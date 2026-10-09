@@ -1838,37 +1838,60 @@ remain identified as manifest data.
 
 ### Caller-owned model operations
 
-Image generation is a separate caller-owned operation family, not a chat turn
-or Agent Run. `POST /v2/image-operations` accepts the image request and
-optional edit inputs with a required Idempotency-Key; `GET /:id` observes its
-durable command, `GET /:id/result` serves private digest-bound JSON bytes,
-and `POST /:id/ack` acknowledges **each image's** sha256 after the caller has
-retained it. The image result is released only after all images are acknowledged
-(or the unacknowledged retention expires); the compact command record never
-contains base64 or credentials. `GET /v2/operations` advertises the family by
-its actual routes, so older engines yield a detectable capability absence.
-Image-purpose resources and their reconciliation are disjoint from the
-model-purpose store's resource enumeration: neither cleanup owner may collect
-the other's live request or result. The same daemon command journal, idempotency
-binding, cancellation and scheduler own both families; an attempted physical
-image dispatch is recorded before its one provider POST. An unknown outcome
-cannot trigger another generation on that command.
+Image requests are a payload kind of the existing model-operation lifecycle.
+Upload `ImageCallRequest` JSON with `purpose: "model"`, then create with
+`POST /v2/model-operations` with `requestKind=image`. Omission preserves text requests.
+The same command id, idempotency binding, queue, cancellation, private result,
+30-day unacknowledged retention and whole-result digest ACK serve both kinds.
+There is no second image command, scheduler or resource-purpose owner.
 
-The Codex image adapter obtains the same managed subscription authorization
-and account identity as the text route, but it does **not** require the image
-model to appear in `/codex/models`, a catalog of text inference, nor route an
-image-specific 429 into the account-wide text cooldown. Image entitlement is
-established by the provider response, not the installed client or a Plus/Pro
-label. Image requests never follow a redirect carrying credentials. Only image create
-widens the shared strict-UTF-8 control-body reader from 10 MiB to the same
-144 MiB request ceiling enforced by image command admission; ordinary control
-routes keep 10 MiB. A lost final image ACK may replay its known digest against
-the compact acknowledged receipt without restoring released bytes. Every
-request/result has explicit byte and media-format limits. Current readiness
-is backed by an offline Codex HTTP fixture, not by a live subscription image
-call: originator/UA acceptance and the available quota on a particular account
-remain external observations. Recognition of image input in text-model turns
-is a separate capability, not claimed by this family.
+#### Image generation and editing
+
+`ModelImageFacet` declares the source's structural `imageGeneration` facet in
+`GET /v2/model-sources` with `view=accounts`. Codex's model ids are presence hints from
+the pinned upstream client, never an allowlist or an account entitlement claim;
+an explicit model is forwarded unchanged, without reading the text catalog.
+The caller selects source/model and pin or Auto account independently of its
+conversation model. The same account resolver and credential-generation observer
+apply. Only a fresh confirmed auth refusal revokes the bound generation; a late
+response cannot revoke a replacement login. No subscription-to-API fallback occurs.
+
+`ImageCallRequest` carries prompt, optional options and exact base64 edit references
+with MIME and SHA-256. Empty references select generation; up to five select
+editing (the upstream tool's bound, not a proven endpoint maximum). Explicit
+options are sent without defaults: size, quality, background and n (1–10).
+The adapter preserves the donor's 144 MiB request/response ceilings, 32 MiB per
+image, bounded 64 KiB refusal body and no credential-bearing redirects. PNG,
+JPEG and WebP are checked by magic bytes, not full decoding. The turn-id header
+is derived from the durable operation id; it is not a provider deduplication claim.
+The wire is anchored in openai/codex commit
+`6f6e80bcddab56a4e6518eb5adef0079ed30bb2b`, codex-api images endpoint and
+ext/image-generation tool/backend source. Live endpoint/account qualification
+remains outstanding.
+
+`ImageCallResult` keeps requestedModel separately from provider-observed route
+model (null when absent), reported usage, unknown cash/valuation, applied options,
+request id and every usable image with verified MIME/size/digest. Rejected sibling
+indexes remain in the problem context. A completed provider response can yield a
+failed command with a ready partial result: callers retrieve ready results on any
+terminal lifecycle, retain images and diagnostics, then ACK the entire JSON
+resource digest. GET never acknowledges, and a lost local reply or an unknown
+dispatch never authorizes another generation. Viewing/sending remain caller actions.
+
+Quota operation scope is `applies_to_request_kinds` on each quota constraint,
+independent of its model scope; absent means both kinds. Codex full and incremental
+readers declare ordinary codex/default windows as text, image_gen as image, and
+leave unknown buckets diagnostic rather than guessing their applicability. Image
+429 reset evidence enters the existing registry as source `codex_image_response`,
+scoped to image and the invoked credential generation; known reset/Retry-After
+expires it, and a newer matching full window supersedes it. No reset is invented.
+The same profile pool and quota availability owner evaluate image requests against
+image scope; existing text/Agent consumers default to text. Budget observations
+retain scope. GET quota query and POST quota refresh accept optional requestKind
+(text/image) and model. All raw constraints remain visible in those responses and
+atomic Accounts; Accounts availability and cooldown badges describe text, with
+image windows labelled separately. Journal rollback projections omit image-only
+windows instead of broadening them to global text limits.
 
 Live model enumeration is qualified by the adapter's declared credential routes.
 A declared producer is used only on a known supported route; otherwise existing
@@ -2173,7 +2196,6 @@ The protocol handshake remains unchanged. No memory thresholds affect admission.
 - `GET /v2/harnesses`
 - `POST /v2/harnesses/:id/auth-readiness`
 - `GET /v2/harnesses/:id/models`
-- `POST /v2/image-operations`
 - `POST /v2/maintenance/gc`
 - `POST /v2/model-operations`
 - `GET /v2/model-operations/:id`

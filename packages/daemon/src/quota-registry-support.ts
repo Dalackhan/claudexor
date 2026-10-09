@@ -67,6 +67,9 @@ export function reactiveCooldownSnapshot(
         ...(event.rate_limit?.applies_to_models !== undefined
           ? { applies_to_models: event.rate_limit.applies_to_models }
           : {}),
+        ...(event.rate_limit?.applies_to_request_kinds
+          ? { applies_to_request_kinds: event.rate_limit.applies_to_request_kinds }
+          : {}),
         used_ratio: null,
         window_seconds: null,
         resets_at: reset,
@@ -142,7 +145,9 @@ export function withoutSupersededQuotaConstraints(
     if (
       constraint.id === "cooldown" &&
       !constraint.applies_to_models?.length &&
-      !constraint.applies_to_model_prefixes?.length
+      !constraint.applies_to_model_prefixes?.length &&
+      (!constraint.applies_to_request_kinds ||
+        observation.constraints.some((c) => sameModelScope(constraint, c)))
     ) {
       return false;
     }
@@ -203,7 +208,12 @@ function windowSupersession(
   if (
     !observation.constraints.some(
       (constraint) =>
-        constraint.used_ratio !== null && quotaConstraintIdentity(constraint) === identity,
+        constraint.used_ratio !== null &&
+        (quotaConstraintIdentity(constraint) === identity ||
+          (existing.source === "codex_image_response" &&
+            existing.constraints[0]!.window_seconds === null &&
+            sameQuotaWindow(existing.source, existing.constraints[0]!.id, constraint.id) &&
+            sameModelScope(existing.constraints[0]!, constraint))),
     )
   )
     return null;
@@ -264,7 +274,10 @@ export function quotaSnapshotRecords(
   if (
     legacy.source === snapshot.source &&
     !snapshot.constraints.some(
-      (c) => c.applies_to_models !== undefined || c.applies_to_model_prefixes !== undefined,
+      (c) =>
+        c.applies_to_models !== undefined ||
+        c.applies_to_model_prefixes !== undefined ||
+        c.applies_to_request_kinds !== undefined,
     )
   )
     return [upsert];
@@ -292,14 +305,20 @@ export function legacyV320Snapshot(snapshot: QuotaSnapshot): QuotaSnapshot {
       plan_label: snapshot.subject.plan_label,
       subject_id: snapshot.subject.subject_id,
     },
-    constraints: snapshot.constraints.map((constraint): QuotaConstraint => ({
-      id: constraint.id,
-      label: constraint.label,
-      used_ratio: constraint.used_ratio,
-      window_seconds: constraint.window_seconds,
-      resets_at: constraint.resets_at,
-      cooldown_until: constraint.cooldown_until,
-    })),
+    constraints: snapshot.constraints
+      .filter(
+        (constraint) =>
+          !constraint.applies_to_request_kinds ||
+          constraint.applies_to_request_kinds.includes("text"),
+      )
+      .map((constraint): QuotaConstraint => ({
+        id: constraint.id,
+        label: constraint.label,
+        used_ratio: constraint.used_ratio,
+        window_seconds: constraint.window_seconds,
+        resets_at: constraint.resets_at,
+        cooldown_until: constraint.cooldown_until,
+      })),
     source: legacyV320QuotaSource(snapshot.source),
     observed_at: snapshot.observed_at,
     freshness: snapshot.freshness,

@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-export { IMAGE_OPERATION_DRAFTS } from "./image-routes.js";
 import {
   ControlModelSourcesResponse,
   ControlModelSourcesAccountsResponse,
@@ -11,8 +10,10 @@ import {
   ControlModelOperationAckRequest,
   ControlModelOperationControlRequest,
   Id,
+  ModelOperationRequestKind,
   type ModelPayloadRef,
   type CancelReasonCode,
+  type ModelOperationRequestKind as RequestKind,
 } from "@claudexor/schema";
 import type { OperationDraft } from "./operation-draft.js";
 import { queryParam } from "./operation-parameters.js";
@@ -36,6 +37,7 @@ export interface ModelRouteServices {
     idempotencyKey: string,
     captureFailureEvidence?: boolean,
     captureEffortEvidence?: boolean,
+    requestKind?: RequestKind,
   ): Promise<unknown>;
   getModelOperation(id: string): Promise<unknown>;
   readModelResult(id: string): Promise<{ bytes: Buffer; sha256: string }>;
@@ -114,30 +116,45 @@ export async function handleModelRoute(
   }
   if (method === "POST" && path === "/model-operations") {
     if (!services?.createModelOperation) return false;
-    const input = await routeValue(ctx, res, 400, async () => ({
-      key: requiredIdempotencyKey(req),
-      body: ControlModelOperationCreateRequest.parse(await ctx.readBody(req)),
-      effort: optionalBooleanQuery(
-        new URL(req.url ?? "/", "http://localhost"),
-        "captureEffortEvidence",
-      ),
-      capture: optionalBooleanQuery(
-        new URL(req.url ?? "/", "http://localhost"),
-        "captureFailureEvidence",
-      ),
-    }));
+    const input = await routeValue(ctx, res, 400, async () => {
+      const query = new URL(req.url ?? "/", "http://localhost");
+      const kind = singleQuery(query, "requestKind");
+      const requestKind = kind === undefined ? undefined : ModelOperationRequestKind.parse(kind);
+      const effort = optionalBooleanQuery(query, "captureEffortEvidence");
+      const capture = optionalBooleanQuery(query, "captureFailureEvidence");
+      // Image results carry neither SSE nor effort evidence: refuse, never ignore.
+      if (requestKind !== undefined && (effort === true || capture === true))
+        throw new Error(
+          "requestKind=image cannot be combined with captureEffortEvidence or captureFailureEvidence",
+        );
+      return {
+        key: requiredIdempotencyKey(req),
+        body: ControlModelOperationCreateRequest.parse(await ctx.readBody(req)),
+        effort,
+        capture,
+        requestKind,
+      };
+    });
     if (!input.ok) return true;
     const value = await routeValue(ctx, res, 500, () =>
-      input.value.effort === true
+      input.value.requestKind !== undefined
         ? services.createModelOperation!(
             input.value.body.request,
             input.value.key,
-            input.value.capture === true ? true : undefined,
-            true,
+            undefined,
+            undefined,
+            input.value.requestKind,
           )
-        : input.value.capture === true
-          ? services.createModelOperation!(input.value.body.request, input.value.key, true)
-          : services.createModelOperation!(input.value.body.request, input.value.key),
+        : input.value.effort === true
+          ? services.createModelOperation!(
+              input.value.body.request,
+              input.value.key,
+              input.value.capture === true ? true : undefined,
+              true,
+            )
+          : input.value.capture === true
+            ? services.createModelOperation!(input.value.body.request, input.value.key, true)
+            : services.createModelOperation!(input.value.body.request, input.value.key),
     );
     if (!value.ok) return true;
     return serviceResponse(ctx, res, "createModelOperation", () =>
@@ -309,6 +326,12 @@ export const MODEL_OPERATION_DRAFTS: OperationDraft[] = [
     responseKind: "json",
     summary: "Accept one idempotent model generation without an agent run.",
     parameters: [
+      queryParam({
+        name: "requestKind",
+        enum: ["image"],
+        description:
+          "Select ImageCallRequest for the uploaded model-purpose JSON payload and ImageCallResult for the result bytes (generated payload schemas, not the query value). Omitted keeps ModelCallRequest/ModelCallResult byte-for-byte. Bound to idempotency; cannot be combined with the evidence-capture flags. Absent from this descriptor means the engine has no image operations.",
+      }),
       queryParam({
         name: "captureEffortEvidence",
         enum: ["true", "false"],

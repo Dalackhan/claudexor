@@ -1,3 +1,4 @@
+import { QuotaRequestKind } from "@claudexor/schema";
 import type { ControlOperationParameter } from "@claudexor/schema";
 
 /**
@@ -66,3 +67,12 @@ export function pathnameDecodes(pathname: string): boolean {
     return false;
   }
 }
+
+export const QUOTA_READ_PARAMETERS = [
+  queryParam({
+    name: "requestKind",
+    enum: QuotaRequestKind.options,
+    description: "Availability scope, text when omitted; all scoped constraints remain visible.",
+  }),
+  queryParam({ name: "model", description: "Optional model for quota applicability." }),
+];

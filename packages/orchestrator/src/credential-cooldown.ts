@@ -1,3 +1,4 @@
+import type { QuotaRequestKind } from "@claudexor/schema";
 import type { CredentialUnusableObservation, QuotaSnapshot } from "@claudexor/schema";
 import { ControlProblem, quotaSnapshotAvailability } from "@claudexor/schema";
 
@@ -55,6 +56,7 @@ export function profileQuotaBlock(
   subjectRoute: "local_session" | "api_key" | null,
   model?: string | null,
   now?: Date,
+  requestKind?: QuotaRequestKind,
 ): QuotaBlock | null {
   const wantRoute =
     subjectRoute === "local_session"
@@ -66,7 +68,11 @@ export function profileQuotaBlock(
     if (snapshot.subject.harness !== harnessId) continue;
     if ((snapshot.subject.subject_id ?? null) !== profileId) continue;
     if (wantRoute !== null && snapshot.subject.credential_route !== wantRoute) continue;
-    const availability = quotaSnapshotAvailability(snapshot, { now, model: model ?? null });
+    const availability = quotaSnapshotAvailability(snapshot, {
+      now,
+      model: model ?? null,
+      requestKind,
+    });
     if (availability.state === "available") continue;
     return {
       blocked: true,

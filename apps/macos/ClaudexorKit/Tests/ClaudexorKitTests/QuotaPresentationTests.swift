@@ -177,6 +177,25 @@ import Testing
         #expect(group.sources.count == 2)
     }
 
+    @Test func imageQuotaStaysVisibleWithoutBlockingTheTextAccountBadge() throws {
+        var image = window("image_gen:primary", label: "Image generation", used: nil,
+                           cooldownUntil: "2026-07-16T12:30:00Z")
+        image["applies_to_request_kinds"] = ["image"]
+        var text = image
+        text["applies_to_request_kinds"] = ["text"]
+        let imageSnapshot = try snapshot(harness: "codex", source: "codex_image_response", constraints: [image])
+        let group = try #require(QuotaPresentation.groups(from: [imageSnapshot], now: now).first)
+        #expect(group.cooldownUntil == nil)
+        #expect(group.windows.first?.label == "Image generation (images)")
+        #expect(group.windows.first?.resetsAt == "2026-07-16T12:30:00Z")
+        #expect(imageSnapshot.constraints.first?.appliesToRequestKinds == ["image"])
+        let textSnapshot = try snapshot(harness: "codex", constraints: [text])
+        #expect(imageSnapshot.constraints.first?.presentationID != textSnapshot.constraints.first?.presentationID)
+        let combined = try #require(QuotaPresentation.groups(from: [imageSnapshot, textSnapshot], now: now).first)
+        #expect(combined.windows.count == 2)
+        #expect(combined.cooldownUntil == "2026-07-16T12:30:00Z")
+    }
+
     @Test func expiredCooldownIsHidden() throws {
         let cooldown = try snapshot(
             source: "claude_api_retry",

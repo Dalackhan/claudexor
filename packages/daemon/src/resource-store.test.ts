@@ -185,13 +185,13 @@ describe("ResourceStore", () => {
     expect(String(resolveError)).not.toContain(tokenLike);
   });
 
-  it("isolates image-purpose uploads from Agent attachments and model GC without filtering caller image content", async () => {
+  it("isolates image request uploads from Agent attachments without filtering caller image content", async () => {
     const root = reapMk(join(tmpdir(), "claudexor-image-resource-"));
     const store = new ResourceStore(root);
     const bytes = Buffer.from(JSON.stringify({ prompt: `ghp_${"z".repeat(24)}` }));
     const upload = store.create(
       {
-        purpose: "image",
+        purpose: "model",
         kind: "file",
         mime: "application/json",
         name: "image-request.json",
@@ -206,27 +206,20 @@ describe("ResourceStore", () => {
       sha256: image.sha256,
       sizeBytes: image.sizeBytes,
     };
-    expect(store.readImage(imageRef).equals(bytes)).toBe(true);
+    expect(store.readModel(imageRef).equals(bytes)).toBe(true);
     expect(() => store.resolve([{ resourceId: image.resourceId }])).toThrowError(
       expect.objectContaining({ code: "resource_purpose_mismatch" }),
     );
-    expect(() => store.readModel(imageRef)).toThrowError(
-      expect.objectContaining({ code: "resource_purpose_mismatch" }),
-    );
-    expect(store.listModelResources()).toEqual([]);
-    expect(store.listImageResources().map((ref) => ref.resourceId)).toEqual([image.resourceId]);
+    expect(store.listModelResources().map((ref) => ref.resourceId)).toEqual([image.resourceId]);
 
     const modelRef = store.publishModel(bytes);
-    expect(() => store.readImage(modelRef)).toThrowError(
-      expect.objectContaining({ code: "resource_purpose_mismatch" }),
-    );
     store.releaseModel(modelRef);
-    expect(store.readImage(imageRef).equals(bytes)).toBe(true); // shared blob remains owned
+    expect(store.readModel(imageRef).equals(bytes)).toBe(true); // shared blob remains owned
     const reopened = new ResourceStore(root);
-    expect(reopened.readImage(imageRef).equals(bytes)).toBe(true);
-    reopened.releaseImage(imageRef);
-    expect(reopened.listImageResources()).toEqual([]);
-    expect(() => reopened.readImage(imageRef)).toThrowError(
+    expect(reopened.readModel(imageRef).equals(bytes)).toBe(true);
+    reopened.releaseModel(imageRef);
+    expect(reopened.listModelResources()).toEqual([]);
+    expect(() => reopened.readModel(imageRef)).toThrowError(
       expect.objectContaining({ code: "resource_not_found" }),
     );
   });

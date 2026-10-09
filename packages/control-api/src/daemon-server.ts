@@ -95,7 +95,6 @@ import { handleDaemonStatusRoute } from "./daemon-status-routes.js";
 import { handleMaintenanceRoute, type MaintenanceRouteServices } from "./maintenance-routes.js";
 import { handleResourceRoute, type ResourceRouteServices } from "./resource-routes.js";
 import { handleModelRoute, type ModelRouteServices } from "./model-routes.js";
-import { handleImageRoute, type ImageRouteServices } from "./image-routes.js";
 import {
   handleArtifactServeRoute,
   listArtifacts,
@@ -242,7 +241,7 @@ export interface DaemonControlApiOptions {
   servingMode?: () => ControlServingMode;
   bus?: { subscribe(listener: (event: { run_id: string }) => void): () => void };
   services?: DeliveryCommandServices &
-    Partial<ModelRouteServices & ImageRouteServices> &
+    Partial<ModelRouteServices> &
     Partial<ResourceRouteServices> &
     Partial<MaintenanceRouteServices> &
     Partial<ProjectRouteServices> & {
@@ -284,7 +283,7 @@ export interface DaemonControlApiOptions {
       journalEvents?: (partition: string, afterCursor?: string) => Promise<unknown>;
       settings?: () => Promise<unknown>;
       updateSettings?: (patch: unknown) => Promise<unknown>;
-      quota?: () => Promise<unknown>;
+      quota?: (input?: ControlQuotaRefreshRequest) => Promise<unknown>;
       refreshQuota?: (input?: ControlQuotaRefreshRequest) => Promise<unknown>;
       accountPools?: () => Promise<unknown>;
       rollbackAccountsMigration?: (input: unknown) => Promise<unknown>;
@@ -740,7 +739,7 @@ export class DaemonControlApiServer {
     const dataRoutes = {
       daemon: this.opts.daemon,
       services: this.opts.services,
-      readBody: (request: IncomingMessage, maxBytes?: number) => this.readBody(request, maxBytes),
+      readBody: (request: IncomingMessage) => this.readBody(request),
       json: (response: ServerResponse, status: number, body: unknown) =>
         this.json(response, status, body),
       requestError: (response: ServerResponse, error: unknown, fallback?: 400 | 500) =>
@@ -749,7 +748,6 @@ export class DaemonControlApiServer {
     for (const route of [
       handleResourceRoute,
       handleModelRoute,
-      handleImageRoute,
       handleMaintenanceRoute,
       handleDaemonStatusRoute,
     ]) {
@@ -1539,8 +1537,21 @@ export class DaemonControlApiServer {
       }
       return this.service(res, "updateSettings", body, ControlSettingsSnapshot);
     }
-    if (method === "GET" && path === "/quota")
-      return this.service(res, "quota", undefined, ControlQuotaResponse);
+    if (method === "GET" && path === "/quota") {
+      try {
+        const input = ControlQuotaRefreshRequest.parse(Object.fromEntries(url.searchParams));
+        if ([...url.searchParams.keys()].some((key) => url.searchParams.getAll(key).length !== 1))
+          throw new Error("Duplicate quota query parameter");
+        return this.service(
+          res,
+          "quota",
+          Object.keys(input).length ? input : undefined,
+          ControlQuotaResponse,
+        );
+      } catch (error) {
+        return this.requestError(res, error);
+      }
+    }
     // Unified account model: the pool-authority read (also the feature marker
     // clients detect through the operation catalog).
     if (method === "GET" && path === "/account-pools")

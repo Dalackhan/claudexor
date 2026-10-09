@@ -11,11 +11,8 @@
         },
         "purpose": {
           "type": "string",
-          "enum": [
-            "model",
-            "image"
-          ],
-          "description": "Immutable model- or image-operation purpose; absent means a legacy or ordinary attachment."
+          "const": "model",
+          "description": "Immutable model-operation purpose; absent means a legacy or ordinary attachment."
         },
         "kind": {
           "type": "string",

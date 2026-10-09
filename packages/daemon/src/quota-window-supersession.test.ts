@@ -412,3 +412,56 @@ describe("full reads supersede matching native windows durably", () => {
       }),
   );
 });
+
+it("retires image response cooldown only after a newer matching measured image window, including durable replay", async () =>
+  fixture(async (f) => {
+    const imageSubject = { ...subject, harness: "codex" };
+    const image = {
+      ...partial(0, {
+        id: "image_gen:primary",
+        window_seconds: null,
+        used_ratio: null,
+        applies_to_request_kinds: ["image"],
+        cooldown_until: new Date(RESET).toISOString(),
+      }),
+      subject: imageSubject,
+      source: "codex_image_response" as const,
+    };
+    f.registry().upsert(image);
+    const blocked = (kind: "text" | "image") =>
+      profileQuotaBlock(
+        f.registry().read().snapshots,
+        "codex",
+        "work",
+        "local_session",
+        "gpt-image-2",
+        new Date(START + 2000),
+        kind,
+      ) !== null;
+    expect(blocked("image")).toBe(true);
+    expect(blocked("text")).toBe(false);
+    f.now(1000);
+    f.registry().upsert({
+      ...full(1000, [constraint({ applies_to_request_kinds: ["text"] })]),
+      subject: imageSubject,
+      source: "codex_app_server",
+    });
+    expect(blocked("image")).toBe(true);
+    f.now(2000);
+    f.registry().upsert({
+      ...full(2000, [
+        constraint({
+          id: "image_gen:primary",
+          window_seconds: 86400,
+          applies_to_request_kinds: ["image"],
+        }),
+      ]),
+      subject: imageSubject,
+      source: "codex_app_server",
+    });
+    expect(blocked("image")).toBe(false);
+    await f.restart();
+    f.registry().upsert(image);
+    expect(blocked("image")).toBe(false);
+    expect(blocked("text")).toBe(false);
+  }));

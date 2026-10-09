@@ -27,6 +27,8 @@ interface UploadRecord {
   request: ReturnType<typeof ControlUploadCreateRequest.parse>;
   status: ReturnType<typeof ControlUploadStatus.parse>;
   partPath: string;
+  // This binding precedes the blob rename, so every interrupted finalize
+  // resumes the same resource and idempotency key, even without the part file.
   finalization?: IdempotencyRecord<ReturnType<typeof ControlResource.parse>>;
 }
 
@@ -45,7 +47,8 @@ function atomicJson(path: string, value: unknown): void {
   const temp = `${path}.${newId("tmp")}`;
   try {
     writeFileSync(temp, `${JSON.stringify(value)}\n`, { mode: 0o600 });
-    // Windows FlushFileBuffers needs a writable handle; r+ changes no bytes.
+    // Windows FlushFileBuffers requires a write-capable file handle. The temp
+    // was already written above; r+ only changes handle rights, not contents.
     const fd = openSync(temp, "r+");
     try {
       fsyncSync(fd);
@@ -222,7 +225,7 @@ export class ResourceStore {
         "upload_size_mismatch",
       );
     if (
-      !upload.request.purpose &&
+      upload.request.purpose !== "model" &&
       sensitiveResourcePolicy.containsSensitiveContent(bytes.toString("utf8"))
     ) {
       upload.status = { ...upload.status, state: "cancelled" };
@@ -263,8 +266,7 @@ export class ResourceStore {
   resolve(refs: ResourceAttachmentRef[] | undefined): Attachment[] {
     return (refs ?? []).map(({ resourceId }) => {
       const resource = this.metadata(resourceId);
-      // A purpose-bound resource never becomes an Agent attachment.
-      if (resource.purpose) throw purposeMismatch();
+      if (resource.purpose === "model") throw purposeMismatch();
       const path = this.blobPath(resource.sha256);
       const bytes = this.verifiedBytes(resource, path);
       if (
@@ -285,53 +287,25 @@ export class ResourceStore {
     });
   }
 
+  /** Exact model bytes only; never a text/artifact projection or secret scanner. */
   readModel(raw: ModelPayloadRef): Buffer {
-    return this.readPurpose("model", raw);
-  }
-  publishModel(bytes: Uint8Array): ModelPayloadRef {
-    return this.publishPurpose("model", "model-result.json", bytes);
-  }
-  releaseModel(raw: ModelPayloadRef): void {
-    this.releasePurpose("model", raw);
-  }
-  listModelResources(): Array<ModelPayloadRef & { createdAt: string }> {
-    return this.listPurposeResources("model");
-  }
-
-  readImage(raw: ModelPayloadRef): Buffer {
-    return this.readPurpose("image", raw);
-  }
-  publishImage(bytes: Uint8Array): ModelPayloadRef {
-    return this.publishPurpose("image", "image-payload.json", bytes);
-  }
-  releaseImage(raw: ModelPayloadRef): void {
-    this.releasePurpose("image", raw);
-  }
-  listImageResources(): Array<ModelPayloadRef & { createdAt: string }> {
-    return this.listPurposeResources("image");
-  }
-
-  private readPurpose(purpose: "model" | "image", raw: ModelPayloadRef): Buffer {
     const ref = ModelPayloadRef.parse(raw);
     const resource = this.metadata(ref.resourceId);
-    this.assertPurposeRef(purpose, resource, ref);
+    this.assertModelRef(resource, ref);
     return this.verifiedBytes(resource, this.blobPath(resource.sha256));
   }
 
-  private publishPurpose(
-    purpose: "model" | "image",
-    name: string,
-    bytes: Uint8Array,
-  ): ModelPayloadRef {
+  /** Publish a daemon-produced result through the same durable finalize owner. */
+  publishModel(bytes: Uint8Array): ModelPayloadRef {
     const status = this.create(
       {
-        purpose,
+        purpose: "model",
         kind: "file",
         mime: "application/json",
-        name,
+        name: "model-result.json",
         sizeBytes: bytes.byteLength,
       },
-      newId(`${purpose}-create`),
+      newId("model-create"),
     );
     const upload = this.uploads.get(status.uploadId)!;
     try {
@@ -344,22 +318,23 @@ export class ResourceStore {
       }
       upload.status = { ...upload.status, state: "uploaded", receivedBytes: bytes.byteLength };
       this.persistUpload(upload);
-      return payloadRef(
-        this.finalize(status.uploadId, digestOf(bytes), newId(`${purpose}-finalize`)),
-      );
+      return payloadRef(this.finalize(status.uploadId, digestOf(bytes), newId("model-finalize")));
     } catch (error) {
-      // Keep begun finalization for restart; discard only an unbound partial.
+      // An unpublished partial result has no caller-visible ref to release.
+      // A begun finalization retains its binding for ordinary restart recovery.
       if (!upload.finalization) this.discardUpload(upload);
       throw error;
     }
   }
 
-  private releasePurpose(purpose: "model" | "image", raw: ModelPayloadRef): void {
+  /** Caller owns command-reference checks. This removes only this resource;
+   * a blob shared with another resource or pending finalize remains owned. */
+  releaseModel(raw: ModelPayloadRef): void {
     const ref = ModelPayloadRef.parse(raw);
     const metaPath = this.resourcePath(ref.resourceId);
     if (!existsSync(metaPath)) return;
     const resource = this.metadata(ref.resourceId);
-    this.assertPurposeRef(purpose, resource, ref);
+    this.assertModelRef(resource, ref);
     const referenced =
       readdirSync(this.resourcesDir).some((name) => {
         if (!name.endsWith(".json") || name === `${ref.resourceId}.json`) return false;
@@ -368,6 +343,7 @@ export class ResourceStore {
       [...this.uploads.values()].some(
         (upload) => upload.finalization?.result.sha256 === ref.sha256,
       );
+    // Unlink bytes before metadata: a failed cleanup retains its exact retry target.
     if (!referenced) {
       rmSync(this.blobPath(ref.sha256), { force: true });
       fsyncDirectory(this.blobsDir);
@@ -376,25 +352,19 @@ export class ResourceStore {
     fsyncDirectory(this.resourcesDir);
   }
 
-  private listPurposeResources(
-    purpose: "model" | "image",
-  ): Array<ModelPayloadRef & { createdAt: string }> {
+  listModelResources(): Array<ModelPayloadRef & { createdAt: string }> {
     return readdirSync(this.resourcesDir)
       .filter((name) => name.endsWith(".json"))
       .map((name) => this.metadata(name.slice(0, -5)))
-      .filter((resource) => resource.purpose === purpose)
+      .filter((resource) => resource.purpose === "model")
       .map((resource) => ({ ...payloadRef(resource), createdAt: resource.createdAt }));
   }
 
-  private assertPurposeRef(
-    purpose: "model" | "image",
-    resource: ControlResource,
-    ref: ModelPayloadRef,
-  ): void {
-    if (resource.purpose !== purpose) throw purposeMismatch();
+  private assertModelRef(resource: ControlResource, ref: ModelPayloadRef): void {
+    if (resource.purpose !== "model") throw purposeMismatch();
     if (resource.sha256 !== ref.sha256 || resource.sizeBytes !== ref.sizeBytes)
       throw resourceError(
-        "purpose resource reference does not match finalized bytes",
+        "model resource reference does not match finalized bytes",
         409,
         "resource_digest_mismatch",
       );
@@ -441,15 +411,17 @@ export class ResourceStore {
     const prior = this.finalizeIdempotency.get(binding.key);
     if (prior) {
       if (prior.requestDigest !== binding.requestDigest) throw idempotencyConflict();
-      // An ACK may have released the resource; replay cleans debris, not bytes.
+      // Publication already committed. Only clean debris; an ACK may since
+      // have released this resource and replay must never resurrect its bytes.
       this.discardUpload(upload);
       return ControlResource.parse(prior.result);
     }
+    // Re-persist even on same-process retry: the earlier metadata write may have failed.
     this.persistUpload(upload);
     const blobPath = this.blobPath(resource.sha256);
     const bytes = this.verifiedBytes(resource, existsSync(blobPath) ? blobPath : upload.partPath);
     if (
-      !resource.purpose &&
+      resource.purpose !== "model" &&
       sensitiveResourcePolicy.containsSensitiveContent(bytes.toString("utf8"))
     )
       throw sensitiveResourceError();

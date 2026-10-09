@@ -19,15 +19,6 @@ changing Claudexor.
 
 ## Caller-Owned Model Operations
 
-Image generation has its own `/v2/image-operations` family, advertised by
-`GET /v2/operations`. Clients use a stable Idempotency-Key on create, poll the
-durable handle, read the private JSON result (with `data[].b64_json`) and retain
-**each image** before acknowledging that image's sha256. An image-specific
-429 is returned with its reset evidence; it does not imply that the account's
-text allowance is spent. A lost create or read response calls for rejoining
-the **same** operation, not another generation. The operation contract and
-limits are mapped in [ARCHITECTURE](ARCHITECTURE.md#caller-owned-model-operations).
-
 The model capability uses the same negotiated, authenticated control API and
 managed accounts as Agents. Codex is the current raw-model source; other harness
 connections remain Agent capabilities. This is an engine operation for a caller
@@ -41,6 +32,19 @@ reading alone does not acknowledge custody. See
 [Caller-owned model operations](ARCHITECTURE.md#caller-owned-model-operations)
 for lifecycle, retention, continuation and capacity semantics, and the
 [feature ledger](FEATURES.md) for transport and acceptance limitations.
+
+For images, discover `requestKind=image` on the create operation and the
+source's `imageGeneration` facet in the accounts view. The query value is the
+string `image`; the create descriptor's description names the separate generated
+payload contracts. Upload an
+[`ImageCallRequest`](../packages/schema/generated/ImageCallRequest.schema.json),
+then recover and acknowledge the
+[`ImageCallResult`](../packages/schema/generated/ImageCallResult.schema.json) through the same operation
+identity and whole-result digest. Decode images into caller-owned files before
+ACK; keep base64 out of model text and make viewing or sending a separate action.
+The [image contract](ARCHITECTURE.md#image-generation-and-editing) owns request,
+quota, provenance and uncertainty semantics. Live subscription qualification
+remains outstanding in the [feature ledger](FEATURES.md).
 
 Processing uses the optional `processingPreference` contract and the
 [single advisory rule](DEVELOPMENT.md#processing-preference). Discover account

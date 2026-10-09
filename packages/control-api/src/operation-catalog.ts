@@ -5,19 +5,17 @@ import {
   type ControlOperationDescriptor,
   ControlHarnessSetupHarness,
 } from "@claudexor/schema";
-import { queryParam, resumeHeader } from "./operation-parameters.js";
+import { queryParam, resumeHeader, QUOTA_READ_PARAMETERS } from "./operation-parameters.js";
 import { REMOTE_OPERATION_DRAFTS } from "./remote-operation-descriptors.js";
-import { MODEL_OPERATION_DRAFTS, IMAGE_OPERATION_DRAFTS } from "./model-routes.js";
+import { MODEL_OPERATION_DRAFTS } from "./model-routes.js";
 import type { OperationDraft } from "./operation-draft.js";
 import { OPERATION_SUMMARIES } from "./operation-summaries.js";
 
 function descriptor(input: OperationDraft): ControlOperationDescriptor {
-  // Resource-family classification (QA-054): an operation is grouped under the
-  // resource plane it acts on. Collection/create routes inherit their family
-  // even without an instance id (GET/POST /v2/projects are project-applicable,
-  // matching how /v2/runs and /v2/threads are already run/thread). `/projects`
-  // had no branch, so every project route falsely reported `global` and the
-  // typed `project` enum value had no live producer.
+  // Resource-family classification (QA-054) follows the resource plane.
+  // Collection/create routes inherit their family without an instance id:
+  // GET/POST /v2/projects are project-applicable, just as runs/threads are.
+  // A missing collection branch would falsely report global applicability.
   const applicability =
     input.path.includes("/threads/") || input.path === "/v2/threads"
       ? "thread"
@@ -68,7 +66,7 @@ const j = (
   });
 
 const operations: ControlOperationDescriptor[] = [
-  ...[...MODEL_OPERATION_DRAFTS, ...IMAGE_OPERATION_DRAFTS].map(descriptor),
+  ...MODEL_OPERATION_DRAFTS.map(descriptor),
   j("POST", "/v2/uploads", "mutating", "ControlUploadCreateRequest", "ControlUploadStatus", {
     idempotency: "key_required",
   }),
@@ -109,7 +107,9 @@ const operations: ControlOperationDescriptor[] = [
       ),
     ],
   }),
-  j("GET", "/v2/quota", "read_only", null, "ControlQuotaResponse"),
+  j("GET", "/v2/quota", "read_only", null, "ControlQuotaResponse", {
+    parameters: QUOTA_READ_PARAMETERS,
+  }),
   // Unified account model (INV-135 rewrite): the pool-authority read. Its
   // catalog presence is also the feature marker clients detect (absent from
   // 3.5.0 engines), per INV-138 a generated capability, never hand-declared.

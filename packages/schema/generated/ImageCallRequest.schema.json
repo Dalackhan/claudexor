@@ -4,81 +4,16 @@
     "ImageCallRequest": {
       "type": "object",
       "properties": {
-        "request": {
-          "type": "object",
-          "properties": {
-            "model": {
-              "type": "string",
-              "minLength": 1,
-              "pattern": "\\S",
-              "description": "User-supplied string that must contain visible content, not just whitespace."
-            },
-            "prompt": {
-              "type": "string",
-              "minLength": 1,
-              "pattern": "\\S",
-              "maxLength": 32000,
-              "description": "User-supplied string that must contain visible content, not just whitespace."
-            },
-            "n": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 10
-            },
-            "quality": {
-              "type": "string",
-              "enum": [
-                "auto",
-                "low",
-                "medium",
-                "high"
-              ]
-            },
-            "size": {
-              "type": "string",
-              "minLength": 1,
-              "pattern": "\\S",
-              "maxLength": 32,
-              "description": "User-supplied string that must contain visible content, not just whitespace."
-            },
-            "background": {
-              "type": "string",
-              "enum": [
-                "auto",
-                "opaque",
-                "transparent"
-              ]
-            }
-          },
-          "required": [
-            "model",
-            "prompt",
-            "n",
-            "quality",
-            "size",
-            "background"
-          ],
-          "additionalProperties": false
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Non-empty identifier string."
         },
-        "images": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "dataUrl": {
-                "type": "string",
-                "maxLength": 47185920,
-                "pattern": "^data:image\\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$"
-              }
-            },
-            "required": [
-              "dataUrl"
-            ],
-            "additionalProperties": false,
-            "description": "Caller-owned edit image bytes; never an Agent attachment resource."
-          },
-          "minItems": 1,
-          "maxItems": 5
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Explicit image model; never derived from a text model."
         },
         "account": {
           "anyOf": [
@@ -90,8 +25,7 @@
                   "const": "auto"
                 },
                 "preferredProfileId": {
-                  "type": "string",
-                  "minLength": 1,
+                  "$ref": "#/definitions/ImageCallRequest/properties/source",
                   "description": "Non-empty identifier string."
                 }
               },
@@ -108,7 +42,7 @@
                   "const": "pin"
                 },
                 "profileId": {
-                  "$ref": "#/definitions/ImageCallRequest/properties/account/anyOf/0/properties/preferredProfileId"
+                  "$ref": "#/definitions/ImageCallRequest/properties/source"
                 }
               },
               "required": [
@@ -119,13 +53,92 @@
             }
           ],
           "description": "Auto keeps a usable prior account; pin never selects another account."
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "User-supplied string that must contain visible content, not just whitespace."
+        },
+        "images": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mime": {
+                "type": "string",
+                "enum": [
+                  "image/png",
+                  "image/jpeg",
+                  "image/webp"
+                ]
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$",
+                "description": "Digest of the decoded bytes."
+              },
+              "dataBase64": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The caller's exact bytes in standard base64; forwarded verbatim, never re-encoded."
+              }
+            },
+            "required": [
+              "mime",
+              "sha256",
+              "dataBase64"
+            ],
+            "additionalProperties": false,
+            "description": "One caller-owned edit reference; decoded bytes must match mime and sha256."
+          },
+          "default": [],
+          "description": "Empty selects generation; one or more selects an edit of these references."
+        },
+        "options": {
+          "type": "object",
+          "properties": {
+            "size": {
+              "$ref": "#/definitions/ImageCallRequest/properties/prompt",
+              "description": "Vendor size token, e.g. \"auto\" or \"1024x1024\"."
+            },
+            "quality": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "auto"
+              ]
+            },
+            "background": {
+              "type": "string",
+              "enum": [
+                "transparent",
+                "opaque",
+                "auto"
+              ]
+            },
+            "n": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 10,
+              "description": "Requested image count in ONE provider request. Omitted sends no n; the provider may return several items either way."
+            }
+          },
+          "additionalProperties": false,
+          "description": "Only explicit options are sent; this transport adds no defaults of its own.",
+          "default": {}
         }
       },
       "required": [
-        "request"
+        "source",
+        "model",
+        "account",
+        "prompt"
       ],
       "additionalProperties": false,
-      "description": "One image generation request. The POST body is this request itself; it is persisted as an image-purpose resource and never rides the command journal."
+      "description": "One image generation or edit request, stored only in a model-purpose payload outside the command journal."
     }
   },
   "$schema": "http://json-schema.org/draft-07/schema#"

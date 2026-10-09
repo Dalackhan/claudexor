@@ -96,10 +96,28 @@ describe("codexTranscriptRateLimits (quota)", () => {
     expect(rl).not.toBeNull();
     expect(rl?.source).toBe("codex_rollout");
     expect(rl?.constraints).toEqual([
-      expect.objectContaining({ id: "primary", used_ratio: 0.125, window_seconds: 18_000 }),
+      expect.objectContaining({
+        id: "primary",
+        used_ratio: 0.125,
+        window_seconds: 18_000,
+        applies_to_request_kinds: ["text"],
+      }),
       expect.objectContaining({ id: "secondary", used_ratio: 0.4, window_seconds: 604_800 }),
     ]);
     expect(rl?.constraints[1]?.resets_at).toBe(new Date(1782387153 * 1000).toISOString());
+    writeFileSync(
+      join(day, `rollout-2026-07-03T00-00-00-${threadId}.jsonl`),
+      line(100, 100).replace('"codex"', '"image_gen"'),
+    );
+    expect(codexTranscriptRateLimits(home, threadId)?.constraints).toEqual([
+      expect.objectContaining({ id: "image_gen:primary", applies_to_request_kinds: ["image"] }),
+      expect.objectContaining({ id: "image_gen:secondary", applies_to_request_kinds: ["image"] }),
+    ]);
+    writeFileSync(
+      join(day, `rollout-2026-07-03T00-00-00-${threadId}.jsonl`),
+      line(100, 100).replace('"codex"', '"unscoped_future"'),
+    );
+    expect(codexTranscriptRateLimits(home, threadId)).toBeNull();
     // Missing rollout -> null (fail-honest, no signal).
     expect(codexTranscriptRateLimits(home, "unknown-thread")).toBeNull();
     rmSync(home, { recursive: true, force: true });

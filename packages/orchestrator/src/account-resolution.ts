@@ -1,3 +1,4 @@
+import type { QuotaRequestKind } from "@claudexor/schema";
 import type {
   AuthPreference,
   CredentialProfile,
@@ -102,6 +103,7 @@ export interface AccountResolutionContext {
   boundProfileId: string | null;
   threadId: string | null;
   model: string | null;
+  requestKind?: QuotaRequestKind;
   /** Model incompatibility exclusions for this unpinned selection epoch. */
   excludedProfileIds?: ReadonlySet<string>;
   /** Default-route estimate of the legacy unprofiled ladder (no-rows harnesses). */
@@ -204,10 +206,19 @@ function poolExhaustionCandidates(ctx: AccountResolutionContext, ready: Readonly
         row.profile_id,
         policy.headroom_threshold,
         model,
+        ctx.requestKind,
       );
       const block = breach
         ? null
-        : profileQuotaBlock(snapshots, harnessId, row.profile_id, limitSubjectRoute(row), model);
+        : profileQuotaBlock(
+            snapshots,
+            harnessId,
+            row.profile_id,
+            limitSubjectRoute(row),
+            model,
+            undefined,
+            ctx.requestKind,
+          );
       const vendor = vendorCredentialObservation(ctx.quota, harnessId, row.profile_id);
       const dead =
         applicableCredentialUnusable(
@@ -313,6 +324,7 @@ export async function resolveAccountForRun(
       pinned.profile_id,
       policy.headroom_threshold,
       model,
+      ctx.requestKind,
     );
     const block = breach
       ? null
@@ -322,6 +334,8 @@ export async function resolveAccountForRun(
           pinned.profile_id,
           limitSubjectRoute(pinned),
           model,
+          undefined,
+          ctx.requestKind,
         );
     if (!breach && !block) return pinned;
     emit("route.profile.headroom_exceeded", {
@@ -394,12 +408,21 @@ export async function resolveAccountForRun(
       null,
       policy.headroom_threshold,
       model,
+      ctx.requestKind,
     );
     const readyProfileIds =
       effectiveLimitAction(policy, ctx.defaultRoute) === "rotate" &&
       ctx.defaultRoute === "local_session" &&
       (breach !== null ||
-        profileQuotaBlock(snapshots, harnessId, null, ctx.defaultRoute, model) !== null)
+        profileQuotaBlock(
+          snapshots,
+          harnessId,
+          null,
+          ctx.defaultRoute,
+          model,
+          undefined,
+          ctx.requestKind,
+        ) !== null)
         ? await readyIds()
         : new Set<string>();
     return preflightDefaultSubject({
@@ -475,12 +498,21 @@ export async function resolveAccountForRun(
         boundId,
         policy.headroom_threshold,
         model,
+        ctx.requestKind,
       );
       // A4: an observed live block on the bound row (reactive cooldown /
       // spent window) unbinds it exactly like a fresh breach would.
       const block = breach
         ? null
-        : profileQuotaBlock(snapshots, harnessId, boundId, limitSubjectRoute(bound), model);
+        : profileQuotaBlock(
+            snapshots,
+            harnessId,
+            boundId,
+            limitSubjectRoute(bound),
+            model,
+            undefined,
+            ctx.requestKind,
+          );
       if (verdict === "available" && !breach && !block) return bound;
       boundSwitchReason =
         breach || block
@@ -502,6 +534,7 @@ export async function resolveAccountForRun(
     readyProfileIds,
     excludedProfileIds: ctx.excludedProfileIds,
     headroomThreshold: policy.headroom_threshold,
+    requestKind: ctx.requestKind,
     model,
     substitutions: ctx.substitutions,
     refusals: ctx.refusals,

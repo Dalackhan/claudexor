@@ -57,6 +57,17 @@
         "constraint_id": {
           "type": "string"
         },
+        "applies_to_request_kinds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "text",
+              "image"
+            ]
+          },
+          "minItems": 1
+        },
         "applies_to_models": {
           "anyOf": [
             {

@@ -9,6 +9,40 @@ import { RunLifecycle } from "./status-projection.js";
 import { TokenUsage } from "./telemetry.js";
 import { ProcessingCapability, ProcessingPreference, ProcessingReceipt } from "./processing.js";
 
+/** Decoded-byte MIME types the image facet accepts as edit references and
+ * recognizes in a provider result. Sniffed from magic bytes, never trusted
+ * from a declaration alone. */
+export const ImageMime = z.enum(["image/png", "image/jpeg", "image/webp"]);
+export type ImageMime = z.infer<typeof ImageMime>;
+
+export const ImageGenerationCapability = z
+  .object({
+    models: z
+      .array(NonBlankString)
+      .describe(
+        "Presence hint from the adapter's recorded client source, never a refusal list: another explicit id is forwarded unchanged.",
+      ),
+    modelsProvenance: NonBlankString.describe(
+      "Where the presence hint comes from (a pinned upstream client constant, not a provider catalog).",
+    ),
+    inputMimes: z.array(ImageMime),
+    maxInputImages: z.number().int().nonnegative().describe("0 means generation only."),
+    maxInputImagesProvenance: NonBlankString.describe(
+      "What the bound is: the upstream tool's own edit cap, not a proven provider maximum.",
+    ),
+    supportedOptions: z.array(z.enum(["size", "quality", "background", "n"])),
+  })
+  .strict()
+  .describe(
+    "Structural image facet declared by one model source; absent means no image operations.",
+  );
+export type ImageGenerationCapability = z.infer<typeof ImageGenerationCapability>;
+
+/** The query value that selects the image schema on the existing model-operation POST. */
+export const MODEL_OPERATION_IMAGE_KIND = "image" as const;
+export const ModelOperationRequestKind = z.literal(MODEL_OPERATION_IMAGE_KIND);
+export type ModelOperationRequestKind = z.infer<typeof ModelOperationRequestKind>;
+
 export const ModelPayloadRef = z
   .object({
     resourceId: Id,
@@ -268,6 +302,9 @@ export const ControlModelSourcesAccountsResponse = z
       ControlModelSourcesResponse.shape.sources.element.extend({
         processingPreferences: z.array(ProcessingPreference),
         accountCatalog: z.literal(true),
+        imageGeneration: ImageGenerationCapability.optional().describe(
+          "Add-only: present when this source declares image generation/edit operations.",
+        ),
       }),
     ),
   })
@@ -386,6 +423,9 @@ export const ModelOperationParams = z
   .object({
     kind: z.literal("model"),
     request: ModelPayloadRef,
+    requestKind: ModelOperationRequestKind.optional().describe(
+      "Omitted preserves the text ModelCallRequest; image selects ImageCallRequest. Part of idempotency identity.",
+    ),
     captureFailureEvidence: z.literal(true).optional(),
     captureEffortEvidence: z.literal(true).optional(),
   })

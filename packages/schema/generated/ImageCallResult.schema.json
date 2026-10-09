@@ -12,6 +12,65 @@
             "unknown"
           ]
         },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "generate",
+            "edit"
+          ]
+        },
+        "requestedModel": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "The model the caller asked for. route.model contains only a provider-observed model, or null."
+        },
+        "images": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mime": {
+                "type": "string",
+                "enum": [
+                  "image/png",
+                  "image/jpeg",
+                  "image/webp"
+                ],
+                "description": "Sniffed from the decoded bytes."
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$",
+                "description": "Digest of the decoded bytes."
+              },
+              "sizeBytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "dataBase64": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The provider's b64_json, exact."
+              },
+              "generationId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "mime",
+              "sha256",
+              "sizeBytes",
+              "dataBase64",
+              "generationId"
+            ],
+            "additionalProperties": false
+          },
+          "description": "Every usable returned item, in provider order; rejected items are diagnosed in problem."
+        },
         "route": {
           "type": "object",
           "properties": {
@@ -45,75 +104,235 @@
           "additionalProperties": false,
           "description": "Selected route at dispatch; a result records the actually observed model, or null."
         },
-        "data": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "b64_json": {
-                    "type": "string",
-                    "minLength": 1,
-                    "pattern": "\\S",
-                    "description": "User-supplied string that must contain visible content, not just whitespace."
-                  },
-                  "generation_id": {
-                    "type": "string"
-                  },
-                  "size": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "b64_json"
-                ],
-                "additionalProperties": false
-              }
+        "appliedOptions": {
+          "type": "object",
+          "properties": {
+            "size": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S",
+              "description": "Vendor size token, e.g. \"auto\" or \"1024x1024\"."
             },
-            {
-              "type": "null"
+            "quality": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "auto"
+              ]
+            },
+            "background": {
+              "type": "string",
+              "enum": [
+                "transparent",
+                "opaque",
+                "auto"
+              ]
+            },
+            "n": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 10,
+              "description": "Requested image count in ONE provider request. Omitted sends no n; the provider may return several items either way."
             }
-          ]
+          },
+          "additionalProperties": false,
+          "description": "As reported by the provider response."
         },
         "usage": {
-          "anyOf": [
-            {
+          "type": "object",
+          "properties": {
+            "input_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "output_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "cached_input_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "cache_write_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "reasoning_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "additionalProperties": false,
+          "description": "Provider-reported counters for one generation; missing counters remain null."
+        },
+        "cost": {
+          "type": "object",
+          "properties": {
+            "processing": {
               "type": "object",
               "properties": {
-                "input_tokens": {
+                "nativeMode": {
                   "anyOf": [
                     {
-                      "type": "integer",
-                      "minimum": 0
+                      "$ref": "#/definitions/ImageCallResult/properties/appliedOptions/properties/size"
                     },
                     {
                       "type": "null"
                     }
                   ],
-                  "default": null
+                  "description": "User-supplied string that must contain visible content, not just whitespace."
                 },
-                "output_tokens": {
-                  "anyOf": [
-                    {
-                      "type": "integer",
-                      "minimum": 0
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "default": null
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "included",
+                    "paid_credits",
+                    "cash",
+                    "valuation",
+                    "unknown"
+                  ]
+                },
+                "source": {
+                  "$ref": "#/definitions/ImageCallResult/properties/appliedOptions/properties/size"
                 }
               },
+              "required": [
+                "nativeMode",
+                "kind",
+                "source"
+              ],
               "additionalProperties": false,
-              "description": "Provider-reported counters for one image generation; missing counters remain null."
+              "description": "Mode-qualified billing evidence for an existing cost record. Authentication alone does not establish included premium service; credits, cash, and token valuation stay distinct."
             },
-            {
-              "type": "null"
+            "knowledge": {
+              "type": "string",
+              "enum": [
+                "exact",
+                "estimated",
+                "unknown"
+              ],
+              "description": "Quality of incremental-cash cost evidence for an operation."
+            },
+            "billing": {
+              "type": "string",
+              "enum": [
+                "proven_zero",
+                "subscription_entitlement",
+                "metered",
+                "unknown"
+              ],
+              "description": "What is actually known about incremental billing; a native credential route alone never proves entitlement or zero cost."
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "provenance": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            },
+            "estimatedUsd": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "cashUsd": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "valuationUsd": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "valuationKnowledge": {
+              "$ref": "#/definitions/ImageCallResult/properties/cost/properties/knowledge",
+              "default": "unknown",
+              "description": "Quality of incremental-cash cost evidence for an operation."
             }
+          },
+          "required": [
+            "knowledge",
+            "billing",
+            "source",
+            "provenance"
           ],
-          "description": "Provider-reported counters for one image generation; missing counters remain null."
+          "additionalProperties": false,
+          "description": "Incremental cash and token valuation are independent; subscription credentials alone never invent a cash receipt."
+        },
+        "providerRequestId": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "problem": {
           "anyOf": [
@@ -178,13 +397,18 @@
       },
       "required": [
         "outcome",
+        "operation",
+        "requestedModel",
+        "images",
         "route",
-        "data",
+        "appliedOptions",
         "usage",
+        "cost",
+        "providerRequestId",
         "problem"
       ],
       "additionalProperties": false,
-      "description": "One provider image outcome. data is null unless the provider returned decodable images; base64 payloads live only in the image-purpose result resource."
+      "description": "One provider image outcome; base64 lives only in this private result resource, never in model text."
     }
   },
   "$schema": "http://json-schema.org/draft-07/schema#"

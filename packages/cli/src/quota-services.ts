@@ -9,10 +9,11 @@ import { ControlQuotaRefreshRequest, withQuotaAvailability } from "@claudexor/sc
  * own boundary. POST accepts an optional model to compute state against. */
 export function quotaControlServices(quotaRegistry: () => QuotaRegistry) {
   return {
-    quota: async () => withQuotaAvailability(quotaRegistry().read()),
+    quota: async (input?: unknown) =>
+      withQuotaAvailability(quotaRegistry().read(), ControlQuotaRefreshRequest.parse(input ?? {})),
     refreshQuota: async (input?: unknown) => {
       const request = ControlQuotaRefreshRequest.parse(input ?? {});
-      return withQuotaAvailability(await quotaRegistry().refresh(), { model: request.model });
+      return withQuotaAvailability(await quotaRegistry().refresh(), request);
     },
   };
 }

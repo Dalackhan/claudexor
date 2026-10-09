@@ -8,6 +8,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { HarnessEvent, VendorFailureEvidence } from "@claudexor/schema";
+import { codexQuotaRequestKind } from "./quota.js";
 
 /**
  * Route proof: recover the model codex ACTUALLY ran from its own session
@@ -84,6 +85,9 @@ export function codexTranscriptRateLimits(
       const rl = (obj as { payload?: { rate_limits?: Record<string, unknown> } })?.payload
         ?.rate_limits;
       if (!rl || typeof rl !== "object") continue;
+      const bucketId = typeof rl["limit_id"] === "string" ? rl["limit_id"] : "default";
+      const requestKind = codexQuotaRequestKind(bucketId);
+      if (requestKind === null) continue;
       const constraints = Object.entries(rl).flatMap(([id, value]) => {
         if (!value || typeof value !== "object") return [];
         const w = value as Record<string, unknown>;
@@ -99,8 +103,9 @@ export function codexTranscriptRateLimits(
         const minutes = w["window_minutes"];
         return [
           {
-            id,
+            id: requestKind === "image" ? `${bucketId}:${id}` : id,
             label: id,
+            applies_to_request_kinds: [requestKind],
             used_ratio: Math.min(1, Math.max(0, rawUsed / 100)),
             window_seconds:
               typeof minutes === "number" && Number.isFinite(minutes) && minutes > 0

@@ -1,6 +1,6 @@
 # @claudexor/util
 
-## 3.26.0
+## 4.0.0
 
 ### Minor Changes
 

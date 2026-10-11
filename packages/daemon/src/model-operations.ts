@@ -8,7 +8,6 @@ import {
   ModelOperationReceipt,
   ModelUsage,
   isTerminalLifecycle,
-  isModelOperation,
   type CancelReasonCode,
   type CredentialProfile,
   type ModelOperationRequestKind,
@@ -16,9 +15,10 @@ import {
   type ModelResponseCustody,
 } from "@claudexor/schema";
 import { redactSecrets } from "@claudexor/util";
-import { commandStoreForId, commandStores, type CommandAuthority } from "./command-authority.js";
+import { commandStoreForId, type CommandAuthority } from "./command-authority.js";
 import { findAcceptedCommand } from "./command-rpc.js";
 import type { JobRecord, RunContext } from "./server.js";
+import type { ModelResourceQueries } from "./store/command-queries.js";
 import {
   emptyDispatch,
   operationError,
@@ -34,11 +34,11 @@ export interface ModelPayloadStore {
   readModel(ref: ModelPayloadRef): Buffer;
   publishModel(bytes: Uint8Array): ModelPayloadRef;
   releaseModel(ref: ModelPayloadRef): void;
+  expireModel(ref: ModelPayloadRef, expiredAt: string): void;
   listModelResources(): Array<ModelPayloadRef & { createdAt: string }>;
 }
 
-export interface ModelOperationDependencies {
-  commands: CommandAuthority;
+interface ModelOperationServices {
   resources: () => ModelPayloadStore;
   enqueue(envelope: {
     request: ModelOperationParams;
@@ -67,6 +67,13 @@ export interface ModelOperationDependencies {
   now?: () => Date;
   warn?: (message: string) => void;
 }
+
+/** Addressed custody queries are part of the persistence contract. */
+export interface ModelOperationPersistence {
+  commands: CommandAuthority;
+  resourceQueries: ModelResourceQueries;
+}
+export type ModelOperationDependencies = ModelOperationServices & ModelOperationPersistence;
 
 /** A model command reuses daemon queue/cancel/command authority. This owns only
  * the generation's payload custody; it has no scheduler or conversation cache. */
@@ -221,18 +228,18 @@ export class ModelOperations {
   reconcileResources(dryRun = false): { released: string[]; errors: string[] } {
     const report = { released: [] as string[], errors: [] as string[] };
     const now = this.now().getTime();
-    const records = this.records();
-    const terminalRefs = new Set<string>();
+    const queries = this.deps.resourceQueries;
+    const records = queries
+      .expiredResponses(new Date(now).toISOString())
+      .map((id) => this.record(id));
     for (const record of records) {
       if (!isTerminalLifecycle(record.state)) continue;
       const params = ModelOperationParams.safeParse(record.params);
       // A malformed raw command is refused by execution; it owns no valid
       // payload ref and cannot prevent unrelated resource reconciliation.
       if (!params.success) continue;
-      terminalRefs.add(params.data.request.resourceId);
       const evidence = this.evidence(record);
       const response = this.responseAt(evidence.response, now);
-      if (response.state !== "absent") terminalRefs.add(response.ref.resourceId);
       if (response.state === "expired" && evidence.response.state === "ready" && !dryRun) {
         this.update(
           record.id,
@@ -240,18 +247,20 @@ export class ModelOperations {
         );
       }
     }
-    const liveRefs = this.retainedResources(now, records);
+    const liveRefs = {
+      has: (id: string) => queries.retainsResourceBytes(id, new Date(now).toISOString()),
+    };
     for (const ref of this.deps.resources().listModelResources()) {
       if (liveRefs.has(ref.resourceId)) continue;
       // A newly finalized input may still be on its way to create. Unbound
       // resources from before this daemon's birth are crash residue.
-      const boundTerminal = terminalRefs.has(ref.resourceId);
+      const boundTerminal = queries.hasTerminalResourceReceipt(ref.resourceId);
       if (!boundTerminal && Date.parse(ref.createdAt) >= this.startedAt) continue;
       report.released.push(ref.resourceId);
       if (!dryRun) {
         try {
           const { createdAt: _createdAt, ...payload } = ref;
-          this.deps.resources().releaseModel(payload);
+          this.releasePayload(payload);
         } catch (error) {
           report.errors.push(redactSecrets(String(error)));
         }
@@ -279,12 +288,6 @@ export class ModelOperations {
     if (ref.sizeBytes > 144 * 1024 * 1024)
       throw operationError("image_request_too_large", "The image request exceeds 144 MiB", 413);
     return readModelPayload(this.deps.resources(), ref, ImageCallRequest, "ImageCallRequest");
-  }
-
-  private records(): JobRecord[] {
-    return commandStores(this.deps.commands)
-      .flatMap((store) => store.records())
-      .filter((record) => isModelOperation(record.params));
   }
 
   private record(id: string): JobRecord {
@@ -331,39 +334,43 @@ export class ModelOperations {
       : response;
   }
 
-  private retainedResources(now: number, records = this.records()): Set<string> {
-    const refs = new Set<string>();
-    for (const record of records) {
-      if (!isTerminalLifecycle(record.state)) {
-        const params = ModelOperationParams.safeParse(record.params);
-        if (params.success) refs.add(params.data.request.resourceId);
-      }
-      const response = this.responseAt(this.evidence(record).response, now);
-      if (response.state === "ready") refs.add(response.ref.resourceId);
-    }
-    return refs;
-  }
-
   private releaseIfUnused(ref: ModelPayloadRef): void {
-    if (this.retainedResources(this.now().getTime()).has(ref.resourceId)) return;
+    const retained = this.deps.resourceQueries.retainsResourceBytes(
+      ref.resourceId,
+      this.now().toISOString(),
+    );
+    if (retained) return;
     try {
-      this.deps.resources().releaseModel(ref);
+      this.releasePayload(ref);
     } catch (error) {
       this.deps.warn?.(`Model payload cleanup remains pending: ${redactSecrets(String(error))}`);
     }
   }
 
+  private releasePayload(ref: ModelPayloadRef): void {
+    const now = this.now().getTime();
+    const responses = this.deps.resourceQueries
+      .responsesForResource(ref.resourceId)
+      .map((record) => this.responseAt(this.evidence(record).response, now))
+      .filter(
+        (response) => response.state !== "absent" && response.ref.resourceId === ref.resourceId,
+      );
+    // A recorded expiry remains the release instant after a failed cleanup or
+    // restart. Shared response owners must all expire; an ACK uses ordinary release.
+    const expiries = responses.flatMap((response) =>
+      response.state === "expired" ? [response.releasedAt] : [],
+    );
+    if (expiries.length && expiries.length === responses.length) {
+      const latest = expiries.reduce((a, b) => (Date.parse(a) >= Date.parse(b) ? a : b));
+      this.deps.resources().expireModel(ref, latest);
+    } else this.deps.resources().releaseModel(ref);
+  }
+
   private armExpiry(): void {
     if (this.expiryTimer) clearTimeout(this.expiryTimer);
     if (this.closed) return;
-    const due = this.records()
-      .map((record) => this.evidence(record).response)
-      .filter(
-        (response): response is Extract<ModelResponseCustody, { state: "ready" }> =>
-          response.state === "ready",
-      )
-      .map((response) => Date.parse(response.expiresAt))
-      .filter(Number.isFinite);
+    const nextExpiry = this.deps.resourceQueries.nextResponseExpiry();
+    const due = (nextExpiry ? [Date.parse(nextExpiry)] : []).filter(Number.isFinite);
     if (!due.length) return;
     const next = due.reduce((earliest, value) => Math.min(earliest, value), Infinity);
     const delay = Math.max(1, Math.min(2_147_483_647, next - this.now().getTime()));

@@ -12,6 +12,7 @@ import {
   type ModelPayloadRef,
 } from "@claudexor/schema";
 import { errorCode, redactSecrets } from "@claudexor/util";
+import { commandStoreForId } from "./command-authority.js";
 import type { ModelOperationDependencies, ModelPayloadStore } from "./model-operations.js";
 import type { RunContext } from "./server.js";
 
@@ -63,15 +64,18 @@ export async function executeModelOperation(
 ): Promise<ModelOperationReceipt> {
   const now = () => (deps.now ?? (() => new Date()))();
   let evidence = emptyEvidence();
+  let dispatchAttempted = false;
+  let barrierProblem: ControlProblem | null = null;
   try {
     const onDispatch: ModelAdapterContext["onDispatch"] = async (route) => {
       ctx.signal.throwIfAborted();
-      if (evidence.dispatch.state !== "not_started") {
+      if (dispatchAttempted) {
         throw operationError(
           "duplicate_model_dispatch",
           "A model operation may send inference only once",
         );
       }
+      dispatchAttempted = true;
       const dispatch: ModelDispatch = {
         state: "started",
         startedAt: now().toISOString(),
@@ -81,8 +85,38 @@ export async function executeModelOperation(
       // The adapter cannot POST until this callback returns. A rejected
       // journal write therefore never becomes evidence of a response.
       evidence.dispatch = dispatch;
+      try {
+        await commandStoreForId(deps.commands, ctx.jobId)!.flushed();
+      } catch (error) {
+        barrierProblem = ControlProblem.parse({
+          code: "store_flush_unavailable",
+          retryable: true,
+          message: redactSecrets(error instanceof Error ? error.message : String(error)),
+        });
+        evidence = {
+          ...evidence,
+          dispatch: { ...dispatch, state: "not_started" },
+          problem: barrierProblem,
+        };
+        update(evidence);
+        throw Object.assign(new Error(barrierProblem.message), { problem: barrierProblem });
+      }
+      if (ctx.signal.aborted) {
+        // The adapter is still waiting inside this callback: no POST occurred.
+        evidence.dispatch = { ...dispatch, state: "not_started" };
+        update(evidence);
+        ctx.signal.throwIfAborted();
+      }
     };
     const result = await invokeModelOperation(params, deps, ctx.signal, onDispatch, ctx.jobId);
+    // An adapter may translate the callback rejection into its normal failed
+    // response. The durable no-dispatch proof still owns this failure.
+    if (barrierProblem)
+      return ModelOperationReceipt.parse({
+        lifecycle: "failed",
+        ...evidence,
+        problem: barrierProblem,
+      });
     evidence.usage = result.usage;
     evidence.cost = result.cost;
     evidence.problem = result.problem;
@@ -138,7 +172,7 @@ export async function executeModelOperation(
     return ModelOperationReceipt.parse({ lifecycle, ...evidence });
   } catch (error) {
     const sent = evidence.dispatch.state !== "not_started";
-    evidence.problem = problemFrom(error);
+    evidence.problem = barrierProblem ?? problemFrom(error);
     if (sent && evidence.dispatch.state !== "response_received") {
       evidence.dispatch = { ...evidence.dispatch, state: "unknown" };
     }

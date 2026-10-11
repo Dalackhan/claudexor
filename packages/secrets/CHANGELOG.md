@@ -1,11 +1,11 @@
 # @claudexor/secrets
 
-## 3.26.0
+## 4.0.0
 
 ### Patch Changes
 
 - Updated dependencies [2fbf7c9]
-  - @claudexor/util@3.26.0
+  - @claudexor/util@4.0.0
 
 ## 3.25.1
 

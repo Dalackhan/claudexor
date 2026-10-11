@@ -1,30 +1,25 @@
 # @claudexor/orchestrator
 
-## 3.26.0
-
-### Minor Changes
-
-- Generate and edit images through subscription-backed Codex accounts as a payload kind of the existing caller-owned model operations. Upload an `ImageCallRequest` with `purpose: "model"` and create it with `POST /v2/model-operations?requestKind=image` (omission stays text): the same idempotency key, queue, cancellation, private result with 30-day unacknowledged retention and whole-result digest ACK serve both kinds, with no second scheduler and no subscription-to-API fallback. `ImageCallResult` keeps the requested model apart from the provider-observed route model, the applied options, reported usage, unknown cash and every usable image with its verified MIME, size and digest; rejected siblings are named in the problem context instead of discarding the good ones. `GET /v2/model-sources?view=accounts` declares the source's structural `imageGeneration` facet, whose model ids are presence hints, not an entitlement. Quota constraints may declare `applies_to_request_kinds` (absent applies to both kinds): Codex `codex`/`default` windows are text and `image_gen` is image, an image 429 with an observed reset enters the registry as image-only evidence, and `GET /v2/quota` (including its resources and constraint-freshness views) and `POST /v2/quota` accept optional `requestKind` and `model`. Image windows stay visible in Accounts, labelled, but no longer drive text availability, the compact text percentage, the cooldown badge or a run's quota-pressure disclosure; legacy unscoped windows keep applying to both kinds. Live proof covers one generation and one edit through the real adapter on one managed account; other accounts' entitlement, image quota headers and the released live chain remain unverified. Thanks to @josephsteuerjr for the original image-operations contribution (#428).
+## 4.0.0
 
 ### Patch Changes
 
-- Updated dependencies
 - Updated dependencies [2fbf7c9]
-  - @claudexor/schema@3.26.0
-  - @claudexor/core@3.26.0
-  - @claudexor/budget@3.26.0
-  - @claudexor/event-log@3.26.0
-  - @claudexor/util@3.26.0
-  - @claudexor/config@3.26.0
-  - @claudexor/arbitration@3.26.0
-  - @claudexor/context@3.26.0
-  - @claudexor/delivery@3.26.0
-  - @claudexor/gateway@3.26.0
-  - @claudexor/policy@3.26.0
-  - @claudexor/review@3.26.0
-  - @claudexor/workspace@3.26.0
-  - @claudexor/artifact-store@3.26.0
-  - @claudexor/synthesis@3.26.0
+  - @claudexor/schema@4.0.0
+  - @claudexor/event-log@4.0.0
+  - @claudexor/util@4.0.0
+  - @claudexor/config@4.0.0
+  - @claudexor/arbitration@4.0.0
+  - @claudexor/budget@4.0.0
+  - @claudexor/context@4.0.0
+  - @claudexor/core@4.0.0
+  - @claudexor/delivery@4.0.0
+  - @claudexor/gateway@4.0.0
+  - @claudexor/policy@4.0.0
+  - @claudexor/review@4.0.0
+  - @claudexor/workspace@4.0.0
+  - @claudexor/artifact-store@4.0.0
+  - @claudexor/synthesis@4.0.0
 
 ## 3.25.1
 

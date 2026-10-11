@@ -9,6 +9,7 @@ import { ControlProblem } from "./problem.js";
 import { RunLifecycle } from "./status-projection.js";
 import { TokenUsage } from "./telemetry.js";
 import { ProcessingCapability, ProcessingPreference, ProcessingReceipt } from "./processing.js";
+import { JobAdmission } from "./runtime-concurrency.js";
 
 /** Decoded-byte MIME types the image facet accepts as edit references and
  * recognizes in a provider result. Sniffed from magic bytes, never trusted
@@ -484,6 +485,11 @@ export const ControlModelOperationDetail = z
   .object({
     id: Id,
     state: RunLifecycle,
+    admission: JobAdmission.nullable()
+      .optional()
+      .describe(
+        "Current scheduler observation for this operation; absent on engines without admission disclosure.",
+      ),
     createdAt: IsoTimestamp,
     startedAt: IsoTimestamp.nullable(),
     finishedAt: IsoTimestamp.nullable(),

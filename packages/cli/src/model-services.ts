@@ -7,6 +7,7 @@ import {
   type CredentialUnusableLedger,
   type DaemonClient,
   type ModelOperationDependencies,
+  type ModelOperationPersistence,
   type QuotaRegistry,
 } from "@claudexor/daemon";
 import { createCodexModelAdapter, describeCodexClientVersion } from "@claudexor/harness-codex";
@@ -29,6 +30,7 @@ import {
   type QuotaRequestKind,
   type ModelAccountChoice,
   type ModelCallResult,
+  type JobAdmission,
 } from "@claudexor/schema";
 import { errorCode, noProjectRepoRoot, redactSecrets } from "@claudexor/util";
 import { accountsMigrationGate } from "./accounts-unified-migration.js";
@@ -37,6 +39,7 @@ import { credentialUnusableLedger } from "./run-orchestrator.js";
 import type { RetentionRunner } from "./retention-service.js";
 import { catalogProfiles, enumerateAccountCatalogs } from "./account-catalog.js";
 import { bindModelAccountEvidence, withImageAccountEvidence } from "./model-account-evidence.js";
+import { modelOperationControlServices } from "./model-operation-control.js";
 import { modelError, poolExhausted } from "./model-service-refusals.js";
 
 /**
@@ -52,16 +55,18 @@ interface ModelSource {
   credentialHarness: string;
 }
 
-interface Dependencies extends Pick<ModelOperationDependencies, "commands" | "resources" | "warn"> {
-  client: Pick<DaemonClient, "enqueue" | "cancel">;
-  quota: () => QuotaRegistry;
-  config?: () => GlobalConfig;
-  registry?: AdapterRegistry;
-  sources?: readonly ModelSource[];
-  unusable?: CredentialUnusableLedger;
-  substitutions?: ModelSubstitutionLedger;
-  migrationGate?: typeof accountsMigrationGate;
-}
+type Dependencies = ModelOperationPersistence &
+  Pick<ModelOperationDependencies, "resources" | "warn"> & {
+    client: Pick<DaemonClient, "enqueue" | "cancel">;
+    admission?: (id: string) => JobAdmission | null;
+    quota: () => QuotaRegistry;
+    config?: () => GlobalConfig;
+    registry?: AdapterRegistry;
+    sources?: readonly ModelSource[];
+    unusable?: CredentialUnusableLedger;
+    substitutions?: ModelSubstitutionLedger;
+    migrationGate?: typeof accountsMigrationGate;
+  };
 
 /** Model transport composition shares account, quota, command, and retention owners
  * with Agents. It never starts an Agent Run or creates another routing ledger. */
@@ -363,6 +368,7 @@ export function createModelServices(deps: Dependencies) {
 
   const operations = new ModelOperations({
     commands: deps.commands,
+    resourceQueries: deps.resourceQueries,
     resources: deps.resources,
     warn: deps.warn,
     enqueue: ({ request, ...options }) => deps.client.enqueue(request, options),
@@ -516,25 +522,7 @@ export function createModelServices(deps: Dependencies) {
           partial: accounts.some((entry) => entry.catalog === null),
         });
       },
-      createModelOperation: (
-        request: Parameters<typeof operations.create>[0],
-        idempotencyKey: string,
-        captureFailureEvidence?: boolean,
-        captureEffortEvidence?: boolean,
-        requestKind?: Parameters<typeof operations.create>[4],
-      ) =>
-        operations.create(
-          request,
-          idempotencyKey,
-          captureFailureEvidence,
-          captureEffortEvidence,
-          requestKind,
-        ),
-      getModelOperation: async (id: string) => operations.inspect(id),
-      readModelResult: async (id: string) => operations.readResult(id),
-      acknowledgeModelResult: async (id: string, sha256: string) =>
-        operations.acknowledge(id, sha256),
-      cancelModelOperation: operations.cancel.bind(operations),
+      ...modelOperationControlServices(operations, deps.admission),
     },
     withRetention:
       (run: RetentionRunner): RetentionRunner =>

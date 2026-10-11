@@ -1,21 +1,22 @@
 # @claudexor/daemon
 
-## 3.26.0
+## 4.0.0
+
+### Major Changes
+
+- Move engine state to one SQLite store with addressed reads, resumable legacy import, generation-scoped recovery and explicit durability barriers. Require Node 24.15 or newer. Remove the implicit shared admission ceiling, preserve explicit global caps, and allow separate model and long-session caps in the existing queue. Preserve managed host bindings across plugin repair. Engine 4.0 requires desktop application 4.0; the updater keeps an older working engine until the app is updated. Legacy journals, run artifacts and accounts remain intact; the migrated format supports forward recovery, not downgrade to 3.x.
 
 ### Minor Changes
 
-- Generate and edit images through subscription-backed Codex accounts as a payload kind of the existing caller-owned model operations. Upload an `ImageCallRequest` with `purpose: "model"` and create it with `POST /v2/model-operations?requestKind=image` (omission stays text): the same idempotency key, queue, cancellation, private result with 30-day unacknowledged retention and whole-result digest ACK serve both kinds, with no second scheduler and no subscription-to-API fallback. `ImageCallResult` keeps the requested model apart from the provider-observed route model, the applied options, reported usage, unknown cash and every usable image with its verified MIME, size and digest; rejected siblings are named in the problem context instead of discarding the good ones. `GET /v2/model-sources?view=accounts` declares the source's structural `imageGeneration` facet, whose model ids are presence hints, not an entitlement. Quota constraints may declare `applies_to_request_kinds` (absent applies to both kinds): Codex `codex`/`default` windows are text and `image_gen` is image, an image 429 with an observed reset enters the registry as image-only evidence, and `GET /v2/quota` (including its resources and constraint-freshness views) and `POST /v2/quota` accept optional `requestKind` and `model`. Image windows stay visible in Accounts, labelled, but no longer drive text availability, the compact text percentage, the cooldown badge or a run's quota-pressure disclosure; legacy unscoped windows keep applying to both kinds. Live proof covers one generation and one edit through the real adapter on one managed account; other accounts' entitlement, image quota headers and the released live chain remain unverified. Thanks to @josephsteuerjr for the original image-operations contribution (#428).
 - 2fbf7c9: Keep the daemon responsive under load without changing any on-disk format. The control API, model operations and harness maintenance reach the daemon's dispatcher in process (`DaemonLocalClient`), so a slow event loop no longer turns their calls into ten-second `daemon_busy` failures; problem fields are unchanged and socket clients keep their transport bound. `ControlDaemonStatus.loop` reports the last ten-second event-loop window (delay p50/p99/max, busy share, GC pauses) as facts, and `claudexor daemon status` prints it. `POST /v2/projects` answers `created`, which `claudexor project register` prints. Run detail reads `lastSeq` from the live writer or the log tail, the project list computes nesting in one pass, `appendLine` takes Node's UTF-8 write without a mkdir per line, Codex rate limits are read incrementally, pid snapshots are written asynchronously on change only, per-request config reads reuse the parse until a source changes, and the control API sets explicit HTTP keep-alive, header and request timeouts.
 
 ### Patch Changes
 
-- Updated dependencies
 - Updated dependencies [2fbf7c9]
-  - @claudexor/schema@3.26.0
-  - @claudexor/core@3.26.0
-  - @claudexor/util@3.26.0
-  - @claudexor/workspace@3.26.0
-  - @claudexor/journal@3.26.0
+  - @claudexor/schema@4.0.0
+  - @claudexor/util@4.0.0
+  - @claudexor/core@4.0.0
+  - @claudexor/workspace@4.0.0
 
 ## 3.25.1
 

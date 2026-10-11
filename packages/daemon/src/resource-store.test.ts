@@ -1,9 +1,11 @@
+/** Historical replay/file contract against the sealed legacy reference.
+ * SQL serving behavior is covered by store/resource-contract.test.ts. */
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ResourceStore } from "./resource-store.js";
+import { ResourceStore } from "./store/test-support/fixtures/legacy/daemon/resource-store.js";
 import { rmSync as __rmSyncReap } from "node:fs";
 import { afterAll as __afterAllReap } from "vitest";
 
@@ -183,44 +185,5 @@ describe("ResourceStore", () => {
     }
     expect(resolveError).toMatchObject({ code: "sensitive_resource_rejected", status: 422 });
     expect(String(resolveError)).not.toContain(tokenLike);
-  });
-
-  it("isolates image request uploads from Agent attachments without filtering caller image content", async () => {
-    const root = reapMk(join(tmpdir(), "claudexor-image-resource-"));
-    const store = new ResourceStore(root);
-    const bytes = Buffer.from(JSON.stringify({ prompt: `ghp_${"z".repeat(24)}` }));
-    const upload = store.create(
-      {
-        purpose: "model",
-        kind: "file",
-        mime: "application/json",
-        name: "image-request.json",
-        sizeBytes: bytes.length,
-      },
-      "image-upload",
-    );
-    await store.write(upload.uploadId, chunks(bytes.toString("utf8")));
-    const image = store.finalize(upload.uploadId, undefined, "image-finalize");
-    const imageRef = {
-      resourceId: image.resourceId,
-      sha256: image.sha256,
-      sizeBytes: image.sizeBytes,
-    };
-    expect(store.readModel(imageRef).equals(bytes)).toBe(true);
-    expect(() => store.resolve([{ resourceId: image.resourceId }])).toThrowError(
-      expect.objectContaining({ code: "resource_purpose_mismatch" }),
-    );
-    expect(store.listModelResources().map((ref) => ref.resourceId)).toEqual([image.resourceId]);
-
-    const modelRef = store.publishModel(bytes);
-    store.releaseModel(modelRef);
-    expect(store.readModel(imageRef).equals(bytes)).toBe(true); // shared blob remains owned
-    const reopened = new ResourceStore(root);
-    expect(reopened.readModel(imageRef).equals(bytes)).toBe(true);
-    reopened.releaseModel(imageRef);
-    expect(reopened.listModelResources()).toEqual([]);
-    expect(() => reopened.readModel(imageRef)).toThrowError(
-      expect.objectContaining({ code: "resource_not_found" }),
-    );
   });
 });

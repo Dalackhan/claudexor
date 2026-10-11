@@ -1,18 +1,17 @@
 # @claudexor/review
 
-## 3.26.0
+## 4.0.0
 
 ### Patch Changes
 
-- Updated dependencies
 - Updated dependencies [2fbf7c9]
-  - @claudexor/schema@3.26.0
-  - @claudexor/core@3.26.0
-  - @claudexor/budget@3.26.0
-  - @claudexor/util@3.26.0
-  - @claudexor/config@3.26.0
-  - @claudexor/context@3.26.0
-  - @claudexor/workspace@3.26.0
+  - @claudexor/schema@4.0.0
+  - @claudexor/util@4.0.0
+  - @claudexor/config@4.0.0
+  - @claudexor/budget@4.0.0
+  - @claudexor/context@4.0.0
+  - @claudexor/core@4.0.0
+  - @claudexor/workspace@4.0.0
 
 ## 3.25.1
 

@@ -1,9 +1,9 @@
+import { sqlFixture } from "./store/test-support/sql-fixture.js";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DurableJournal } from "@claudexor/journal";
 import type { ModelAdapter } from "@claudexor/core";
 import {
   CredentialProfile,
@@ -12,10 +12,8 @@ import {
   ModelOperationParams,
   type ModelPayloadRef,
 } from "@claudexor/schema";
-import { CommandStore } from "./command-store.js";
 import { DaemonClient } from "./client.js";
 import { DaemonServer } from "./server.js";
-import { ResourceStore } from "./resource-store.js";
 import { ModelOperations } from "./model-operations.js";
 
 const cleanup: Array<() => Promise<void>> = [];
@@ -75,10 +73,10 @@ async function fixture(
 ) {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "cx-moi-")));
   const clock = new Date();
-  const journal = new DurableJournal({ rootDir: join(root, "journal"), partition: "global" });
-  const store = new CommandStore(journal, () => clock);
-  const commands = { current: () => store };
-  const resources = new ResourceStore(join(root, "resources"));
+  const sql = await sqlFixture(root, () => clock);
+  const store = sql.graph.commands.current();
+  const commands = sql.graph.commands;
+  const resources = sql.graph.resources;
   const socket =
     process.platform === "win32"
       ? `\\\\.\\pipe\\cx-moi-${randomUUID()}`
@@ -122,6 +120,7 @@ async function fixture(
   const resolveImage = vi.fn(async () => ({ adapter, profile }));
   const operations = new ModelOperations({
     commands,
+    resourceQueries: commands.queries,
     resources: () => resources,
     now: () => clock,
     enqueue: (envelope) => client.call("claudexor.enqueue", envelope),
@@ -141,7 +140,7 @@ async function fixture(
   cleanup.push(async () => {
     await server.stop();
     operations.close();
-    journal.close();
+    await sql.close();
     rmSync(root, { recursive: true, force: true });
   });
   const upload = (body: unknown = imageRequest()): ModelPayloadRef =>
@@ -153,11 +152,22 @@ async function fixture(
     );
     return operations.inspect(id);
   };
-  return { store, resources, operations, sends, textInvoke, resolveImage, upload, terminal, clock };
+  return {
+    records: sql.records,
+    store,
+    resources,
+    operations,
+    sends,
+    textInvoke,
+    resolveImage,
+    upload,
+    terminal,
+    clock,
+  };
 }
 
 describe("image requests over the existing model-operation substrate", () => {
-  it("runs one image dispatch through the same journal, publishes the exact result and releases on ACK", async () => {
+  it("runs one image dispatch through the same SQL store, publishes the exact result and releases on ACK", async () => {
     const f = await fixture();
     const created = await f.operations.create(
       f.upload(),
@@ -280,7 +290,7 @@ describe("image requests over the existing model-operation substrate", () => {
         "image",
       ),
     ).rejects.toMatchObject({ code: "model_request_invalid", status: 400 });
-    expect(f.store.records()).toHaveLength(0);
+    expect(f.records()).toHaveLength(0);
   });
 
   it("maps a completed response with no usable image to a failed lifecycle that keeps usage", async () => {

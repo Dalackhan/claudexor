@@ -1,17 +1,15 @@
+import { sqlFixture } from "../../daemon/src/store/test-support/sql-fixture.js";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelAdapter } from "@claudexor/core";
-import { DurableJournal } from "@claudexor/journal";
 import {
-  CommandStore,
   CredentialUnusableLedger,
   DaemonClient,
   DaemonServer,
   QuotaRegistry,
-  ResourceStore,
 } from "@claudexor/daemon";
 import {
   createCodexAdapter,
@@ -41,12 +39,11 @@ afterEach(async () => {
 
 async function fixture(imageDeps?: Parameters<typeof createCodexModelAdapter>[0]) {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "cx-msi-")));
-  const journal = new DurableJournal({ rootDir: join(root, "journal"), partition: "global" });
-  const commands = { current: () => store };
-  const store = new CommandStore(journal);
-  const quota = new QuotaRegistry(journal);
+  const sql = await sqlFixture(root);
+  const commands = sql.graph.commands;
+  const quota = new QuotaRegistry(sql.graph.globalEvents);
   const unusable = new CredentialUnusableLedger();
-  const resources = new ResourceStore(join(root, "resources"));
+  const resources = sql.graph.resources;
   const cfg = GlobalConfig.parse({
     credential_profiles: ["a", "b"].map((id) => ({
       profile_id: id,
@@ -183,6 +180,7 @@ async function fixture(imageDeps?: Parameters<typeof createCodexModelAdapter>[0]
   const client = new DaemonClient(socket, "fixture-control");
   const services = createModelServices({
     commands,
+    resourceQueries: commands.queries,
     resources: () => resources,
     client,
     quota: () => quota,
@@ -203,7 +201,7 @@ async function fixture(imageDeps?: Parameters<typeof createCodexModelAdapter>[0]
   cleanups.push(async () => {
     services.close();
     await server.stop();
-    journal.close();
+    await sql.close();
     rmSync(root, { recursive: true, force: true });
   });
   const run = async (kind: "image" | "text", account: ModelAccountChoice = { mode: "auto" }) => {
@@ -242,7 +240,7 @@ async function fixture(imageDeps?: Parameters<typeof createCodexModelAdapter>[0]
     invoke,
     imageInvoke,
     quota,
-    journal,
+    sql,
     unusable,
     failures,
     services,
@@ -591,7 +589,7 @@ describe("visible request-kind quota through the actual shared admission path", 
     // Full refresh supersedes matching incremental identities and previous full measurements.
     const newer = new Date(Date.now() + 10);
     for (const row of parseCodexRateLimitsResponse(full(20), newer, "a")) f.quota.upsert(row);
-    const restarted = new QuotaRegistry(f.journal).read();
+    const restarted = new QuotaRegistry(f.sql.graph.globalEvents).read();
     expect(
       restarted.snapshots.some((s) =>
         s.constraints.some((c) => c.applies_to_request_kinds?.includes("image")),

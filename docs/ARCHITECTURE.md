@@ -2863,8 +2863,9 @@ lost" when the stream ends without a terminal event.
 ### Daemon lifecycle (signals, orphans, crash GC)
 
 The engine-store migration is forward-fix only. Before publishing imported SQL
-state, startup advances the existing root-authority semantic floor to 4.0.0.
-Older engines then refuse that root with `root_authority_floor_regression`.
+state, startup advances the existing root-authority semantic floor to the
+running engine version. Older engines then refuse that root with
+`root_authority_floor_regression`.
 Keep preserved journals, SQL evidence and run artifacts; an older backup must
 not automatically replace later work. Logical partition recovery and physical
 whole-store recovery are described under

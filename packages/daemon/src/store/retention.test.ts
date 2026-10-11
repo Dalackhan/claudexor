@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { DurableJournal } from "./test-support/fixtures/legacy/journal/index.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { journalFoldPolicy } from "../journal-fold-policy.js";
+import { applyCommandPruneInTx } from "./command-prune.js";
 import { createPartition } from "./partitions.js";
 import {
   COMMAND_PRUNABLE_PAGE_SQL,
@@ -324,7 +325,16 @@ describeStore("event key deletes stay index-addressed (#446)", () => {
         type: "run.event",
         payload: { run_id: "r", task_id: "k", type: "run.completed", ts: "t", run_facts: {} },
       });
-      deleteEventKeysInTx(observed, generation.pid, ["c:x:a", "c:x:u"]);
+      applyCommandPruneInTx(observed, [
+        {
+          id: "x",
+          pid: generation.pid,
+          run_id: "r",
+          scope_root: null,
+          params_sha: "p".repeat(64),
+          result_sha: null,
+        },
+      ]);
     });
     const deletes = executed.filter((sql) => /^DELETE FROM event\b/.test(sql));
     expect(new Set(deletes)).toEqual(new Set([EVENT_SLOT_DELETE_SQL, EVENT_GROUP_DELETE_SQL]));

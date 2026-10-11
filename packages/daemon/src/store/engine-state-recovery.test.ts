@@ -2,6 +2,7 @@ import {
   mkdirSync,
   mkdtempSync,
   existsSync,
+  fsyncSync,
   readFileSync,
   readdirSync,
   realpathSync,
@@ -38,10 +39,23 @@ import { EngineStore } from "./store.js";
 import { createPartition } from "./partitions.js";
 import { globalGeneration, setGlobalGenerationInTx } from "./generations.js";
 
+vi.mock("node:fs", async (original) => {
+  const actual = await original<typeof import("node:fs")>();
+  return {
+    ...actual,
+    fsyncSync: vi.fn((fd: number) => {
+      // Windows requires write access for file flushes. Enforce that capability
+      // on POSIX too, without changing any bytes, then perform the real sync.
+      if (actual.fstatSync(fd).isFile()) actual.writeSync(fd, Buffer.alloc(0), 0, 0, 0);
+      actual.fsyncSync(fd);
+    }),
+  };
+});
+
 let root: string;
 const opened: EngineStore[] = [];
 beforeEach(() => {
-  root = realpathSync(mkdtempSync(join(tmpdir(), "cx-engine-recovery-")));
+  root = realpathSync.native(mkdtempSync(join(tmpdir(), "cx-engine-recovery-")));
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -254,6 +268,33 @@ describe("physical engine-state recovery", () => {
       { name: "engine.sqlite-wal", bytes: null, sha256: null },
       { name: "engine.sqlite-shm", bytes: null, sha256: null },
     ]);
+  });
+
+  it("preserves intent and source bytes after a closed-file sync failure, then resumes the same operation", async () => {
+    seed();
+    const f = lifecycle();
+    const close = f.owner.close;
+    f.owner.close = async () => {
+      await close();
+      vi.mocked(fsyncSync).mockImplementationOnce(() => {
+        throw new Error("closed engine file sync failed");
+      });
+    };
+    const current = api(f.owner),
+      request = input(current);
+    await expect(current.quarantineAndStartFresh(request)).rejects.toThrow(
+      "closed engine file sync failed",
+    );
+    const saved = operation();
+    expect(saved.phase).toBe("intent");
+    expect(f.created).toEqual([]);
+    expect(existsSync(join(root, "journal-quarantine"))).toBe(false);
+    for (const [name, bytes] of original) expect(readFileSync(join(root, name))).toEqual(bytes);
+    f.owner.close = close;
+    const receipt = await current.quarantineAndStartFresh(request);
+    expect(receipt.operationId).toBe(saved.operationId);
+    for (const [name, bytes] of original)
+      expect(readFileSync(join(receipt.quarantinePath, name))).toEqual(bytes);
   });
 
   it.each([

@@ -23,7 +23,7 @@ async function digestFile(path: string): Promise<string> {
 
 async function syncFile(path: string, directory = false): Promise<void> {
   try {
-    const fd = await open(path, "r");
+    const fd = await open(path, directory ? "r" : "r+");
     try {
       await fd.sync();
     } finally {
@@ -90,7 +90,7 @@ export async function exportSqlRecovery(
     });
     const createdAt = store.now().toISOString();
     const manifest = Buffer.from(
-      `${JSON.stringify({ schemaVersion: 1, exportId, partition, fingerprint: evidence.fingerprint, recovery, createdAt, scope: "whole_engine_store", storeId: evidence.storeId, generation: evidence.generation, counts: evidence.counts, entries, externalEvidence: "Per-run event logs, run artifacts and setup operational artifacts remain in their existing locations and are not included." }, null, 2)}\n`,
+      `${JSON.stringify({ schemaVersion: 1, exportId, partition, fingerprint: evidence.fingerprint, recovery, createdAt, scope: "whole_engine_store", storeId: evidence.storeId, generation: evidence.generation, counts: evidence.counts, entries, externalEvidence: "Upload .part files, legacy upload idempotency-key files not yet adopted into SQL, per-run event logs, run artifacts and setup operational artifacts remain in their existing locations and are not included." }, null, 2)}\n`,
     );
     const manifestPath = join(bundlePath, "manifest.json");
     const fd = await open(manifestPath, "wx", 0o400);

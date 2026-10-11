@@ -339,6 +339,7 @@ jobs:
           packages/daemon/src/store/statement-observer.test.ts
           packages/cli/src/sql-startup-storage.test.ts
           packages/cli/src/sql-daemon-storage.test.ts
+          packages/cli/src/sql-daemon-storage-owner.test.ts
           packages/harness-codex/src/model-auth.test.ts
           packages/harness-codex/src/model.test.ts
           packages/harness-codex/src/responses.test.ts

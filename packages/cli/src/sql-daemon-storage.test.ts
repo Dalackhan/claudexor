@@ -190,7 +190,7 @@ it("keeps physical archive bodies and uploads outside fresh and restarted GC cus
   checkArchive();
 });
 function fixture() {
-  const rootDir = realpathSync(mkdtempSync(join(tmpdir(), "sql-storage-owner-")));
+  const rootDir = realpathSync.native(mkdtempSync(join(tmpdir(), "sql-storage-owner-")));
   cleanups.push(() => rmSync(rootDir, { recursive: true, force: true }));
   const beforeClose = vi.fn(async () => {}),
     onOpen = vi.fn(),

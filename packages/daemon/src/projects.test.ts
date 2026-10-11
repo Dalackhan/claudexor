@@ -202,32 +202,42 @@ describe("ProjectStore", () => {
 
 /** A registry replayed from synthetic registrations (roots need not exist). */
 async function syntheticRegistry(roots: readonly string[]) {
-  const sql = await openSql(realpathSync(reapMk(join(tmpdir(), "claudexor-nesting-"))));
+  const root = realpathSync(reapMk(join(tmpdir(), "claudexor-nesting-")));
+  const sql = await openSql(root);
   const at = new Date(0).toISOString();
+  const projects = roots.map((root, index) => ({
+    schema_version: SCHEMA_VERSION,
+    id: `prj-${String(index).padStart(6, "0")}`,
+    root,
+    created_at: at,
+    updated_at: at,
+  }));
   sql.store.transaction(() =>
-    roots.forEach((root, index) =>
+    projects.forEach((project) =>
       applyProjectMutation(
         sql.store,
         sql.graph.projects.global().pid,
         "project.registered",
-        {
-          project: {
-            schema_version: SCHEMA_VERSION,
-            id: `prj-${String(index).padStart(6, "0")}`,
-            root,
-            created_at: at,
-            updated_at: at,
-          },
-        },
+        { project },
         at,
       ),
     ),
   );
-  return { sql, store: sql.graph.projects };
+  const journal = new DurableJournal({ rootDir: join(root, "legacy"), partition: "global" });
+  try {
+    journal.appendBatch(
+      projects.map((project) => ({ type: "project.registered", payload: { project } })),
+    );
+    return { sql, store: sql.graph.projects, frozen: new FrozenProjectStore(journal) };
+  } finally {
+    journal.close(); // The frozen list/nesting projection needs no subsequent journal I/O.
+  }
 }
 
 /** The pre-batch projection: one `nestingFor` scan per project. */
-function perProject(store: import("./store-contracts.js").ProjectStorePort) {
+function perProject(
+  store: Pick<import("./store-contracts.js").ProjectStorePort, "list" | "nestingFor">,
+) {
   return store.list().map((project) => ({ ...project, nesting: store.nestingFor(project.id) }));
 }
 
@@ -281,15 +291,19 @@ describe("whole-registry nesting (one pass)", () => {
     await sql.close();
   });
 
-  it("equals per-project nestingFor at 2035 roots while testing each root only against its ancestors", async () => {
+  it("equals frozen per-project nesting at 2035 roots while testing each root only against its ancestors", async () => {
     const roots = liveSizedRoots();
     expect(roots).toHaveLength(2035);
-    const { sql, store } = await syntheticRegistry(roots);
+    const { sql, store, frozen } = await syntheticRegistry(roots);
     const nestingFor = vi.spyOn(store, "nestingFor");
+    const list = vi.spyOn(store, "list");
     const batch = store.listWithNesting();
     expect(nestingFor).not.toHaveBeenCalled();
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(batch).toHaveLength(2035);
     nestingFor.mockRestore();
-    expect(batch).toStrictEqual(perProject(store));
+    list.mockRestore();
+    expect(batch).toStrictEqual(perProject(frozen));
     expect(batch.reduce((count, project) => count + project.nesting.length, 0)).toBeGreaterThan(
       2035,
     );

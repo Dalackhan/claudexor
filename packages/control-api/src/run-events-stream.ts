@@ -166,9 +166,9 @@ export async function streamRunEvents(
         }
         const latest = await ctx.opts.daemon.status(rec.id).catch(() => rec);
         if (TERMINAL_STATES.has(latest.state) && !pendingTerminalFiles()) {
-          // A materialized run appends its canonical terminal event to the file
-          // BEFORE the daemon commits terminal job state, so once status is
-          // terminal the terminal event is durably readable. Re-check the file
+          // A materialized run commits SQL terminal state with a file-publication
+          // obligation. Its cleared obligation proves the canonical terminal is
+          // readable after publication. Re-check the file
           // cursor: only conclude `end` when the file yields nothing new AND a
           // wakeup is not already pending — otherwise loop and deliver the tail,
           // whose canonical terminal ends the stream through the branch above.

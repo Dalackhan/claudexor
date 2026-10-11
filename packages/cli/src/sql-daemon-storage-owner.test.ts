@@ -22,7 +22,7 @@ const acquired: Array<{
   flusher: FlusherController;
 }> = [];
 beforeEach(() => {
-  root = realpathSync(mkdtempSync(join(tmpdir(), "sql-storage-owner-")));
+  root = realpathSync.native(mkdtempSync(join(tmpdir(), "sql-storage-owner-")));
   const open = EngineStore.open;
   vi.spyOn(EngineStore, "open").mockImplementation(async (options) => {
     const store = await open(options);

@@ -33,7 +33,7 @@ export function engineFingerprint(files: readonly EngineFileEvidence[]): string 
 export function syncEngineFiles(root: string, files: readonly EngineFileEvidence[]): void {
   for (const file of files) {
     if (file.sha256 === null) continue;
-    const fd = openSync(join(root, file.name), "r");
+    const fd = openSync(join(root, file.name), "r+");
     try {
       fsyncSync(fd);
     } finally {

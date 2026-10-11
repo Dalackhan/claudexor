@@ -572,6 +572,10 @@ for (const [label, mutated] of [
     "deleted SQLite store boundary tests",
     ci.replace("          packages/daemon/src/store/store.test.ts\n", ""),
   ],
+  [
+    "deleted SQLite storage owner cleanup test",
+    ci.replace("          packages/cli/src/sql-daemon-storage-owner.test.ts\n", ""),
+  ],
   ["Windows agy acceptance ordered before native fixture build", delayedWindowsFixtureCi],
   [
     "Windows matrix removed from required aggregate",
@@ -1022,6 +1026,10 @@ function windowsPrLegFindings(workflow) {
   requirePattern(
     "Windows PR legs must exercise SQLite store, runtime, flush and file-owner boundaries",
     /store\/store\.test\.ts[\s\S]*?store\/runtime\.test\.ts[\s\S]*?store\/flusher\.test\.ts[\s\S]*?store\/blob-files\.test\.ts[\s\S]*?store\/obligations\.test\.ts[\s\S]*?store\/maintenance\.test\.ts/,
+  );
+  requirePattern(
+    "Windows PR legs must exercise SQLite storage owner cleanup",
+    /packages\/cli\/src\/sql-daemon-storage-owner\.test\.ts/,
   );
   const build = windows.indexOf("      - name: Build\n        run: pnpm build");
   const nativeFixture = windows.indexOf("pnpm --filter @claudexor/core build:win32-fixtures");

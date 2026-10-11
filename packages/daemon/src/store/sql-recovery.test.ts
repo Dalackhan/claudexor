@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import * as promises from "node:fs/promises";
 import {
   existsSync,
   mkdirSync,
@@ -7,7 +8,9 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -33,6 +36,26 @@ import { createPartition, type PartitionGeneration } from "./partitions.js";
 import { SqlProjectStore } from "./projects.js";
 import { SqlPartitionRecovery, type SqlRecoveryOptions } from "./sql-recovery.js";
 import { EngineStore } from "./store.js";
+import { SqlUploads } from "./uploads.js";
+import { uploadKeyDigest } from "./upload-binding-retention.js";
+
+vi.mock("node:fs/promises", async (original) => {
+  const actual = await original<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const fd = await actual.open(...args);
+      const sync = fd.sync.bind(fd);
+      fd.sync = async () => {
+        // Keep the Windows writable-handle requirement visible on POSIX too.
+        // A zero-byte write checks access without changing the exported bytes.
+        if ((await fd.stat()).isFile()) writeSync(fd.fd, Buffer.alloc(0), 0, 0, 0);
+        await sync();
+      };
+      return fd;
+    },
+  };
+});
 
 const TIME = "2026-10-10T12:00:00.000Z";
 let root: string;
@@ -362,7 +385,50 @@ describe("SQL logical partition recovery", () => {
 });
 
 describe("SQL recovery export", () => {
+  it("refuses a failed body sync without losing source bytes and permits a complete retry", async () => {
+    ledger().append("large.evidence", { text: "x".repeat(80_000) });
+    const required = store.prepare("SELECT sha256 FROM blob WHERE inline IS NULL").get() as {
+      sha256: string;
+    };
+    const before = readFileSync(blobs.filePath(required.sha256));
+    const open = promises.open;
+    vi.spyOn(promises, "open").mockImplementationOnce(async (...args) => {
+      const fd = await open(...args);
+      vi.spyOn(fd, "sync").mockRejectedValueOnce(new Error("body sync failed"));
+      return fd;
+    });
+    await expect(recovery().exportRecovery()).rejects.toMatchObject({
+      code: "recovery_export_incomplete",
+      message: expect.stringContaining("body sync failed"),
+    });
+    expect(readdirSync(join(root, "daemon/recovery-exports"))).toEqual([]);
+    expect(readFileSync(blobs.filePath(required.sha256))).toEqual(before);
+    const receipt = await recovery().exportRecovery();
+    expect(readFileSync(join(receipt.bundlePath, "blobs", required.sha256))).toEqual(before);
+  });
+
   it("exports an integrity-valid snapshot with required external SQL bodies and original fingerprint", async () => {
+    const uploads = new SqlUploads(store, () => {});
+    const partBytes = Buffer.from("uploaded but not finalized");
+    const upload = uploads.create(
+      { kind: "file", mime: "text/plain", name: "pending.txt", sizeBytes: partBytes.length },
+      "snapshot-upload",
+    );
+    uploads.writeAll(upload.uploadId, partBytes);
+    const legacyKey = "not-yet-adopted";
+    const legacyDir = join(root, "daemon/resource-store/idempotency");
+    mkdirSync(legacyDir);
+    const legacyPath = join(legacyDir, `${uploadKeyDigest("create", legacyKey)}.json`);
+    const legacyBytes = JSON.stringify({
+      operation: "create",
+      key: legacyKey,
+      requestDigest: "legacy-digest",
+      result: upload,
+    });
+    writeFileSync(legacyPath, legacyBytes);
+    store.transaction(() =>
+      store.prepare("INSERT INTO meta(key,value) VALUES('legacy_idempotency_dir','present')").run(),
+    );
     const large = { text: "snapshot-body:".repeat(9000) };
     ledger().append("large.evidence", large);
     const required = store.prepare("SELECT sha256 FROM blob WHERE inline IS NULL").get() as {
@@ -385,6 +451,10 @@ describe("SQL recovery export", () => {
     const manifest = JSON.parse(manifestBytes.toString("utf8"));
     expect(manifest.scope).toBe("whole_engine_store");
     expect(manifest.externalEvidence).toContain("not included");
+    expect(manifest.externalEvidence).toContain("Upload .part files");
+    expect(manifest.externalEvidence).toContain(
+      "legacy upload idempotency-key files not yet adopted into SQL",
+    );
     expect(manifest.entries.map((entry: { path: string }) => entry.path)).toEqual([
       "engine.sqlite",
       `blobs/${required.sha256}`,
@@ -397,19 +467,30 @@ describe("SQL recovery export", () => {
       expect(
         db.prepare("SELECT count(*) AS n FROM event WHERE type='later.evidence'").get(),
       ).toEqual({ n: 0 });
+      expect(db.prepare("SELECT state FROM upload WHERE id=?").get(upload.uploadId)).toEqual({
+        state: "uploaded",
+      });
+      expect(
+        db
+          .prepare("SELECT 1 FROM idempotency WHERE key_digest=?")
+          .get(uploadKeyDigest("create", legacyKey)),
+      ).toBeUndefined();
     } finally {
       db.close();
     }
+    expect(readFileSync(uploads.partPath(upload.uploadId))).toEqual(partBytes);
+    expect(readFileSync(legacyPath, "utf8")).toBe(legacyBytes);
+    expect(existsSync(join(receipt.bundlePath, "resource-store"))).toBe(false);
     rmSync(blobs.filePath(required.sha256));
     expect(
       JSON.parse(readFileSync(join(receipt.bundlePath, "blobs", required.sha256), "utf8")),
     ).toEqual(large);
-    for (const entry of manifest.entries)
-      expect(
-        createHash("sha256")
-          .update(readFileSync(join(receipt.bundlePath, entry.path)))
-          .digest("hex"),
-      ).toBe(entry.sha256);
+    for (const entry of manifest.entries) {
+      const path = join(receipt.bundlePath, entry.path);
+      expect(statSync(path).mode & 0o222).toBe(0);
+      if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o400);
+      expect(createHash("sha256").update(readFileSync(path)).digest("hex")).toBe(entry.sha256);
+    }
   });
 
   it.each(["missing", "changed"] as const)(

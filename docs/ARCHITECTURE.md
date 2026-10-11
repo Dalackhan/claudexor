@@ -3249,7 +3249,10 @@ Logical archive/quarantine changes status and generation visibility without
 deleting the old rows. A global-generation replacement hides the old project
 registry and its generations together; uploads keep their independent pid0
 scope. Logical recovery exports a consistent SQL snapshot with its referenced
-external bodies. Physical corruption instead uses the existing `engine-state`
+external bodies. Its manifest discloses excluded upload `.part` files, legacy
+upload idempotency-key files not yet adopted into SQL, and per-run event logs,
+run artifacts and setup operational artifacts; those remain at their existing
+locations. Physical corruption instead uses the existing `engine-state`
 recovery target: its raw database/WAL/SHM export is diagnostic evidence, not a
 complete restorable backup. Explicit whole-store quarantine closes storage and
 archives the database files with `resource-store/` (bodies, uploads and legacy

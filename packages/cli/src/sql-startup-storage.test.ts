@@ -20,7 +20,7 @@ afterEach(async () => {
   for (const fn of cleanup.splice(0).reverse()) await fn();
 });
 function fixture() {
-  const daemonDir = realpathSync(mkdtempSync(join(tmpdir(), "sql-startup-")));
+  const daemonDir = realpathSync.native(mkdtempSync(join(tmpdir(), "sql-startup-")));
   cleanup.push(() => rmSync(daemonDir, { recursive: true, force: true }));
   return {
     daemonDir,

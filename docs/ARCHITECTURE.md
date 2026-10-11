@@ -3174,8 +3174,9 @@ kept only for cold import and an independent frozen copy kept for tests.
   and maintenance share it automatically, including when constructed separately.
 - Retention applies the existing fold verdicts as SQL retire/slot/group/drop
   operations. Slot and group deletions name the partial indexes `event_slot`
-  and `event_group`, so applying a verdict is one index probe at any partition
-  size during appends and cold import; retention query-plan tests pin those
+  and `event_group`, so each is an addressed `(pid, key)` lookup whose cost
+  depends on the rows it actually removes, not on the partition's other
+  history, during appends and cold import; retention query-plan tests pin those
   plans. Thread/turn/session/checkpoint state is kept in tables and is never
   age-pruned; thread-entity snapshots consume sequence but are not event rows.
   Resolved interactions remain resolved across restart until command pruning.

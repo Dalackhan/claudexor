@@ -45,6 +45,13 @@ export function sqlEventVerdict(record: FoldRecord): FoldVerdict {
   return verdict;
 }
 
+/** Addressed event deletes pin their partial index: without statistics SQLite
+ * otherwise scans the whole partition for every fold verdict (issue #446). */
+export const EVENT_SLOT_DELETE_SQL =
+  "DELETE FROM event INDEXED BY event_slot WHERE pid = ? AND slot_key = ? RETURNING payload_sha";
+export const EVENT_GROUP_DELETE_SQL =
+  "DELETE FROM event INDEXED BY event_group WHERE pid = ? AND group_key = ? RETURNING payload_sha";
+
 /** Retire addressed slots/groups and return every released body reference. */
 export function deleteEventKeysInTx(
   sql: SqlWriteContext,
@@ -53,11 +60,11 @@ export function deleteEventKeysInTx(
 ): string[] {
   requireTransaction(sql);
   const released: string[] = [];
-  const remove = sql.prepare(
-    "DELETE FROM event WHERE pid = ? AND (slot_key = ? OR group_key = ?) RETURNING payload_sha",
-  );
+  const slot = sql.prepare(EVENT_SLOT_DELETE_SQL);
+  const group = sql.prepare(EVENT_GROUP_DELETE_SQL);
   for (const key of new Set(keys)) {
-    released.push(...releasedPayloadDigests(remove.all(pid, key, key)));
+    released.push(...releasedPayloadDigests(slot.all(pid, key)));
+    released.push(...releasedPayloadDigests(group.all(pid, key)));
   }
   return released;
 }
@@ -90,11 +97,7 @@ export function insertEventInTx(
   const releasedDigests = deleteEventKeysInTx(sql, pid, verdict.retire ?? []);
   if (verdict.slot !== undefined) {
     releasedDigests.push(
-      ...releasedPayloadDigests(
-        sql
-          .prepare("DELETE FROM event WHERE pid = ? AND slot_key = ? RETURNING payload_sha")
-          .all(pid, verdict.slot),
-      ),
+      ...releasedPayloadDigests(sql.prepare(EVENT_SLOT_DELETE_SQL).all(pid, verdict.slot)),
     );
   }
   if (!verdict.drop) {

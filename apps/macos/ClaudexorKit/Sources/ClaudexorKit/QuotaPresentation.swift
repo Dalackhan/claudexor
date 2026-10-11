@@ -24,6 +24,9 @@ public enum QuotaPresentation {
         public let resetsAt: String?
         /// Empty/nil is account-wide; a non-empty list is model-scoped.
         public let appliesToModels: [String]?
+        /// False for a window scoped away from text (image-only). Text-account
+        /// summaries skip it; detail rows keep it, labelled "(images)".
+        public let appliesToText: Bool
         /// Freshness of the snapshot this window's FRESHEST copy came from.
         public let freshness: String
     }
@@ -150,6 +153,7 @@ public enum QuotaPresentation {
                         usedRatio: constraint.usedRatio,
                         resetsAt: constraint.resetsAt ?? (constraint.appliesToText ? nil : constraint.cooldownUntil),
                         appliesToModels: constraint.modelScope.isEmpty ? nil : constraint.modelScope,
+                        appliesToText: constraint.appliesToText,
                         freshness: snapshot.freshness
                     ))
                 }

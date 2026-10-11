@@ -76,12 +76,13 @@ struct AccountRowModel: Identifiable {
         return detail
     }
 
-    /// The single worst usage window across the account's quota groups; drives
-    /// the ONE compact quota line the popover shows per account.
+    /// The single worst account-wide text window across the account's quota
+    /// groups; drives the ONE compact quota line the popover shows per account.
+    /// Image and model-scoped windows stay in the detail rows.
     var worstWindow: QuotaPresentation.Window? {
         quotaGroups
             .flatMap(\.windows)
-            .filter { ($0.appliesToModels ?? []).isEmpty }
+            .filter { $0.appliesToText && ($0.appliesToModels ?? []).isEmpty }
             .max { ($0.usedRatio ?? -1) < ($1.usedRatio ?? -1) }
     }
     var worstPercent: Int? {

@@ -239,7 +239,7 @@ at every wire boundary.
   see the lifecycle section below. Projection reads select exact record types
   before payload copying; every read sees the retained set, and sequence
   numbers and cursors are the original ones.
-- `packages/daemon`: durable local queue (Unix socket on POSIX, named pipe on win32) and journal projections for commands, projects, and threads.
+- `packages/daemon`: durable local queue (Unix socket on POSIX, named pipe on win32), the in-process facade client its own control API uses, and journal projections for commands, projects, and threads.
   Project projections select their own record types; run-event history is validated
   once per projection creation through its descriptor. Direct RunEventStore
   construction still validates by default. Preparation and post-open activation
@@ -292,7 +292,10 @@ at every wire boundary.
   are finalized through the daemon attachment pipeline before a turn enqueues.
 - `packages/canary`: canary golden stories — user-level E2E smokes over the
   BUILT CLI with offline fake harnesses, each pinned to a Bible invariant
-  tag (`pnpm canary`; runs in CI on every PR).
+  tag (`pnpm canary`; runs in CI on every PR). The shared fixture pins the built
+  daemon entry and its own endpoint. Disposal removes its root only after the
+  writer lease proves absence or a stale owner; a failed stop or live/unknown
+  successor retains the root and cleanup diagnostic.
 - `benchmarks/runner`: the SWE-bench Verified benchmark runner (predictions
   via the Claudexor CLI; see `benchmarks/`).
 - `apps/macos`: native app; displays/edits what the engine exposes.
@@ -652,14 +655,18 @@ A word no verified catalog model lists is placed by the shared preference order
 exactly as on session routes, and the receipt says so.
 Both public catalog views project the internal order out, preserving their object
 shapes. Native session Ultra remains unchanged and is implemented by the CLI.
+For an explicit unlisted raw model, ordinary effort is submitted unchanged with
+adapter-sourced exact-submission evidence and unconfirmed capability; no sibling
+ladder is borrowed. Raw Ultra without a known generation ladder is an unsupported
+option, since a raw call cannot perform the native agent's automatic delegation.
 
 Managed catalogs also carry optional `reasoningEffortsVerified` on `ModelCatalogEntry`:
 true records a fully parsed vendor array (including known empty), while false or
 historical absence prevents an incomplete catalog from claiming known absence or
 authorizing a substitution. Native Codex likewise retains explicit empty arrays
 separately from missing metadata on a listed model. The unnegotiated model-catalog
-HTTP view omits this new field; the account view retains it. An unlisted advisory model
-still follows its existing sibling-ladder fallback.
+HTTP view omits this new field; the account view retains it. Session adapters keep
+their existing unlisted-model effort resolution; raw calls use the rule above.
 
 Manifest `auth_modes` and `capability_profile.auth.preferred_source` describe
 possible source availability only. They are not readiness. UI, routing, and
@@ -1004,6 +1011,53 @@ grandchildren or windows the child opens later. Interactive sign-in
 (`profiles login`, the Terminal/ConPTY setup runner) and `setup attach` do not
 use those helpers and keep their own visible-terminal policy.
 
+### Account resources and explicit resets
+
+`QuotaRegistry` also owns independently observed balances, spending, reset inventory
+and diagnostics. Versioned resource observations share the existing global journal;
+quota windows keep their strict schema and their existing admission/supersession owner.
+Resource facets carry a successful observation time, a separate last attempt, source,
+and freshness. A missing or failed facet preserves its last known value as stale;
+unknown amount/count is null, not zero. Amount strings retain provider units,
+nullable currency and provider-reported `decimal_places`. Reset offer/grant
+`description` is display copy; `clears` retains native scope identifiers. Diagnostic
+codes retain provenance while their detail explains the state, including false/unknown.
+These resources do not enable paid usage or change routing policy.
+
+The operation catalog advertises `view=resources` on quota and atomic Accounts
+reads. Without a view selector, quota responses keep the strict legacy representation, including
+the historical Codex reset-credit label at the serializer boundary. A refresh body
+may select one exact `target` (harness and profile id), including a named default
+or a disabled portable profile. It uses the existing refresh coordinator and pacing
+floor, retains other accounts, and cannot join a cycle that did not cover its target.
+Claude's ordinary usage read includes spending and granted-reset inventory. Separate
+prepaid and session-refill reads run only during existing foreground cycles, with the
+same subject's pacing owner. A prepaid eligibility refusal affects the balance facet,
+not account authentication. Background polling adds no supplementary request fan-out.
+The internal observation's `resets_resolved_ids` names programs authoritatively read
+in that cycle, including explicit null from that program's reader. An omitted or
+malformed body is unresolved. Merge drops resolved-absent offers and retains unread
+ones without inventing an error; retaining any unread offer keeps the single facet
+clock stale. Coverage is not a public snapshot field. The journal stores the merged
+complete row and replay installs it, while legacy partial rows still merge as deltas.
+
+`POST /v2/account-resets` is a direct control operation backed by `CommandStore`,
+independent of inference queue capacity. Its required Idempotency-Key binds the exact
+request, canonical native account fingerprint, selected grant/program and native request
+id before dispatch. Keep the original body and key through an HTTP timeout, even if no
+receipt id arrived. `GET /v2/account-resets/:id` reads the durable receipt. Outcome and
+resource readback are independent: confirmed reset survives failed readback. Codex
+same-key `already_redeemed` confirms its operation; Claude `already_used` does not.
+An unknown Claude outcome never automatically submits another native POST. Distinct
+explicit keys are independent requests; there is no new account-wide lock or scheduler.
+Receipts retain the key binding outside ordinary inference command pruning.
+
+Only an effect or possible effect makes old observations historical. Confirmed no-effect
+outcomes preserve fresh quota when readback fails. Post-reset readback drains the old
+cycle, moves the durable account cutoff before the new read, and retains history if that
+read fails. Journal order distinguishes fresh reads sharing the cutoff's millisecond.
+The engine never infers a new balance or remaining reset count from a consume response.
+
 ### Credential profiles (INV-135, unified account model)
 
 Every routable credential binding of a harness is a named registry row; the
@@ -1161,7 +1215,10 @@ and retry evidence stays profile-attributable, and the run's `auth_route`
 receipt carries `profile_id`; Control API projects it as `authRoute.profileId`
 without re-deriving it. Vendor sessions record the profile they were
 created under (the attempt's session capsule, `session-capsule.json`); a
-session has one holder row at a time — the engine boundary re-verifies every
+session has one holder row at a time. History lookup uses the full
+`(harness_id, profile_id)` identity for source, target and capsule relocation;
+a disabled holder remains readable for transfer, independently of dispatch
+admission. The engine boundary re-verifies every
 cached session against the RESOLVED account, and a pool switch either MOVES
 the session file into the next row's store through the adapter's
 `continuity` (claude, codex) and resumes it there, or starts a fresh vendor
@@ -1844,6 +1901,8 @@ Upload `ImageCallRequest` JSON with `purpose: "model"`, then create with
 The same command id, idempotency binding, queue, cancellation, private result,
 30-day unacknowledged retention and whole-result digest ACK serve both kinds.
 There is no second image command, scheduler or resource-purpose owner.
+`cli/model-service-refusals.ts` owns pool-cause and reset aggregation for the shared
+service: model absence and generic unavailability never become quota exhaustion.
 
 #### Image generation and editing
 
@@ -1866,8 +1925,9 @@ JPEG and WebP are checked by magic bytes, not full decoding. The turn-id header
 is derived from the durable operation id; it is not a provider deduplication claim.
 The wire is anchored in openai/codex commit
 `6f6e80bcddab56a4e6518eb5adef0079ed30bb2b`, codex-api images endpoint and
-ext/image-generation tool/backend source. Live endpoint/account qualification
-remains outstanding.
+ext/image-generation tool/backend source. Live qualification is narrow: one generate
+and one edit call through the real adapter on one existing managed account; the
+released live chain remains unqualified (see the feature ledger).
 
 `ImageCallResult` keeps requestedModel separately from provider-observed route
 model (null when absent), reported usage, unknown cash/valuation, applied options,
@@ -1879,16 +1939,19 @@ resource digest. GET never acknowledges, and a lost local reply or an unknown
 dispatch never authorizes another generation. Viewing/sending remain caller actions.
 
 Quota operation scope is `applies_to_request_kinds` on each quota constraint,
-independent of its model scope; absent means both kinds. Codex full and incremental
-readers declare ordinary codex/default windows as text, image_gen as image, and
-leave unknown buckets diagnostic rather than guessing their applicability. Image
+independent of its model scope; absent means both kinds. Codex full-read, notification
+and rollout readers declare ordinary codex/default windows as text and image_gen as
+image. None guesses an unknown bucket's applicability: the notification reader keeps it
+only as diagnostic `native_quota` evidence, while full and rollout readers omit it. Image
 429 reset evidence enters the existing registry as source `codex_image_response`,
 scoped to image and the invoked credential generation; known reset/Retry-After
 expires it, and a newer matching full window supersedes it. No reset is invented.
 The same profile pool and quota availability owner evaluate image requests against
 image scope; existing text/Agent consumers default to text. Budget observations
-retain scope. GET quota query and POST quota refresh accept optional requestKind
-(text/image) and model. All raw constraints remain visible in those responses and
+retain scope; a run's one-shot quota-pressure disclosure considers text windows only. GET quota query and POST quota refresh accept optional requestKind
+(text/image) and model, including the opt-in resources and constraint-freshness
+reads. `quota-request-kind.ts` owns the shared kind schema used by quota evidence
+and account-target/read requests without a circular schema dependency. All raw constraints remain visible in those responses and
 atomic Accounts; Accounts availability and cooldown badges describe text, with
 image windows labelled separately. Journal rollback projections omit image-only
 windows instead of broadening them to global text limits.
@@ -1901,9 +1964,13 @@ borrowing a subscription catalog. A failed supported live inventory remains
 unverifiable; it never falls back to a convenient manifest to admit a model.
 Where the harness declared absences advisory, an unverifiable answer — and a
 manifest miss — instead sends the explicit model to the vendor unchanged
-(above). The authenticated
-account catalog read below is a different source and stays strict: a model it
-does not carry is a typed `model_unavailable` refusal.
+(above). Authenticated raw sources separately declare `inventoryAbsence` on `ModelAdapter`:
+omitted means authoritative, while Codex declares advisory. A successfully read
+catalog that lacks an explicit model therefore permits the exact Codex request;
+failed catalog acquisition remains a typed failure. Auth and model-scoped quota
+still participate in account selection. An authoritative miss retains its own
+cause; a pool containing model/general unavailability never inherits a quota-only
+reset promise from other accounts.
 
 Claude's producer is the prompt-free `initialize` handshake of the installed
 `claude` binary (`harness-claude/src/model-probe.ts`): one stdin frame, the
@@ -1944,15 +2011,18 @@ review loop, model fallback or internal compaction is created for this capabilit
 
 The Codex transport lives in `harness-codex`. It uses a selected managed ChatGPT
 profile, the official CLI for an expired-token refresh, and the raw account's
-model catalog. The backend filters that catalog by the client version the
-caller declares (a model is listed only for clients at or above its own
-minimum), so the transport declares ITS OWN verified level,
+model catalog. Server discovery varies with the client version the caller
+declares; a missing row does not prove a minimum-version or entitlement refusal.
+The transport declares ITS OWN verified level,
 `CODEX_HTTP_CLIENT_VERSION` (`http-client-version.ts`), raised to the installed
 Codex CLI's version when that is newer and never below the constant — not the
 managed-installer pin, which is a different fact (a release that only moves
 the installer must never decide which models an account can see). The account
-view carries the declared `clientVersion` and its source per catalog (the
-legacy query keeps its shape), every membership refusal names it, and the constant moves together with a recorded catalog
+view carries the declared `clientVersion` and its source per catalog. Selected-account
+discovery can negotiate `includeAdmission=true` with `requestedModel` to obtain
+those version facts and `admission: {requestedModel, inventoryAbsence}`. This permits
+an attempt, without adding a synthetic model row or claiming successful generation.
+Without the opt-in the legacy query keeps its exact shape. The constant moves together with a recorded catalog
 fixture pair (`fixtures/models-http-*.json`) whose shared rows must stay
 identical. In-process refresh work is serialized by canonical managed home;
 cancelled callers cannot release another caller past a still-live refresh. Each
@@ -2167,7 +2237,13 @@ percent-encoding in the path with a typed `400 malformed_request_path` (never a
 `500`), projects request-schema violations into structured `fieldErrors`
 (JSON Pointer → messages) with a single-line human summary rather than a raw
 validator dump, and validates the per-run SSE cursor as a nonnegative integer
-`seq` before opening the stream.
+`seq` before opening the stream. Its HTTP server keeps idle keep-alive sockets
+for 65 s (longer than clients' idle-reuse windows, such as httpx's 5 s, which
+would otherwise race the server's close), allows 66 s for request headers, and
+does not bound the receipt of a request body, so a large upload during a busy
+period is not cut; none of these limits applies to responses or SSE streams.
+Once stopping, it closes each kept-alive socket as soon as its response finishes,
+so the longer keep-alive window never delays shutdown.
 
 An admitted continuation whose predecessor record or run directory disappears
 before execution fails with `continuation_predecessor_unavailable` (404, not
@@ -2178,11 +2254,21 @@ current memory facts (heap used/limit, RSS, external bytes, effective heap args)
 plus the first normal-admission snapshot. It is also available in recovery-only
 mode, where admission memory is null until normal admission has opened. Sampling
 does not force GC or traverse retained commands; job counts use store sizes.
-The protocol handshake remains unchanged. No memory thresholds affect admission.
+`loop` carries the last completed ten-second window of event-loop facts: delay
+p50/p99/max from `monitorEventLoopDelay` (sampled at 10 ms, so an idle loop's
+p50 sits near 10 ms, and reset every window), the `eventLoopUtilization` busy
+share, and the GC pauses a `PerformanceObserver` saw (count, total, longest).
+It is null until the first window completes; a stalled loop rolls its window
+late, so `windowMs` grows with the stall. `claudexor daemon status` prints the
+same window as one line. The status route reaches the daemon in process, so it
+answers while the loop is merely slow. The protocol handshake remains unchanged.
+No memory or loop thresholds affect admission.
 
 <!-- BEGIN GENERATED ENDPOINTS (node scripts/gen-endpoints-doc.mjs; do not edit by hand) -->
 - `GET /healthz`
 - `GET /v2/account-pools`
+- `POST /v2/account-resets`
+- `GET /v2/account-resets/:id`
 - `POST /v2/accounts-migration/rollback`
 - `GET /v2/agent-capabilities`
 - `GET /v2/credential-profiles`
@@ -2197,6 +2283,10 @@ The protocol handshake remains unchanged. No memory thresholds affect admission.
 - `POST /v2/harnesses/:id/auth-readiness`
 - `GET /v2/harnesses/:id/models`
 - `POST /v2/maintenance/gc`
+- `GET /v2/maintenance/harnesses`
+- `POST /v2/maintenance/operations`
+- `GET /v2/maintenance/operations/:id`
+- `POST /v2/maintenance/operations/:id/cancel`
 - `POST /v2/model-operations`
 - `GET /v2/model-operations/:id`
 - `POST /v2/model-operations/:id/ack`
@@ -2271,12 +2361,19 @@ The protocol handshake remains unchanged. No memory thresholds affect admission.
 
 Endpoint semantics beyond the inventory:
 
-Local daemon RPC timeouts retain the ten-second transport bound and answer
-`503 daemon_busy`; connection failures, closed sockets and invalid responses
-answer `503 daemon_unavailable`. Both are retryable and preserve an unknown
-mutation outcome. Daemon-authored refusals keep their status, code, safe context
-and required actions through RPC and HTTP, including continuation chain heads.
-Request validation remains a typed 400; transport does not retry automatically.
+The control API, model operations and harness maintenance run inside the
+daemon process and reach its RPC dispatcher in process (`DaemonLocalClient`):
+there is no socket round trip and no transport timer, so a busy event loop makes
+such a call slow rather than failed. Params, results and problems keep the
+socket's JSON value semantics, and both transports rebuild problems through one
+projection. Socket clients (the CLI, the stdio bridges, runtime replacement and
+the startup transport proof, which dials the socket itself) keep the ten-second
+transport bound: a timeout answers `503 daemon_busy`; connection failures, closed
+sockets and invalid responses answer `503 daemon_unavailable`. Both are retryable
+and preserve an unknown mutation outcome. Daemon-authored refusals keep their
+status, code, safe context and required actions through RPC and HTTP, including
+continuation chain heads. Request validation remains a typed 400; transport does
+not retry automatically.
 
 - `POST /v2/runs` with `continueFrom: <runId>` continues a terminal run of this
   daemon — stopped, limited, cancelled, interrupted or finished — as a new
@@ -2482,7 +2579,13 @@ Request validation remains a typed 400; transport does not retry automatically.
   `POST /v2/runs` and Exact Retry answer typed `404 project_not_registered`
   (`retryable: false`, required action: register the root with
   `POST /v2/projects` or declare `scope.ephemeral`) instead of the retryable
-  `503 idempotency_status_unavailable`. If no command was
+  `503 idempotency_status_unavailable`. The lookup also preserves canonical
+  `409 idempotency_conflict` and `400 invalid_idempotency_key` refusals. Other
+  lookup failures retain the retryable 503 and same-key recovery: their safe
+  cause and `lookup_before_preflight` / `lookup_after_preflight` stage travel
+  in the existing problem context, with the preflight error separately retained
+  when that second lookup failed. Neither failure proves no prior acceptance.
+  If no command was
   accepted, a replay may reuse its one journaled runless turn only while that
   turn is still the conversation tail; the recovery boundary refuses a
   historical orphan before enqueue. Already accepted commands remain valid and
@@ -2731,7 +2834,9 @@ LIFECYCLE after restart, never token-level progress. A journal sink failure for 
 journaled event fails the producer/run instead of being swallowed as a live-only
 gap; an event outside the journaled set is never a sink failure.
 `GET /v2/runs/:id` returns the snapshot together with `lastSeq` — the highest seq
-already reflected in that snapshot — so a client subscribes to
+already reflected in that snapshot, read from the live writer's in-memory counter
+or, for a finished run, from the log's last line (a full scan only when that line
+cannot decide) — so a client subscribes to
 `GET /v2/runs/:id/events` with `Last-Event-ID: <lastSeq>` and applies deltas with
 no gaps and no duplicates. The per-run stream replays from the run's
 `events.jsonl` — the one complete per-run event record; the journal partition
@@ -2870,8 +2975,9 @@ therefore cannot turn an old or newly busy daemon into a replacement casualty.
 Explicit operator shutdown keeps its forceful semantics. The daemon records its
 birth identity in the writer lease at startup; `claudexor daemon stop` then CONFIRMS death
 (released lease, gone pid, or identity-verified SIGKILL escalation — a
-recycled pid is never signalled) before reporting success, so scripts and
-test disposers can trust its exit code. The lease is acquired before the
+recycled pid is never signalled) before reporting success. Scripts can trust
+that exit code for the pinned generation; canary disposal additionally checks
+the current writer lease for a successor. The lease is acquired before the
 daemon publishes its socket or Control descriptor, so a present lease without
 a reachable socket remains a protected startup window unless its owner is
 proven stale. That proof is deliberately narrow: a missing pid, a birth-identity
@@ -3010,7 +3116,15 @@ nonterminal command to `interrupted_unknown`; mutating commands are never
 auto-replayed.
 The deliberately empty-on-v2-start registry is global. `GET/POST /v2/projects`
 list/register canonical local roots and
-`POST /v2/projects/:id/relink` moves an existing stable project id.
+`POST /v2/projects/:id/relink` moves an existing stable project id. A
+registration answer carries `created`: true only when that registration made the
+project, false when the root was already registered; an `Idempotency-Key` replay
+repeats its first answer, derived from journal order across restarts, so a
+caller can tell a project it created from one it merely found (`claudexor
+project register` prints `created` or `existing`). Each project
+discloses its nesting relations with other registered roots (`inside` /
+`contains`, never a refusal); the list computes them for the whole registry in
+one pass, each root checked only against its own registered ancestors.
 `DELETE /v2/projects/:id` retires a project — it removes the registry entry and
 ARCHIVES the project's journal partition (renamed out of the active journal
 tree, never deleted, the same non-destructive move the quarantine path uses),
@@ -3091,7 +3205,9 @@ start from the project base even if their predecessor holds a retained envelope;
 they do not adopt or retain it. In-place runs and race/synthesis/review envelopes
 keep their ordinary lifecycle.
 While running it snapshots its live harness child process groups to
-`daemon/pids.json`; the NEXT startup reaps recorded orphans that survived a
+`daemon/pids.json` (checked every two seconds, written asynchronously and only
+when the set of children changed; shutdown waits for that write before its final
+synchronous snapshot); the NEXT startup reaps recorded orphans that survived a
 crash (pid liveness + command-name recycling guard) and sweeps workspace
 debris under daemon-known project roots. The reap is not a stop proof: it sends
 SIGTERM to each recorded group, deletes the record, and only schedules SIGKILL
@@ -3859,6 +3975,38 @@ refresher produces it, and full-inventory versus incremental-window replacement.
 subject. Display and routing evaluate freshness at the actual current time:
 absent an earlier reset boundary, a snapshot is still fresh exactly five
 minutes after observation and becomes stale only after that boundary.
+Passive consumers can opt in with `GET /v2/quota` and query `view=constraint_freshness`.
+They may request it directly; discovery through the GET quota operation's `view`
+query enum in `/v2/operations` is optional and must not block a passive read.
+The 3.24 engine ignores the selector and returns its legacy shape; 3.25.0 and
+3.25.1 reject it with HTTP 400 (`view must be resources`).
+The strict `ControlQuotaFreshnessResponse` adds required
+`constraints[].freshness` (`fresh`, `stale`, or `unknown`). Each value uses the
+raw snapshot's freshness and observation time, the same five-minute TTL
+(stale only after 300000ms), and only that constraint's reset (stale at or
+after reset). Raw stale/unknown remain so, null resets add no expiry, and null
+usage remains null. Evidence observed before an account reset cutoff is stale
+for every window, exactly as for the aggregate. An expired 5h window therefore
+does not stale a still-fresh weekly sibling in this display projection. The
+historical Codex `reset_credits` label is not a quota window: it carries the
+freshness of the resets facet its count was read from, and `unknown` under an
+unknown snapshot. Snapshot freshness remains the
+conservative aggregate. No usage, reset, observation time, or availability is
+rewritten, and an elapsed reset never implies refill. The read uses existing
+pruning rules without refresh or journal writes. The legacy GET, POST refresh
+(whose `view` remains `resources` only), Accounts responses, raw schemas, routing,
+and refresh demand retain their existing contract. Supporting engines reject empty,
+unknown, and repeated `view`; the catalog's `ControlQuotaQueryResponse` is a union
+of the strict whole-response shapes (legacy, `resources`, and `constraint_freshness`).
+A direct caller accepts only a fully valid explicit response or fully valid
+legacy response. Missing nested freshness in valid legacy data retains conservative
+snapshot freshness, never implies independent freshness or refill. Malformed or
+partial explicit metadata, including mixed explicit/legacy constraints or snapshots,
+is rejected without stripping metadata or silently downgrading. For an engine that
+explicitly rejects the selector with HTTP 400, a caller may make one plain GET
+fallback and validate its strict legacy response; transport failures, HTTP 500/other
+statuses, and malformed successful payloads do not permit that fallback. Neither
+direct reads nor the optional plain-GET fallback trigger provider refresh.
 Background demand additionally looks through
 the next existing 60-second poll tick, so a matching primary snapshot whose TTL
 or reset boundary is due by that deadline (including equality) no longer
@@ -3927,7 +4075,9 @@ even for timestamp-only re-observation. Reversed arrival uses the same witness;
 a delayed old refusal cannot revive a retired block. Request-start timestamps keep
 an older in-flight poll from erasing a newer refusal. A generic unclassified block
 can yield to a successful response without measured windows (usage stays unknown),
-while independently identified/scoped windows need matching measured replacement.
+while independently identified or model-scoped windows need matching measured
+replacement. A Codex refusal's text request-kind scope narrows what its generic
+block applies to, not which successful read retires it.
 This permits purchased or vendor-granted early resets without waiting for an obsolete
 timer. Malformed Codex responses never become successful empty observations.
 
@@ -3955,7 +4105,12 @@ of the same measured window, duration, applicability, account and route. The
 registry writes its full witness and `quota.window.superseded` atomically in
 the existing journal, then removes that exact effective window. Its cutoff
 survives later full-inventory replacement, display aging and compaction, so an
-old delayed event cannot resurrect a cleared limit. Newer partial evidence is
+old delayed event cannot resurrect a cleared limit. A window journaled before
+request-kind scope carries none, so it applies to both kinds; a measured replacement
+that declares a kind retires it only with the same id, model scope and an identical
+duration (unknown matches only unknown). The reactive Codex rollout reconciliation
+applies the same rule to its unscoped windows, including the `primary` →
+`codex:primary` mapping. Explicit text and image scopes never retire each other. Newer partial evidence is
 admitted again; equal timestamps remain conservative. Missing or unmeasured
 windows do not supersede known limits. Subject removal clears observations
 and cutoffs together. Older rollback readers ignore the new record and may
@@ -4304,7 +4459,11 @@ account (`native`), or `packet` once a typed fact (locate miss, identity
 mismatch, adapter rejection, no session ever reported) proved the native
 carrier unusable, bounded by
 `transient_retry.max_retries` per account; hops are bounded by the profiles
-already tried. A bare backoff frame (`retry_delay_ms`, no reset, no
+already tried. Claude's failed terminal CLI diagnostic naming a missing session
+also rejects the native carrier; generic execution errors and model prose do
+not. Existing transcripts misplaced outside the correct holder store are not
+migrated automatically: a locate miss retains them and uses the evidence packet.
+A bare backoff frame (`retry_delay_ms`, no reset, no
 constraint) is transport when a session exists to resume. On a native carrier
 the user prompt is one constant notice ("the previous process stopped …
 continue from where it stopped … a cut-off tool call may or may not have taken
@@ -4723,15 +4882,16 @@ back through the settled lease.
 
 Vendor harness CLIs land on a host only through the disclosed installer
 (`claudexor harness install`, reachable from Settings → Harnesses for a
-connected host). The npm-distributed harnesses (claude, codex, opencode)
-install one EXACT pinned version — each pin aliases that harness package's
+connected host). The npm-distributed harnesses (claude, codex, copilot, opencode)
+ensure the release pin while preserving an already runnable newer managed copy;
+explicit maintenance installs the selected exact version. Each pin aliases that harness package's
 vendor-version constant, and npm checks the registry integrity checksum for
 that exact version; `@latest` is never used. For codex that constant is the
 same value the model-hints and effort freshness gates read; for claude it is
 the effort-snapshot stamp, while the Claude known-model hint list keeps the
 literal version it was last actually re-verified against (a pin bump never
-restamps unrechecked ids). So the installed CLI is the version this release's
-effort ladders were verified against (a recording that needs a paid live run
+restamps unrechecked ids). The pin records this release's verified baseline,
+not a verification claim about a newer selected CLI (a recording that needs a paid live run
 keeps the version it was captured from, as its fixture manifest states); the
 opencode pin is a deterministic install target, not a verification claim —
 no recorded fixture covers it yet, as its `vendor-cli-version.ts` discloses.
@@ -4800,6 +4960,30 @@ contract are unchanged. After any successful local install, the embedding host
 must request the existing fresh doctor/status projection before retrying login;
 it must not trust a pre-install readiness cache, and this needs no new setup-job
 or daemon API.
+
+Local CLI maintenance uses `harness inspect` and `harness update --vendor-version`
+(`cli/src/harness-maintenance.ts`), the same recipe/proof/lease as Ensure. Codex,
+Claude, Copilot and OpenCode support exact npm targets; latest is resolved once
+before installation. Cursor and Antigravity on supported POSIX installations run
+their native foreground updater at the selected canonical launcher under the
+installation HOME. They expose latest only: the vendor resolves the target, and
+unchanged version evidence never means "updated" or proves newest. External
+overrides are identified, not silently replaced by a managed copy. Existing
+Windows recipe limits remain.
+
+`harness-maintenance-service.ts` exposes `/v2/maintenance/harnesses` and the
+maintenance operation routes through existing CommandStore admission, queue,
+idempotency, cancellation and retention. Blocking work runs in a custodied CLI
+child. Before-version and target evidence precede mutation; failures, interruption
+and unconfirmed termination retain their real effects without automatic replay or
+rollback. Previous-version return uses retained proved before-evidence and
+reinstalls it, so it depends on package availability. Inspection separates selected
+version, managed copy, release baseline, available observation and supported
+targets; `canCheckLatest` prevents a native update-only recipe advertising an
+unimplemented check. Effects invalidate affected observations for on-demand reads.
+Active maintenance is visible in readiness; it neither restarts the daemon nor
+starts account probes, login or model generation. Operations use ordinary queue
+slots and may wait behind active work.
 
 `claudexor remote bootstrap --json` starts or discovers the remote daemon and
 returns its loopback endpoint. The daemon remains bound to `127.0.0.1`; the app

@@ -187,12 +187,14 @@ import Testing
         let group = try #require(QuotaPresentation.groups(from: [imageSnapshot], now: now).first)
         #expect(group.cooldownUntil == nil)
         #expect(group.windows.first?.label == "Image generation (images)")
+        #expect(group.windows.first?.appliesToText == false)
         #expect(group.windows.first?.resetsAt == "2026-07-16T12:30:00Z")
         #expect(imageSnapshot.constraints.first?.appliesToRequestKinds == ["image"])
         let textSnapshot = try snapshot(harness: "codex", constraints: [text])
         #expect(imageSnapshot.constraints.first?.presentationID != textSnapshot.constraints.first?.presentationID)
         let combined = try #require(QuotaPresentation.groups(from: [imageSnapshot, textSnapshot], now: now).first)
         #expect(combined.windows.count == 2)
+        #expect(Set(combined.windows.map(\.appliesToText)) == [false, true])
         #expect(combined.cooldownUntil == "2026-07-16T12:30:00Z")
     }
 

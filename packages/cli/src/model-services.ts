@@ -1,6 +1,6 @@
 import type { AdapterRegistry, ModelAdapter } from "@claudexor/core";
 import { credentialProfilePolicyState } from "@claudexor/core";
-import { loadConfig } from "@claudexor/config";
+import { loadConfigCached } from "@claudexor/config";
 import {
   ModelOperations,
   ModelSubstitutionLedger,
@@ -37,6 +37,7 @@ import { credentialUnusableLedger } from "./run-orchestrator.js";
 import type { RetentionRunner } from "./retention-service.js";
 import { catalogProfiles, enumerateAccountCatalogs } from "./account-catalog.js";
 import { bindModelAccountEvidence, withImageAccountEvidence } from "./model-account-evidence.js";
+import { modelError, poolExhausted } from "./model-service-refusals.js";
 
 /**
  * Daemon-lifetime model-substitution observations: in-memory and bounded, like
@@ -62,10 +63,6 @@ interface Dependencies extends Pick<ModelOperationDependencies, "commands" | "re
   migrationGate?: typeof accountsMigrationGate;
 }
 
-function modelError(code: string, message: string, status = 409): Error {
-  return Object.assign(new Error(message), { code, status, retryable: false });
-}
-
 /** Model transport composition shares account, quota, command, and retention owners
  * with Agents. It never starts an Agent Run or creates another routing ledger. */
 export function createModelServices(deps: Dependencies) {
@@ -73,7 +70,7 @@ export function createModelServices(deps: Dependencies) {
     { adapter: createCodexModelAdapter(), label: "Codex", credentialHarness: "codex" },
   ];
   const registry = deps.registry ?? buildRegistry({ includeFakes: false });
-  const config = deps.config ?? (() => loadConfig(noProjectRepoRoot()).global);
+  const config = deps.config ?? (() => loadConfigCached(noProjectRepoRoot()).global);
   const unusable = deps.unusable ?? credentialUnusableLedger;
   const substitutions = deps.substitutions ?? modelSubstitutionLedger;
   const quotaEvidence = () => ({ ...deps.quota().read(), honored: unusable.honored() });
@@ -212,78 +209,12 @@ export function createModelServices(deps: Dependencies) {
       });
     } catch (error) {
       if (errorCode(error) === "credential_pool_exhausted")
-        throw poolExhausted(source, error, excluded, catalogRefusals);
+        throw poolExhausted(source.adapter.id, error, catalogRefusals);
       throw error;
     }
     if (!profile)
       throw modelError("model_account_unavailable", "Connect a managed account for model calls");
     return profile;
-  };
-
-  const poolExhausted = (
-    source: ModelSource,
-    error: unknown,
-    excluded: Set<string>,
-    catalogRefusals: Map<string, ControlProblem>,
-  ): Error => {
-    const provided = ControlProblem.safeParse(
-      error && typeof error === "object" && "problem" in error ? error.problem : null,
-    );
-    const recordedCauses = provided.success ? provided.data.context.poolCauses : null;
-    const causes = new Set(Array.isArray(recordedCauses) ? recordedCauses : []);
-    const resets: Array<string | null> = causes.has("quota")
-      ? [
-          provided.success && typeof provided.data.context.resetsAt === "string"
-            ? provided.data.context.resetsAt
-            : null,
-        ]
-      : [];
-    for (const refusal of catalogRefusals.values()) {
-      causes.add(
-        refusal.code === "auth_required"
-          ? "auth"
-          : refusal.code === "subscription_window_exhausted"
-            ? "quota"
-            : "unavailable",
-      );
-      if (refusal.code === "subscription_window_exhausted")
-        resets.push(typeof refusal.context.resetsAt === "string" ? refusal.context.resetsAt : null);
-    }
-    const poolCause =
-      causes.size === 1 && causes.has("quota")
-        ? "quota"
-        : causes.size === 1 && causes.has("auth")
-          ? "auth"
-          : causes.size > 1 && !causes.has("unavailable")
-            ? "mixed"
-            : "unavailable";
-    const code =
-      poolCause === "quota"
-        ? "subscription_window_exhausted"
-        : poolCause === "auth"
-          ? "auth_required"
-          : excluded.size > 0 && causes.size === 0
-            ? "model_unavailable"
-            : "credential_pool_exhausted";
-    const message =
-      poolCause === "quota"
-        ? "Every available model account is blocked by subscription quota"
-        : poolCause === "auth"
-          ? "Every available model account requires sign-in"
-          : "No managed account can currently serve this model request";
-    const resetsAt =
-      resets.length > 0 &&
-      resets.every((at): at is string => at !== null && Number.isFinite(Date.parse(at)))
-        ? resets.reduce((earliest, at) => (Date.parse(at) < Date.parse(earliest) ? at : earliest))
-        : null;
-    return Object.assign(modelError(code, message), {
-      problem: ControlProblem.parse({
-        code,
-        message,
-        retryable: false,
-        context: { source: source.adapter.id, poolCause, resetsAt },
-      }),
-    });
   };
 
   const resolveCatalog = async (
@@ -296,8 +227,8 @@ export function createModelServices(deps: Dependencies) {
     const { harnessId } = admitted;
     const excluded = new Set<string>();
     const catalogRefusals = new Map<string, ControlProblem>();
-    // Catalog membership is checked on exactly the selected account, before inference.
-    // The same pool resolver chooses any next candidate; this loop never generates.
+    // Exact-account discovery follows the raw source's absence declaration.
+    // Actual catalog failures retain their causes; this loop never generates.
     while (true) {
       signal.throwIfAborted();
       const profile = await pickAccount(
@@ -365,13 +296,27 @@ export function createModelServices(deps: Dependencies) {
         );
       if (catalog.provenance === "provider_http" && catalog.observedAt)
         evidence.honorCatalog(catalog.observedAt);
-      if (model === null || catalog.models.some((entry) => entry.id === model))
+      if (
+        model === null ||
+        source.adapter.inventoryAbsence === "advisory" ||
+        catalog.models.some((entry) => entry.id === model)
+      )
         return { profile, catalog };
+      const refusal = ControlProblem.parse({
+        code: "model_unavailable",
+        message: `The selected account does not advertise the requested model in its catalog as served to ${describeCodexClientVersion(catalog)}`,
+        retryable: false,
+        context: {
+          source: source.adapter.id,
+          credentialProfileId: profile.profile_id,
+          requestedModel: model,
+          clientVersion: catalog.clientVersion,
+          clientVersionSource: catalog.clientVersionSource,
+        },
+      });
       if (account.mode === "pin")
-        throw modelError(
-          "model_unavailable",
-          `The pinned account does not advertise the requested model in its catalog as served to ${describeCodexClientVersion(catalog)}`,
-        );
+        throw Object.assign(modelError(refusal.code, refusal.message), { problem: refusal });
+      catalogRefusals.set(profile.profile_id, refusal);
       excluded.add(profile.profile_id);
     }
   };
@@ -519,15 +464,27 @@ export function createModelServices(deps: Dependencies) {
         sourceId: string,
         credentialProfileId?: string,
         requestedModel?: string,
+        includeAdmission = false,
       ) => {
+        if (includeAdmission && !requestedModel)
+          throw modelError("invalid_request", "Admission observation requires requestedModel", 400);
+        const source = getSource(sourceId);
         const { catalog } = await resolve(
-          getSource(sourceId),
+          source,
           credentialProfileId ? { mode: "pin", profileId: credentialProfileId } : { mode: "auto" },
           requestedModel ?? null,
           lifetime.signal,
         );
         return {
           ...catalog,
+          ...(includeAdmission
+            ? {
+                admission: {
+                  requestedModel: requestedModel!,
+                  inventoryAbsence: source.adapter.inventoryAbsence ?? "authoritative",
+                },
+              }
+            : {}),
           models: catalog.models.map(({ processing: _processing, ...model }) => model),
         };
       },

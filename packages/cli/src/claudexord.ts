@@ -1,7 +1,8 @@
 #!/usr/bin/env node
+import { accountResetServices } from "./account-reset-services.js";
 import { join } from "node:path";
 import {
-  DaemonClient,
+  DaemonLocalClient,
   commandActivityRecords,
   commandProjection,
   commandExecutionRoots,
@@ -69,6 +70,7 @@ import { runStartupAccountsMigration } from "./accounts-unified-migration.js";
 import { runStopIfRequested } from "./runtime-replacement-stop.js";
 import { createDaemonAgentRunner } from "./daemon-agent-runner.js";
 import { createModelServices } from "./model-services.js";
+import { daemonHarnessMaintenance } from "./harness-maintenance-service.js";
 import { isModelOperation } from "@claudexor/schema";
 
 export async function main(): Promise<void> {
@@ -175,7 +177,7 @@ export async function main(): Promise<void> {
     const resources = (): ResourceStore =>
       (resourceStore ??= new ResourceStore(join(daemonDir(), "resource-store")));
 
-    const selfClient = new DaemonClient(socketPath, token);
+    const selfClient = new DaemonLocalClient(() => server);
     const models = createModelServices({
       commands: threads,
       resources,
@@ -183,6 +185,7 @@ export async function main(): Promise<void> {
       quota: () => quotaStoreSlot.current(),
       warn: (message) => logLine(logPath(), message),
     });
+    const maintenance = daemonHarnessMaintenance(threads, selfClient, () => authReadiness);
     const agentRunner = createDaemonAgentRunner({
       delegationBudgetAuthority,
       quotaStore: () => quotaStoreSlot.current(),
@@ -228,7 +231,9 @@ export async function main(): Promise<void> {
       runner: (params, ctx) =>
         isModelOperation(params)
           ? models.operations.execute(params, ctx)
-          : agentRunner(params, ctx),
+          : maintenance.owns(params)
+            ? maintenance.execute(params, ctx)
+            : agentRunner(params, ctx),
     });
     bindDelegationDaemon(server);
 
@@ -282,9 +287,10 @@ export async function main(): Promise<void> {
       () => commandActivityRecords(threads.all().flatMap((store) => store.records())),
       startupConcurrencyCaps,
     );
-    const runRetention = services.runRetention;
-    services.runRetention = models.withRetention(runRetention);
-    Object.assign(services, models.routes);
+    services.runRetention = models.withRetention(services.runRetention);
+    const accountControls = accountResetServices(commandStoreSlot, quotaStoreSlot);
+    Object.assign(services, models.routes, accountControls);
+    maintenance.bind(services);
     control = !controlApiEnabledForStartup({
       disabledByEnv: process.env.CLAUDEXOR_NO_CONTROL_API === "1",
       blockedPartitions: startupBlockedPartitions,
@@ -293,7 +299,7 @@ export async function main(): Promise<void> {
       ? null
       : new DaemonControlApiServer({
           token,
-          daemon: new DaemonClient(socketPath, token),
+          daemon: selfClient,
           port: Number(process.env.CLAUDEXOR_CONTROL_PORT ?? 0),
           servingMode: admission.snapshot,
           bus,
@@ -358,7 +364,7 @@ export async function main(): Promise<void> {
     });
     if (!shutdownRuntime.requested()) {
       await proveRecoveryTransport({
-        socket: selfClient,
+        socketPath,
         identity: servingIdentity,
         token,
         control: controlAddr,
@@ -369,7 +375,7 @@ export async function main(): Promise<void> {
       await runAdmissionCompletion(() => startupBlockedPartitions);
     }
     await shutdownRuntime.wait();
-    lifecycle.finalize();
+    await lifecycle.finalize();
     logLine(logPath(), "claudexord shut down");
     startupDiagnostics.recordStage("shutdown_complete", "claudexord shut down");
   } catch (error) {
@@ -385,7 +391,7 @@ export async function main(): Promise<void> {
     if (shutdownRuntime) {
       try {
         await shutdownRuntime.beginShutdown("startup failure");
-        lifecycle?.finalize();
+        await lifecycle?.finalize();
       } catch (shutdownError) {
         logLine(
           logPath(),

@@ -1,5 +1,67 @@
 # @claudexor/review
 
+## 3.25.1
+
+### Patch Changes
+
+- @claudexor/budget@3.25.1
+- @claudexor/config@3.25.1
+- @claudexor/context@3.25.1
+- @claudexor/core@3.25.1
+- @claudexor/schema@3.25.1
+- @claudexor/util@3.25.1
+- @claudexor/workspace@3.25.1
+
+## 3.25.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/schema@3.25.0
+  - @claudexor/budget@3.25.0
+  - @claudexor/config@3.25.0
+  - @claudexor/context@3.25.0
+  - @claudexor/core@3.25.0
+  - @claudexor/workspace@3.25.0
+  - @claudexor/util@3.25.0
+
+## 3.24.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/core@3.24.0
+  - @claudexor/schema@3.24.0
+  - @claudexor/context@3.24.0
+  - @claudexor/workspace@3.24.0
+  - @claudexor/budget@3.24.0
+  - @claudexor/config@3.24.0
+  - @claudexor/util@3.24.0
+
+## 3.23.2
+
+### Patch Changes
+
+- @claudexor/budget@3.23.2
+- @claudexor/config@3.23.2
+- @claudexor/context@3.23.2
+- @claudexor/core@3.23.2
+- @claudexor/schema@3.23.2
+- @claudexor/util@3.23.2
+- @claudexor/workspace@3.23.2
+
+## 3.23.1
+
+### Patch Changes
+
+- @claudexor/budget@3.23.1
+- @claudexor/config@3.23.1
+- @claudexor/context@3.23.1
+- @claudexor/core@3.23.1
+- @claudexor/schema@3.23.1
+- @claudexor/util@3.23.1
+- @claudexor/workspace@3.23.1
+
 ## 3.23.0
 
 ### Patch Changes

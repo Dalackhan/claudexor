@@ -1,5 +1,43 @@
 # @claudexor/schema
 
+## 3.25.1
+
+### Patch Changes
+
+- @claudexor/util@3.25.1
+
+## 3.25.0
+
+### Minor Changes
+
+- Expose independently dated account resources and explicit Codex and Claude resets through the control API, CLI, MCP and native Accounts. Preserve original request identity through uncertain outcomes and keep provider results separate from resource refresh.
+
+### Patch Changes
+
+- @claudexor/util@3.25.0
+
+## 3.24.0
+
+### Minor Changes
+
+- Add shared vendor CLI inspection and maintenance with durable update, cancellation and previous-version evidence. Preserve newer managed installations and support native Cursor and Antigravity updates. Permit explicit Codex models absent from a successful catalog without misreporting account availability as exhausted quota.
+
+### Patch Changes
+
+- @claudexor/util@3.24.0
+
+## 3.23.2
+
+### Patch Changes
+
+- @claudexor/util@3.23.2
+
+## 3.23.1
+
+### Patch Changes
+
+- @claudexor/util@3.23.1
+
 ## 3.23.0
 
 ### Patch Changes

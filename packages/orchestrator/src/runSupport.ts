@@ -20,13 +20,12 @@ import {
   makeOutcomeFacts,
   runOutcomeLabel,
 } from "@claudexor/schema";
-import type { RouteDropStage } from "@claudexor/schema";
+import type { BudgetObservation, RouteDropStage } from "@claudexor/schema";
 import type { EventLog } from "@claudexor/event-log";
-import { isBlocking } from "@claudexor/schema";
+import { isBlocking, quotaConstraintAppliesToRequestKind } from "@claudexor/schema";
 import type { CandidateEvidence } from "@claudexor/arbitration";
 import { redactSecrets } from "@claudexor/util";
 import { observationsFromEvent, recordHarnessMetric } from "@claudexor/budget";
-import type { BudgetObservation } from "@claudexor/schema";
 import { ArtifactStore } from "@claudexor/artifact-store";
 import { blockedDecisionOverride } from "@claudexor/delivery";
 
@@ -503,6 +502,7 @@ export function observeBudgetSignals(
     ledger.observe(obs);
     if (
       obs.kind === "quota_constraint" &&
+      quotaConstraintAppliesToRequestKind(obs, "text") &&
       (obs.used_ratio ?? 0) >= 0.5 &&
       !state.quotaPressureDisclosed
     ) {

@@ -10,7 +10,7 @@ changing Claudexor.
 
 | Surface | Current role | Stability |
 |---|---|---|
-| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, retry, run-again, apply, decision, review), ops (project, models, harness, doctor, quota, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
+| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, retry, run-again, apply, decision, review), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
 | Daemon and control API | Local durable queue, Agent runs, caller-owned model and image operations, artifacts, SSE events, settings, harness status, secrets metadata, apply, and run control. | Stable contract: endpoints and DTOs per `docs/reference/endpoints.json` + generated schemas (add-only fields). Loopback + bearer token only. |
 | MCP server | Exposes Claudexor tools to MCP clients. | Stable contract: the tool set with input/output schemas. Tool list follows the implementation, not old docs. |
 | ACP server | Lets compatible editors or agents talk to Claudexor as a local agent surface. | Experimental (may change in minors, disclosed in the CHANGELOG). |
@@ -43,8 +43,15 @@ then recover and acknowledge the
 identity and whole-result digest. Decode images into caller-owned files before
 ACK; keep base64 out of model text and make viewing or sending a separate action.
 The [image contract](ARCHITECTURE.md#image-generation-and-editing) owns request,
-quota, provenance and uncertainty semantics. Live subscription qualification
-remains outstanding in the [feature ledger](FEATURES.md).
+quota, provenance and uncertainty semantics. Live qualification is one real-adapter
+generate and edit on one managed account; the [feature ledger](FEATURES.md) lists the rest.
+Selected-account discovery can negotiate `includeAdmission=true` with an exact
+`requestedModel`. Its `admission` reports the source's inventory-absence policy
+after account admission: Codex permits an explicit model absent from a successful
+catalog. Keep unknown model metadata unknown, and keep acquisition failures
+distinct. The response adds declared client-version facts; without the opt-in,
+the legacy envelope remains unchanged. This is permission to attempt, not evidence
+that a generation completed or that an older uncertain request can be replayed.
 
 Processing uses the optional `processingPreference` contract and the
 [single advisory rule](DEVELOPMENT.md#processing-preference). Discover account
@@ -84,6 +91,10 @@ The effort receipt preserves `requested: ultra`, the prepared value and independ
 provider observation; it discloses that raw calls do not execute native automatic
 delegation. Native Codex sessions retain their full Ultra mode. Catalog object
 shapes and the opt-in result contract are unchanged.
+For an unlisted raw model, ordinary explicit effort is forwarded exactly with
+adapter-sourced submission evidence and unconfirmed model support. Ultra cannot
+be mapped without a known generation ladder and returns an unsupported-option
+refusal; an account's unrelated model ladder is not a substitute.
 
 ## Embedded Engine Runtime
 
@@ -127,8 +138,9 @@ JSON object. Every executed result carries `ok: boolean`, `dryRun: false`,
 `command: string`, `installLocation: string`, `pinnedVersion: string | null`, and
 `verification: string`. Every successful `--target local` result additionally carries
 `installedBinary` (an absolute launcher path; on Windows the package-native
-image) and `installedVersion` (the exact
-npm pin, or Cursor's bounded non-empty version line). On the local target,
+image) and `installedVersion` (the exact npm pin, a kept runnable newer managed
+version, or the script vendor's bounded non-empty version line). `pinnedVersion`
+continues to name the release baseline; Ensure never downgrades a newer copy. On the local target,
 child exit zero is not sufficient: if that launcher/version proof fails, the
 result is `ok: false`, `code: "install_verification_failed"`. A remote success
 keeps the historical contract — `exitCode: 0` with no proof fields. A Cursor result after a
@@ -142,6 +154,17 @@ disclosure field (and the native `causeCode` when available). Dry-run
 returns the disclosure fields with
 `ok: true` and `dryRun: true`, without executing, proving a binary, or acquiring
 the install lease.
+
+For updates, negotiate the maintenance routes from the operation catalog rather
+than calling Ensure again. `GET /v2/maintenance/harnesses` returns selected-version
+facts and each installation's `maintainable`, `targets` and `canCheckLatest`.
+`POST /v2/maintenance/operations` accepts a harness and target with a stable
+Idempotency-Key; recover a lost reply with that same key/body, then read or cancel
+the returned operation. Acceptance is not completion. Latest-only native updaters
+can return an unchanged version without proving newest; npm return/exact targets
+require the package to remain downloadable. The CLI uses `harness inspect` and
+`harness update <id> --vendor-version <exact|latest> --yes --json`; its new receipt
+keeps before/after and effect facts separate from the legacy install envelope.
 
 The public [Ouroboros runtime pin](https://github.com/razzant/ouroboros/blob/ouroboros/ouroboros/claudexor_runtime_pin.json)
 is a working example of that exact-version, exact-build, and checksum contract.
@@ -282,6 +305,38 @@ constraints themselves. `POST /v2/quota` accepts an optional `{"model": …}`
 body to compute `state` against the model the caller intends to spend
 (case-insensitive alias containment in either direction). The CLI projection
 is `claudexor quota [--refresh] --json`.
+Typed account resources are opt-in: request `view=resources` on either quota
+operation, or on `GET /v2/credential-profiles` with `snapshot=true`. Detect the query
+parameter in the operation catalog. The rich quota response adds `resources`, with
+independent balances, spending, reset offers and diagnostic facets per exact account.
+POST quota accepts `target: {harness, profile_id}` for selected-account refresh.
+The CLI equivalent is `claudexor quota --resources --refresh --profile claude/work --json`.
+Amounts preserve decimal strings, units and nullable provider scale/currency; failed
+reads retain stale values rather than inventing zero. Render reset descriptions and
+contextual diagnostic details instead of raw native scope/reason identifiers.
+Per-window freshness is a separate GET-only opt-in: `GET /v2/quota` with query
+`view=constraint_freshness` returns `ControlQuotaFreshnessResponse`, the legacy shape
+with a required `freshness` (`fresh`, `stale` or `unknown`) on every constraint, so an
+elapsed five-hour reset no longer stales a weekly window that is still current. Snapshot
+`freshness`, observation times, usage, availability and routing are unchanged, and the
+read never refreshes quota. The legacy Codex `reset_credits` row carries the freshness
+of its resets facet. Discovery is optional (the GET quota `view` enum lists
+`constraint_freshness`); validate the whole response as either that shape or strict
+legacy, and reject partial or mixed metadata. A 3.24 engine ignores the selector and
+returns legacy data, whose snapshot freshness then applies to every window. 3.25.0 and
+3.25.1 answer HTTP 400; one plain GET is then the compatible fallback. Never fall back
+after other statuses, transport errors or malformed payloads, and never use POST for
+this read.
+
+`POST /v2/account-resets` accepts `{target, offer_id, grant_id?}` and requires an
+Idempotency-Key. The receipt separates provider outcome from readback freshness;
+`GET /v2/account-resets/:id` reads it again. After a timeout without a receipt id,
+repeat the original POST body and key. Codex `already_redeemed` confirms that native
+request, while Claude `already_used` is not proof of this operation's success.
+The CLI uses `claudexor account-reset claude/work --offer claude_granted --grant <id>
+--idempotency-key <key> --json`; `--operation <id>` reads its receipt. This direct
+operation does not need an inference slot and never changes billing settings.
+
 Control quota snapshots also carry a server-derived `snapshot_id` for stable
 presentation identity. Native incremental sources (`claude_rate_limit_event`,
 `codex_app_server_event`) report single windows with their own timestamps; they
@@ -557,7 +612,10 @@ answer, finished work, or applyability.
 The implemented tools include `claudexor_ask` (with `deepScan`), `claudexor_run`,
 `claudexor_best_of`, `claudexor_plan`, `claudexor_create`,
 `claudexor_thread_create`, `claudexor_thread_turn`, `claudexor_thread_read`,
-`claudexor_status`, `claudexor_capabilities`
+`claudexor_status`, `claudexor_account_resources` (the same rich quota read,
+with optional `refresh`, `target` and `model`), `claudexor_account_reset`
+(explicit reset with original `idempotency_key`, or receipt lookup by `operation_id`),
+`claudexor_capabilities`
 (the derived AgentCapabilityCatalog: per-harness live capabilities, modes,
 the mutability matrix, run-control keys), and the read-only recovery tools
 `claudexor_accounts` (the server-authored credential-profile/readiness/quota

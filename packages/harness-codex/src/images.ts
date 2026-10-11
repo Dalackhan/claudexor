@@ -32,8 +32,9 @@ const MAX_FAILURE_BYTES = 64 * 1024;
  * upstream CLI's own tool pins `gpt-image-2` and refuses more than five edit
  * references; those are CLIENT facts, so they are published as a presence
  * hint and a labelled bound, never as a provider maximum or refusal list.
- * Nothing here is live-qualified: the embedding application runs its own
- * narrow probe before declaring the backend working.
+ * Live qualification is one generate and one edit on one managed account
+ * (docs/FEATURES.md); the embedding application still runs its own narrow
+ * probe before declaring the backend working.
  */
 export const CODEX_IMAGE_CAPABILITY: ImageGenerationCapability = {
   models: ["gpt-image-2"],

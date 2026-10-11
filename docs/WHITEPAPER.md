@@ -47,6 +47,14 @@ turn. Claudexor binds this state to the actual account and model, preserves it
 through body failures, and leaves turn lifetime with the caller. It does not
 create a second conversation store or retry an uncertain generation.
 
+Discovery and admission are separate facts. A vendor catalog can lag a model
+that an explicit request already names; the source declares whether that absence
+is authoritative or advisory. Permitting the attempt never invents capabilities
+or successful execution, and authentication, quota and failed discovery retain
+their actual causes. Vendor program maintenance likewise belongs to the engine:
+surfaces share the selected installation's update capability and observed result,
+while the caller decides when to update and whether to continue its work.
+
 Model content and authorization are distinct responsibilities. The caller's model
 payload keeps its supplied content, including examples that resemble credentials;
 the adapter's own authorization never enters that payload. Temporary exchange
@@ -134,6 +142,22 @@ limits remain applicable. The retirement survives replay. Usage-statistics failu
 never imply that every subscription is spent; unrelated account polling continues.
 Observing Accounts reuses the first acquisition until an explicit or credential-driven
 refresh, without a client view continuously spawning vendor checks.
+Passive quota consumers may directly request per-window freshness without
+requiring operation discovery: a reset in one
+window need not stale a sibling whose own observation is still current.
+Fully valid legacy responses retain conservative snapshot freshness; missing
+metadata never implies a fresh window, and partial explicit metadata is rejected.
+This display projection preserves the conservative snapshot used by routing,
+the original observation time and usage, and unknown values; it never invents
+refill or triggers provider work. An account reset still makes earlier evidence
+historical for every window.
+
+Account resources extend that same observation owner with independently aged
+balances, spending facts and reset offers. An explicit reset is a durable direct
+command outside inference capacity: its original account binding and request key
+survive response loss, while provider effect and subsequent readback remain
+separate. GUI, CLI and MCP consume the same contract; the existence of a balance
+or reset never creates an automatic spending strategy.
 
 A saved login and a vendor accepting that credential are different facts.
 Observations from ordinary work should improve the same account view and selection

@@ -1,3 +1,4 @@
+import { ACCOUNT_RESOURCE_OPERATION_DRAFTS } from "./account-resource-routes.js";
 import {
   CONTROL_PROTOCOL_MAJOR,
   ControlOperationCatalog,
@@ -5,9 +6,10 @@ import {
   type ControlOperationDescriptor,
   ControlHarnessSetupHarness,
 } from "@claudexor/schema";
-import { queryParam, resumeHeader, QUOTA_READ_PARAMETERS } from "./operation-parameters.js";
+import { queryParam, resumeHeader } from "./operation-parameters.js";
 import { REMOTE_OPERATION_DRAFTS } from "./remote-operation-descriptors.js";
 import { MODEL_OPERATION_DRAFTS } from "./model-routes.js";
+import { MAINTENANCE_OPERATION_DRAFTS } from "./maintenance-routes.js";
 import type { OperationDraft } from "./operation-draft.js";
 import { OPERATION_SUMMARIES } from "./operation-summaries.js";
 
@@ -84,9 +86,7 @@ const operations: ControlOperationDescriptor[] = [
   j("POST", "/v2/handshake", "read_only", "ControlHandshakeRequest", "ControlHandshakeResponse"),
   j("GET", "/v2/daemon/status", "read_only", null, "ControlDaemonStatus"),
   j("GET", "/v2/operations", "read_only", null, "ControlOperationCatalog"),
-  j("POST", "/v2/maintenance/gc", "mutating", "ControlGcRequest", "ControlGcReceipt", {
-    idempotency: "natural",
-  }),
+  ...MAINTENANCE_OPERATION_DRAFTS.map(descriptor),
   j("GET", "/v2/agent-capabilities", "read_only", null, "AgentCapabilityCatalog"),
   j("GET", "/v2/run-applicability", "read_only", null, "ControlRunApplicabilityResponse", {
     applicability: "project",
@@ -107,22 +107,11 @@ const operations: ControlOperationDescriptor[] = [
       ),
     ],
   }),
-  j("GET", "/v2/quota", "read_only", null, "ControlQuotaResponse", {
-    parameters: QUOTA_READ_PARAMETERS,
-  }),
+  ...ACCOUNT_RESOURCE_OPERATION_DRAFTS.map(descriptor),
   // Unified account model (INV-135 rewrite): the pool-authority read. Its
   // catalog presence is also the feature marker clients detect (absent from
   // 3.5.0 engines), per INV-138 a generated capability, never hand-declared.
   j("GET", "/v2/account-pools", "read_only", null, "ControlAccountPoolsResponse"),
-  j("GET", "/v2/credential-profiles", "read_only", null, "ControlCredentialProfilesQueryResponse", {
-    parameters: [
-      queryParam({
-        name: "snapshot",
-        enum: ["true", "false"],
-        description: "Return one fresh server-authored Accounts snapshot epoch.",
-      }),
-    ],
-  }),
   j(
     "POST",
     "/v2/credential-profiles",
@@ -158,9 +147,6 @@ const operations: ControlOperationDescriptor[] = [
     "ControlAccountsMigrationRollbackResponse",
     { idempotency: "natural" },
   ),
-  j("POST", "/v2/quota", "mutating", "ControlQuotaRefreshRequest", "ControlQuotaResponse", {
-    idempotency: "natural",
-  }),
   j("GET", "/v2/harnesses", "read_only", null, "ControlHarnessListResponse", {
     parameters: [
       queryParam({
@@ -183,9 +169,14 @@ const operations: ControlOperationDescriptor[] = [
   }),
   j("GET", "/v2/projects", "read_only", null, "ControlProjectListResponse"),
   ...REMOTE_OPERATION_DRAFTS.map(descriptor),
-  j("POST", "/v2/projects", "mutating", "ControlProjectRegisterRequest", "ControlProject", {
-    idempotency: "key_required",
-  }),
+  j(
+    "POST",
+    "/v2/projects",
+    "mutating",
+    "ControlProjectRegisterRequest",
+    "ControlProjectRegisterResponse",
+    { idempotency: "key_required" },
+  ),
   j(
     "POST",
     "/v2/projects/:id/relink",

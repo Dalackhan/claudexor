@@ -1,5 +1,42 @@
 # claudexor
 
+## 3.25.1
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/cli@3.25.1
+
+## 3.25.0
+
+### Minor Changes
+
+- Expose independently dated account resources and explicit Codex and Claude resets through the control API, CLI, MCP and native Accounts. Preserve original request identity through uncertain outcomes and keep provider results separate from resource refresh.
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/cli@3.25.0
+
+## 3.24.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/cli@3.24.0
+
+## 3.23.2
+
+### Patch Changes
+
+- @claudexor/cli@3.23.2
+
+## 3.23.1
+
+### Patch Changes
+
+- @claudexor/cli@3.23.1
+
 ## 3.23.0
 
 ### Minor Changes

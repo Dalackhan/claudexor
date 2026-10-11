@@ -1,5 +1,163 @@
 # @claudexor/cli
 
+## 3.25.1
+
+### Patch Changes
+
+- Carry account resources and explicit reset controls forward from the unpublished 3.25.0 candidate, and use the matching Docker Official Ubuntu image from ECR Public for Linux SSH release verification.
+  - @claudexor/acp-server@3.25.1
+  - @claudexor/artifact-store@3.25.1
+  - @claudexor/config@3.25.1
+  - @claudexor/control-api@3.25.1
+  - @claudexor/core@3.25.1
+  - @claudexor/daemon@3.25.1
+  - @claudexor/delivery@3.25.1
+  - @claudexor/gateway@3.25.1
+  - @claudexor/harness-acp@3.25.1
+  - @claudexor/harness-agy@3.25.1
+  - @claudexor/harness-claude@3.25.1
+  - @claudexor/harness-codex@3.25.1
+  - @claudexor/harness-cursor@3.25.1
+  - @claudexor/harness-fake@3.25.1
+  - @claudexor/harness-opencode@3.25.1
+  - @claudexor/harness-raw-api@3.25.1
+  - @claudexor/journal@3.25.1
+  - @claudexor/mcp-server@3.25.1
+  - @claudexor/orchestrator@3.25.1
+  - @claudexor/review@3.25.1
+  - @claudexor/schema@3.25.1
+  - @claudexor/secrets@3.25.1
+  - @claudexor/util@3.25.1
+  - @claudexor/workspace@3.25.1
+
+## 3.25.0
+
+### Minor Changes
+
+- Expose independently dated account resources and explicit Codex and Claude resets through the control API, CLI, MCP and native Accounts. Preserve original request identity through uncertain outcomes and keep provider results separate from resource refresh.
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/schema@3.25.0
+  - @claudexor/daemon@3.25.0
+  - @claudexor/control-api@3.25.0
+  - @claudexor/mcp-server@3.25.0
+  - @claudexor/harness-codex@3.25.0
+  - @claudexor/harness-claude@3.25.0
+  - @claudexor/acp-server@3.25.0
+  - @claudexor/config@3.25.0
+  - @claudexor/core@3.25.0
+  - @claudexor/delivery@3.25.0
+  - @claudexor/gateway@3.25.0
+  - @claudexor/harness-acp@3.25.0
+  - @claudexor/harness-agy@3.25.0
+  - @claudexor/harness-cursor@3.25.0
+  - @claudexor/harness-fake@3.25.0
+  - @claudexor/harness-opencode@3.25.0
+  - @claudexor/harness-raw-api@3.25.0
+  - @claudexor/orchestrator@3.25.0
+  - @claudexor/review@3.25.0
+  - @claudexor/workspace@3.25.0
+  - @claudexor/artifact-store@3.25.0
+  - @claudexor/journal@3.25.0
+  - @claudexor/secrets@3.25.0
+  - @claudexor/util@3.25.0
+
+## 3.24.0
+
+### Minor Changes
+
+- Add shared vendor CLI inspection and maintenance with durable update, cancellation and previous-version evidence. Preserve newer managed installations and support native Cursor and Antigravity updates. Permit explicit Codex models absent from a successful catalog without misreporting account availability as exhausted quota.
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/core@3.24.0
+  - @claudexor/schema@3.24.0
+  - @claudexor/daemon@3.24.0
+  - @claudexor/control-api@3.24.0
+  - @claudexor/harness-codex@3.24.0
+  - @claudexor/delivery@3.24.0
+  - @claudexor/gateway@3.24.0
+  - @claudexor/harness-acp@3.24.0
+  - @claudexor/harness-agy@3.24.0
+  - @claudexor/harness-claude@3.24.0
+  - @claudexor/harness-cursor@3.24.0
+  - @claudexor/harness-fake@3.24.0
+  - @claudexor/harness-opencode@3.24.0
+  - @claudexor/harness-raw-api@3.24.0
+  - @claudexor/orchestrator@3.24.0
+  - @claudexor/review@3.24.0
+  - @claudexor/workspace@3.24.0
+  - @claudexor/acp-server@3.24.0
+  - @claudexor/config@3.24.0
+  - @claudexor/mcp-server@3.24.0
+  - @claudexor/artifact-store@3.24.0
+  - @claudexor/journal@3.24.0
+  - @claudexor/secrets@3.24.0
+  - @claudexor/util@3.24.0
+
+## 3.23.2
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/control-api@3.23.2
+  - @claudexor/acp-server@3.23.2
+  - @claudexor/artifact-store@3.23.2
+  - @claudexor/config@3.23.2
+  - @claudexor/core@3.23.2
+  - @claudexor/daemon@3.23.2
+  - @claudexor/delivery@3.23.2
+  - @claudexor/gateway@3.23.2
+  - @claudexor/harness-acp@3.23.2
+  - @claudexor/harness-agy@3.23.2
+  - @claudexor/harness-claude@3.23.2
+  - @claudexor/harness-codex@3.23.2
+  - @claudexor/harness-cursor@3.23.2
+  - @claudexor/harness-fake@3.23.2
+  - @claudexor/harness-opencode@3.23.2
+  - @claudexor/harness-raw-api@3.23.2
+  - @claudexor/journal@3.23.2
+  - @claudexor/mcp-server@3.23.2
+  - @claudexor/orchestrator@3.23.2
+  - @claudexor/review@3.23.2
+  - @claudexor/schema@3.23.2
+  - @claudexor/secrets@3.23.2
+  - @claudexor/util@3.23.2
+  - @claudexor/workspace@3.23.2
+
+## 3.23.1
+
+### Patch Changes
+
+- Updated dependencies [1111845]
+  - @claudexor/orchestrator@3.23.1
+  - @claudexor/harness-claude@3.23.1
+  - @claudexor/acp-server@3.23.1
+  - @claudexor/artifact-store@3.23.1
+  - @claudexor/config@3.23.1
+  - @claudexor/control-api@3.23.1
+  - @claudexor/core@3.23.1
+  - @claudexor/daemon@3.23.1
+  - @claudexor/delivery@3.23.1
+  - @claudexor/gateway@3.23.1
+  - @claudexor/harness-acp@3.23.1
+  - @claudexor/harness-agy@3.23.1
+  - @claudexor/harness-codex@3.23.1
+  - @claudexor/harness-cursor@3.23.1
+  - @claudexor/harness-fake@3.23.1
+  - @claudexor/harness-opencode@3.23.1
+  - @claudexor/harness-raw-api@3.23.1
+  - @claudexor/journal@3.23.1
+  - @claudexor/mcp-server@3.23.1
+  - @claudexor/review@3.23.1
+  - @claudexor/schema@3.23.1
+  - @claudexor/secrets@3.23.1
+  - @claudexor/util@3.23.1
+  - @claudexor/workspace@3.23.1
+
 ## 3.23.0
 
 ### Patch Changes

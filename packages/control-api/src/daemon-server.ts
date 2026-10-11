@@ -1,3 +1,5 @@
+import { handleAccountResourceRoute } from "./account-resource-routes.js";
+import { ControlAccountResetRequest } from "@claudexor/schema";
 import { readThreadCommands } from "./command-reads.js";
 import { recoverInterruptedOutput } from "./retained-output.js";
 import { recordedExecutionRoot } from "./run-delivery-state.js";
@@ -20,7 +22,7 @@ import {
   validateApplyGate,
   verifyAndDeliver,
 } from "@claudexor/delivery";
-import { lastSeqInFile } from "@claudexor/event-log";
+import { lastRunEventSeq } from "@claudexor/event-log";
 import { isVanishedErrno, safeArtifactPath, safeArtifactRoot } from "./artifact-paths.js";
 import { TERMINAL_STATES } from "./sse-shared.js";
 import { readFilesWorkProduct } from "./files-work-product.js";
@@ -171,7 +173,7 @@ import {
   ControlSettingsSnapshot,
   ControlSettingsUpdateRequest,
   ControlQuotaRefreshRequest,
-  ControlQuotaResponse,
+  type ControlQuotaReadRequest,
   ControlAccountPoolsResponse,
   ControlAccountsMigrationRollbackRequest,
   ControlAccountsMigrationRollbackResponse,
@@ -218,6 +220,7 @@ import {
 
 import { resolveControlProtocol, type ControlServingMode } from "./control-protocol.js";
 import { readControlRequestBody } from "./request-body.js";
+import { withControlHttpTimeouts } from "./http-server-options.js";
 import {
   assertNoInlineSecretValues,
   errorCode,
@@ -283,11 +286,19 @@ export interface DaemonControlApiOptions {
       journalEvents?: (partition: string, afterCursor?: string) => Promise<unknown>;
       settings?: () => Promise<unknown>;
       updateSettings?: (patch: unknown) => Promise<unknown>;
-      quota?: (input?: ControlQuotaRefreshRequest) => Promise<unknown>;
-      refreshQuota?: (input?: ControlQuotaRefreshRequest) => Promise<unknown>;
+      quota?: (input?: ControlQuotaReadRequest) => Promise<unknown>;
+      createAccountReset?: (input: {
+        request: ControlAccountResetRequest;
+        idempotencyKey: string;
+        clientId: string;
+      }) => Promise<unknown>;
+      accountReset?: (id: string) => Promise<unknown>;
+      refreshQuota?: (
+        input?: ControlQuotaRefreshRequest & { view?: "resources" },
+      ) => Promise<unknown>;
       accountPools?: () => Promise<unknown>;
       rollbackAccountsMigration?: (input: unknown) => Promise<unknown>;
-      credentialProfiles?: (input?: { snapshot?: boolean }) => Promise<unknown>;
+      credentialProfiles?: (input?: { snapshot?: boolean; view?: "resources" }) => Promise<unknown>;
       runApplicability?: (input: { repoRoot: string }) => Promise<unknown>;
       createCredentialProfile?: (input: unknown) => Promise<unknown>;
       updateCredentialProfile?: (input: unknown) => Promise<unknown>;
@@ -549,7 +560,7 @@ export class DaemonControlApiServer {
     const host = this.opts.host ?? "127.0.0.1";
     const port = this.opts.port ?? 0;
     await new Promise<void>((resolve, reject) => {
-      this.server = createServer((req, res) => this.onRequest(req, res));
+      this.server = withControlHttpTimeouts(createServer((req, res) => this.onRequest(req, res)));
       this.server.once("error", reject);
       this.server.listen(port, host, () => resolve());
     });
@@ -835,7 +846,7 @@ export class DaemonControlApiServer {
       if (!rec) return this.json(res, 404, { error: "no such run" });
       // Fence order: cursor FIRST, every projection (pending interactions
       // included) after it — see the detailFor doc comment.
-      const lastSeq = rec.runDir ? lastSeqInFile(join(rec.runDir, "events.jsonl")) : 0;
+      const lastSeq = rec.runDir ? lastRunEventSeq(join(rec.runDir, "events.jsonl")) : 0;
       const parentRunId = rec.runId ?? rec.id;
       // Addressed child read: the daemon selects this parent's direct children
       // before it projects, so parent detail never pays for the params of every
@@ -1537,35 +1548,26 @@ export class DaemonControlApiServer {
       }
       return this.service(res, "updateSettings", body, ControlSettingsSnapshot);
     }
-    if (method === "GET" && path === "/quota") {
-      try {
-        const input = ControlQuotaRefreshRequest.parse(Object.fromEntries(url.searchParams));
-        if ([...url.searchParams.keys()].some((key) => url.searchParams.getAll(key).length !== 1))
-          throw new Error("Duplicate quota query parameter");
-        return this.service(
-          res,
-          "quota",
-          Object.keys(input).length ? input : undefined,
-          ControlQuotaResponse,
-        );
-      } catch (error) {
-        return this.requestError(res, error);
-      }
-    }
+    if (
+      await handleAccountResourceRoute(
+        {
+          services: this.opts.services,
+          readBody: (request) => this.readBody(request),
+          json: (response, status, body) => this.json(response, status, body),
+          requestError: (response, error) => this.requestError(response, error),
+        },
+        method,
+        path,
+        url,
+        req,
+        res,
+      )
+    )
+      return;
     // Unified account model: the pool-authority read (also the feature marker
     // clients detect through the operation catalog).
     if (method === "GET" && path === "/account-pools")
       return this.service(res, "accountPools", undefined, ControlAccountPoolsResponse);
-    if (method === "POST" && path === "/quota") {
-      let body: ControlQuotaRefreshRequest;
-      try {
-        // An absent/empty body keeps the model-agnostic projection.
-        body = ControlQuotaRefreshRequest.parse(await this.readBody(req));
-      } catch (err) {
-        return this.requestError(res, err);
-      }
-      return this.service(res, "refreshQuota", body, ControlQuotaResponse);
-    }
     if (method === "GET" && path === "/credential-profiles") {
       try {
         const query = parseCredentialProfilesSnapshotQuery(url);
@@ -2633,7 +2635,7 @@ function detailFor(
   // that cursor would never see it). A pre-projection cursor errs the other
   // way: an in-between event is both reflected AND replayed, which clients
   // absorb (event application is reconciled against the newer snapshot).
-  const lastSeq = cursor ?? (rec.runDir ? lastSeqInFile(join(rec.runDir, "events.jsonl")) : 0);
+  const lastSeq = cursor ?? (rec.runDir ? lastRunEventSeq(join(rec.runDir, "events.jsonl")) : 0);
   const failure = readFailure(rec);
   const decision = safeReadStructuredArtifact(rec, "arbitration/decision.yaml", DecisionRecord);
   const operatorDecisionRaw = operator

@@ -1,5 +1,57 @@
 # @claudexor/harness-claude
 
+## 3.25.1
+
+### Patch Changes
+
+- @claudexor/core@3.25.1
+- @claudexor/schema@3.25.1
+- @claudexor/secrets@3.25.1
+- @claudexor/util@3.25.1
+
+## 3.25.0
+
+### Minor Changes
+
+- Expose independently dated account resources and explicit Codex and Claude resets through the control API, CLI, MCP and native Accounts. Preserve original request identity through uncertain outcomes and keep provider results separate from resource refresh.
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/schema@3.25.0
+  - @claudexor/core@3.25.0
+  - @claudexor/secrets@3.25.0
+  - @claudexor/util@3.25.0
+
+## 3.24.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/core@3.24.0
+  - @claudexor/schema@3.24.0
+  - @claudexor/secrets@3.24.0
+  - @claudexor/util@3.24.0
+
+## 3.23.2
+
+### Patch Changes
+
+- @claudexor/core@3.23.2
+- @claudexor/schema@3.23.2
+- @claudexor/secrets@3.23.2
+- @claudexor/util@3.23.2
+
+## 3.23.1
+
+### Patch Changes
+
+- 1111845: Keep session history bound to both its harness and profile when locating, moving and continuing it. Recognize Claude's failed missing-session diagnostic and continue through the existing evidence packet instead of retrying the unavailable native session. Previously misplaced histories remain preserved and are not relocated automatically.
+  - @claudexor/core@3.23.1
+  - @claudexor/schema@3.23.1
+  - @claudexor/secrets@3.23.1
+  - @claudexor/util@3.23.1
+
 ## 3.23.0
 
 ### Patch Changes

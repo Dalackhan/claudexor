@@ -1,5 +1,52 @@
 # @claudexor/harness-cursor
 
+## 3.25.1
+
+### Patch Changes
+
+- @claudexor/core@3.25.1
+- @claudexor/schema@3.25.1
+- @claudexor/secrets@3.25.1
+- @claudexor/util@3.25.1
+
+## 3.25.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/schema@3.25.0
+  - @claudexor/core@3.25.0
+  - @claudexor/secrets@3.25.0
+  - @claudexor/util@3.25.0
+
+## 3.24.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/core@3.24.0
+  - @claudexor/schema@3.24.0
+  - @claudexor/secrets@3.24.0
+  - @claudexor/util@3.24.0
+
+## 3.23.2
+
+### Patch Changes
+
+- @claudexor/core@3.23.2
+- @claudexor/schema@3.23.2
+- @claudexor/secrets@3.23.2
+- @claudexor/util@3.23.2
+
+## 3.23.1
+
+### Patch Changes
+
+- @claudexor/core@3.23.1
+- @claudexor/schema@3.23.1
+- @claudexor/secrets@3.23.1
+- @claudexor/util@3.23.1
+
 ## 3.23.0
 
 ### Patch Changes

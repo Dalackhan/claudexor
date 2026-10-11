@@ -33,6 +33,8 @@ import { projectRuntimeDir, sha256 } from "@claudexor/util";
 import { createRevertAnchorFromPatchOrNull } from "@claudexor/workspace";
 import {
   requiredActionsFor,
+  ControlQuotaResponse,
+  ControlQuotaFreshnessResponse,
   SCHEMA_VERSION,
   validateRunFactsInvariants,
   type ControlSetupJob,
@@ -851,6 +853,11 @@ describe("DaemonControlApiServer", () => {
         (o) => o.method === "GET" && o.path === "/v2/credential-profiles",
       );
       expect(credentialProfiles?.parameters).toEqual([
+        expect.objectContaining({
+          name: "view",
+          location: "query",
+          enum: ["resources"],
+        }),
         expect.objectContaining({
           name: "snapshot",
           location: "query",
@@ -2026,11 +2033,14 @@ describe("DaemonControlApiServer", () => {
       updated_at: now,
     };
     let registration: unknown;
+    let registrations = 0;
     const services: DaemonControlApiOptions["services"] = {
       listProjects: async () => ({ projects: [project] }),
       registerProject: async (input) => {
         registration = input;
-        return project;
+        registrations += 1;
+        // The producer's created fact: the first root registration created it.
+        return registrations === 3 ? project : { ...project, created: registrations === 1 };
       },
       relinkProject: async (id, root) => ({ ...project, id, root, updated_at: now }),
     };
@@ -2055,8 +2065,26 @@ describe("DaemonControlApiServer", () => {
           body: JSON.stringify({ root: firstRoot }),
         });
         expect(registered.status).toBe(200);
-        expect(await registered.json()).toMatchObject({ id: "prj-1", root: firstRoot });
+        expect(await registered.json()).toMatchObject({
+          id: "prj-1",
+          root: firstRoot,
+          created: true,
+        });
         expect(registration).toMatchObject({ root: firstRoot, clientId: "control-api" });
+        const existing = await apiFetch(`${base}/projects`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+          body: JSON.stringify({ root: firstRoot }),
+        });
+        expect(await existing.json()).toMatchObject({ id: "prj-1", created: false });
+        // A producer that omits the fact is a contract failure, never a default.
+        const unstated = await apiFetch(`${base}/projects`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+          body: JSON.stringify({ root: firstRoot }),
+        });
+        expect(unstated.status).toBe(500);
+        expect(await unstated.json()).toMatchObject({ code: "invalid_service_response" });
 
         const listed = await apiFetch(`${base}/projects`, {
           headers: { authorization: `Bearer ${token}` },
@@ -10113,6 +10141,7 @@ describe("DaemonControlApiServer", () => {
           root,
           created_at: now,
           updated_at: now,
+          created: true,
         };
       },
     };
@@ -11553,6 +11582,115 @@ describe("DaemonControlApiServer", () => {
           refreshes += 1;
           refreshBodies.push(input);
           return response;
+        },
+      },
+    );
+  });
+
+  it("accepts direct constraint freshness reads without discovery and validates the selected strict shape", async () => {
+    const { daemon } = fakeDaemon();
+    const legacy = ControlQuotaResponse.parse(
+      JSON.parse(
+        readFileSync(
+          "apps/macos/ClaudexorKit/Tests/ClaudexorKitTests/Fixtures/control-quota-response.json",
+          "utf8",
+        ),
+      ),
+    );
+    const projected = ControlQuotaFreshnessResponse.parse({
+      ...legacy,
+      snapshots: legacy.snapshots.map((snapshot) => ({
+        ...snapshot,
+        constraints: snapshot.constraints.map((constraint) => ({
+          ...constraint,
+          freshness: "fresh",
+        })),
+      })),
+    });
+    const reads: unknown[] = [];
+    let refreshes = 0;
+    let wrongShape = false;
+    await withDaemonServer(
+      daemon,
+      async (base) => {
+        const get = (path: string) =>
+          apiFetch(`${base}${path}`, { headers: { authorization: `Bearer ${token}` } });
+        // No discovery request precedes the direct opt-in read.
+        const opted = await get("/quota?view=constraint_freshness");
+        expect(opted.status).toBe(200);
+        const payload = await opted.json();
+        expect(ControlQuotaFreshnessResponse.parse(payload)).toEqual(projected);
+        expect(() => ControlQuotaResponse.parse(payload)).toThrow();
+        const plain = await get("/quota");
+        expect(plain.status).toBe(200);
+        expect(ControlQuotaResponse.parse(await plain.json())).toEqual(legacy);
+        expect(reads).toEqual([{ view: "constraint_freshness" }, undefined]);
+        for (const query of [
+          "view=",
+          "view=future",
+          "view=constraint_freshness&view=constraint_freshness",
+          "view=constraint_freshness&unrelated=1",
+        ]) {
+          const rejected = await get(`/quota?${query}`);
+          expect(rejected.status).toBe(400);
+        }
+        expect(reads).toHaveLength(2);
+        expect(refreshes).toBe(0);
+        // Advertisement remains available independently of the read; the
+        // refresh operation keeps its resources-only selector.
+        const catalog = await get("/operations");
+        const { operations } = (await catalog.json()) as typeof OPERATION_CATALOG;
+        expect(operations.find((operation) => operation.id === "get:quota")).toMatchObject({
+          responseSchema: "ControlQuotaQueryResponse",
+          mutability: "read_only",
+          parameters: [
+            expect.objectContaining({
+              name: "requestKind",
+              location: "query",
+              enum: ["text", "image"],
+            }),
+            expect.objectContaining({ name: "model", location: "query" }),
+            expect.objectContaining({
+              name: "view",
+              location: "query",
+              enum: ["resources", "constraint_freshness"],
+            }),
+          ],
+        });
+        expect(operations.find((operation) => operation.id === "post:quota")).toMatchObject({
+          parameters: [expect.objectContaining({ name: "view", enum: ["resources"] })],
+        });
+        // A service must honor negotiation, never silently downgrade or leak
+        // the new shape to a strict legacy consumer.
+        wrongShape = true;
+        for (const path of ["/quota", "/quota?view=constraint_freshness"]) {
+          const invalid = await get(path);
+          expect(invalid.ok).toBe(false);
+          expect(await invalid.json()).not.toHaveProperty("snapshots");
+        }
+        for (const [path, body] of [
+          ["/quota", { view: "constraint_freshness" }],
+          ["/quota?view=constraint_freshness", {}],
+        ] as const) {
+          const post = await apiFetch(`${base}${path}`, {
+            method: "POST",
+            headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          expect(post.status).toBe(400);
+        }
+        expect(refreshes).toBe(0);
+      },
+      undefined,
+      {
+        quota: async (input) => {
+          reads.push(input);
+          const opted = input?.view === "constraint_freshness";
+          return opted !== wrongShape ? projected : legacy;
+        },
+        refreshQuota: async () => {
+          refreshes += 1;
+          return legacy;
         },
       },
     );

@@ -1,4 +1,7 @@
 import { z } from "zod/v3";
+export { ControlQuotaRefreshRequest } from "./account-target.js";
+import { QuotaRequestKind } from "./quota-request-kind.js";
+export { QuotaRequestKind, quotaConstraintAppliesToRequestKind } from "./quota-request-kind.js";
 import { Id } from "./primitives.js";
 
 export const QuotaSource = z
@@ -173,17 +176,6 @@ export const QuotaSubject = z
     "Quota owner and credential route; subject_id is the credential-profile id (null = the engine-default credential).",
   );
 export type QuotaSubject = z.infer<typeof QuotaSubject>;
-
-export const QuotaRequestKind = z.enum(["text", "image"]);
-export type QuotaRequestKind = z.infer<typeof QuotaRequestKind>;
-
-/** Operation applicability is independent of any vendor model-id spelling. */
-export function quotaConstraintAppliesToRequestKind(
-  constraint: { applies_to_request_kinds?: QuotaRequestKind[] },
-  requestKind: QuotaRequestKind = "text",
-): boolean {
-  return constraint.applies_to_request_kinds?.includes(requestKind) ?? true;
-}
 
 export const QuotaConstraint = z
   .object({
@@ -429,25 +421,6 @@ export const ControlQuotaSnapshot = QuotaSnapshot.extend({
   ),
 }).describe("One vendor-owned quota snapshot plus its derived availability projection.");
 export type ControlQuotaSnapshot = z.infer<typeof ControlQuotaSnapshot>;
-
-export const ControlQuotaRefreshRequest = z
-  .object({
-    requestKind: QuotaRequestKind.optional().describe(
-      "Availability scope; omitted means text. Raw constraints retain every scope.",
-    ),
-    model: z
-      .string()
-      .min(1)
-      .optional()
-      .describe(
-        "Optional model id/alias the caller intends to spend against. When present, each snapshot's availability.state is computed against this model (case-insensitive alias containment in either direction), so windows scoped to OTHER models never report the subject exhausted.",
-      ),
-  })
-  .strict()
-  .describe(
-    "Optional POST /v2/quota body; an empty or absent body keeps the model-agnostic projection.",
-  );
-export type ControlQuotaRefreshRequest = z.infer<typeof ControlQuotaRefreshRequest>;
 
 export const QuotaRefreshSkipped = z
   .object({

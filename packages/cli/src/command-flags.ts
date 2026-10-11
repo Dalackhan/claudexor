@@ -238,6 +238,11 @@ export const CLI_FLAGS: readonly CliFlagSpec[] = [
     "<profile-id>",
     "Credential profile for this run (INV-135); unknown/disabled ids refuse, never default",
   ),
+  booleanFlag("resources", "Include typed account resource facts"),
+  valueFlag("offer", "id", "Reset offer id"),
+  valueFlag("grant", "id", "Native reset grant id"),
+  valueFlag("operation", "id", "Read an account reset receipt"),
+  valueFlag("idempotency-key", "key", "Stable explicit operation key; retain for recovery"),
   booleanFlag("refresh", "Refresh vendor-owned quota sources before reading"),
   booleanFlag(
     "in-place",
@@ -296,6 +301,12 @@ export const CLI_FLAGS: readonly CliFlagSpec[] = [
   booleanFlag("rerun", null),
   valueFlag("apply-mode", "<m>", null),
   valueFlag("feedback", '"<text>"', null),
+  valueFlag(
+    "vendor-version",
+    "<exact|latest>",
+    "harness update: install one exact vendor version, or resolve latest once",
+  ),
+  booleanFlag("latest", "harness inspect: also read the newest published vendor version"),
   booleanFlag("help", "Show this help"),
   booleanFlag("version", "Print the CLI version"),
 ];

@@ -27,6 +27,30 @@
     },
     {
       "method": "POST",
+      "path": "/v2/account-resets",
+      "mutating": true,
+      "applicability": "global",
+      "summary": "Explicitly consume a native account reset and read back its resources.",
+      "auth": "loopback_bearer",
+      "request_schema": "ControlAccountResetRequest",
+      "parameters": [],
+      "response_schema": "ControlAccountResetResponse",
+      "error_schema": "ControlProblem"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/account-resets/:id",
+      "mutating": false,
+      "applicability": "global",
+      "summary": "Read a durable account reset receipt.",
+      "auth": "loopback_bearer",
+      "request_schema": null,
+      "parameters": [],
+      "response_schema": "ControlAccountResetResponse",
+      "error_schema": "ControlProblem"
+    },
+    {
+      "method": "POST",
       "path": "/v2/accounts-migration/rollback",
       "mutating": true,
       "applicability": "global",
@@ -58,6 +82,17 @@
       "auth": "loopback_bearer",
       "request_schema": null,
       "parameters": [
+        {
+          "name": "view",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": [
+            "resources"
+          ],
+          "schema_ref": null,
+          "description": "Include typed resources in quota; requires snapshot=true."
+        },
         {
           "name": "snapshot",
           "in": "query",
@@ -115,7 +150,7 @@
       "path": "/v2/daemon/status",
       "mutating": false,
       "applicability": "global",
-      "summary": "Read daemon activity, capacity and current/admission memory facts.",
+      "summary": "Read daemon activity, capacity, current/admission memory and event-loop window facts.",
       "auth": "loopback_bearer",
       "request_schema": null,
       "parameters": [],
@@ -294,6 +329,88 @@
       "error_schema": "ControlProblem"
     },
     {
+      "method": "GET",
+      "path": "/v2/maintenance/harnesses",
+      "mutating": false,
+      "applicability": "global",
+      "summary": "Inspect installed vendor CLIs: selected program and version, managed copy, tested pin and maintainability; never logs in or installs.",
+      "auth": "loopback_bearer",
+      "request_schema": null,
+      "parameters": [
+        {
+          "name": "harness",
+          "in": "query",
+          "required": false,
+          "repeatable": true,
+          "enum": null,
+          "schema_ref": null,
+          "description": "Restrict to these installable harness ids (repeat to select several)."
+        },
+        {
+          "name": "fresh",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": [
+            "true",
+            "false"
+          ],
+          "schema_ref": null,
+          "description": "Re-inspect instead of returning the cached installation facts."
+        },
+        {
+          "name": "checkLatest",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": [
+            "true",
+            "false"
+          ],
+          "schema_ref": null,
+          "description": "Also read the newest published version where the mechanism supports it; omitted keeps the last observation (null = not checked)."
+        }
+      ],
+      "response_schema": "ControlHarnessMaintenanceInventory",
+      "error_schema": "ControlProblem"
+    },
+    {
+      "method": "POST",
+      "path": "/v2/maintenance/operations",
+      "mutating": true,
+      "applicability": "global",
+      "summary": "Accept one durable update/return of an installed vendor CLI; the 202 handle is not success.",
+      "auth": "loopback_bearer",
+      "request_schema": "ControlHarnessMaintenanceCreateRequest",
+      "parameters": [],
+      "response_schema": "ControlHarnessMaintenanceOperation",
+      "error_schema": "ControlProblem"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/maintenance/operations/:id",
+      "mutating": false,
+      "applicability": "global",
+      "summary": "Read one maintenance operation's lifecycle and before/target/after evidence.",
+      "auth": "loopback_bearer",
+      "request_schema": null,
+      "parameters": [],
+      "response_schema": "ControlHarnessMaintenanceOperation",
+      "error_schema": "ControlProblem"
+    },
+    {
+      "method": "POST",
+      "path": "/v2/maintenance/operations/:id/cancel",
+      "mutating": true,
+      "applicability": "global",
+      "summary": "Cancel a maintenance operation; the installer's process tree is stopped and its effect disclosed.",
+      "auth": "loopback_bearer",
+      "request_schema": null,
+      "parameters": [],
+      "response_schema": "ControlHarnessMaintenanceOperation",
+      "error_schema": "ControlProblem"
+    },
+    {
       "method": "POST",
       "path": "/v2/model-operations",
       "mutating": true,
@@ -443,13 +560,25 @@
           "description": "Pin a managed profile; omitted selects the engine's Auto account."
         },
         {
+          "name": "includeAdmission",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": [
+            "true",
+            "false"
+          ],
+          "schema_ref": null,
+          "description": "With requestedModel, include exact-model account admission and the source inventory-absence policy, plus declared client version. Omitted or false preserves the legacy shape; cannot combine with account view. Admission is not generation proof."
+        },
+        {
           "name": "requestedModel",
           "in": "query",
           "required": false,
           "repeatable": false,
           "enum": null,
           "schema_ref": "ModelCallRequest#/properties/model",
-          "description": "Select one account able to serve this model using the inference pool criteria; omitted discovers one account without a model constraint."
+          "description": "Select one account through this model's authentication, quota and source inventory policy; omitted discovers without a model constraint."
         }
       ],
       "response_schema": "ControlModelCatalogQueryResponse",
@@ -488,7 +617,7 @@
       "auth": "loopback_bearer",
       "request_schema": "ControlProjectRegisterRequest",
       "parameters": [],
-      "response_schema": "ControlProject",
+      "response_schema": "ControlProjectRegisterResponse",
       "error_schema": "ControlProblem"
     },
     {
@@ -621,9 +750,21 @@
           "enum": null,
           "schema_ref": null,
           "description": "Optional model for quota applicability."
+        },
+        {
+          "name": "view",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": [
+            "resources",
+            "constraint_freshness"
+          ],
+          "schema_ref": null,
+          "description": "Opt in to typed account resources alongside quota, or to per-constraint freshness from raw snapshot evidence, observation TTL, and each window's own reset; omitted preserves the legacy shape. Does not refresh quota."
         }
       ],
-      "response_schema": "ControlQuotaResponse",
+      "response_schema": "ControlQuotaQueryResponse",
       "error_schema": "ControlProblem"
     },
     {
@@ -634,8 +775,20 @@
       "summary": "Refresh and read per-profile harness quota snapshots.",
       "auth": "loopback_bearer",
       "request_schema": "ControlQuotaRefreshRequest",
-      "parameters": [],
-      "response_schema": "ControlQuotaResponse",
+      "parameters": [
+        {
+          "name": "view",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": [
+            "resources"
+          ],
+          "schema_ref": null,
+          "description": "Opt in to typed account resources alongside quota."
+        }
+      ],
+      "response_schema": "ControlQuotaQueryResponse",
       "error_schema": "ControlProblem"
     },
     {

@@ -1,0 +1,33 @@
+{
+  "$ref": "#/definitions/ControlQuotaReadRequest",
+  "definitions": {
+    "ControlQuotaReadRequest": {
+      "type": "object",
+      "properties": {
+        "requestKind": {
+          "type": "string",
+          "enum": [
+            "text",
+            "image"
+          ],
+          "description": "Availability scope; omitted means text. Raw constraints retain every scope."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional model id/alias the caller intends to spend against. When present, each snapshot's availability.state is computed against this model (case-insensitive alias containment in either direction), so windows scoped to OTHER models never report the subject exhausted."
+        },
+        "view": {
+          "type": "string",
+          "enum": [
+            "resources",
+            "constraint_freshness"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "description": "GET /v2/quota query selectors, each at most once; there is no body. Omitted requestKind means text availability, omitted model keeps the model-agnostic projection, and omitted view keeps the legacy shape. Reads cached snapshots without refreshing quota."
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

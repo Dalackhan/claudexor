@@ -301,6 +301,12 @@ Tests and local smokes must never touch real user state:
   native session id (resuming one the engine carries) plus a probe of the cwd and
   `HOME` it was handed, so thread lane-home and native-resume stories run
   offline.
+- Canary fixtures use their candidate's built daemon and isolated endpoint,
+  regardless of inherited entry/socket overrides. Cleanup must check the stop
+  result and the root's current writer lease, not just the old owner's exit.
+  Known absence and repeated disposal succeed; uncertain cleanup retains the
+  root with `canary-cleanup.json`. This is normal teardown, not a guarantee
+  against a runner killed before its cleanup executes.
 - Council regression fixtures exercise actual planner transports and final
   artifacts: retained unverified drafts, original failures, merge selection and
   terminal RunFacts must agree. Check solo/draft/merge prompt guidance through
@@ -457,11 +463,25 @@ requested, submitted and observed service separately, including mixed sessions.
 Capabilities, exact-account inventories and their observation provenance belong
 to existing adapter/discovery owners. Clients negotiate new account views through
 the operation catalog and preserve strict legacy requests when unsupported.
+Raw requested-model admission follows the source's inventory-absence declaration,
+not an assumption that discovery enumerates every callable model. Keep failed
+discovery distinct from a successful advisory miss; retain exact requested options
+without inventing capability metadata. Admission observations negotiate
+`includeAdmission` and name the exact requested model, while legacy envelopes stay
+unchanged. Model/general unavailability must not become a pool-wide quota reset.
 Account display acquisition is shared by profile and catalog consumers through
 one observation owner. It retains the first attempt, including failure, with
 its original age until explicit refresh, credential changes or necessary work
 updates it; actual execution still performs its own checks. Do not add a
 second display cache, pricing ledger or preference resolver.
+
+Harness maintenance reuses recipe selection, install proof/lease and generic
+command custody. Keep it off the daemon event loop and preserve cancellation
+evidence through preparation and installation. Record the proved prior version
+before mutation, invalidate affected observations even after partial failure,
+and keep actual selection, release baseline and requested target distinct. Native
+updaters advertise only their real targets; do not invent exact return or latest
+discovery, or replace an external selection through another install prefix.
 
 ## Boundaries
 

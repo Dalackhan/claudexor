@@ -22,7 +22,8 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 ssh-keygen -q -t ed25519 -N '' -f "$key"
-docker run --detach --rm --name "$container" -p 127.0.0.1::22 ubuntu:24.04 sleep infinity >/dev/null
+# Identical Docker Official Ubuntu 24.04 amd64 bytes, outside shared Docker Hub pull quotas.
+docker run --detach --rm --name "$container" -p 127.0.0.1::22 public.ecr.aws/docker/library/ubuntu@sha256:f610ab94648195aa356059f5b41d6085c9d4d903c072430cdd1af7bdb646106b sleep infinity >/dev/null
 docker exec "$container" bash -ceu '
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq

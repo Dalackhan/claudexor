@@ -463,6 +463,51 @@ import Testing
         #expect(AccountsPresentation.worstPercent([row]) == 20)
     }
 
+    /// The compact percent describes text: image windows stay visible in the
+    /// detail rows, labelled, but never become the account row's one number.
+    @MainActor
+    @Test func compactPercentDescribesTextWhileImageWindowsStayVisible() throws {
+        func row(_ constraints: String) throws -> AccountRowModel {
+            let model = AppModel(client: nil, requestNotificationAuthorization: false)
+            model.credentialProfiles = try JSONDecoder().decode(
+                [CredentialProfileEntry].self,
+                from: Data(#"[{"profile":{"profile_id":"work","harness_id":"codex","display_name":"Work","credential_kind":"config_dir_login","enabled":true},"status":{"availability":"available","verification":"passed","detail":null,"last_verified_at":null}}]"#.utf8))
+            model.quotaResponse = try JSONDecoder().decode(ControlQuotaResponse.self, from: Data(#"""
+            {"snapshots":[{"subject":{"harness":"codex","credential_route":"vendor_native",
+              "plan_label":"pro","subject_id":"work"},"constraints":[\#(constraints)],
+              "source":"codex_app_server","observed_at":"2026-08-09T00:00:00Z","freshness":"fresh",
+              "availability":{"state":"available","blocking_constraints":[],"resets_at":null,
+              "model_scoped_exhaustions":[]}}],"absences":[],"refreshed_at":"2026-08-09T00:00:00Z"}
+            """#.utf8))
+            return try #require(AccountsPresentation.rows(model: model).first)
+        }
+        let image = #"""
+        {"id":"image_gen:primary","label":"image_gen primary","applies_to_request_kinds":["image"],
+         "used_ratio":0.95,"window_seconds":86400,"resets_at":"2026-08-10T00:00:00Z","cooldown_until":null}
+        """#
+        let text = #"""
+        {"id":"codex:primary","label":"codex primary","applies_to_request_kinds":["text"],
+         "used_ratio":0.2,"window_seconds":18000,"resets_at":"2026-08-09T05:00:00Z","cooldown_until":null}
+        """#
+        let legacy = #"""
+        {"id":"primary","label":"primary","used_ratio":0.4,"window_seconds":18000,
+         "resets_at":"2026-08-09T05:00:00Z","cooldown_until":null}
+        """#
+
+        let mixed = try row("\(image),\(text)")
+        #expect(mixed.worstPercent == 20)
+        #expect(mixed.worstWindow?.label == "codex primary")
+        #expect(AccountsPresentation.worstPercent([mixed]) == 20)
+        let windows = mixed.quotaGroups.flatMap(\.windows)
+        #expect(windows.map(\.label).sorted() == ["codex primary", "image_gen primary (images)"])
+        #expect(windows.first { $0.label.hasSuffix("(images)") }?.usedRatio == 0.95)
+        // A window without request-kind scope still applies to text.
+        #expect(try row("\(image),\(text),\(legacy)").worstPercent == 40)
+        let imageOnly = try row(image)
+        #expect(imageOnly.worstPercent == nil)
+        #expect(imageOnly.quotaGroups.flatMap(\.windows).count == 1)
+    }
+
     @MainActor
     @Test func scopedOnlyWindowsUseScopedLimitsInsteadOfAnAccountPercent() throws {
         let model = AppModel(client: nil, requestNotificationAuthorization: false)

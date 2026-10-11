@@ -1,5 +1,12 @@
 # @claudexor/artifact-store
 
+## 3.26.0
+
+### Patch Changes
+
+- Updated dependencies [2fbf7c9]
+  - @claudexor/util@3.26.0
+
 ## 3.25.1
 
 ### Patch Changes

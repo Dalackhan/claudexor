@@ -1,5 +1,16 @@
 # @claudexor/harness-claude
 
+## 3.26.0
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies [2fbf7c9]
+  - @claudexor/schema@3.26.0
+  - @claudexor/core@3.26.0
+  - @claudexor/util@3.26.0
+  - @claudexor/secrets@3.26.0
+
 ## 3.25.1
 
 ### Patch Changes

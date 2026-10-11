@@ -1,6 +1,6 @@
 {
   "name": "@claudexor/acp-server",
-  "version": "3.25.1",
+  "version": "3.26.0",
   "license": "MIT",
   "description": "Official-SDK ACP projection over daemon-owned Claudexor threads and runs.",
   "type": "module",

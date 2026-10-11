@@ -8,10 +8,13 @@ import { createPartition } from "./partitions.js";
 import {
   COMMAND_PRUNABLE_PAGE_SQL,
   COMMAND_TERMINAL_COUNT_SQL,
+  EVENT_GROUP_DELETE_SQL,
+  EVENT_SLOT_DELETE_SQL,
   RETAINED_PREDECESSOR_SQL,
   appendEvent,
   commandKind,
   commandRetentionCandidates,
+  deleteEventKeysInTx,
   queryPlan,
   terminalCommandCount,
 } from "./retention.js";
@@ -215,6 +218,186 @@ describeStore("event retention through the journal fold verdicts (SYNTHESIS_R5 Â
       { seq: 2, slot_key: "r:r:c", group_key: null },
       { seq: 3, slot_key: null, group_key: "r:r:live" },
     ]);
+  });
+});
+
+/** A key delete qualifies only when its named partial index constrains both
+ * the partition and the key; a walk of the partition does not (issue #446). */
+function keyAddressed(plan: string[], index: string, column: string): boolean {
+  return new RegExp(`SEARCH event USING INDEX ${index} \\(pid=\\? AND ${column}=\\?\\)`).test(
+    plan.join("\n"),
+  );
+}
+
+describeStore("event key deletes stay index-addressed (#446)", () => {
+  const seedPairs = (store: EngineStore, pid: number, from: number, count: number) =>
+    store.transaction(() => {
+      for (let index = from; index < from + count; index += 1) {
+        const record = { id: `c${index}`, state: "queued", createdAt: "t" };
+        appendEvent(store, pid, {
+          type: "command.accepted",
+          payload: { record, keyDigest: `k${index}`, requestDigest: `r${index}` },
+        });
+        appendEvent(store, pid, {
+          type: "command.updated",
+          payload: { record: { ...record, state: "running" } },
+        });
+      }
+    });
+  const insertRow = (
+    store: EngineStore,
+    row: { pid: number; seq: number; slot?: string; group?: string; digest?: string },
+  ) =>
+    store
+      .prepare(
+        "INSERT INTO event(pid, seq, time, type, payload, payload_sha, slot_key, group_key) VALUES(?, ?, 't', 'fixture', ?, ?, ?, ?)",
+      )
+      .run(
+        row.pid,
+        row.seq,
+        Buffer.from("null"),
+        row.digest ?? null,
+        row.slot ?? null,
+        row.group ?? null,
+      );
+  const survivors = (store: EngineStore) =>
+    (
+      store.prepare("SELECT pid, seq FROM event ORDER BY pid, seq").all() as Array<{
+        pid: number;
+        seq: number;
+      }>
+    ).map((row) => `${Number(row.pid)}:${Number(row.seq)}`);
+
+  it("plans both deletes through (pid, key) on an empty, a 10x grown and an analyzed partition", async () => {
+    const store = await openStore();
+    const generation = store.transaction(() => createPartition(store, "global"));
+    const plans = () => ({
+      slot: queryPlan(store, EVENT_SLOT_DELETE_SQL),
+      group: queryPlan(store, EVENT_GROUP_DELETE_SQL),
+    });
+    const empty = plans();
+    expect(keyAddressed(empty.slot, "event_slot", "slot_key")).toBe(true);
+    expect(keyAddressed(empty.group, "event_group", "group_key")).toBe(true);
+    seedPairs(store, generation.pid, 0, 200);
+    expect(plans()).toEqual(empty);
+    // History grows inside the same partition: the walk the pin prevents.
+    seedPairs(store, generation.pid, 200, 1800);
+    expect(plans()).toEqual(empty);
+    store.prepare("ANALYZE").run();
+    expect(plans()).toEqual(empty);
+    // The matcher refuses the partition walks this gate exists for: the
+    // primary-key prefix SQLite chose without the pin, and a pid-only index.
+    expect(keyAddressed(["SEARCH event USING PRIMARY KEY (pid=?)"], "event_slot", "slot_key")).toBe(
+      false,
+    );
+    expect(
+      keyAddressed(["SEARCH event USING INDEX event_type (pid=?)"], "event_slot", "slot_key"),
+    ).toBe(false);
+  });
+
+  it("executes only the pinned statements for slot, retire and prune deletes", async () => {
+    const store = await openStore();
+    const generation = store.transaction(() => createPartition(store, "global"));
+    const executed: string[] = [];
+    const observed = {
+      get inTransaction() {
+        return store.inTransaction;
+      },
+      now: store.now,
+      prepare: (sql: string) => {
+        executed.push(sql);
+        return store.prepare(sql);
+      },
+    };
+    store.transaction(() => {
+      const thread = (revision: number) => ({
+        type: "thread.head.updated",
+        payload: { thread_id: "t", revision },
+      });
+      appendEvent(observed, generation.pid, thread(1));
+      appendEvent(observed, generation.pid, thread(2));
+      appendEvent(observed, generation.pid, {
+        type: "run.event",
+        payload: { run_id: "r", task_id: "k", type: "harness.started", ts: "t" },
+      });
+      appendEvent(observed, generation.pid, {
+        type: "run.event",
+        payload: { run_id: "r", task_id: "k", type: "run.completed", ts: "t", run_facts: {} },
+      });
+      deleteEventKeysInTx(observed, generation.pid, ["c:x:a", "c:x:u"]);
+    });
+    const deletes = executed.filter((sql) => /^DELETE FROM event\b/.test(sql));
+    expect(new Set(deletes)).toEqual(new Set([EVENT_SLOT_DELETE_SQL, EVENT_GROUP_DELETE_SQL]));
+  });
+
+  it("removes and reports exactly the rows of the slot-or-group predicate it replaced", async () => {
+    const store = await openStore();
+    const global = store.transaction(() => createPartition(store, "global"));
+    const project = store.transaction(() => createPartition(store, "project:p"));
+    store.transaction(() => {
+      const pid = global.pid;
+      insertRow(store, { pid, seq: 1, slot: "k", digest: "d-slot" });
+      insertRow(store, { pid, seq: 2, group: "k", digest: "d-group" });
+      insertRow(store, { pid, seq: 3, slot: "k", group: "k", digest: "d-both" });
+      insertRow(store, { pid, seq: 4, group: "k", digest: "d-shared" });
+      insertRow(store, { pid, seq: 5, group: "k", digest: "d-shared" });
+      insertRow(store, { pid, seq: 6, group: "k" });
+      for (let seq = 7; seq <= 11; seq += 1)
+        insertRow(store, { pid, seq, group: "five", digest: `d-five-${seq}` });
+      insertRow(store, { pid, seq: 12, slot: "other", digest: "d-other" });
+      insertRow(store, { pid: project.pid, seq: 1, slot: "k", group: "k", digest: "d-foreign" });
+    });
+    const keys = ["k", "five", "k"];
+    const replaced = store.prepare(
+      "DELETE FROM event WHERE pid = ? AND (slot_key = ? OR group_key = ?) RETURNING payload_sha",
+    );
+    const expected = store.transaction(() => {
+      store.prepare("SAVEPOINT replaced").run();
+      const digests = [...new Set(keys)].flatMap((key) =>
+        (replaced.all(global.pid, key, key) as Array<{ payload_sha: string | null }>)
+          .map((row) => row.payload_sha)
+          .filter((digest): digest is string => typeof digest === "string"),
+      );
+      const rows = survivors(store);
+      store.prepare("ROLLBACK TO replaced").run();
+      store.prepare("RELEASE replaced").run();
+      return { digests: digests.sort(), rows };
+    });
+    const released = store.transaction(() => deleteEventKeysInTx(store, global.pid, keys));
+    expect(released.sort()).toEqual(expected.digests);
+    expect(released.filter((digest) => digest === "d-both")).toHaveLength(1);
+    expect(released.filter((digest) => digest === "d-shared")).toHaveLength(2);
+    expect(survivors(store)).toEqual(expected.rows);
+    expect(survivors(store)).toEqual([`${global.pid}:12`, `${project.pid}:1`]);
+    // A NULL key matches nothing.
+    expect(
+      store.transaction(() => store.prepare(EVENT_SLOT_DELETE_SQL).all(global.pid, null)),
+    ).toEqual([]);
+  });
+
+  it("rolls back the slot delete when the group delete fails in the same transaction", async () => {
+    const store = await openStore();
+    const generation = store.transaction(() => createPartition(store, "global"));
+    store.transaction(() =>
+      insertRow(store, { pid: generation.pid, seq: 1, slot: "k", digest: "d" }),
+    );
+    const failing = {
+      get inTransaction() {
+        return store.inTransaction;
+      },
+      prepare: (sql: string) =>
+        sql === EVENT_GROUP_DELETE_SQL
+          ? ({
+              all: () => {
+                throw new Error("injected group failure");
+              },
+            } as unknown as ReturnType<EngineStore["prepare"]>)
+          : store.prepare(sql),
+    };
+    expect(() =>
+      store.transaction(() => deleteEventKeysInTx(failing, generation.pid, ["k"])),
+    ).toThrow("injected group failure");
+    expect(survivors(store)).toEqual([`${generation.pid}:1`]);
   });
 });
 

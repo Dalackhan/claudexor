@@ -130,15 +130,22 @@ static int provider_keys_absent(void) {
   return 1;
 }
 
-static int stdin_is_eof_without_blocking(void) {
+/* The runner can close its end of the stdin pipe only after CreateProcess has
+ * already started us, so a one-shot peek races that close. Read like a real
+ * piped-stdin consumer instead: only the runner closing the pipe without
+ * writing is EOF. Bytes are not EOF, and a runner that never closes leaves
+ * this fake blocked until the runner's own timeout reaps it, so neither can
+ * record a false EOF. */
+static int stdin_reaches_eof(void) {
   HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
   if (input == NULL || input == INVALID_HANDLE_VALUE) return 1;
   DWORD console_mode = 0;
   if (GetConsoleMode(input, &console_mode)) return 0;
   DWORD type = GetFileType(input);
   if (type == FILE_TYPE_PIPE) {
-    DWORD available = 0;
-    if (PeekNamedPipe(input, NULL, 0, NULL, &available, NULL)) return 0;
+    char byte = 0;
+    DWORD read = 0;
+    if (ReadFile(input, &byte, 1, &read, NULL)) return 0;
     return GetLastError() == ERROR_BROKEN_PIPE ? 1 : 0;
   }
   if (type == FILE_TYPE_CHAR || type == FILE_TYPE_DISK) {
@@ -279,7 +286,7 @@ static int run_fake_agy(int argc, wchar_t **argv) {
                     conin_available();
   int hanging = !interactive &&
                 marker_exists(home, L".claudexor-agy-fake-hang");
-  int stdin_eof = interactive ? 0 : stdin_is_eof_without_blocking();
+  int stdin_eof = interactive ? 0 : stdin_reaches_eof();
   const char *mode = interactive ? "interactive" : hanging ? "hang" : "print";
   if (!append_fake_evidence(home, mode, command, stdin_eof)) {
     free(home);

@@ -18,6 +18,8 @@ export * from "./answer-assembly.js";
 export * from "./auth-readiness.js";
 export * from "./auth-capability-verifier.js";
 export * from "./env-scope.js";
+export * from "./process-scope.js";
+export * from "./host-facts.js";
 export * from "./runtime-env.js";
 export * from "./npm-launch.js";
 export * from "./executable-inspection.js";

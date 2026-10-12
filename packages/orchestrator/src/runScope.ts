@@ -159,3 +159,71 @@ export function scopedRouteContext(
       : {}),
   };
 }
+
+/**
+ * The per-run custody wiring of `Orchestrator.run()` (owner 1A, #449): the
+ * marker minted and recorded BEFORE the first launch, the announced context
+ * holding its terminal (the existing deferred-terminal mechanism) until the
+ * barrier has settled custody, settlement memoised so the barrier, the
+ * terminalization fallback and the never-announced path agree on ONE outcome,
+ * and the typed facts recorded exactly once. A settlement that throws is
+ * disclosed as a failed outcome, never as a run failure. Without a custodian
+ * (an embedder), custody is in-process only.
+ */
+export interface RunScopeCustody {
+  readonly marker: string;
+  /** Wrap `announce`: remember the context and hold its terminal for the barrier. */
+  announced(announce: (a: AnnouncedRunContext) => void): (a: AnnouncedRunContext) => void;
+  /** The whole-run barrier body: `drain` first; settle and record in `finally`. */
+  barrier(drain: () => Promise<void>): Promise<void>;
+  /** Idempotent fallback for a path that never reached the barrier. */
+  record(): Promise<void>;
+  /** A run that never announced launched nothing, but its marker was recorded: settle it. */
+  settleUnannounced(): Promise<void>;
+}
+
+export async function openRunScopeCustody(
+  custodian: RunScopeCustodian | undefined,
+  runId: string,
+): Promise<RunScopeCustody> {
+  const custody = custodian ?? inProcessRunScopeCustodian;
+  const { marker } = await custody.open(runId);
+  let announcedContext: AnnouncedRunContext | null = null;
+  let settlement: Promise<ScopeReapOutcome> | null = null;
+  const settle = (): Promise<ScopeReapOutcome> => {
+    settlement ??= custody
+      .settle(runId, marker)
+      .catch((error: unknown) =>
+        failedScopeOutcome(
+          `scope settlement failed: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+    return settlement;
+  };
+  let recorded = false;
+  const record = async (): Promise<void> => {
+    const outcome = await settle();
+    if (!announcedContext || recorded) return;
+    recorded = true;
+    writeRunScopeFacts(announcedContext, marker, outcome);
+  };
+  return {
+    marker,
+    announced: (announce) => (a) => {
+      announcedContext = a;
+      announce(a);
+      a.log.deferTerminal();
+    },
+    barrier: async (drain) => {
+      try {
+        await drain();
+      } finally {
+        await record();
+      }
+    },
+    record,
+    settleUnannounced: async () => {
+      if (!announcedContext) await settle();
+    },
+  };
+}

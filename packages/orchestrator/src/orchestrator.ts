@@ -5,14 +5,11 @@ import {
 } from "./prompt-framing.js";
 import { requestRefusalFailure } from "./runTerminalResults.js";
 import {
-  failedScopeOutcome,
-  inProcessRunScopeCustodian,
+  openRunScopeCustody,
   scopedRouteContext,
   scopedSpecEnv,
-  writeRunScopeFacts,
   type RunScopeCustodian,
 } from "./runScope.js";
-import type { ScopeReapOutcome } from "@claudexor/core";
 import { delegationBeltFor } from "./delegationBelt.js";
 import {
   bindProcessingAdmission,
@@ -27,7 +24,6 @@ import {
   failedCandidatesResult,
   failAfterCandidates,
 } from "./candidateTerminals.js";
-import { existsSync } from "node:fs";
 import {
   effectiveAuthPreference,
   observeNativeSessionEvent,
@@ -308,14 +304,10 @@ import { interactionChannelFor } from "./interaction.js";
 import { liveAttempt, type LiveAttemptContext, type LiveAttemptHook } from "./live-input.js";
 import { gateSpecsFromContract, renderTestsEvidence } from "./contract-gates.js";
 import { buildTaskContract } from "./task-contract-builder.js";
+import { prepareReviewEvidenceDir, recordReviewEvidenceCleanup } from "./reviewEvidence.js";
 import { ArtifactStore, type RunPaths } from "@claudexor/artifact-store";
 import type { EventLog, TerminalPersistenceHook } from "@claudexor/event-log";
-import {
-  buildContextPack,
-  rawContextForEnvelope,
-  preflightEvidence,
-  writeEvidencePacket,
-} from "@claudexor/context";
+import { buildContextPack, rawContextForEnvelope, writeEvidencePacket } from "@claudexor/context";
 import {
   WorkspaceManager,
   captureRawPatchEnvelope,
@@ -411,12 +403,9 @@ export interface OrchestratorDeps {
   /** Startup-frozen regular/strategy concurrency caps from the daemon owner. */
   runtimeConcurrencyCaps?: RuntimeConcurrencyCaps;
   /**
-   * Durable per-run process custody (the daemon's scope index: marker minted
-   * and recorded before the first launch, descendants captured while live,
-   * members ended at the run's terminal and at the next daemon start after a
-   * crash). Absent: in-process custody only — the marker is still minted,
-   * carried and reaped at the barrier, but nothing survives a daemon crash
-   * (`runScope.ts`).
+   * Durable per-run process custody (the daemon's scope index). Absent: in-process
+   * custody only — minted, carried and reaped at the barrier, nothing survives a
+   * daemon crash (`runScope.ts`).
    */
   runScopes?: RunScopeCustodian;
 }
@@ -641,11 +630,8 @@ export interface RunInput {
    * ignored knob instead of silently dropping it.
    */
   maxTurns?: number | null;
-  /**
-   * Internal provenance: the run's process-scope marker, minted by `run()`
-   * before the first launch and carried in every harness `spec.env` so the
-   * whole-run terminal barrier can end what the run left. Never set by a caller.
-   */
+  /** Internal provenance: the run's process-scope marker, minted by `run()` before the
+   * first launch and carried in every harness `spec.env`. Never set by a caller. */
   runScopeMarker?: string;
 }
 
@@ -855,48 +841,17 @@ export class Orchestrator {
       this.routingRationaleByRun.delete(settledRunId);
       this.deps.delegationBudgetAuthority?.releaseRun(settledRunId);
     };
-    // Process custody (owner 1A, #449): mint the run's scope marker and record
-    // it durably BEFORE the first launch. Every harness spec env this run
-    // builds carries it (`scopedSpecEnv`). Every announced run HOLDS its
-    // terminal (the existing deferred-terminal mechanism) until the whole-run
-    // barrier has ended what still carries the marker and recorded the typed
-    // outcome, so the terminal a host observes — SSE, SQL command state — is
-    // published only after cleanup (fix round 1 item 3). The reap never
-    // changes the verdict; its outcome is a disclosure beside it.
-    const runScopes = this.deps.runScopes ?? inProcessRunScopeCustodian;
-    const { marker: runScopeMarker } = await runScopes.open(runId);
-    resolved = { ...resolved, runScopeMarker };
-    let announcedContext: AnnouncedRunContext | null = null;
-    let scopeSettlement: Promise<ScopeReapOutcome> | null = null;
-    const settleScope = (): Promise<ScopeReapOutcome> => {
-      scopeSettlement ??= runScopes
-        .settle(runId, runScopeMarker)
-        .catch((error: unknown) =>
-          failedScopeOutcome(
-            `scope settlement failed: ${error instanceof Error ? error.message : String(error)}`,
-          ),
-        );
-      return scopeSettlement;
-    };
-    let scopeRecorded = false;
-    // Idempotent: the barrier records first; the terminalization hook is the
-    // fallback for a path that never reached the barrier.
-    const recordScope = async (): Promise<void> => {
-      const outcome = await settleScope();
-      if (!announcedContext || scopeRecorded) return;
-      scopeRecorded = true;
-      writeRunScopeFacts(announcedContext, runScopeMarker, outcome);
-    };
+    // Process custody (owner 1A, #449; `runScope.ts`): the marker is minted and
+    // recorded BEFORE the first launch, rides every spec env (`scopedSpecEnv`),
+    // and every announced run HOLDS its terminal until the barrier has ended
+    // what still carries it. The reap never changes the verdict.
+    const custody = await openRunScopeCustody(this.deps.runScopes, runId);
+    resolved = { ...resolved, runScopeMarker: custody.marker };
     try {
       return await guardAnnouncedRun(
         resolved.signal,
         (announce) => {
-          const announced = (a: AnnouncedRunContext): void => {
-            announcedContext = a;
-            announce(a);
-            // Hold the terminal until the barrier below has settled custody.
-            a.log.deferTerminal();
-          };
+          const announced = custody.announced(announce);
           switch (mode) {
             case "ask":
               // `--deep-scan` widens the answer into the bounded multi-scout
@@ -917,28 +872,22 @@ export class Orchestrator {
               return this.runPlan(resolved, announced);
           }
         },
-        async ({ runId }) => {
-          // The whole-run barrier: drain delegated children, then end the run's
-          // process scope and record its outcome — all before ANY terminal is
-          // flushed, including the typed failure a child-drain rejection
-          // becomes (the original drain error is kept). Bounded by the reap
-          // deadline.
-          const authority = this.deps.delegationBudgetAuthority;
-          try {
-            if (authority?.hasParent(runId)) {
-              authority.beginParentClose(runId);
-              await authority.waitForChildren(runId);
-            }
-          } finally {
-            await recordScope();
-          }
-        },
+        // The whole-run barrier: drain delegated children, then end the run's
+        // process scope and record its outcome before ANY terminal is flushed
+        // (a child-drain rejection keeps its error). Bounded by the reap deadline.
+        ({ runId }) =>
+          custody.barrier(async () => {
+            const authority = this.deps.delegationBudgetAuthority;
+            if (!authority?.hasParent(runId)) return;
+            authority.beginParentClose(runId);
+            await authority.waitForChildren(runId);
+          }),
         // Single per-run terminalization hook: the custody fallback for a path
         // that never reached the barrier, then release per-run engine state
         // (the delegated-child drain authority is released only AFTER
         // settlement) on EVERY terminal.
         async (settledRunId) => {
-          await recordScope();
+          await custody.record();
           releaseRunState(settledRunId);
         },
       );
@@ -952,10 +901,7 @@ export class Orchestrator {
       }
       throw error;
     } finally {
-      // A run that never announced launched nothing, but its minted marker was
-      // recorded: settle it so the index does not carry an open entry until the
-      // next daemon start (fix round 1 NIT).
-      if (!announcedContext) await settleScope();
+      await custody.settleUnannounced();
     }
   }
 
@@ -4623,62 +4569,12 @@ export class Orchestrator {
         runScopeMarker,
       },
       {
-        prepareReviewEvidenceDir: this.prepareReviewEvidenceDir.bind(this),
-        recordReviewEvidenceCleanup: this.recordReviewEvidenceCleanup.bind(this),
+        prepareReviewEvidenceDir,
+        recordReviewEvidenceCleanup,
         reviewScoped: this.reviewScoped.bind(this),
         config: this.config.bind(this),
       },
     );
-  }
-
-  private prepareReviewEvidenceDir(sourceDir: string, _candidateCwd: string): string {
-    // Evidence is an external runtime artifact. ReviewEngine builds a separate
-    // reviewer workspace and copies the packet there; writing/copying it into
-    // the candidate tree would contaminate the Git diff and, worse, overwrite a
-    // user-owned path with the same name.
-    if (!existsSync(sourceDir)) {
-      throw new Error(`review evidence preflight failed for ${sourceDir}: source packet missing`);
-    }
-    return this.requireReviewEvidence(sourceDir);
-  }
-
-  private requireReviewEvidence(dir: string): string {
-    const result = preflightEvidence(dir);
-    if (result.ok) return dir;
-    const missing = result.missing.length ? `missing=${result.missing.join(",")}` : "";
-    const empty = result.empty.length ? `empty=${result.empty.join(",")}` : "";
-    throw new Error(
-      `review evidence preflight failed for ${dir}: ${[missing, empty].filter(Boolean).join(" ")}`,
-    );
-  }
-
-  private cleanupReviewEvidenceDir(
-    _candidateEvidenceDir: string,
-    _candidateCwd: string,
-  ): Record<string, string> | null {
-    // No candidate-tree packet exists in v2; external runtime retention is
-    // governed by the artifact/journal lifecycle rather than best-effort rm.
-    return null;
-  }
-
-  private recordReviewEvidenceCleanup(
-    store: ArtifactStore,
-    metadataPath: string,
-    attemptId: string,
-    candidateEvidenceDir: string,
-    candidateCwd: string,
-  ): void {
-    const cleanupMetadata = this.cleanupReviewEvidenceDir(candidateEvidenceDir, candidateCwd);
-    if (!cleanupMetadata) return;
-    try {
-      store.writeYaml(metadataPath, {
-        ...cleanupMetadata,
-        attempt_id: attemptId,
-      });
-    } catch {
-      // Cleanup telemetry must not mask the review/revalidation failure that
-      // triggered best-effort cleanup.
-    }
   }
 
   private async runConvergence(

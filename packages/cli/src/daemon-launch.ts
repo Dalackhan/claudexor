@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { lstatSync } from "node:fs";
 import type { Readable } from "node:stream";
 import { logPath } from "@claudexor/daemon";
+import { isRunScopeMarkerName } from "@claudexor/core";
 import {
   daemonHeapLaunch,
   safeProblemContext,
@@ -75,7 +76,14 @@ export function daemonLaunchEnvironment(
   source: NodeJS.ProcessEnv,
   launchSource: CliDaemonLaunchSource,
 ): NodeJS.ProcessEnv {
-  return { ...source, [DAEMON_LAUNCH_SOURCE_ENV]: launchSource };
+  // Inheritance is not a lifetime transfer: a daemon is a longer-lived
+  // custodian, so a run marker inherited from a harness child that
+  // autostarts it is shed here (an enclosing host's installation marker is kept).
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (!isRunScopeMarkerName(key)) env[key] = value;
+  }
+  return { ...env, [DAEMON_LAUNCH_SOURCE_ENV]: launchSource };
 }
 
 function missingEntryError(entryPath: string, reason: unknown): CliError {

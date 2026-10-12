@@ -35,6 +35,7 @@ import {
   mintRunScopeMarker,
   onChildProcessRegistered,
   reapScopeMembers,
+  birthEpochSeconds,
   type AsyncProcessIdentityReader,
   type CapturedProcess,
   type KnownProcessIdentity,
@@ -61,12 +62,18 @@ interface RunScopeOutcomeSummary {
   completeness: ScopeReapOutcome["completeness"];
 }
 
-/** A harness root's own process group, recorded the moment it was spawned. */
+/**
+ * A harness root's own process group, recorded SYNCHRONOUSLY at registration
+ * from the registry handle (pgid + the leader's measured identity), and
+ * completed with the leader's `lstart` once a table read confirmed it.
+ */
 export interface RunScopeRootGroup {
   pgid: number;
   leader_pid: number;
-  /** The leader's `lstart` birth text (C locale, local time, 1 s resolution). */
-  leader_birth: string;
+  /** The leader's `lstart` birth text (C locale, local time, 1 s resolution); null until a table read confirmed it. */
+  leader_birth: string | null;
+  /** The leader's spawn-time measured identity (proc identity token). */
+  leader_identity?: KnownProcessIdentity;
 }
 
 export interface RunScopeEntry {
@@ -119,6 +126,88 @@ function summarize(outcome: ScopeReapOutcome): RunScopeOutcomeSummary {
   };
 }
 
+/** One strictly validated index row; null for anything malformed. */
+function parseEntry(value: unknown): RunScopeEntry | null {
+  if (!value || typeof value !== "object") return null;
+  const entry = value as Partial<RunScopeEntry>;
+  if (
+    typeof entry.marker !== "string" ||
+    typeof entry.run_id !== "string" ||
+    (entry.state !== "open" && entry.state !== "unresolved")
+  )
+    return null;
+  const rootGroups: RunScopeRootGroup[] = [];
+  for (const g of Array.isArray(entry.root_groups) ? entry.root_groups : []) {
+    const group = g as Partial<RunScopeRootGroup> | null;
+    if (
+      !group ||
+      typeof group !== "object" ||
+      !Number.isSafeInteger(group.pgid) ||
+      !Number.isSafeInteger(group.leader_pid) ||
+      (group.leader_birth !== null && typeof group.leader_birth !== "string")
+    )
+      return null;
+    rootGroups.push({
+      pgid: group.pgid as number,
+      leader_pid: group.leader_pid as number,
+      leader_birth: group.leader_birth ?? null,
+      ...(isKnownProcessIdentity(group.leader_identity)
+        ? { leader_identity: group.leader_identity }
+        : {}),
+    });
+  }
+  const captured: CapturedProcess[] = [];
+  for (const c of Array.isArray(entry.captured) ? entry.captured : []) {
+    const row = c as Partial<CapturedProcess> | null;
+    if (
+      !row ||
+      typeof row !== "object" ||
+      !Number.isSafeInteger(row.pid) ||
+      !Number.isSafeInteger(row.pgid) ||
+      typeof row.birth !== "string"
+    )
+      return null;
+    captured.push({ pid: row.pid as number, pgid: row.pgid as number, birth: row.birth });
+  }
+  return {
+    marker: entry.marker,
+    run_id: entry.run_id,
+    owner: isKnownProcessIdentity(entry.owner) ? entry.owner : null,
+    state: entry.state,
+    opened_at: typeof entry.opened_at === "string" ? entry.opened_at : "",
+    ...(typeof entry.settled_at === "string" ? { settled_at: entry.settled_at } : {}),
+    scope_start: typeof entry.scope_start === "string" ? entry.scope_start : null,
+    root_groups: rootGroups,
+    captured,
+    ...(entry.outcome ? { outcome: entry.outcome } : {}),
+  };
+}
+
+/** The recorded sources of one entry as the reaper takes them. */
+function reapSources(entry: RunScopeEntry) {
+  return {
+    captured: entry.captured,
+    scopeStart: entry.scope_start,
+    scopeStartAt: entry.opened_at || null,
+    rootGroups: entry.root_groups.map((g) => ({
+      pgid: g.pgid,
+      leaderPid: g.leader_pid,
+      leaderBirth: g.leader_birth,
+      ...(g.leader_identity ? { leaderIdentity: g.leader_identity } : {}),
+    })),
+  };
+}
+
+/** The earlier of two `lstart` readings (the scope floor keeps the minimum). */
+function earlierBirth(current: string | null, candidate: string): string | null {
+  if (current === null) return candidate;
+  const a = birthEpochSeconds(current);
+  const b = birthEpochSeconds(candidate);
+  if (a === null) return candidate;
+  if (b === null) return current;
+  return b < a ? candidate : current;
+}
+
 function describe(entry: RunScopeEntry, outcome: ScopeReapOutcome): string {
   return (
     `scope ${entry.marker.slice(-8)} of run ${entry.run_id}: ` +
@@ -141,6 +230,8 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
   private readonly roots: () => ReadonlyArray<LiveChildProcess>;
   private readonly seeding = new Set<Promise<void>>();
   private unsubscribe: (() => void) | null = null;
+  /** Set when the index file had to be preserved aside; surfaced as a startup action. */
+  private unreadableNotice: string | null = null;
   private readonly log: (message: string) => void;
   private readonly now: () => string;
 
@@ -178,23 +269,41 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
    */
   seedRoot(child: LiveChildProcess): Promise<void> {
     const job = (async () => {
-      if (!this.table || !child.scopeMarker) return;
-      const entry = this.load().find((item) => item.marker === child.scopeMarker);
-      if (!entry || entry.state !== "open") return;
-      if (!(await this.rootStillSame(child))) return;
-      const row = await this.table.row(child.pid);
-      if (row === null || row === "unreadable") return; // exited already, or unreadable: nothing to seed
-      if (entry.root_groups.some((g) => g.leader_pid === row.pid && g.leader_birth === row.birth))
-        return;
-      entry.root_groups.push({ pgid: row.pgid, leader_pid: row.pid, leader_birth: row.birth });
-      if (!entry.captured.some((c) => c.pid === row.pid && c.birth === row.birth))
-        entry.captured.push({ pid: row.pid, pgid: row.pgid, birth: row.birth });
-      if (entry.scope_start === null) entry.scope_start = row.birth;
       try {
-        await this.persist();
+        if (!child.scopeMarker) return;
+        const entry = this.load().find((item) => item.marker === child.scopeMarker);
+        if (!entry || entry.state !== "open") return;
+        // SYNCHRONOUS seed from the registry handle (fix round 2 item 10): the
+        // group id and the leader's measured identity are known the moment
+        // the root is registered, so a root that exits within milliseconds
+        // still leaves its group on record; the floor is `opened_at` until a
+        // birth is known.
+        let group = entry.root_groups.find((g) => g.leader_pid === child.pid);
+        if (!group) {
+          group = {
+            pgid: child.processGroup.pgid,
+            leader_pid: child.pid,
+            leader_birth: null,
+            leader_identity: child.processGroup.leader,
+          };
+          entry.root_groups.push(group);
+          await this.persistQuietly(`root group of ${child.pid}`);
+        }
+        if (!this.table) return;
+        // Refinement: the leader's lstart, read only while it is still the
+        // spawn-time leader BEFORE and AFTER the table read (item 8).
+        if (!(await this.rootStillSame(child))) return;
+        const row = await this.table.row(child.pid);
+        if (row === null || row === "unreadable") return; // exited already, or unreadable
+        if (!(await this.rootStillSame(child))) return;
+        group.leader_birth = row.birth;
+        if (!entry.captured.some((c) => c.pid === row.pid && c.birth === row.birth))
+          entry.captured.push({ pid: row.pid, pgid: row.pgid, birth: row.birth });
+        entry.scope_start = earlierBirth(entry.scope_start, row.birth);
+        await this.persistQuietly(`root birth of ${child.pid}`);
       } catch (error) {
         this.log(
-          `run-scope index: root group of ${child.pid} could not be persisted (${
+          `run-scope index: seeding root ${child.pid} failed (${
             error instanceof Error ? error.message : String(error)
           })`,
         );
@@ -203,6 +312,18 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
     this.seeding.add(job);
     void job.finally(() => this.seeding.delete(job));
     return job;
+  }
+
+  private async persistQuietly(what: string): Promise<void> {
+    try {
+      await this.persist();
+    } catch (error) {
+      this.log(
+        `run-scope index: ${what} could not be persisted (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      );
+    }
   }
 
   /** Awaited by settle so a seed in flight is never raced by the reap. */
@@ -254,7 +375,7 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
     const entry = this.load().find((item) => item.marker === marker);
     const outcome = await this.reap({
       marker,
-      ...(entry ? { captured: entry.captured, scopeStart: entry.scope_start } : {}),
+      ...(entry ? reapSources(entry) : {}),
       ...(this.table ? { table: this.table } : {}),
     });
     if (entry) {
@@ -300,13 +421,24 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
       );
       if (!entry) continue;
       // A root whose measured identity no longer matches its spawn-time handle
-      // (pid freed and reused) must not have a stranger's tree captured (item 7).
+      // (pid freed and reused) must not have a stranger's tree captured: the
+      // identity is checked before AND after the snapshot (items 7/8).
+      if (!(await this.rootStillSame(root))) continue;
+      const walked = descendantProcessRows(root.pid, rows);
       if (!(await this.rootStillSame(root))) continue;
       const known = new Set(entry.captured.map((c) => `${c.pid}:${c.birth}`));
-      for (const row of descendantProcessRows(root.pid, rows)) {
-        if (row.pid === root.pid && entry.scope_start === null) {
-          entry.scope_start = row.birth;
-          changed = true;
+      for (const row of walked) {
+        if (row.pid === root.pid) {
+          const floor = earlierBirth(entry.scope_start, row.birth);
+          if (floor !== entry.scope_start) {
+            entry.scope_start = floor;
+            changed = true;
+          }
+          const group = entry.root_groups.find((g) => g.leader_pid === root.pid);
+          if (group && group.leader_birth === null) {
+            group.leader_birth = row.birth;
+            changed = true;
+          }
         }
         const key = `${row.pid}:${row.birth}`;
         if (known.has(key)) continue;
@@ -338,6 +470,7 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
   async settleDeadOwners(): Promise<string[]> {
     const actions: string[] = [];
     const entries = this.load();
+    if (this.unreadableNotice) actions.push(this.unreadableNotice);
     if (entries.length === 0) return actions;
     for (const entry of [...entries]) {
       if (await this.ownerLive(entry)) {
@@ -350,8 +483,7 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
       try {
         outcome = await this.reap({
           marker: entry.marker,
-          captured: entry.captured,
-          scopeStart: entry.scope_start,
+          ...reapSources(entry),
           ...(this.table ? { table: this.table } : {}),
         });
       } catch (error) {
@@ -436,48 +568,25 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
       );
       return this.entries;
     }
-    for (const value of raw.entries) {
-      const entry = value as Partial<RunScopeEntry>;
-      if (
-        typeof entry.marker !== "string" ||
-        typeof entry.run_id !== "string" ||
-        (entry.state !== "open" && entry.state !== "unresolved")
-      )
-        continue;
-      this.entries.push({
-        marker: entry.marker,
-        run_id: entry.run_id,
-        owner: isKnownProcessIdentity(entry.owner) ? entry.owner : null,
-        state: entry.state,
-        opened_at: typeof entry.opened_at === "string" ? entry.opened_at : "",
-        ...(typeof entry.settled_at === "string" ? { settled_at: entry.settled_at } : {}),
-        scope_start: typeof entry.scope_start === "string" ? entry.scope_start : null,
-        root_groups: Array.isArray(entry.root_groups)
-          ? entry.root_groups.filter(
-              (g): g is RunScopeRootGroup =>
-                !!g &&
-                Number.isSafeInteger((g as RunScopeRootGroup).pgid) &&
-                Number.isSafeInteger((g as RunScopeRootGroup).leader_pid) &&
-                typeof (g as RunScopeRootGroup).leader_birth === "string",
-            )
-          : [],
-        captured: Array.isArray(entry.captured)
-          ? entry.captured.filter(
-              (c): c is CapturedProcess =>
-                !!c &&
-                Number.isSafeInteger((c as CapturedProcess).pid) &&
-                Number.isSafeInteger((c as CapturedProcess).pgid) &&
-                typeof (c as CapturedProcess).birth === "string",
-            )
-          : [],
-        ...(entry.outcome ? { outcome: entry.outcome } : {}),
-      });
+    const parsed: RunScopeEntry[] = [];
+    for (const [index, value] of raw.entries.entries()) {
+      const entry = parseEntry(value);
+      if (entry === null) {
+        // A malformed row is not "some entries": the file's obligations are
+        // unknown, so the bytes are preserved aside and disclosed, never
+        // partially loaded and rewritten without the row.
+        this.preserveUnreadable(`malformed entry #${index}`);
+        return this.entries;
+      }
+      parsed.push(entry);
     }
+    this.entries.push(...parsed);
     return this.entries;
   }
 
   /** The unreadable file's bytes are evidence of unknown obligations: keep them beside the index. */
   private preserveUnreadable(reason: string): void {
+    this.unreadableNotice = `run-scope index unreadable (${reason}); preserved aside; its cleanup obligations are UNKNOWN`;
     const aside = `${this.options.path}.unreadable-${Date.now()}`;
     let moved = false;
     try {
@@ -486,11 +595,10 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
     } catch {
       /* nothing to move (or no permission): the disclosure below still names the problem */
     }
-    this.log(
-      `run-scope index ${this.options.path} is unreadable (${reason}); ` +
-        (moved ? `preserved as ${aside}; ` : "could not be moved aside; ") +
-        "its cleanup obligations are UNKNOWN until an operator inspects it; starting an empty index",
-    );
+    this.unreadableNotice = `run-scope index unreadable (${reason}); ${
+      moved ? `preserved as ${aside}` : "could not be moved aside"
+    }; its cleanup obligations are UNKNOWN until an operator inspects it`;
+    this.log(`${this.unreadableNotice}; starting an empty index`);
   }
 
   /** Serialized atomic rewrite (tmp + rename), one writer at a time. */

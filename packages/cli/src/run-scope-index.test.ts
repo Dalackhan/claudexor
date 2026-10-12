@@ -323,7 +323,10 @@ describe("DaemonRunScopeIndex", () => {
       roots: () => [],
       log: (message) => disclosures.push(message),
     });
-    expect(await corrupt.settleDeadOwners()).toEqual([]);
+    // The disclosure is also a startup action (crash_gc_scopes), not only a log line.
+    const corruptActions = await corrupt.settleDeadOwners();
+    expect(corruptActions).toHaveLength(1);
+    expect(corruptActions[0]).toMatch(/unreadable .*parse failed.*preserved as .*UNKNOWN/);
     expect(disclosures.join("\n")).toMatch(/unreadable .*parse failed.*UNKNOWN/);
     const aside = readdirSync(root).find((name) => name.startsWith("corrupt.json.unreadable-"));
     expect(aside).toBeDefined();
@@ -361,6 +364,118 @@ describe("DaemonRunScopeIndex", () => {
     const outcome = await retiring.settle("run-win", marker);
     expect(outcome.settled).toBe(false);
     expect(readIndex(root).entries).toEqual([]);
+  });
+
+  it("a syntactically valid index with a malformed row is preserved aside and disclosed, never partially loaded (item 5)", async () => {
+    const root = tempRoot();
+    const path = join(root, RUN_SCOPE_INDEX_FILE);
+    const original = JSON.stringify({ schema_version: 1, entries: [null] });
+    writeFileSync(path, original);
+    const disclosures: string[] = [];
+    const reaper = fakeReaper();
+    const index = new DaemonRunScopeIndex({
+      path,
+      identity: fakeIdentity({}),
+      reap: reaper.reap,
+      table: fakeTable([]),
+      roots: () => [],
+      log: (message) => disclosures.push(message),
+    });
+    const actions = await index.settleDeadOwners();
+    expect(reaper.calls).toEqual([]);
+    expect(actions.join("\n")).toMatch(/unreadable .*malformed entry #0.*preserved as/);
+    expect(disclosures.join("\n")).toMatch(/malformed entry #0/);
+    const aside = readdirSync(root).find((name) =>
+      name.startsWith(`${RUN_SCOPE_INDEX_FILE}.unreadable-`),
+    );
+    expect(aside).toBeDefined();
+    expect(readFileSync(join(root, aside!), "utf8")).toBe(original);
+    // A well-formed row with captured rows is never dropped silently either:
+    // a malformed captured row makes the whole file unknown.
+    const path2 = join(root, "rows.json");
+    writeFileSync(
+      path2,
+      JSON.stringify({
+        schema_version: 1,
+        entries: [
+          {
+            marker: mintRunScopeMarker(),
+            run_id: "r",
+            owner: null,
+            state: "open",
+            opened_at: "x",
+            scope_start: null,
+            root_groups: [],
+            captured: [{ pid: "not-a-number" }],
+          },
+        ],
+      }),
+    );
+    const second = new DaemonRunScopeIndex({
+      path: path2,
+      identity: fakeIdentity({}),
+      reap: reaper.reap,
+      table: fakeTable([]),
+      roots: () => [],
+      log: () => {},
+    });
+    expect((await second.settleDeadOwners()).join("\n")).toMatch(/malformed entry #0/);
+    expect(readdirSync(root).some((name) => name.startsWith("rows.json.unreadable-"))).toBe(true);
+  });
+
+  it("capture re-checks the root's identity AFTER the snapshot and stores nothing when it changed (item 8)", async () => {
+    const root = tempRoot();
+    const rows: ProcessTableRow[] = [
+      { pid: 100, ppid: 1, pgid: 100, birth: T0 },
+      { pid: 200, ppid: 100, pgid: 200, birth: T1 },
+    ];
+    let reads = 0;
+    const flipping = {
+      async read(pid: number): Promise<ProcessIdentity> {
+        reads += 1;
+        // first read (before the snapshot): the spawn-time leader; second
+        // read (after): a stranger owns the pid now.
+        return reads === 1 ? known(pid, "100") : known(pid, "999");
+      },
+    };
+    const index = new DaemonRunScopeIndex({
+      path: join(root, RUN_SCOPE_INDEX_FILE),
+      owner: async () => known(process.pid, "7"),
+      reap: fakeReaper().reap,
+      table: fakeTable(rows),
+      identity: flipping,
+      roots: () => [fakeRoot(100, marker)],
+    });
+    const { marker } = await index.open("run-flip");
+    await index.captureTick();
+    expect(index.list()[0]!.captured).toEqual([]);
+  });
+
+  it("scope_start keeps the EARLIEST birth when a later-born root is seeded first (NIT)", async () => {
+    const root = tempRoot();
+    const rows: ProcessTableRow[] = [
+      { pid: 100, ppid: process.pid, pgid: 100, birth: T1 }, // born later, seeded first
+      { pid: 300, ppid: process.pid, pgid: 300, birth: T0 }, // born earlier
+    ];
+    const index = new DaemonRunScopeIndex({
+      path: join(root, RUN_SCOPE_INDEX_FILE),
+      owner: async () => known(process.pid, "7"),
+      reap: fakeReaper().reap,
+      table: fakeTable(rows),
+      identity: fakeIdentity({ 100: known(100, "100"), 300: known(300, "300") }),
+      roots: () => [fakeRoot(100, marker), fakeRoot(300, marker)],
+    });
+    const { marker } = await index.open("run-floor");
+    await index.seedRoot(fakeRoot(100, marker));
+    expect(index.list()[0]!.scope_start).toBe(T1);
+    await index.seedRoot(fakeRoot(300, marker));
+    expect(index.list()[0]!.scope_start).toBe(T0);
+    const groups = index.list()[0]!.root_groups;
+    expect(groups.map((g) => [g.pgid, g.leader_birth])).toEqual([
+      [100, T1],
+      [300, T0],
+    ]);
+    expect(groups.every((g) => g.leader_identity?.status === "known")).toBe(true);
   });
 
   it("start: a leader that exited before any snapshot is reaped by marker alone (empty capture, no floor)", async () => {
@@ -442,6 +557,38 @@ describe.runIf(process.platform !== "win32")(
         const outcome = await index.settle("run-short", marker);
         expect(outcome.ended.map((m) => m.pid)).toContain(sleepPid);
         expect(outcome.settled).toBe(true);
+        expect(alive(sleepPid)).toBe(false);
+      } finally {
+        index.dispose();
+        try {
+          if (sleepPid) process.kill(sleepPid, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
+    }, 30_000);
+
+    it("a root that exits within milliseconds still leaves its group on record (synchronous seed) and its background /bin/sleep is ended (item 10)", async () => {
+      const root = tempRoot();
+      const index = new DaemonRunScopeIndex({ path: join(root, RUN_SCOPE_INDEX_FILE) });
+      let sleepPid = 0;
+      try {
+        const { marker } = await index.open("run-ms");
+        // No `/bin/sleep 0.1` tail this time: the shell exits as soon as it has
+        // started the background sleep — before any table read could land.
+        for await (const ev of spawnProcess("/bin/sh", ["-c", "/bin/sleep 600 & echo sleep:$!"], {
+          env: { [marker]: "1" },
+        })) {
+          if (ev.type === "stdout" && ev.line.startsWith("sleep:"))
+            sleepPid = Number(ev.line.slice(6));
+        }
+        expect(sleepPid).toBeGreaterThan(0);
+        expect(alive(sleepPid)).toBe(true);
+        const entry = index.list()[0]!;
+        expect(entry.root_groups).toHaveLength(1);
+        expect(entry.root_groups[0]!.leader_identity?.status).toBe("known");
+        const outcome = await index.settle("run-ms", marker);
+        expect(outcome.ended.map((m) => m.pid)).toContain(sleepPid);
         expect(alive(sleepPid)).toBe(false);
       } finally {
         index.dispose();

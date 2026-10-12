@@ -551,6 +551,54 @@ describe("capturedCandidates (DIRECTIVE 1 rule 2, pure)", () => {
   });
 });
 
+describe("root groups known by leader identity (fix round 2 item 10)", () => {
+  const T_OPEN = "2026-10-12T14:00:00.000Z";
+  const identity = (pid: number, token: string) => ({
+    status: "known" as const,
+    pid,
+    platform: "linux" as const,
+    source: "procfs_stat" as const,
+    startToken: `linux:${token}`,
+    processGroupId: pid,
+  });
+  it("ends a same-group member of a root that never got an lstart, using the opened_at floor; a reused leader pid skips the group", () => {
+    // The root (pid 100) exited within ms; its child 150 stays in pgid 100.
+    const rows: ProcessTableRow[] = [
+      { pid: 150, ppid: 1, pgid: 100, birth: "Mon Oct 12 17:00:05 2026" },
+    ];
+    const rootGroups = [
+      { pgid: 100, leaderPid: 100, leaderBirth: null, leaderIdentity: identity(100, "100") },
+    ];
+    const found = capturedCandidates([], rows, null, {
+      scopeStartAt: new Date("Mon Oct 12 17:00:00 2026").toISOString(),
+      rootGroups,
+    });
+    expect([...found.candidates.keys()]).toEqual([150]);
+    // A live process with pid == 100 that is NOT the spawn-time leader: reused.
+    const reusedRows: ProcessTableRow[] = [
+      { pid: 100, ppid: 1, pgid: 100, birth: "Mon Oct 12 17:00:09 2026" },
+      ...rows,
+    ];
+    const reused = capturedCandidates([], reusedRows, null, {
+      scopeStartAt: new Date("Mon Oct 12 17:00:00 2026").toISOString(),
+      rootGroups,
+      leaderVerdict: new Map([[100, "different"]]),
+    });
+    expect(reused.reusedGroups).toEqual([100]);
+    expect(reused.candidates.size).toBe(0);
+    // The same live leader confirmed as the spawn-time identity: admitted.
+    const same = capturedCandidates([], reusedRows, null, {
+      scopeStartAt: new Date("Mon Oct 12 17:00:00 2026").toISOString(),
+      rootGroups,
+      leaderVerdict: new Map([[100, "same"]]),
+    });
+    expect([...same.candidates.keys()].sort()).toEqual([100, 150]);
+    // Without any floor, groups are still skipped.
+    expect(capturedCandidates([], rows, null, { rootGroups }).reusedGroups).toEqual([100]);
+    void T_OPEN;
+  });
+});
+
 describe("reapScopeMembers with recorded sources (fake table)", () => {
   const captured: CapturedProcess[] = [
     { pid: 100, pgid: 100, birth: T0 },

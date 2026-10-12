@@ -440,6 +440,15 @@ export interface ScopeReapOptions {
   captured?: readonly CapturedProcess[];
   /** Birth floor of the scope (the harness root's `lstart` at first capture). */
   scopeStart?: string | null;
+  /** Wall-clock floor (ISO) known from the moment the scope was opened; used
+   * when no `lstart` floor exists yet (a root that exited within milliseconds). */
+  scopeStartAt?: string | null;
+  /**
+   * The harness roots' own process groups, recorded SYNCHRONOUSLY at spawn
+   * from the registry handle: pgid plus the leader's measured identity, and
+   * the leader's `lstart` once a table read confirmed it (null until then).
+   */
+  rootGroups?: ReadonlyArray<ScopeRootGroup>;
   table?: ProcessTableReader;
   /** Per-pid signal delivery (default `process.kill`). */
   signal?: (pid: number, signal: NodeJS.Signals) => void;
@@ -458,6 +467,28 @@ export interface ScopeReapOptions {
   now?: () => number;
 }
 
+export interface ScopeRootGroup {
+  pgid: number;
+  leaderPid: number;
+  /** `lstart` text of the leader when a table read confirmed it; null if the root never got one. */
+  leaderBirth: string | null;
+  /** The leader's spawn-time measured identity (proc identity token). */
+  leaderIdentity?: KnownProcessIdentity;
+}
+
+/** The epoch-seconds floor of a scope: the earlier of its `lstart` and wall-clock floors. */
+export function scopeFloorSeconds(
+  scopeStart: string | null | undefined,
+  scopeStartAt: string | null | undefined,
+): number | null {
+  const fromBirth = scopeStart ? birthEpochSeconds(scopeStart) : null;
+  const fromClock = scopeStartAt ? Math.floor(Date.parse(scopeStartAt) / 1000) : null;
+  const floors = [fromBirth, fromClock].filter(
+    (v): v is number => v !== null && Number.isFinite(v),
+  );
+  return floors.length ? Math.min(...floors) : null;
+}
+
 /**
  * The candidates of the recorded sources against one fresh table snapshot:
  * every individually captured pid still alive with its recorded birth, plus
@@ -471,6 +502,13 @@ export function capturedCandidates(
   captured: readonly CapturedProcess[],
   rows: readonly ProcessTableRow[],
   scopeStart: string | null | undefined,
+  options: {
+    scopeStartAt?: string | null;
+    rootGroups?: ReadonlyArray<ScopeRootGroup>;
+    /** For a root group known only by its leader identity: whether a live
+     * process with pid == G is still that leader (computed by the caller). */
+    leaderVerdict?: ReadonlyMap<number, "same" | "different">;
+  } = {},
 ): { candidates: Map<number, string>; reusedGroups: number[] } {
   const byPid = new Map(rows.map((row) => [row.pid, row] as const));
   const candidates = new Map<number, string>();
@@ -479,13 +517,24 @@ export function capturedCandidates(
     const row = byPid.get(item.pid);
     if (row && row.birth === item.birth) candidates.set(row.pid, row.birth);
   }
-  const floor = scopeStart ? birthEpochSeconds(scopeStart) : null;
-  for (const group of new Set(captured.map((item) => item.pgid))) {
+  const floor = scopeFloorSeconds(scopeStart, options.scopeStartAt);
+  const rootByPgid = new Map((options.rootGroups ?? []).map((g) => [g.pgid, g] as const));
+  const groups = new Set([...captured.map((item) => item.pgid), ...rootByPgid.keys()]);
+  for (const group of groups) {
     const members = rows.filter((row) => row.pgid === group);
     if (members.length === 0) continue; // emptied: simply gone
-    const recordedLeaderBirth = captured.find((item) => item.pid === group)?.birth;
+    const root = rootByPgid.get(group);
+    const recordedLeaderBirth =
+      captured.find((item) => item.pid === group)?.birth ?? root?.leaderBirth ?? undefined;
     const liveLeader = byPid.get(group);
-    const leaderReused = liveLeader !== undefined && liveLeader.birth !== recordedLeaderBirth;
+    // Rule (ii): a live process with pid == G must be the recorded leader —
+    // by its `lstart` when one was recorded, else by the caller's identity
+    // verdict against the spawn-time handle; otherwise G was reused.
+    const leaderReused =
+      liveLeader !== undefined &&
+      (recordedLeaderBirth !== undefined
+        ? liveLeader.birth !== recordedLeaderBirth
+        : options.leaderVerdict?.get(group) !== "same");
     const bornBefore =
       floor === null ||
       members.some((row) => {
@@ -566,7 +615,7 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
   if (!census) return unsupportedOutcome(now() - start);
   const identity = opts.identity ?? defaultAsyncProcessIdentityReader;
   const captured = opts.captured;
-  const table = opts.table ?? (captured ? createProcessTableReader() : null);
+  const table = opts.table ?? (captured || opts.rootGroups ? createProcessTableReader() : null);
   const deliver = opts.signal ?? ((pid, signal) => process.kill(pid, signal));
   const graceMs = opts.graceMs ?? 1_000;
   const deadlineMs = opts.deadlineMs ?? graceMs + 4_000;
@@ -689,11 +738,28 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
   };
 
   const scanCaptured = async (signal: NodeJS.Signals): Promise<string | null> => {
-    if (!captured || !table || pastDeadline()) return null;
+    if ((!captured && !opts.rootGroups) || !table || pastDeadline()) return null;
     const rows = await bounded(table.snapshot());
     if (rows === DEADLINE) return null;
     if (rows === null) return "process table unreadable";
-    const found = capturedCandidates(captured, rows, opts.scopeStart);
+    // A root group known only by its leader's identity (no lstart yet): if a
+    // live process owns pid == G, measure it against the spawn-time identity.
+    const leaderVerdict = new Map<number, "same" | "different">();
+    for (const root of opts.rootGroups ?? []) {
+      if (root.leaderBirth !== null || !root.leaderIdentity) continue;
+      if (!rows.some((row) => row.pid === root.pgid)) continue;
+      const observed = await bounded(identity.read(root.pgid));
+      if (observed === DEADLINE) return null;
+      leaderVerdict.set(
+        root.pgid,
+        compareProcessIdentity(root.leaderIdentity, observed) === "same" ? "same" : "different",
+      );
+    }
+    const found = capturedCandidates(captured ?? [], rows, opts.scopeStart, {
+      scopeStartAt: opts.scopeStartAt,
+      rootGroups: opts.rootGroups,
+      leaderVerdict,
+    });
     for (const group of found.reusedGroups) reusedGroups.add(group);
     await mapBounded([...found.candidates], LINUX_CONCURRENCY, ([pid, birth]) =>
       admitCaptured(pid, birth, signal),
@@ -736,7 +802,7 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
   };
 
   const outcome = (censusFailure: string | null): ScopeReapOutcome => ({
-    coverage: captured ? "marker+capture" : "marker",
+    coverage: captured || opts.rootGroups ? "marker+capture" : "marker",
     census: censusFailure === null ? "ok" : "failed",
     censusFailure,
     ended,

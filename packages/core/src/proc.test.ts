@@ -199,6 +199,59 @@ describe("spawnProcess", () => {
     expect(exitDrain).toBe("truncated");
   }, 20_000);
 
+  it.each([
+    { cap: 300, when: "fires mid-stall" },
+    { cap: 30_000, when: "never fires (control)" },
+  ])(
+    "forced closure keeps every frame already acquired beyond one native read chunk: 96 frames, both pipes held, cap $when (96/96)",
+    async ({ cap }) => {
+      // Astra's R2 fixture: 96 ~1 KB frames in ONE batch (~98 KB: several
+      // native pipe reads), queue bound 1, the root exits after 100 ms while
+      // a silent descendant holds BOTH pipes, the consumer pauses 700 ms
+      // after the first frame. With the 300 ms absolute cap firing during the
+      // stall, every complete frame already read from the OS — in the parser's
+      // chunk and in the Readable's buffer — must still arrive; the 30 s
+      // control (the consumer resumes first) is the same 96/96.
+      const script = [
+        "const {spawn}=require('node:child_process')",
+        "let out='';for (let i = 0; i < 96; i++) out += JSON.stringify({ i, pad: 'x'.repeat(1000) }) + '\\n'",
+        "process.stdout.write(out)",
+        "process.stderr.write('diagnostic kept\\n')",
+        "spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:['ignore',1,2]})",
+        "setTimeout(()=>process.exit(0),100)",
+      ].join(";");
+      const frames: number[] = [];
+      const stderr: string[] = [];
+      let exitDrain: string | undefined = "unset";
+      let paused = false;
+      let threw: unknown = null;
+      try {
+        for await (const ev of spawnProcess(process.execPath, ["-e", script], {
+          exitDrainMs: 100,
+          exitDrainMaxMs: cap,
+          streamLimits: { stdoutFrameBytes: 65_536, queuedFrames: 1, stderrBytes: 4096 },
+        })) {
+          if (ev.type === "stdout") {
+            frames.push((JSON.parse(ev.line) as { i: number }).i);
+            if (!paused) {
+              paused = true;
+              await new Promise((resolve) => setTimeout(resolve, 700));
+            }
+          }
+          if (ev.type === "stderr") stderr.push(ev.line);
+          if (ev.type === "exit") exitDrain = ev.drain;
+        }
+      } catch (error) {
+        threw = error;
+      }
+      expect(threw).toBeNull();
+      expect(frames).toEqual(Array.from({ length: 96 }, (_, i) => i));
+      expect(stderr.join("\n")).toContain("diagnostic kept");
+      expect(exitDrain).toBe("truncated");
+    },
+    20_000,
+  );
+
   it("forced closure delivers frames that arrived as separate pipe chunks: paused consumer, cap mid-stall (24/24)", async () => {
     // Same shape, but the 24 frames are written one per 10 ms so they arrive
     // as many pipe chunks. While the bounded consumer is paused the reader

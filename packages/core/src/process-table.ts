@@ -36,8 +36,9 @@ export interface ProcessTableReader {
   row(pid: number): Promise<ProcessTableRow | null | "unreadable">;
 }
 
-// `ps` resolved through the pinned PATH, exactly like `process-tree.ts` (a host
-// without /bin/ps — NixOS, some containers — still has it on PATH).
+// `ps` resolved through the pinned child PATH (`/usr/bin:/bin`), exactly like
+// `process-tree.ts`: both readers find or miss `ps` the same way (a host that
+// keeps it elsewhere — NixOS — is a disclosed, consistent miss).
 const PS_COMMAND = "ps";
 const TABLE_TIMEOUT_MS = 5_000;
 const ROW_RE = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s*$/;

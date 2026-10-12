@@ -105,6 +105,17 @@ export async function guardAnnouncedRun(
       return false;
     }
   };
+  /**
+   * The held-terminal RECOVERY path (the strategy held its terminal, then
+   * threw): for an ordinary run the cancellation decision is frozen NOW,
+   * before its barrier, exactly as on the normal return — the verdict was
+   * reached before any abort that lands during settlement. Delegate parents
+   * keep the live signal through their child drain (the drain is their work).
+   */
+  const heldVerdictBarrier = async (context: AnnouncedRunContext): Promise<boolean> => {
+    if (!ownsDelegateDrain(context)) abortedAtStrategyEnd = signal?.aborted === true;
+    return barrierHeld(context);
+  };
   try {
     let result: OrchestratorResult;
     try {
@@ -309,7 +320,7 @@ export async function guardAnnouncedRun(
         a.log.deferredTerminalPending() &&
         !signal?.aborted &&
         !barrierFailed &&
-        (await barrierHeld(a))
+        (await heldVerdictBarrier(a))
       ) {
         // The strategy already produced its terminal — held for the barrier
         // (INV-144: custody settles before the terminal is published) — and

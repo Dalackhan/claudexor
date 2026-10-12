@@ -117,6 +117,11 @@ export class EventLog {
     this.deferredTerminal = null;
   }
 
+  /** The terminal held by `deferTerminal()` and not yet flushed, if any (a copy). */
+  deferredTerminalPending(): { type: RunEventType; payload: Record<string, unknown> } | null {
+    return this.deferredTerminal ? { ...this.deferredTerminal } : null;
+  }
+
   flushDeferredTerminal(): RunEvent | null {
     const pending = this.deferredTerminal;
     this.deferredTerminal = null;

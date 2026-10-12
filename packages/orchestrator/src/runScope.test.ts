@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -21,7 +21,9 @@ import {
 } from "@claudexor/schema";
 import type { ReviewerSpec } from "@claudexor/review";
 import { ArtifactStore } from "@claudexor/artifact-store";
+import { projectRuntimeDir } from "@claudexor/util";
 import { Orchestrator } from "./orchestrator.js";
+import { createFakeHarness } from "@claudexor/harness-fake";
 import { inProcessRunScopeCustodian, scopedSpecEnv, type RunScopeCustodian } from "./runScope.js";
 
 const reapDirs: string[] = [];
@@ -438,6 +440,127 @@ describe("Orchestrator run scope: cancel, Windows coverage, concurrency (item 8)
       }
     },
     120_000,
+  );
+});
+
+describe("Orchestrator run scope: terminal after cleanup (fix round 1 item 3)", () => {
+  it("publishes the run terminal only after the scope is settled and its outcome recorded; survivors never change the verdict", async () => {
+    const repo = await initRepo();
+    const observed: { terminalAtSettle: boolean; factsAtSettle: boolean }[] = [];
+    const custodian: RunScopeCustodian = {
+      open: (runId) => inProcessRunScopeCustodian.open(runId),
+      async settle(runId, marker) {
+        const runDir = join(projectRuntimeDir(repo), "runs", runId);
+        const events = existsSync(join(runDir, "events.jsonl"))
+          ? readFileSync(join(runDir, "events.jsonl"), "utf8")
+          : "";
+        observed.push({
+          terminalAtSettle: /"type":"run\.(completed|failed|blocked)"/.test(events),
+          factsAtSettle: existsSync(join(runDir, "final", "process_scope.yaml")),
+        });
+        const real = await inProcessRunScopeCustodian.settle(runId, marker);
+        // A survivor the cleanup could not end is a DISCLOSURE, not a verdict.
+        return { ...real, settled: false, survivors: [{ pid: 424242, startToken: "ps:x" }] };
+      },
+    };
+    const res = await new Orchestrator({
+      registry: new Map([["impl", recordingImplementer("impl", [])]]),
+      runScopes: custodian,
+    }).run({ repoRoot: repo, prompt: "do it", mode: "agent", harnesses: ["impl"], n: 1 });
+    expect(res.lifecycle).toBe("succeeded");
+    expect(observed).toEqual([{ terminalAtSettle: false, factsAtSettle: false }]);
+    const events = readFileSync(join(res.runDir, "events.jsonl"), "utf8");
+    expect(events).toContain('"type":"run.completed"');
+    const facts = RunProcessScopeOutcome.parse(
+      new ArtifactStore(repo).readYaml(join(res.runDir, "final", "process_scope.yaml")),
+    );
+    expect(facts.settled).toBe(false);
+    expect(facts.survivors.map((m) => m.pid)).toEqual([424242]);
+  }, 60_000);
+
+  it("a refused run (announced, then failed before any launch) still settles its minted marker exactly once", async () => {
+    // Every refusal that could precede the announcement happens BEFORE the
+    // marker is minted (mode/secret/admission checks), so the reachable
+    // property is: a run the engine refuses after routing — here an effective
+    // Delegate without a budget authority — ends with one settle, never none.
+    const repo = await initRepo();
+    const calls: string[] = [];
+    const custodian: RunScopeCustodian = {
+      async open(runId) {
+        calls.push("open");
+        return inProcessRunScopeCustodian.open(runId);
+      },
+      async settle(runId, marker) {
+        calls.push("settle");
+        return inProcessRunScopeCustodian.settle(runId, marker);
+      },
+    };
+    const res = await new Orchestrator({
+      registry: new Map([["fake-success", createFakeHarness("fake-success")]]),
+      runScopes: custodian,
+    }).run({
+      repoRoot: repo,
+      prompt: "do it",
+      mode: "agent",
+      harnesses: ["fake-success"],
+      delegate: true,
+      n: 1,
+    });
+    expect(res.lifecycle).toBe("failed");
+    expect(calls).toEqual(["open", "settle"]);
+    expect(existsSync(join(res.runDir, "final", "process_scope.yaml"))).toBe(true);
+  }, 60_000);
+
+  it.runIf(process.platform !== "win32")(
+    "a continuation inside one run keeps its helper: attempt 1's leftover is alive during attempt 2 and ended only at the run's end",
+    async () => {
+      const repo = await initRepo();
+      const script =
+        "const {spawn}=require('node:child_process');" +
+        "const c=spawn(process.execPath,['-e','setTimeout(()=>{},600000)'],{detached:true,stdio:'ignore',env:process.env});" +
+        "c.unref();console.log('orphan:'+c.pid);";
+      let orphan = 0;
+      let aliveDuringSecond: boolean | null = null;
+      let attempts = 0;
+      const impl = recordingImplementer("impl", [], async function* (spec) {
+        attempts += 1;
+        if (attempts === 1) {
+          for await (const ev of spawnProcess(process.execPath, ["-e", script], {
+            env: spec.env,
+            cwd: spec.cwd,
+          })) {
+            if (ev.type === "stdout" && ev.line.startsWith("orphan:"))
+              orphan = Number(ev.line.slice(7));
+          }
+        } else {
+          aliveDuringSecond = alive(orphan);
+        }
+        yield;
+      });
+      try {
+        const res = await new Orchestrator({ registry: new Map([["impl", impl]]) }).run({
+          repoRoot: repo,
+          prompt: "do it",
+          mode: "agent",
+          harnesses: ["impl"],
+          n: 2,
+        });
+        expect(res.lifecycle).toBe("succeeded");
+        expect(attempts).toBe(2);
+        expect(orphan).toBeGreaterThan(0);
+        expect(aliveDuringSecond).toBe(true);
+        expect(alive(orphan)).toBe(false);
+      } finally {
+        if (orphan) {
+          try {
+            process.kill(orphan, "SIGKILL");
+          } catch {
+            /* already gone */
+          }
+        }
+      }
+    },
+    90_000,
   );
 });
 

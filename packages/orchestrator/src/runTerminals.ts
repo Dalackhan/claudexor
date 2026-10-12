@@ -435,6 +435,29 @@ export async function guardAnnouncedRun(
               ...(spendUsd !== null ? { spendUsd } : {}),
             }
           : committedResult(a, outcome, spendUsd);
+      } else if (a.log.deferredTerminalPending() && !signal?.aborted) {
+        // The strategy already produced its terminal — held for the barrier
+        // (INV-144: custody settles before the terminal is published) — and
+        // then threw. Exactly like a committed terminal, its verdict stands:
+        // settle custody, publish the held terminal, keep its outcome.
+        const pending = a.log.deferredTerminalPending()!;
+        try {
+          await runBarrier(a);
+        } catch {
+          /* the barrier owner disclosed its own failure; the held verdict still publishes */
+        }
+        await flushContinuationTerminal(a, terminalOutcomeFromPayload(pending.payload));
+        const outcome = canonicalOutcome ?? committedOutcome(a);
+        if (!outcome) throw err;
+        const spendUsd = settledSpend(a);
+        result = preparedResult
+          ? {
+              ...preparedResult,
+              lifecycle: outcome.lifecycle,
+              facts: outcome,
+              ...(spendUsd !== null ? { spendUsd } : {}),
+            }
+          : committedResult(a, outcome, spendUsd);
       } else {
         a.log.clearDeferredTerminal();
         let terminalError = err;

@@ -857,24 +857,35 @@ export class Orchestrator {
     };
     // Process custody (owner 1A, #449): mint the run's scope marker and record
     // it durably BEFORE the first launch. Every harness spec env this run
-    // builds carries it (`scopedSpecEnv`), and the single per-run
-    // terminalization hook below ends what still carries it on EVERY terminal —
-    // success, failure, cancel, timeout — then writes the typed outcome.
+    // builds carries it (`scopedSpecEnv`). Every announced run HOLDS its
+    // terminal (the existing deferred-terminal mechanism) until the whole-run
+    // barrier has ended what still carries the marker and recorded the typed
+    // outcome, so the terminal a host observes — SSE, SQL command state — is
+    // published only after cleanup (fix round 1 item 3). The reap never
+    // changes the verdict; its outcome is a disclosure beside it.
     const runScopes = this.deps.runScopes ?? inProcessRunScopeCustodian;
     const { marker: runScopeMarker } = await runScopes.open(runId);
     resolved = { ...resolved, runScopeMarker };
     let announcedContext: AnnouncedRunContext | null = null;
-    const settleRunScope = async (settledRunId: string): Promise<void> => {
-      releaseRunState(settledRunId);
-      let outcome: ScopeReapOutcome;
-      try {
-        outcome = await runScopes.settle(settledRunId, runScopeMarker);
-      } catch (error) {
-        outcome = failedScopeOutcome(
-          `scope settlement failed: ${error instanceof Error ? error.message : String(error)}`,
+    let scopeSettlement: Promise<ScopeReapOutcome> | null = null;
+    const settleScope = (): Promise<ScopeReapOutcome> => {
+      scopeSettlement ??= runScopes
+        .settle(runId, runScopeMarker)
+        .catch((error: unknown) =>
+          failedScopeOutcome(
+            `scope settlement failed: ${error instanceof Error ? error.message : String(error)}`,
+          ),
         );
-      }
-      if (announcedContext) writeRunScopeFacts(announcedContext, runScopeMarker, outcome);
+      return scopeSettlement;
+    };
+    let scopeRecorded = false;
+    // Idempotent: the barrier records first; the terminalization hook is the
+    // fallback for a path that never reached the barrier.
+    const recordScope = async (): Promise<void> => {
+      const outcome = await settleScope();
+      if (!announcedContext || scopeRecorded) return;
+      scopeRecorded = true;
+      writeRunScopeFacts(announcedContext, runScopeMarker, outcome);
     };
     try {
       return await guardAnnouncedRun(
@@ -883,6 +894,8 @@ export class Orchestrator {
           const announced = (a: AnnouncedRunContext): void => {
             announcedContext = a;
             announce(a);
+            // Hold the terminal until the barrier below has settled custody.
+            a.log.deferTerminal();
           };
           switch (mode) {
             case "ask":
@@ -905,16 +918,24 @@ export class Orchestrator {
           }
         },
         async ({ runId }) => {
+          // The whole-run barrier: drain delegated children, then end the run's
+          // process scope and record its outcome — all before the held terminal
+          // is flushed. Bounded by the reap deadline.
           const authority = this.deps.delegationBudgetAuthority;
-          if (!authority?.hasParent(runId)) return;
-          authority.beginParentClose(runId);
-          await authority.waitForChildren(runId);
+          if (authority?.hasParent(runId)) {
+            authority.beginParentClose(runId);
+            await authority.waitForChildren(runId);
+          }
+          await recordScope();
         },
-        // Single per-run terminalization hook: release the routing-rationale map
-        // entry on EVERY terminal (incl. a run that died before its telemetry
-        // writer ran, which is the leak this closes) and end the run's
-        // process scope.
-        settleRunScope,
+        // Single per-run terminalization hook: the custody fallback for a path
+        // that never reached the barrier, then release per-run engine state
+        // (the delegated-child drain authority is released only AFTER
+        // settlement) on EVERY terminal.
+        async (settledRunId) => {
+          await recordScope();
+          releaseRunState(settledRunId);
+        },
       );
     } catch (error) {
       // A durable startup sink may refuse `run.created` before the strategy can
@@ -925,6 +946,11 @@ export class Orchestrator {
         this.deps.delegationBudgetAuthority?.releaseRun(runId);
       }
       throw error;
+    } finally {
+      // A run that never announced launched nothing, but its minted marker was
+      // recorded: settle it so the index does not carry an open entry until the
+      // next daemon start (fix round 1 NIT).
+      if (!announcedContext) await settleScope();
     }
   }
 

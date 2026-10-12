@@ -42,8 +42,14 @@ export interface ScopeCensusReader {
 const PS_COMMAND = "ps";
 const CENSUS_TIMEOUT_MS = 10_000;
 export const LINUX_CONCURRENCY = 8;
-/** Slack added to the scope's age before a process is deemed too old to carry its marker. */
-export const SCOPE_AGE_SLACK_SECONDS = 5;
+/**
+ * Slack added to the scope's age before a process is deemed too old to carry
+ * its marker: `etime` truncation and the listing's own delay, and a backward
+ * wall-clock step of up to a minute during the run (a larger one can hide a
+ * marker-only member from the filtered read; recorded groups and captured
+ * descendants do not use it).
+ */
+export const SCOPE_AGE_SLACK_SECONDS = 60;
 
 /** `ps -o etime=` text — `[[dd-]hh:]mm:ss`, elapsed since the process started — as seconds; null for anything else. */
 export function parseEtime(text: string): number | null {
@@ -164,7 +170,24 @@ class CoalescingCensus {
   }
 }
 
-export type PsRunFailure = { status: "failed"; reason: string };
+export type PsRunFailure = {
+  status: "failed";
+  reason: string;
+  /** What `ps` wrote to stderr (bounded); absent or empty when it wrote nothing. */
+  stderr?: string;
+};
+
+/**
+ * `ps -p` exits 1 with no row and nothing on stderr when every listed pid has
+ * vanished: a complete, empty answer. The same exit code after a real error
+ * (an allocation failure, an invalid argument) comes with a message on
+ * stderr and stays a failure.
+ */
+export function psSelectionVanished(failure: PsRunFailure, sawRow: boolean): boolean {
+  return !sawRow && failure.reason === "ps exited 1" && !failure.stderr;
+}
+
+const PS_STDERR_LIMIT = 512;
 /** Runs `ps` with `args`, streaming stdout lines; null on success (test seam). */
 export type PsRunner = (
   args: string[],
@@ -182,7 +205,7 @@ export const runPs: PsRunner = (args, onLine) => {
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn(PS_COMMAND, args, {
-        stdio: ["ignore", "pipe", "ignore"],
+        stdio: ["ignore", "pipe", "pipe"],
         env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" },
       });
     } catch (error) {
@@ -198,6 +221,14 @@ export const runPs: PsRunner = (args, onLine) => {
       settle({ status: "failed", reason: `ps exceeded ${CENSUS_TIMEOUT_MS}ms` });
     }, CENSUS_TIMEOUT_MS);
     timer.unref?.();
+    let stderr = "";
+    child.stderr!.on("data", (chunk: Buffer) => {
+      if (stderr.length < PS_STDERR_LIMIT)
+        stderr += chunk.toString("utf8").slice(0, PS_STDERR_LIMIT - stderr.length);
+    });
+    child.stderr!.on("error", () => {
+      /* stderr is diagnostic only */
+    });
     const lines = createInterface({ input: child.stdout!, crlfDelay: Infinity });
     let readFailure: string | null = null;
     lines.on("line", (line) => {
@@ -218,7 +249,12 @@ export const runPs: PsRunner = (args, onLine) => {
       clearTimeout(timer);
       lines.close();
       if (readFailure) settle({ status: "failed", reason: readFailure });
-      else if (code !== 0) settle({ status: "failed", reason: `ps exited ${code ?? signal}` });
+      else if (code !== 0)
+        settle({
+          status: "failed",
+          reason: `ps exited ${code ?? signal}`,
+          ...(stderr.trim() ? { stderr: stderr.trim() } : {}),
+        });
       else settle(null);
     });
   });
@@ -232,9 +268,10 @@ type PsFailure = PsRunFailure;
  * the scope (plus slack): a cheap `ps -A -o pid=,etime=` listing first, then
  * `-p` over the young pids (none → an `ok` census with no members). `etime`
  * is elapsed time, measured by `ps` against the same wall clock at the same
- * moment as the age, so time zones, DST and wall-clock steps cannot hide a
- * member; a row whose `etime` cannot be parsed is read, and a failed listing
- * falls back to the full census. `confirm` is unchanged.
+ * moment as the age, so time zones and DST cannot hide a member; a backward
+ * wall-clock step larger than the slack during the run can (a disclosed
+ * residual for marker-only members). A row whose `etime` cannot be parsed is
+ * read, and a failed listing falls back to the full census.
  */
 export function createDarwinScopeCensusReader(deps: { ps?: PsRunner } = {}): ScopeCensusReader {
   const ps = deps.ps ?? runPs;
@@ -271,9 +308,9 @@ export function createDarwinScopeCensusReader(deps: { ps?: PsRunner } = {}): Sco
         if (darwinLineCarriesMarker(line, marker)) members.get(marker)!.push(pid);
       }
     });
-    // `ps -p` exits 1 with no row when EVERY listed pid vanished meanwhile:
-    // a complete, empty answer (a partly vanished list still exits 0).
-    if (failure && listed && !sawRow && /exited 1$/.test(failure.reason))
+    // Every listed pid vanished meanwhile (exit 1, no row, nothing on stderr):
+    // a complete, empty answer; a partly vanished list still exits 0.
+    if (failure && listed && psSelectionVanished(failure, sawRow))
       return { status: "ok", members, unreadable: 0 };
     return failure ?? { status: "ok", members, unreadable: 0 };
   });
@@ -287,8 +324,9 @@ export function createDarwinScopeCensusReader(deps: { ps?: PsRunner } = {}): Sco
         sawRow = true;
         if (darwinLineCarriesMarker(line, marker)) carries = true;
       });
-      // `ps -p` of a vanished pid exits 1 with no row: absent, not unreadable.
-      if (failure && !sawRow && /exited 1$/.test(failure.reason)) return false;
+      // A vanished pid: exit 1, no row, nothing on stderr — absent. With a
+      // message on stderr the same exit code is a real error: unreadable.
+      if (failure && psSelectionVanished(failure, sawRow)) return false;
       if (failure) return null;
       return carries;
     },

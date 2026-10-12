@@ -5,6 +5,7 @@ import { reapScopeMembers } from "./process-scope-census.js";
 import {
   createDarwinScopeCensusReader,
   parseEtime,
+  psSelectionVanished,
   runPs,
   SCOPE_AGE_SLACK_SECONDS,
   scopeAgeSeconds,
@@ -47,6 +48,15 @@ function fakePs(table: {
   return { ps, calls };
 }
 
+/** Seconds as `ps -o etime=` spells them (`[[dd-]hh:]mm:ss`). */
+function etimeText(seconds: number): string {
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  const h = Math.floor(seconds / 3_600);
+  const m = Math.floor((seconds % 3_600) / 60);
+  const s = seconds % 60;
+  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
 const M = mintRunScopeMarker();
 const carrying = `node ${M}=1 HOME=/x`;
 
@@ -83,8 +93,8 @@ describe("darwin census with a known scope age", () => {
         10: "3-00:00:00", // old: cannot carry a marker minted 60 s ago
         20: "00:03", // young
         30: "??", // unparseable: read
-        40: `01:${String(age + SCOPE_AGE_SLACK_SECONDS - 60).padStart(2, "0")}`, // exactly age+slack
-        50: `01:${String(age + SCOPE_AGE_SLACK_SECONDS - 60 + 1).padStart(2, "0")}`, // one second older
+        40: etimeText(age + SCOPE_AGE_SLACK_SECONDS), // exactly age+slack
+        50: etimeText(age + SCOPE_AGE_SLACK_SECONDS + 1), // one second older
       },
       env: { 10: carrying, 20: carrying, 30: carrying, 40: carrying, 50: carrying },
     });
@@ -150,12 +160,36 @@ describe("darwin census with a known scope age", () => {
     });
   });
 
+  it("exit 1 with a message on stderr is a real ps error, never 'every pid vanished': the census fails and confirm answers unreadable (both directions)", async () => {
+    const etimeOnly = fakePs({ etime: { 20: "00:01" }, env: {} });
+    const erroring: PsRunner = async (args, onLine) =>
+      args.includes("-E")
+        ? { status: "failed", reason: "ps exited 1", stderr: "ps: malloc: Cannot allocate memory" }
+        : etimeOnly.ps(args, onLine);
+    const reader = createDarwinScopeCensusReader({ ps: erroring });
+    expect(await reader.census([M], 1)).toEqual({
+      status: "failed",
+      reason: "ps exited 1",
+      stderr: "ps: malloc: Cannot allocate memory",
+    });
+    expect(await reader.confirm(20, M)).toBeNull();
+    // The same exit code with nothing on stderr is the vanished selection.
+    const vanished: PsRunner = async () => ({ status: "failed", reason: "ps exited 1" });
+    expect(await createDarwinScopeCensusReader({ ps: vanished }).confirm(20, M)).toBe(false);
+    expect(psSelectionVanished({ status: "failed", reason: "ps exited 1" }, false)).toBe(true);
+    expect(
+      psSelectionVanished({ status: "failed", reason: "ps exited 1", stderr: "" }, false),
+    ).toBe(true);
+    expect(psSelectionVanished({ status: "failed", reason: "ps exited 1" }, true)).toBe(false);
+    expect(psSelectionVanished({ status: "failed", reason: "ps exited 2" }, false)).toBe(false);
+  });
+
   it("coalesces concurrent callers under the LARGEST age (a superset); any caller without an age means the full census", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
     let gated = true;
     const fake = fakePs({
-      etime: { 10: "3-00:00:00", 20: "00:50", 30: "00:02" },
+      etime: { 10: "3-00:00:00", 20: "02:00", 30: "00:02" },
       env: { 10: carrying, 20: carrying, 30: carrying },
       gate: () => (gated ? gate : Promise.resolve()),
     });
@@ -173,8 +207,8 @@ describe("darwin census with a known scope age", () => {
     });
     expect(await third).toEqual({ status: "ok", members: new Map([[M, [20, 30]]]), unreadable: 0 });
     expect(fake.calls.filter((c) => c.includes("-p")).map((c) => c[c.indexOf("-p") + 1])).toEqual([
-      "30", // first scan: age 10 (+5 s slack) admits only the 2 s old process
-      "20,30", // second scan: limit 100 covers the 50 s old one too
+      "30", // first scan: age 10 (+60 s slack) admits only the 2 s old process
+      "20,30", // second scan: limit 100 (+60 s) covers the two-minute-old one too
     ]);
     // One caller without an age in a batch → that batch is the full census
     // (the batch forms behind a scan in flight: `fourth` starts synchronously,
@@ -194,6 +228,16 @@ describe("darwin census with a known scope age", () => {
       unreadable: 0,
     });
     expect(fake.calls.at(-1)).toEqual(["-E", "-ww", "-A", "-o", "pid=,command="]);
+  });
+});
+
+describe.runIf(process.platform === "darwin")("runPs on this host", () => {
+  it("keeps what ps wrote to stderr: none for a vanished pid, the message for a real error", async () => {
+    const vanished = await runPs(["-o", "pid=", "-p", "99990"], () => {});
+    expect(vanished).toEqual({ status: "failed", reason: "ps exited 1" });
+    const invalid = await runPs(["-o", "pid=", "-p", "not-a-pid"], () => {});
+    expect(invalid?.reason).toBe("ps exited 1");
+    expect(invalid?.stderr).toMatch(/process id/i);
   });
 });
 

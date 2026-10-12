@@ -3085,8 +3085,12 @@ deferred-terminal mechanism) until the whole-run barrier has ended the scope's
 members by measured identity — environment-marker members (`ps -E` on macOS,
 read only for processes no older than the scope after a cheap `pid,etime`
 listing — elapsed time rather than a start timestamp, so both sides come from
-the same clock at the same moment and zones, DST or wall-clock steps cannot
-hide a member; a failed listing falls back to the full read —
+the same clock at the same moment and zones or DST cannot hide a member; a
+minute of slack absorbs small backward wall-clock steps, and a larger one
+during the run can hide a marker-only member (recorded groups and captured
+descendants do not use the filter); a failed listing falls back to the full
+read, and `ps -p` exiting 1 counts as "every selected pid vanished" only with
+nothing on stderr —
 `/proc/<pid>/environ` on Linux), members of recorded process groups under the
 pgid-reuse rule and recorded descendants, TERM then a bounded KILL, each signal
 after a fresh birth read — and written `final/process_scope.yaml` (what was

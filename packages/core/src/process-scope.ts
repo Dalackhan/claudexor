@@ -57,3 +57,8 @@ export function inheritedScopeMarkers(source: NodeJS.ProcessEnv): Record<string,
   }
   return out;
 }
+
+/** The run scope marker NAME carried by a composed spawn env, if any (never its value). */
+export function runScopeMarkerOf(env: NodeJS.ProcessEnv): string | undefined {
+  return Object.keys(env).find((key) => isRunScopeMarkerName(key) && env[key] === "1");
+}

@@ -2,7 +2,8 @@ import { spawn } from "node:child_process";
 import { registerChildProcess, unregisterChildProcess } from "./process-registry.js";
 import { readProcessLines, type ProcessStreamLimits } from "./process-lines.js";
 import { composeSpawnEnv } from "./env-scope.js";
-import { isRunScopeMarkerName } from "./process-scope.js";
+import { postExitDrain } from "./process-drain.js";
+import { runScopeMarkerOf } from "./process-scope.js";
 import { prepareHarnessCommand } from "./runtime-env.js";
 import {
   killWindowsProcessTree,
@@ -47,19 +48,15 @@ export interface SpawnOptions {
    */
   cancelDeadlineMs?: number;
   /**
-   * Bounded post-exit output drain (ms). After the direct child exits, its
-   * stdout/stderr can stay open because a descendant inherited the pipe; the
-   * `close` that finishes capture would then never fire and the run would hang
-   * on the barrier. Once no output has arrived for this long AFTER exit, the
-   * parent-side streams are force-closed so capture completes (the exit event
-   * carries `drain: "truncated"`). Reset by each chunk, so a child still
-   * flushing is not cut off. 0 disables (wait for a real `close`). Default 2000.
+   * Bounded post-exit output drain (ms, `process-drain.ts`): once no output has
+   * arrived for this long AFTER the direct child exited (a descendant kept the
+   * pipe open), the parent-side streams are force-closed so capture completes
+   * (exit event `drain: "truncated"`). 0 disables (wait for a real `close`). Default 2000.
    */
   exitDrainMs?: number;
   /**
    * Absolute bound (ms) on the post-exit drain that ongoing descendant writes
-   * cannot renew: a leftover logging to the inherited pipe forever must not
-   * hold the run. Default `max(10 * exitDrainMs, 30000)`.
+   * cannot renew. Default `max(10 * exitDrainMs, 30000)`.
    */
   exitDrainMaxMs?: number;
   /**
@@ -102,11 +99,6 @@ export interface SpawnOptions {
   onExit?: (code: number | null, signal: NodeJS.Signals | null) => void;
 }
 
-/** The run scope marker NAME carried by a composed spawn env, if any (never its value). */
-function runScopeMarkerOf(env: NodeJS.ProcessEnv): string | undefined {
-  return Object.keys(env).find((key) => isRunScopeMarkerName(key) && env[key] === "1");
-}
-
 /** Minimal live stdin handle for bidirectional CLI protocols. */
 export interface ChildStdin {
   /** Write one line/frame; errors are swallowed (exit carries the outcome). */
@@ -124,11 +116,9 @@ export type ProcEvent =
   | { type: "stdout"; line: string; wire?: string }
   | { type: "stderr"; line: string }
   /**
-   * `drain: "truncated"` means the direct child exited but its stdout/stderr
-   * stayed open (a descendant inherited the pipe), and the bounded post-exit
-   * drain force-closed them so the run could reach its terminal barrier rather
-   * than hang forever on exactly the kind of leftover the run-end reap exists
-   * to end. The captured output up to that point is complete.
+   * `drain: "truncated"`: the direct child exited but a descendant kept its
+   * stdout/stderr open, and the bounded post-exit drain force-closed them so the
+   * run reaches its terminal barrier. The output captured up to then is complete.
    */
   | { type: "exit"; code: number | null; signal: NodeJS.Signals | null; drain?: "truncated" }
   /**
@@ -170,62 +160,17 @@ export async function* spawnProcess(
     detached: true,
   });
   if (typeof child.pid === "number") registerChildProcess(child.pid, cmd, runScopeMarkerOf(env));
-  // Bounded post-exit output drain (#449 item 2): the direct child may exit
-  // while a descendant keeps our stdout/stderr pipe open, so `close` — which
-  // finishes capture — never fires and the run hangs on its terminal barrier.
-  // After exit, the OS pipe is read until it is QUIET for `exitDrainMs` (raw
-  // bytes, so a frame the consumer has not accepted yet still counts as
-  // progress, and time the bounded reader spends blocked on consumer capacity
-  // is never idle) or an ABSOLUTE post-exit bound passes that a chatty
-  // descendant cannot renew. Then our side of the pipes is closed — frames
-  // already read or queued are kept, the line reader is told first so the
-  // forced closure is never a protocol read failure — and the exit event says
-  // `drain: "truncated"`. The run-end reap ends the leftover itself.
-  const exitDrainMs = opts.exitDrainMs ?? 2_000;
-  const exitDrainMaxMs = opts.exitDrainMaxMs ?? Math.max(10 * exitDrainMs, 30_000);
-  const rawBytesRead = (): number =>
-    ((child.stdout as unknown as { bytesRead?: number } | null)?.bytesRead ?? 0) +
-    ((child.stderr as unknown as { bytesRead?: number } | null)?.bytesRead ?? 0);
-  let drainTruncated = false;
-  let drainTimer: NodeJS.Timeout | undefined;
-  const armExitDrain = (): void => {
-    if (exitDrainMs <= 0 || drainTimer) return;
-    const exitedAt = Date.now();
-    let progressBytes = rawBytesRead();
-    let progressAt = exitedAt;
-    drainTimer = setInterval(
-      () => {
-        const now = Date.now();
-        const read = rawBytesRead();
-        if (read !== progressBytes) {
-          progressBytes = read;
-          progressAt = now;
-        }
-        // Blocked on consumer capacity: the reader is not idle, it is waiting
-        // for the consumer; the absolute bound still applies.
-        if (capacity !== undefined) progressAt = now;
-        const quiet = now - progressAt >= exitDrainMs;
-        const overdue = now - exitedAt >= exitDrainMaxMs;
-        if (!quiet && !overdue) return;
-        drainTruncated = true;
-        if (drainTimer) clearInterval(drainTimer);
-        drainTimer = undefined;
-        // Tell the line reader to STOP reading (not to discard): every frame
-        // it already assembled — including one waiting for consumer capacity —
-        // and its stderr tail are still delivered, and the premature-close
-        // rejection that follows is the expected end of input. Then end our
-        // side of the pipes so `close` fires. The leftover keeps its own fd.
-        lines.stop();
-        child.stdout?.destroy();
-        child.stderr?.destroy();
-      },
-      Math.max(50, Math.min(exitDrainMs, 500)),
-    );
-    drainTimer.unref?.();
-  };
+  // Bounded post-exit output drain (#449 item 2): see `process-drain.ts`.
+  // The reader is told to stop (never to discard) before the pipes are ended.
+  const drain = postExitDrain(child, {
+    exitDrainMs: opts.exitDrainMs ?? 2_000,
+    exitDrainMaxMs: opts.exitDrainMaxMs ?? Math.max(10 * (opts.exitDrainMs ?? 2_000), 30_000),
+    readerBlocked: () => capacity !== undefined,
+    stopReader: () => lines.stop(),
+  });
   child.once("exit", (code, signal) => {
     opts.onExit?.(code, signal);
-    armExitDrain();
+    drain.arm();
   });
 
   let resolveClosed!: () => void;
@@ -328,8 +273,7 @@ export async function* spawnProcess(
 
   child.on("error", (err) => {
     if (typeof child.pid === "number") unregisterChildProcess(child.pid);
-    if (drainTimer) clearInterval(drainTimer);
-    drainTimer = undefined;
+    drain.clear();
     spawnError = err;
     finished = true;
     if (wake) {
@@ -339,14 +283,13 @@ export async function* spawnProcess(
   });
   child.on("close", async (code, signal) => {
     if (typeof child.pid === "number") unregisterChildProcess(child.pid);
-    if (drainTimer) clearInterval(drainTimer);
-    drainTimer = undefined;
+    drain.clear();
     await lines.drained;
     push({
       type: "exit",
       code,
       signal,
-      ...(drainTruncated ? { drain: "truncated" as const } : {}),
+      ...(drain.truncated ? { drain: "truncated" as const } : {}),
     });
     finished = true;
     if (wake) {
@@ -472,7 +415,7 @@ export async function* spawnProcess(
     lines.close();
     capacity?.();
     if (timer) clearTimeout(timer);
-    if (drainTimer) clearInterval(drainTimer);
+    drain.clear();
     abortSignal?.removeEventListener("abort", onAbort);
     if (!finished) {
       // Consumer broke early (no abort/timeout): cancel and reap the tree.
@@ -504,35 +447,7 @@ export interface CaptureResult {
   stderr: string;
 }
 
-/**
- * Label which stream said what in a compact one-line detail (truncated probe
- * errors must stay attributable to stderr vs stdout). Null when both are empty.
- *
- * `transform` (e.g. a secret redactor) runs on each FULL stream BEFORE
- * truncation — truncating first could split a token and leave a partial
- * secret the redactor no longer recognizes. Each present stream then gets an
- * equal code-point budget (never splitting a surrogate pair), so one noisy
- * stream cannot evict the other from the detail.
- */
-export function labelStreams(
-  stderr: string,
-  stdout: string,
-  opts: { maxLen?: number; transform?: (s: string) => string } = {},
-): string | null {
-  const maxLen = opts.maxLen ?? 300;
-  const transform = opts.transform ?? ((s: string): string => s);
-  const streams: Array<[string, string]> = [
-    ["stderr", stderr],
-    ["stdout", stdout],
-  ].filter((entry): entry is [string, string] => entry[1].trim() !== "");
-  if (streams.length === 0) return null;
-  const budget = Math.max(1, Math.floor(maxLen / streams.length));
-  const parts = streams.map(([label, raw]) => {
-    const clean = [...transform(raw.trim())].slice(0, budget).join("");
-    return `${label}: ${clean}`;
-  });
-  return parts.join(" | ");
-}
+export { labelStreams } from "./process-output.js";
 
 /** Run a process to completion, capturing stdout/stderr. Throws on spawn error. */
 export async function runCapture(

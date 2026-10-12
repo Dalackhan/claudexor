@@ -1,17 +1,15 @@
 import { spawn } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { ScopeReaper, capturedCandidates, reapScopeMembers } from "./process-scope-census.js";
 import {
-  ScopeReaper,
-  capturedCandidates,
   createLinuxScopeCensusReader,
   createScopeCensusReader,
   darwinLineCarriesMarker,
   environCarriesMarker,
   parseDarwinCensusLine,
-  reapScopeMembers,
   type ScopeCensusReader,
   type ScopeCensusResult,
-} from "./process-scope-census.js";
+} from "./process-scope-readers.js";
 import { mintRunScopeMarker } from "./process-scope.js";
 import {
   createProcessTableReader,

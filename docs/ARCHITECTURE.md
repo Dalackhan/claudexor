@@ -3077,17 +3077,33 @@ event. Independently of that cancel ladder, every run owns a process SCOPE
 run carries it (a `clean` env also forwards an enclosing host's grammar-shaped
 markers); the same pids tick takes one asynchronous process-table snapshot and
 records each live harness root's descendants (pid, group, birth) into the run's
-entry. At the run's terminal on every path the scope's members are ended by
-measured identity — environment-marker members (`ps -E` on macOS,
+entry, after the root's own group (pgid, leader pid, leader birth) was seeded
+the moment it was spawned. Every announced run holds its terminal event (the
+deferred-terminal mechanism) until the whole-run barrier has ended the scope's
+members by measured identity — environment-marker members (`ps -E` on macOS,
 `/proc/<pid>/environ` on Linux), members of recorded process groups under the
 pgid-reuse rule and recorded descendants, TERM then a bounded KILL, each signal
-after a fresh birth read — and `final/process_scope.yaml` records what was
-ended, what survived, what was unreadable and which recorded groups were skipped
-as reused. The next start settles or discloses entries whose owning daemon is no
+after a fresh birth read — and written `final/process_scope.yaml` (what was
+ended, what survived, what was unreadable, which recorded groups were skipped
+as reused, and `completeness`); only then is the terminal published, so the
+SQL command state and the SSE stream a host observes already carry the outcome,
+which `GET /v2/runs/:id` projects compactly as `summary.processScope` (null for
+runs without the artifact: unknown, never clean). The reap never changes the
+verdict. The next start settles or discloses entries whose owning daemon is no
 longer live BEFORE this sweep and never touches a marker absent from the index.
 Limits are disclosed, never failures: Windows has no environment census
-(`tree_only`); macOS SIP hides Apple platform-binary environments, so such a
-leftover is reached only through the group it was captured in. The sweep covers orphaned envelopes (with their
+(`tree_only`, and such entries are retired after disclosure); on macOS SIP
+hides Apple platform-binary environments, so a system binary started in the
+background by a shell that exited before any capture cannot be ruled out —
+`completeness` is `not_provable` there even when settled, and `complete` only
+on Linux with every census source succeeding.
+`daemon/run-scopes.json` (`schema_version: 1`) is a stable contract a host may
+read directly when the daemon is dead: per entry `run_id`, `marker`, `state`
+(`open` | `unresolved`), `scope_start` (birth floor), `root_groups[]` with
+`{pgid, leader_pid, leader_birth}`, and `captured[]` rows `{pid, pgid, birth}`;
+every `birth` is `ps -o lstart=` text under the C locale in local time
+(`Mon Oct 12 14:08:47 2026`, 1 s resolution) and is only ever compared with
+another `lstart` reading, never with the proc-identity helper's token. The sweep covers orphaned envelopes (with their
 seeded-credential homes), dead per-attempt `claudexor/<task>/<attempt>`
 branches, leaked `claudexor/verify-*` branches, and stale
 `claudexor-ro-*`/`claudexor-verify-*` tmp dirs. Envelopes whose creating

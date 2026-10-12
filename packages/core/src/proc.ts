@@ -46,6 +46,16 @@ export interface SpawnOptions {
    */
   cancelDeadlineMs?: number;
   /**
+   * Bounded post-exit output drain (ms). After the direct child exits, its
+   * stdout/stderr can stay open because a descendant inherited the pipe; the
+   * `close` that finishes capture would then never fire and the run would hang
+   * on the barrier. Once no output has arrived for this long AFTER exit, the
+   * parent-side streams are force-closed so capture completes (the exit event
+   * carries `drain: "truncated"`). Reset by each chunk, so a child still
+   * flushing is not cut off. 0 disables (wait for a real `close`). Default 2000.
+   */
+  exitDrainMs?: number;
+  /**
    * Fail-closed disclosure (QA-027) for a consumer that broke the stream EARLY
    * (it is no longer iterating, so the typed `termination_unconfirmed` event
    * cannot be delivered): called once when a proven-alive descendant group
@@ -101,7 +111,14 @@ export type ProcEvent =
   | { type: "launch_advisory"; detail: string }
   | { type: "stdout"; line: string; wire?: string }
   | { type: "stderr"; line: string }
-  | { type: "exit"; code: number | null; signal: NodeJS.Signals | null }
+  /**
+   * `drain: "truncated"` means the direct child exited but its stdout/stderr
+   * stayed open (a descendant inherited the pipe), and the bounded post-exit
+   * drain force-closed them so the run could reach its terminal barrier rather
+   * than hang forever on exactly the kind of leftover the run-end reap exists
+   * to end. The captured output up to that point is complete.
+   */
+  | { type: "exit"; code: number | null; signal: NodeJS.Signals | null; drain?: "truncated" }
   /**
    * QA-027 fail-closed death-proof disclosure: the process was cancelled and the
    * whole-tree reap could NOT confirm death — a descendant group is proven-alive
@@ -141,7 +158,37 @@ export async function* spawnProcess(
     detached: true,
   });
   if (typeof child.pid === "number") registerChildProcess(child.pid, cmd);
-  child.once("exit", (code, signal) => opts.onExit?.(code, signal));
+  // Bounded post-exit output drain (item 2): the direct child may exit while a
+  // descendant keeps our stdout/stderr pipe open, so `close` — which finishes
+  // capture — never fires and the run hangs on its terminal barrier. Once no
+  // output has arrived for `exitDrainMs` after exit, force the parent-side
+  // streams closed so capture completes and the barrier (which then reaps the
+  // leftover by its scope marker) is reached. Reset by each chunk below.
+  const exitDrainMs = opts.exitDrainMs ?? 2_000;
+  let lastOutputAt = Date.now();
+  let drainTruncated = false;
+  let drainTimer: NodeJS.Timeout | undefined;
+  const armExitDrain = (): void => {
+    if (exitDrainMs <= 0 || drainTimer) return;
+    drainTimer = setInterval(
+      () => {
+        if (Date.now() - lastOutputAt < exitDrainMs) return;
+        drainTruncated = true;
+        if (drainTimer) clearInterval(drainTimer);
+        drainTimer = undefined;
+        // Our side only: ends the readers so `close` fires. The leftover keeps
+        // its own copy of the fd; the run-end reap ends the leftover itself.
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      },
+      Math.max(50, Math.min(exitDrainMs, 500)),
+    );
+    drainTimer.unref?.();
+  };
+  child.once("exit", (code, signal) => {
+    opts.onExit?.(code, signal);
+    armExitDrain();
+  });
 
   let resolveClosed!: () => void;
   const closed = new Promise<void>((resolve) => {
@@ -217,6 +264,7 @@ export async function* spawnProcess(
   let capacity: (() => void) | undefined;
 
   const push = (e: ProcEvent): void => {
+    if (e.type === "stdout" || e.type === "stderr") lastOutputAt = Date.now();
     queue.push(e);
     if (wake) {
       wake();
@@ -243,6 +291,8 @@ export async function* spawnProcess(
 
   child.on("error", (err) => {
     if (typeof child.pid === "number") unregisterChildProcess(child.pid);
+    if (drainTimer) clearInterval(drainTimer);
+    drainTimer = undefined;
     spawnError = err;
     finished = true;
     if (wake) {
@@ -252,8 +302,15 @@ export async function* spawnProcess(
   });
   child.on("close", async (code, signal) => {
     if (typeof child.pid === "number") unregisterChildProcess(child.pid);
+    if (drainTimer) clearInterval(drainTimer);
+    drainTimer = undefined;
     await lines.drained;
-    push({ type: "exit", code, signal });
+    push({
+      type: "exit",
+      code,
+      signal,
+      ...(drainTruncated ? { drain: "truncated" as const } : {}),
+    });
     finished = true;
     if (wake) {
       wake();
@@ -378,6 +435,7 @@ export async function* spawnProcess(
     lines.close();
     capacity?.();
     if (timer) clearTimeout(timer);
+    if (drainTimer) clearInterval(drainTimer);
     abortSignal?.removeEventListener("abort", onAbort);
     if (!finished) {
       // Consumer broke early (no abort/timeout): cancel and reap the tree.

@@ -34,6 +34,49 @@ describe("spawnProcess", () => {
     await expect(closed).resolves.toBeUndefined();
   });
 
+  it("reaches exit when a leftover inherits the stdout pipe (bounded post-exit drain)", async () => {
+    // The parent writes a line, spawns a child that INHERITS stdout and lives
+    // on, then exits. Without the drain, `close` never fires (the child holds
+    // the pipe) and the generator hangs; the bounded drain force-closes our
+    // side so the exit event arrives, marked truncated.
+    const script = [
+      "const {spawn}=require('node:child_process')",
+      "console.log('parent-line')",
+      // Child keeps stdout (fd 1) open and never writes, so no output resets
+      // the drain clock; it outlives the parent.
+      "const c=spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:['ignore',1,'ignore']})",
+      "setTimeout(()=>process.exit(0),50)",
+    ].join(";");
+
+    const events: string[] = [];
+    let exitDrain: string | undefined;
+    const started = Date.now();
+    let childPid = 0;
+    for await (const ev of spawnProcess(process.execPath, ["-e", script], {
+      exitDrainMs: 500,
+      onExit: () => {},
+    })) {
+      if (ev.type === "stdout") events.push(ev.line);
+      if (ev.type === "exit") exitDrain = ev.drain;
+    }
+    expect(events).toContain("parent-line");
+    expect(exitDrain).toBe("truncated");
+    // It ended via the bounded drain, not by hanging to a timeout.
+    expect(Date.now() - started).toBeLessThan(4000);
+    // The inheriting child is still ours to reap at the barrier, not killed here.
+    void childPid;
+  }, 15_000);
+
+  it("does not truncate a clean exit whose pipe closes normally", async () => {
+    let exitDrain: string | undefined = "unset";
+    for await (const ev of spawnProcess(process.execPath, ["-e", "console.log('hi')"], {
+      exitDrainMs: 500,
+    })) {
+      if (ev.type === "exit") exitDrain = ev.drain;
+    }
+    expect(exitDrain).toBeUndefined();
+  });
+
   it("kills the child when the consumer closes the stream early", async () => {
     const dir = tempDir();
     const marker = join(dir, "survived.txt");

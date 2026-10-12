@@ -4569,12 +4569,17 @@ export class Orchestrator {
         runScopeMarker,
       },
       {
-        prepareReviewEvidenceDir,
+        prepareReviewEvidenceDir: this.prepareReviewEvidenceDir.bind(this),
         recordReviewEvidenceCleanup,
         reviewScoped: this.reviewScoped.bind(this),
         config: this.config.bind(this),
       },
     );
+  }
+
+  /** The instance method is the seam tests stub to make evidence setup fail. */
+  private prepareReviewEvidenceDir(sourceDir: string, candidateCwd: string): string {
+    return prepareReviewEvidenceDir(sourceDir, candidateCwd);
   }
 
   private async runConvergence(

@@ -46,6 +46,7 @@ The [image contract](ARCHITECTURE.md#image-generation-and-editing) owns request,
 quota, provenance and uncertainty semantics. Live qualification is one real-adapter
 generate and edit on one managed account, made before the SQL store; the
 [feature ledger](FEATURES.md) lists the rest.
+
 Selected-account discovery can negotiate `includeAdmission=true` with an exact
 `requestedModel`. Its `admission` reports the source's inventory-absence policy
 after account admission: Codex permits an explicit model absent from a successful
@@ -294,8 +295,8 @@ files. Every product route is under `/v2`: clients first `POST /v2/handshake`,
 then send `X-Claudexor-Protocol-Major: 3`; incompatible or missing negotiation
 returns a typed `426`. `GET /v2/operations` is the runtime operation catalog,
 and unversioned product aliases do not exist.
-`GET /v2/quota` returns every independently reported vendor-owned quota window
-with provenance and freshness; `POST /v2/quota` requests a live refresh and
+`GET /v2/quota` returns recognised vendor-owned windows with provenance and
+freshness (Codex: codex/default and image_gen; unknown buckets are not constraints); `POST /v2/quota` requests a live refresh and
 fails explicitly when no official refresher is available. Missing usage stays
 unknown and an elapsed reset marks data stale rather than locally setting it to
 zero. Each snapshot also carries a derived `availability` projection (`state`,
@@ -306,7 +307,9 @@ available and is disclosed separately, so consumers never aggregate raw
 constraints themselves. `POST /v2/quota` accepts an optional `{"model": …}`
 body to compute `state` against the model the caller intends to spend
 (case-insensitive alias containment in either direction). The CLI projection
-is `claudexor quota [--refresh] --json`.
+is `claudexor quota [--refresh] --json`. Request-kind availability selection is
+HTTP-only (`requestKind` on GET/POST quota); CLI and MCP retain text-default
+availability. JSON retains raw image constraints; CLI text has only vendor labels.
 Typed account resources are opt-in: request `view=resources` on either quota
 operation, or on `GET /v2/credential-profiles` with `snapshot=true`. Detect the query
 parameter in the operation catalog. The rich quota response adds `resources`, with

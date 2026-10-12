@@ -1,5 +1,14 @@
 # @claudexor/harness-agy
 
+## 4.1.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/schema@4.1.0
+  - @claudexor/core@4.1.0
+  - @claudexor/util@4.1.0
+
 ## 4.0.1
 
 ### Patch Changes

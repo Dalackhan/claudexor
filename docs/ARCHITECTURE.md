@@ -1873,23 +1873,25 @@ and use a null observation time; manifest hints stay identified as manifest data
 
 #### Image generation and editing
 
-Images are a payload kind of the lifecycle below, with no second command,
-scheduler or resource purpose: a `purpose: "model"` `ImageCallRequest` created
-with `requestKind=image` (omitted stays text) shares its command, queue, flush
-barrier, result custody and whole-digest ACK, and the kind joins the stored
-parameters and same-key identity. `ImageCallRequest` and
-`ImageCallResult` own field semantics: verbatim edit bytes, explicit
-options, requested versus observed model, unknown cash and every usable image
-beside diagnosed rejected siblings. A completed response with rejected or no
-images is a failed command with a ready result; viewing and sending
-stay caller actions. Codex's declared image model ids are presence hints, not an
-allowlist or entitlement: an explicit model is forwarded unchanged without the
-text catalog. Source, model and account are chosen apart from the conversation
-model by the shared resolver; only a fresh confirmed auth refusal revokes
-the bound credential generation, and nothing falls back from subscription to
-API. The adapter records its upstream wire anchor and byte bounds, recognizes
-images by magic bytes without decoding, and derives its turn-id header from the
-operation id, which claims no provider deduplication.
+`ImageCallRequest`, uploaded with `purpose: "model"`, uses `requestKind=image`
+(omitted stays text). Kind joins stored parameters and same-key identity; the
+existing command, queue, flush barrier, custody and whole-digest ACK serve both
+kinds, without another scheduler or resource purpose. Request/result schemas own
+verbatim edit bytes, explicit options, requested/observed model, unknown cash and
+usable images beside rejected siblings. Rejected or absent images mean a failed
+command with a ready result; viewing/sending remain caller actions. Codex image
+model ids are hints, not entitlement or an allowlist: explicit models pass unchanged,
+without the text catalog. The shared resolver selects source/model/account apart
+from the conversation model; only fresh confirmed auth refusal revokes the bound
+credential generation. Subscription never falls back to API. The adapter records
+its wire anchor/bounds, sniffs magic bytes without decoding and derives a turn-id
+header from the operation id, claiming no provider deduplication.
+
+Large edits parse twice and validate base64 on the daemon thread; near-cap requests
+can delay other clients. Admission quota refusal is `subscription_window_exhausted`;
+provider image exhaustion is `image_generation_limit_reached`. Aggregate byte limits
+use `image_request_too_large`/`image_response_too_large`; an oversized individual
+edit image returns `invalid_request`.
 
 Live model enumeration is qualified by the adapter's declared credential routes:
 a declared producer is used only on a known supported route, otherwise manifest
@@ -3984,31 +3986,27 @@ proven-zero route. It NEVER recommends authentication/setup for a budget cause,
 and it warns that an unchanged Exact Retry replays the immutable cap. Surfaces
 choose remediation from the typed `code`, never by parsing the message.
 
-Quota is typed and vendor-owned, never inferred from model prose. Constraints carry
-exact `applies_to_models` and optional producer-declared `applies_to_model_prefixes`.
-Without either scope they are vendor-wide. An independent `applies_to_request_kinds`
-means both text and image when absent: Codex readers mark codex/default
-windows text and image_gen image, never guessing unknown buckets, and an image
-429 reset is image-scoped `codex_image_response` evidence for the invoked
-credential generation until its known reset or a newer matching full window.
-Image requests are admitted against image scope; text and Agent consumers, run
-quota-pressure disclosure and the Accounts summary stay text, and raw image
-windows stay visible and labelled. AGY's named Gemini and Claude/GPT groups declare their
-known prefixes once, so new IDs in those families keep their limits; unknown
-families get no invented group. Display, budget, routing, pacing and profile
-headroom share that applicability predicate, so a saturated Fable-only window
-cannot cool an explicit Opus run. Codex rollout `token_count.rate_limits`
-keeps each reported window as an independent constraint with usage, duration,
-reset, provenance and freshness. The global event ledger is authority; an elapsed
-reset marks a snapshot stale and requests a refresh, never invents zero usage,
-and unknown usage stays `null`. One exhaustive schema-owned trait registry
-classifies every source on four independent axes: vendor-authenticated credential
-evidence, the primary harness whose missing observation creates refresh demand,
-whether a top-level refresher produces it, and full-inventory versus
-incremental-window replacement. Refresh demand is computed per enabled credential
-subject. Display and routing evaluate freshness at the current time: absent an
-earlier reset boundary, a snapshot is fresh exactly five minutes after
-observation and stale only after that boundary.
+Quota is typed, vendor-owned, never inferred from prose. Exact `applies_to_models`
+and producer-declared `applies_to_model_prefixes` scope models. Without either,
+model scope is vendor-wide. Independent `applies_to_request_kinds` defaults to text and image.
+Codex maps codex/default to text, image_gen to image; full reads and rollout
+`token_count.rate_limits` omit unrecognised buckets rather than invent applicability.
+Notifications retain unknown buckets as diagnostic payloads, not constraints.
+An image 429 reset supplies image-scoped `codex_image_response` for that credential
+generation until its reset or a newer matching full window. Image admission uses
+image scope; Agent/text admission, run pressure and Accounts summaries stay text,
+while raw image windows remain visible and labelled. AGY declares Gemini and
+Claude/GPT prefixes once: new family IDs inherit limits, unknown families no group.
+Display, budget, routing, pacing and profile headroom share applicability; a spent
+Fable window cannot cool Opus. Each recognised Codex window retains usage, duration,
+reset, provenance and freshness. The global event ledger is authority. Elapsed
+reset marks stale and requests refresh, never zeroes usage; unknown stays `null`.
+The exhaustive schema trait registry classifies sources on four independent axes:
+vendor-authenticated credential evidence, primary harness whose absence demands
+refresh, top-level refresher production, and full-inventory versus incremental
+replacement. Refresh demand is per enabled credential subject. Display/routing use
+current-time freshness: without an earlier reset, fresh through exactly five minutes,
+stale only afterwards.
 Passive consumers can request `GET /v2/quota` with `view=constraint_freshness`
 directly; discovering the GET quota operation's `view` enum in `/v2/operations`
 is optional and must not block a passive read. The 3.24 engine

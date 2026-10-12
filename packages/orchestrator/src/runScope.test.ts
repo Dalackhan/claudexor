@@ -11,6 +11,7 @@ import {
   spawnProcess,
   type HarnessAdapter,
   type ScopeReapOutcome,
+  type ScopeReapOptions,
 } from "@claudexor/core";
 import {
   ConformanceReport,
@@ -23,7 +24,13 @@ import type { ReviewerSpec } from "@claudexor/review";
 import { ArtifactStore } from "@claudexor/artifact-store";
 import { projectRuntimeDir } from "@claudexor/util";
 import { Orchestrator } from "./orchestrator.js";
-import { inProcessRunScopeCustodian, scopedSpecEnv, type RunScopeCustodian } from "./runScope.js";
+import {
+  type RunScopeCustodian,
+  createInProcessRunScopeCustodian,
+  failedScopeOutcome,
+  inProcessRunScopeCustodian,
+  scopedSpecEnv,
+} from "./runScope.js";
 
 const reapDirs: string[] = [];
 afterAll(() => {
@@ -605,6 +612,25 @@ describe("fix round 2: barrier finally and frozen cancellation", () => {
     expect(events).toContain('"type":"run.failed"');
     expect(events).toContain("delegation_drain");
   }, 60_000);
+
+  it("the in-process custodian records each marker's opening time and hands it to its settle (round 5: the census skips older processes)", async () => {
+    const calls: ScopeReapOptions[] = [];
+    const custodian = createInProcessRunScopeCustodian(async (opts) => {
+      calls.push(opts);
+      return failedScopeOutcome("fake");
+    });
+    const before = Date.now();
+    const { marker } = await custodian.open("run-1");
+    await custodian.settle("run-1", marker);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.marker).toBe(marker);
+    const openedAt = Date.parse(calls[0]?.scopeStartAt ?? "");
+    expect(openedAt).toBeGreaterThanOrEqual(before - 1);
+    expect(openedAt).toBeLessThanOrEqual(Date.now());
+    // A marker this custodian never opened has no opening time: full census.
+    await custodian.settle("run-x", mintRunScopeMarker());
+    expect(calls[1]?.scopeStartAt).toBeNull();
+  });
 
   it("an abort that arrives DURING the settlement barrier does not turn a completed run into cancelled (item 9)", async () => {
     const repo = await initRepo();

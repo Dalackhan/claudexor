@@ -248,6 +248,60 @@ describe("DaemonRunScopeIndex", () => {
     });
   });
 
+  it("settle hands the reaper the entry's opening time as scopeStartAt (the census skips older processes); a row without opened_at hands null, the full census (round 5)", async () => {
+    const root = tempRoot();
+    const path = join(root, RUN_SCOPE_INDEX_FILE);
+    const reaper = fakeReaper();
+    const index = new DaemonRunScopeIndex({
+      path,
+      owner: async () => known(process.pid, "7"),
+      reap: reaper.reap,
+      table: fakeTable([]),
+      identity: fakeIdentity({}),
+      roots: () => [],
+    });
+    const before = Date.now();
+    const { marker } = await index.open("run-1");
+    const openedAt = readIndex(root).entries[0]?.["opened_at"];
+    expect(typeof openedAt).toBe("string");
+    expect(Date.parse(openedAt as string)).toBeGreaterThanOrEqual(before - 1);
+    await index.settle("run-1", marker);
+    expect(reaper.calls).toHaveLength(1);
+    expect(reaper.calls[0]?.scopeStartAt).toBe(openedAt);
+
+    // A startup settlement of an entry recorded without an opening time keeps
+    // the full census: the reaper is handed no age.
+    const legacyPath = join(root, "legacy.json");
+    const legacyMarker = mintRunScopeMarker();
+    writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        schema_version: 1,
+        entries: [
+          {
+            marker: legacyMarker,
+            run_id: "run-legacy",
+            owner: known(4242, "4242"),
+            state: "open",
+            scope_start: null,
+            root_groups: [],
+            captured: [],
+          },
+        ],
+      }),
+    );
+    const legacy = new DaemonRunScopeIndex({
+      path: legacyPath,
+      identity: fakeIdentity({}),
+      reap: reaper.reap,
+      table: fakeTable([]),
+      roots: () => [],
+    });
+    await legacy.settleDeadOwners();
+    expect(reaper.calls.map((c) => c.marker)).toEqual([marker, legacyMarker]);
+    expect(reaper.calls[1]?.scopeStartAt).toBeNull();
+  });
+
   it("start: reaps a dead generation's scopes, spares a live owner's, never touches an unindexed marker, treats a missing file as empty and an unreadable one as unknown (preserved aside)", async () => {
     const root = tempRoot();
     const path = join(root, RUN_SCOPE_INDEX_FILE);

@@ -17,6 +17,7 @@ import {
   mintRunScopeMarker,
   reapScopeMembers,
   scopeMarkerEnv,
+  type ScopeReapOptions,
   type ScopeReapOutcome,
 } from "@claudexor/core";
 import {
@@ -43,17 +44,29 @@ export interface RunScopeCustodian {
 
 /**
  * The default custodian for an embedder/test with no daemon index: it mints
- * and reaps in process (no durable crash-recovery record). The reaper's own
- * per-marker coalescing makes repeat settles safe.
+ * and reaps in process (no durable crash-recovery record), remembering each
+ * marker's opening time so the census can skip processes older than the
+ * scope. The reaper's own per-marker coalescing makes repeat settles safe.
  */
-export const inProcessRunScopeCustodian: RunScopeCustodian = {
-  async open() {
-    return { marker: mintRunScopeMarker() };
-  },
-  async settle(_runId, marker) {
-    return reapScopeMembers({ marker });
-  },
-};
+export function createInProcessRunScopeCustodian(
+  reap: (opts: ScopeReapOptions) => Promise<ScopeReapOutcome> = reapScopeMembers,
+): RunScopeCustodian {
+  const openedAt = new Map<string, string>();
+  return {
+    async open() {
+      const marker = mintRunScopeMarker();
+      openedAt.set(marker, new Date().toISOString());
+      return { marker };
+    },
+    async settle(_runId, marker) {
+      const scopeStartAt = openedAt.get(marker) ?? null;
+      openedAt.delete(marker);
+      return reap({ marker, scopeStartAt });
+    },
+  };
+}
+
+export const inProcessRunScopeCustodian: RunScopeCustodian = createInProcessRunScopeCustodian();
 
 /**
  * Add the run's scope marker (and, when the env is a scoped native-state HOME,

@@ -3083,6 +3083,10 @@ is added once a table read confirms the same leader before and after the
 read, and the scope floor is `opened_at` until a birth is known. Every announced run holds its terminal event (the
 deferred-terminal mechanism) until the whole-run barrier has ended the scope's
 members by measured identity — environment-marker members (`ps -E` on macOS,
+read only for processes no older than the scope after a cheap `pid,etime`
+listing — elapsed time rather than a start timestamp, so both sides come from
+the same clock at the same moment and zones, DST or wall-clock steps cannot
+hide a member; a failed listing falls back to the full read —
 `/proc/<pid>/environ` on Linux), members of recorded process groups under the
 pgid-reuse rule and recorded descendants, TERM then a bounded KILL, each signal
 after a fresh birth read — and written `final/process_scope.yaml` (what was

@@ -24,6 +24,7 @@ import {
   type RunProcessScopeOutcome as RunProcessScopeOutcomeType,
 } from "@claudexor/schema";
 import type { AnnouncedRunContext } from "./runTerminalContext.js";
+import type { ResolvedRouteContext } from "./routeContext.js";
 
 export interface RunScopeCustodian {
   /**
@@ -124,4 +125,31 @@ export function writeRunScopeFacts(
   } catch {
     return null;
   }
+}
+
+/**
+ * The route-admitting readiness probe and the run must share the EXACT env
+ * (W3.3 / TZ-1 §B: evidence gathered in one env while the run executes in
+ * another is not evidence). The marker and host facts therefore join the
+ * route context itself, so the probe, the model inventory and the spawn all
+ * see one env; `scopedSpecEnv` on the eventual spec is then idempotent.
+ */
+export function scopedRouteContext(
+  ctx: ResolvedRouteContext,
+  marker: string | undefined,
+): ResolvedRouteContext {
+  if (!marker) return ctx;
+  const envForHarness = ctx.envForHarness;
+  return {
+    ...ctx,
+    env: scopedSpecEnv(marker, ctx.env) ?? ctx.env,
+    ...(envForHarness
+      ? {
+          envForHarness: (harnessId: string) => {
+            const lane = envForHarness(harnessId);
+            return lane ? (scopedSpecEnv(marker, lane) ?? lane) : null;
+          },
+        }
+      : {}),
+  };
 }

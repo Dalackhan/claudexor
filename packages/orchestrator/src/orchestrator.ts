@@ -7,6 +7,7 @@ import { requestRefusalFailure } from "./runTerminalResults.js";
 import {
   failedScopeOutcome,
   inProcessRunScopeCustodian,
+  scopedRouteContext,
   scopedSpecEnv,
   writeRunScopeFacts,
   type RunScopeCustodian,
@@ -5811,11 +5812,14 @@ export class Orchestrator {
     // harnesses run sequentially. Doctor, model inventory, and spawn share each
     // lane's durable HOME; the disposable context remains the non-thread fallback.
     const laneRun = Boolean(input.threadId);
-    const roHome = resolveReadOnlyRouteContext(
-      this.execRootOf(input),
-      laneRun
-        ? (id) => this.laneHomeEnvFor(input, id, input.credentialProfileId ?? null)
-        : undefined,
+    const roHome = scopedRouteContext(
+      resolveReadOnlyRouteContext(
+        this.execRootOf(input),
+        laneRun
+          ? (id) => this.laneHomeEnvFor(input, id, input.credentialProfileId ?? null)
+          : undefined,
+      ),
+      input.runScopeMarker,
     );
     let adapters: RoutedAdapter[];
     try {
@@ -6209,7 +6213,11 @@ export class Orchestrator {
     log: EventLog,
   ): DeepScanReducerDeps {
     return {
-      newReadOnlyHome: () => resolveReadOnlyRouteContext(this.execRootOf(input)),
+      newReadOnlyHome: () =>
+        scopedRouteContext(
+          resolveReadOnlyRouteContext(this.execRootOf(input)),
+          input.runScopeMarker,
+        ),
       costEvidence: (harnessId, attemptId, routed) =>
         // The reducer admits under a finite estimate floor (mirror of the n>1
         // scout reserve) so a subscription route is not refused for lacking a
@@ -6322,11 +6330,14 @@ export class Orchestrator {
     // and the next lane turn resumes it (INV-034). Its doctor/model/spawn path
     // shares that lane HOME; deep-scan and one-shot asks keep the disposable one.
     const laneRun = Boolean(input.threadId) && opts.mode === "ask" && !opts.deepScan;
-    const roHome = resolveReadOnlyRouteContext(
-      this.execRootOf(input),
-      laneRun
-        ? (id) => this.laneHomeEnvFor(input, id, input.credentialProfileId ?? null)
-        : undefined,
+    const roHome = scopedRouteContext(
+      resolveReadOnlyRouteContext(
+        this.execRootOf(input),
+        laneRun
+          ? (id) => this.laneHomeEnvFor(input, id, input.credentialProfileId ?? null)
+          : undefined,
+      ),
+      input.runScopeMarker,
     );
     let adapters: RoutedAdapter[], width: number;
     try {

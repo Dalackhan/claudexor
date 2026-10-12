@@ -297,5 +297,147 @@ describe("Orchestrator run scope (item 1-2)", () => {
   );
 });
 
+describe("Orchestrator run scope: cancel, Windows coverage, concurrency (item 8)", () => {
+  it("settles the scope exactly once when the run is cancelled mid-flight", async () => {
+    const repo = await initRepo();
+    const calls: string[] = [];
+    const custodian: RunScopeCustodian = {
+      open: (runId) => inProcessRunScopeCustodian.open(runId),
+      async settle(runId, marker) {
+        calls.push("settle");
+        return inProcessRunScopeCustodian.settle(runId, marker);
+      },
+    };
+    const controller = new AbortController();
+    const impl = recordingImplementer("slow", [], async function* () {
+      controller.abort();
+      yield;
+    });
+    const res = await new Orchestrator({
+      registry: new Map([["slow", impl]]),
+      runScopes: custodian,
+    }).run({
+      repoRoot: repo,
+      prompt: "do it",
+      mode: "agent",
+      harnesses: ["slow"],
+      n: 1,
+      signal: controller.signal,
+    });
+    expect(res.lifecycle).toBe("cancelled");
+    expect(calls).toEqual(["settle"]);
+  }, 60_000);
+
+  it("a tree_only (Windows) scope outcome is a disclosure: the succeeded run stays succeeded", async () => {
+    const repo = await initRepo();
+    const custodian: RunScopeCustodian = {
+      open: (runId) => inProcessRunScopeCustodian.open(runId),
+      async settle() {
+        return {
+          coverage: "tree_only",
+          census: "unsupported",
+          censusFailure: null,
+          ended: [],
+          survivors: [],
+          unreadable: [],
+          reusedGroups: [],
+          settled: false,
+          restricted: false,
+          durationMs: 0,
+        };
+      },
+    };
+    const res = await new Orchestrator({
+      registry: new Map([["impl", recordingImplementer("impl", [])]]),
+      runScopes: custodian,
+    }).run({ repoRoot: repo, prompt: "do it", mode: "agent", harnesses: ["impl"], n: 1 });
+    expect(res.lifecycle).toBe("succeeded");
+    const facts = RunProcessScopeOutcome.parse(
+      new ArtifactStore(repo).readYaml(join(res.runDir, "final", "process_scope.yaml")),
+    );
+    expect(facts).toMatchObject({ coverage: "tree_only", census: "unsupported", settled: false });
+  }, 60_000);
+
+  it.runIf(process.platform !== "win32")(
+    "two concurrent runs: the first run's end leaves the second's leftover alive until the second ends",
+    async () => {
+      const repoA = await initRepo();
+      const repoB = await initRepo();
+      const script =
+        "const {spawn}=require('node:child_process');" +
+        "const c=spawn(process.execPath,['-e','setTimeout(()=>{},600000)'],{detached:true,stdio:'ignore',env:process.env});" +
+        "c.unref();console.log('orphan:'+c.pid);";
+      let orphanA = 0;
+      let orphanB = 0;
+      let releaseB!: () => void;
+      const aFinished = new Promise<void>((resolve) => (releaseB = resolve));
+      const leave = async (spec: HarnessRunSpec): Promise<number> => {
+        let pid = 0;
+        for await (const ev of spawnProcess(process.execPath, ["-e", script], {
+          env: spec.env,
+          cwd: spec.cwd,
+        })) {
+          if (ev.type === "stdout" && ev.line.startsWith("orphan:")) pid = Number(ev.line.slice(7));
+        }
+        return pid;
+      };
+      const implA = recordingImplementer("impl-a", [], async function* (spec) {
+        orphanA = await leave(spec);
+        yield;
+      });
+      const implB = recordingImplementer("impl-b", [], async function* (spec) {
+        orphanB = await leave(spec);
+        await aFinished; // B outlives A on purpose
+        yield;
+      });
+      try {
+        const runA = new Orchestrator({ registry: new Map([["impl-a", implA]]) }).run({
+          repoRoot: repoA,
+          prompt: "a",
+          mode: "agent",
+          harnesses: ["impl-a"],
+          n: 1,
+        });
+        const runB = new Orchestrator({ registry: new Map([["impl-b", implB]]) }).run({
+          repoRoot: repoB,
+          prompt: "b",
+          mode: "agent",
+          harnesses: ["impl-b"],
+          n: 1,
+        });
+        const resA = await runA;
+        expect(resA.lifecycle).toBe("succeeded");
+        expect(orphanA).toBeGreaterThan(0);
+        expect(orphanB).toBeGreaterThan(0);
+        // A ended ONLY its own leftover; B's is still the live run's.
+        expect(alive(orphanA)).toBe(false);
+        expect(alive(orphanB)).toBe(true);
+        releaseB();
+        const resB = await runB;
+        expect(resB.lifecycle).toBe("succeeded");
+        expect(alive(orphanB)).toBe(false);
+        const factsA = RunProcessScopeOutcome.parse(
+          new ArtifactStore(repoA).readYaml(join(resA.runDir, "final", "process_scope.yaml")),
+        );
+        const factsB = RunProcessScopeOutcome.parse(
+          new ArtifactStore(repoB).readYaml(join(resB.runDir, "final", "process_scope.yaml")),
+        );
+        expect(factsA.ended.map((m) => m.pid)).toEqual([orphanA]);
+        expect(factsB.ended.map((m) => m.pid)).toEqual([orphanB]);
+      } finally {
+        releaseB();
+        for (const pid of [orphanA, orphanB]) {
+          try {
+            if (pid) process.kill(pid, "SIGKILL");
+          } catch {
+            /* already gone */
+          }
+        }
+      }
+    },
+    120_000,
+  );
+});
+
 // Keep `spawn` referenced for the platform-binary shape documented above.
 void spawn;

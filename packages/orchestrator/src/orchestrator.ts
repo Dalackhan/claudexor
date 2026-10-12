@@ -4,6 +4,14 @@ import {
   threadContextPointer,
 } from "./prompt-framing.js";
 import { requestRefusalFailure } from "./runTerminalResults.js";
+import {
+  failedScopeOutcome,
+  inProcessRunScopeCustodian,
+  scopedSpecEnv,
+  writeRunScopeFacts,
+  type RunScopeCustodian,
+} from "./runScope.js";
+import type { ScopeReapOutcome } from "@claudexor/core";
 import { delegationBeltFor } from "./delegationBelt.js";
 import {
   bindProcessingAdmission,
@@ -401,6 +409,15 @@ export interface OrchestratorDeps {
   reviewerEfforts?: Partial<Record<ProviderFamily, EffortHint>>;
   /** Startup-frozen regular/strategy concurrency caps from the daemon owner. */
   runtimeConcurrencyCaps?: RuntimeConcurrencyCaps;
+  /**
+   * Durable per-run process custody (the daemon's scope index: marker minted
+   * and recorded before the first launch, descendants captured while live,
+   * members ended at the run's terminal and at the next daemon start after a
+   * crash). Absent: in-process custody only — the marker is still minted,
+   * carried and reaped at the barrier, but nothing survives a daemon crash
+   * (`runScope.ts`).
+   */
+  runScopes?: RunScopeCustodian;
 }
 
 /**
@@ -623,6 +640,12 @@ export interface RunInput {
    * ignored knob instead of silently dropping it.
    */
   maxTurns?: number | null;
+  /**
+   * Internal provenance: the run's process-scope marker, minted by `run()`
+   * before the first launch and carried in every harness `spec.env` so the
+   * whole-run terminal barrier can end what the run left. Never set by a caller.
+   */
+  runScopeMarker?: string;
 }
 
 /** Context handed to RunInput.onInteraction for one pending question. */
@@ -831,28 +854,53 @@ export class Orchestrator {
       this.routingRationaleByRun.delete(settledRunId);
       this.deps.delegationBudgetAuthority?.releaseRun(settledRunId);
     };
+    // Process custody (owner 1A, #449): mint the run's scope marker and record
+    // it durably BEFORE the first launch. Every harness spec env this run
+    // builds carries it (`scopedSpecEnv`), and the single per-run
+    // terminalization hook below ends what still carries it on EVERY terminal —
+    // success, failure, cancel, timeout — then writes the typed outcome.
+    const runScopes = this.deps.runScopes ?? inProcessRunScopeCustodian;
+    const { marker: runScopeMarker } = await runScopes.open(runId);
+    resolved = { ...resolved, runScopeMarker };
+    let announcedContext: AnnouncedRunContext | null = null;
+    const settleRunScope = async (settledRunId: string): Promise<void> => {
+      releaseRunState(settledRunId);
+      let outcome: ScopeReapOutcome;
+      try {
+        outcome = await runScopes.settle(settledRunId, runScopeMarker);
+      } catch (error) {
+        outcome = failedScopeOutcome(
+          `scope settlement failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      if (announcedContext) writeRunScopeFacts(announcedContext, runScopeMarker, outcome);
+    };
     try {
       return await guardAnnouncedRun(
         resolved.signal,
         (announce) => {
+          const announced = (a: AnnouncedRunContext): void => {
+            announcedContext = a;
+            announce(a);
+          };
           switch (mode) {
             case "ask":
               // `--deep-scan` widens the answer into the bounded multi-scout
               // research sweep with synthesis (the old `audit --swarm`/`explore`).
               return resolved.deepScan
-                ? this.runDeepScan(resolved, announce)
-                : this.runAsk(resolved, announce);
+                ? this.runDeepScan(resolved, announced)
+                : this.runAsk(resolved, announced);
             case "agent":
               // Engine strategies are FLAGS on agent (v0.9 collapse): `--until-clean`
               // and `--attempts` select the convergence loop; `--n` selects the race
               // width; `--create` switches the candidate intent to create_from_scratch.
-              if (resolved.untilClean) return this.runConvergence(resolved, mode, null, announce);
+              if (resolved.untilClean) return this.runConvergence(resolved, mode, null, announced);
               if (resolved.attempts !== undefined && resolved.attempts !== null) {
-                return this.runConvergence(resolved, mode, resolved.attempts, announce);
+                return this.runConvergence(resolved, mode, resolved.attempts, announced);
               }
-              return this.runRace({ ...resolved, n: resolved.n ?? 1 }, mode, announce);
+              return this.runRace({ ...resolved, n: resolved.n ?? 1 }, mode, announced);
             case "plan":
-              return this.runPlan(resolved, announce);
+              return this.runPlan(resolved, announced);
           }
         },
         async ({ runId }) => {
@@ -863,8 +911,9 @@ export class Orchestrator {
         },
         // Single per-run terminalization hook: release the routing-rationale map
         // entry on EVERY terminal (incl. a run that died before its telemetry
-        // writer ran, which is the leak this closes).
-        releaseRunState,
+        // writer ran, which is the leak this closes) and end the run's
+        // process scope.
+        settleRunScope,
       );
     } catch (error) {
       // A durable startup sink may refuse `run.created` before the strategy can
@@ -2203,7 +2252,11 @@ export class Orchestrator {
         adapter: this.deps.registry.get(harnessId),
         credentialProfile: sessionFields.credential_profile,
         authPreference: sessionFields.auth_preference ?? "auto",
-        laneEnv: this.laneHomeEnvFor(runInput, harnessId, profileId) ?? {},
+        laneEnv:
+          scopedSpecEnv(
+            runInput.runScopeMarker,
+            this.laneHomeEnvFor(runInput, harnessId, profileId) ?? {},
+          ) ?? {},
         envInheritance: envInheritance(this.config(runInput.repoRoot)),
         signal: runInput.signal,
         processing,
@@ -2383,6 +2436,9 @@ export class Orchestrator {
     if (routed.browserRequirement.effective && artifactRelativeDir === null) {
       throw new Error("browser artifact ownership marker was not persisted");
     }
+    // The run's scope marker rides every spec env (plus the host facts when the
+    // HOME is scoped), added AFTER the lane/profile home so that patch is kept.
+    const scopedEnv = scopedSpecEnv(runInput?.runScopeMarker, harnessHome.env);
     let spec = HarnessRunSpec.parse({
       session_id: newId("ses"),
       intent,
@@ -2421,7 +2477,7 @@ export class Orchestrator {
       ...(inPlaceEnvelope && sessionFields?.resume_session_id
         ? { resume_session_id: sessionFields.resume_session_id }
         : {}),
-      ...(harnessHome.env ? { env: harnessHome.env } : {}),
+      ...(scopedEnv ? { env: scopedEnv } : {}),
       raw_context_packet: rawContextPacket,
       stream_deltas: streamDeltas,
     });
@@ -3778,6 +3834,8 @@ export class Orchestrator {
         taskId,
         input.signal,
         this.reservationEstimateUsd(input),
+        false,
+        input.runScopeMarker,
       );
     } catch (err) {
       // Review preflight/evidence failures end TERMINALLY with artifacts —
@@ -3923,6 +3981,8 @@ export class Orchestrator {
                 taskId,
                 input.signal,
                 this.reservationEstimateUsd(input),
+                false,
+                input.runScopeMarker,
               );
               evidences.push(...synthEvidence);
               workingRuns.push(run);
@@ -4484,7 +4544,7 @@ export class Orchestrator {
    * panel settles (resolve OR reject).
    */
   private reviewScoped(
-    input: Omit<Parameters<typeof reviewCandidate>[0], "env">,
+    input: Parameters<typeof reviewCandidate>[0],
   ): ReturnType<typeof reviewCandidate> {
     return reviewCandidate({
       ...input,
@@ -4510,6 +4570,7 @@ export class Orchestrator {
     signal?: AbortSignal,
     reservationEstimateUsd?: number,
     reviewUnchanged = false,
+    runScopeMarker?: string,
   ): Promise<CandidateEvidence[]> {
     return reviewCandidateRuns(
       {
@@ -4527,6 +4588,7 @@ export class Orchestrator {
         signal,
         reservationEstimateUsd,
         reviewUnchanged,
+        runScopeMarker,
       },
       {
         prepareReviewEvidenceDir: this.prepareReviewEvidenceDir.bind(this),
@@ -5146,6 +5208,7 @@ export class Orchestrator {
               input.signal,
               this.reservationEstimateUsd(input),
               true,
+              input.runScopeMarker,
             );
             if (!evidence) throw new Error("Convergence review produced no evidence");
             lastFindings = evidence.findings;
@@ -5668,7 +5731,8 @@ export class Orchestrator {
           ...sessionFields,
           ...this.harnessSpecKnobs(contract, knobs, args.intent),
           env_inheritance: envInheritance(this.config(input.repoRoot)),
-          env:
+          env: scopedSpecEnv(
+            input.runScopeMarker,
             (args.laneRun
               ? this.laneHomeEnvFor(
                   input,
@@ -5676,6 +5740,7 @@ export class Orchestrator {
                   sessionFields.credential_profile?.profile_id ?? input.credentialProfileId ?? null,
                 )
               : null) ?? args.fallbackHome,
+          ),
         });
         this.credentials.stampProfileSelection(spec, input, adapter.id);
         const plannerAbort = new AbortController();
@@ -6180,7 +6245,7 @@ export class Orchestrator {
           resume_session_id: null,
           ...this.harnessSpecKnobs(contract, knobs, "synthesize"),
           env_inheritance: envInheritance(this.config(input.repoRoot)),
-          env: homeEnv,
+          env: scopedSpecEnv(input.runScopeMarker, homeEnv),
         });
         this.credentials.stampProfileSelection(spec, input, routed.adapter.id);
         // D-16: compile the WorkReport transport onto the reducer spec (the
@@ -6525,7 +6590,8 @@ export class Orchestrator {
           // A thread lane turn spawns in its DURABLE per-lane home so the native
           // session it records is reachable for resume next turn; everything else
           // uses the disposable route-context home.
-          env:
+          env: scopedSpecEnv(
+            input.runScopeMarker,
             (laneRun
               ? this.laneHomeEnvFor(
                   input,
@@ -6533,6 +6599,7 @@ export class Orchestrator {
                   sessionFields.credential_profile?.profile_id ?? input.credentialProfileId ?? null,
                 )
               : null) ?? roHome.env,
+          ),
         });
         this.credentials.stampProfileSelection(spec, input, adapter.id);
         const reportInteraction = interactionChannelFor(

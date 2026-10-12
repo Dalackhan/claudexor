@@ -23,6 +23,7 @@ import {
   runStartStrategyViolations,
 } from "@claudexor/schema";
 import { writeText } from "@claudexor/util";
+import { scopeMarkerEnv } from "@claudexor/core";
 import { type CandidateRun, toCandidateEvidence } from "./candidateEvidence.js";
 import { policyFindings } from "./policyFindings.js";
 import { renderTestsEvidence } from "./contract-gates.js";
@@ -131,6 +132,8 @@ interface ReviewRunsInput {
   reservationEstimateUsd?: number;
   /** Convergence verifies its full candidate even when a repair made no change. */
   reviewUnchanged?: boolean;
+  /** The run's process-scope marker: reviewer processes are the run's to end too. */
+  runScopeMarker?: string;
 }
 interface ReviewRunsDeps {
   prepareReviewEvidenceDir: (source: string, cwd: string) => string;
@@ -142,7 +145,7 @@ interface ReviewRunsDeps {
     cwd: string,
   ) => void;
   reviewScoped: (
-    input: Omit<Parameters<typeof reviewCandidate>[0], "env">,
+    input: Parameters<typeof reviewCandidate>[0],
   ) => ReturnType<typeof reviewCandidate>;
   config: (cwd: string) => ResolvedConfigLike;
 }
@@ -166,6 +169,7 @@ export async function reviewCandidateRuns(
     taskId,
     signal,
     reservationEstimateUsd,
+    runScopeMarker,
   } = input;
   if (contract.review_requested === false) {
     return runs.map((run) => unreviewedCandidateEvidence(run, contract, store, paths, log));
@@ -223,6 +227,10 @@ export async function reviewCandidateRuns(
               reviewers,
               reviewerTimeoutMs: reviewerTimeoutMs(deps.config(contract.repo.root)),
               envInheritance: envInheritance(deps.config(cwd)),
+              // The reviewer's scratch HOME is decided by the review engine; the
+              // run marker is added here so the reviewer and its shells are the
+              // run's members (the #449 orphans were reviewer-slot shells).
+              ...(runScopeMarker ? { env: scopeMarkerEnv(runScopeMarker) } : {}),
               signal,
               onReviewerEvent: (event) => log.emit(event.type, { ...event }),
               onBeforeDispatch:

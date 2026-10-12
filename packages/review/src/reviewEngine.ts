@@ -6,6 +6,7 @@ import {
   stampCredentialProfileSelection,
   type HarnessAdapter,
   type PreparedHarnessProcessing,
+  harnessHostFactsEnv,
 } from "@claudexor/core";
 import { prepareReviewerRunSpec, recordPreparedEffort } from "./reviewerPreparation.js";
 import { preflightEvidence, type DiffEvidence, writeDiffEvidence } from "@claudexor/context";
@@ -442,7 +443,14 @@ export async function reviewCandidate(input: ReviewCandidateInput): Promise<Revi
     artifacts[index] = artifact;
     // Scratch state is per reviewer; the credential store stays adapter-owned.
     const reviewerScratch = new WorkspaceManager(input.cwd).readOnlyHomeEnv();
-    const reviewerEnv = { ...(input.env ?? {}), ...reviewerScratch.env };
+    // Scratch HOME last (it is the reviewer's scoped native-state home), then
+    // the host facts that scoped home owes the child (operator home, Playwright
+    // cache); the caller's env carries the run's process-scope marker.
+    const reviewerEnv = {
+      ...(input.env ?? {}),
+      ...reviewerScratch.env,
+      ...harnessHostFactsEnv(reviewerScratch.env),
+    };
     let reviewerWorkspace: ReviewerWorkspace | null = null;
     let spec: HarnessRunSpec | null = null;
     try {

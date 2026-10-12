@@ -168,6 +168,8 @@ import {
   ControlRunDetail,
   ControlRunListResponse,
   ControlRunSummary,
+  ControlProcessScope,
+  RunProcessScopeOutcome,
   ControlBudgetSnapshot,
   PaidBudget,
   ControlSettingsSnapshot,
@@ -2664,6 +2666,19 @@ function detailFor(
   const retentionProblem = !runFacts ? recoverInterruptedOutput(rec) : null;
   const planProjection = planProjectionFor(rec, summary.mode);
   const telemetry = safeReadStructuredArtifact(rec, "final/telemetry.yaml", RunTelemetry);
+  // INV-144: the compact scope outcome for hosts deciding workspace reuse;
+  // absent (null) while live and for historical runs — unknown, never clean.
+  const scope = safeReadStructuredArtifact(rec, "final/process_scope.yaml", RunProcessScopeOutcome);
+  const processScope: ControlProcessScope | null = scope
+    ? {
+        settled: scope.settled,
+        coverage: scope.coverage,
+        completeness: scope.completeness,
+        census: scope.census,
+        survivors: scope.survivors.length,
+        unreadable: scope.unreadable.length,
+      }
+    : null;
   return ControlRunDetail.parse({
     attemptExecution: telemetry?.attempts.map((attempt) => ({
       attemptId: attempt.attempt_id,
@@ -2676,6 +2691,7 @@ function detailFor(
       ...summary,
       outcomeFacts,
       waitingOnUser: pendingInteractions.length > 0,
+      processScope,
     },
     children,
     runFacts,

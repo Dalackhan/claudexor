@@ -867,8 +867,11 @@ invariant or operator decision before proceeding.
   provable only where the census read every same-uid environment (Linux),
   never on macOS for a system binary started in the background by a shell
   that exited before capture, never on Windows, never after a settlement
-  that outran its single deadline (disclosed as incomplete, never a late
-  signal, never a verdict). The outcome is a disclosure, not a
+  that outran its single absolute budget — one deadline that starts when the
+  daemon's custodian enters settlement for that run and bounds that run's own
+  pending seed refinement together with every census, identity and table read
+  and every signal, never waiting for another run's seeds (disclosed as
+  incomplete, never a late signal, never a verdict). The outcome is a disclosure, not a
   verdict axis: it never turns a delivered answer into a failure. Work meant
   to outlive a run belongs to a longer-lived custodian, never to pid 1.
   verify: core scope census/reap tests (fake kernel and real orphan

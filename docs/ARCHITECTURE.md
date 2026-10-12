@@ -3088,12 +3088,15 @@ pgid-reuse rule and recorded descendants, TERM then a bounded KILL, each signal
 after a fresh birth read — and written `final/process_scope.yaml` (what was
 ended, what survived, what was unreadable, which recorded groups were skipped
 as reused, `completeness`, and `incomplete` when the single settlement
-deadline expired first — scanning and signalling stop at that moment, never a
-late signal); only then is the terminal published — also on the path where a
+deadline expired first — one absolute budget that starts when the daemon's
+custodian enters settlement for the run, also bounds the run's own pending
+seed refinement and never waits for another run's seeds; scanning and
+signalling stop at that moment, never a late signal); only then is the terminal published — also on the path where a
 delegated child drain failed (the record step is the barrier's `finally`) — so the
 SQL command state and the SSE stream a host observes already carry the outcome,
-which `GET /v2/runs/:id` projects compactly as `summary.processScope` (null for
-runs without the artifact: unknown, never clean). The reap never changes the
+which `GET /v2/runs/:id` projects compactly as `summary.processScope` (null
+until the run is terminal — even when the artifact already exists — and null
+for runs without it: unknown, never clean). The reap never changes the
 verdict. The next start settles or discloses entries whose owning daemon is no
 longer live BEFORE this sweep and never touches a marker absent from the index.
 Limits are disclosed, never failures: Windows has no environment census
@@ -3108,15 +3111,22 @@ A host cancel that arrives during the settlement barrier does not rewrite a
 completed run as cancelled: the cancellation decision is frozen when the
 strategy's terminal is held.
 `daemon/run-scopes.json` is a stable contract a host may read directly when
-the daemon is dead. Its top-level shape is
-`{ "schema_version": 1, "entries": [ ... ] }`; per entry `run_id`, `marker`, `state`
-(`open` | `unresolved`), `scope_start` (birth floor), `root_groups[]` with
-`{pgid, leader_pid, leader_birth | null, leader_identity?}` (the identity is
-the daemon's proc-identity token, recorded at registration; `leader_birth` is
-filled once confirmed), and `captured[]` rows `{pid, pgid, birth}`;
-every `birth` is `ps -o lstart=` text under the C locale in local time
+the daemon is dead. Its compact schema, in the field names the daemon writes:
+`{ "schema_version": 1, "entries": [ ... ] }`; per entry `run_id`, `marker`,
+`state` (`open` | `unresolved`), `opened_at` (ISO time: the floor the daemon
+uses while no `lstart` birth exists), `scope_start` (`lstart` text or null),
+`root_groups[{pgid, leader_pid, leader_birth | null, leader_identity?}]`
+(`leader_identity` is the daemon's opaque kernel birth token, comparable only
+by the daemon's own identity helper; `leader_birth` is filled once a table
+read confirmed the same leader) and `captured[{pid, pgid, birth}]`; every
+birth is `ps -o lstart=` text under the C locale in local time
 (`Mon Oct 12 14:08:47 2026`, 1 s resolution) and is only ever compared with
-another `lstart` reading, never with the proc-identity helper's token. The sweep covers orphaned envelopes (with their
+another `lstart` reading, never with the identity token. A host without the
+identity helper follows this rule when `leader_birth` is null: a live process
+with `pid == pgid` cannot be verified as the recorded leader, so the host
+skips that group; when no process with `pid == pgid` is alive, the group's
+remaining members born at or after the floor belong to the scope (the kernel
+does not hand out a pid that is still a live process-group id). The sweep covers orphaned envelopes (with their
 seeded-credential homes), dead per-attempt `claudexor/<task>/<attempt>`
 branches, leaked `claudexor/verify-*` branches, and stale
 `claudexor-ro-*`/`claudexor-verify-*` tmp dirs. Envelopes whose creating

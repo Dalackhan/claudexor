@@ -2,7 +2,14 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { composeBaseEnv, HarnessUnavailableError } from "@claudexor/core";
+import {
+  composeBaseEnv,
+  HarnessUnavailableError,
+  HOME_SCOPED_ENV,
+  inheritedScopeMarkers,
+  OPERATOR_HOME_ENV,
+  PLAYWRIGHT_BROWSERS_PATH_ENV,
+} from "@claudexor/core";
 import { namespacedSecretRefBase, resolveSecret } from "@claudexor/secrets";
 import { CredentialProfileStatus, type CredentialProfile } from "@claudexor/schema";
 import type { AcpEntry } from "./entry.js";
@@ -88,8 +95,18 @@ export function acpChildEnv(
   for (const [key, value] of Object.entries(composeBaseEnv("mirror_native", source))) {
     if (BASE_KEYS.has(key.toUpperCase()) && value !== undefined) env[key] = value;
   }
+  // Custody and host facts survive the credential filter (#449 item 6): every
+  // grammar-shaped scope marker (the run's and an enclosing host's), the
+  // scoped-home facts and an explicit Playwright value are custody, not
+  // credentials, and must reach the child in both inheritance modes.
+  const custody: Record<string, string> = { ...inheritedScopeMarkers(source) };
+  for (const key of [HOME_SCOPED_ENV, OPERATOR_HOME_ENV, PLAYWRIGHT_BROWSERS_PATH_ENV]) {
+    const value = source[key];
+    if (value !== undefined) custody[key] = value;
+  }
   return {
     ...env,
+    ...custody,
     HOME: home,
     USERPROFILE: home,
     XDG_CONFIG_HOME: join(home, ".config"),

@@ -84,10 +84,14 @@ export function harnessHostFactsEnv(
   if (!scopedHome || !home || scopedHome === home) return out;
   out[HOME_SCOPED_ENV] = "1";
   out[OPERATOR_HOME_ENV] = home;
+  // An explicit value already in the spec patch (an embedder or reviewer
+  // asking for per-package browsers with `0`, or its own cache) wins over
+  // everything: the key is left to the patch as it stands.
+  if (specEnv?.[PLAYWRIGHT_BROWSERS_PATH_ENV] !== undefined) return out;
   const explicit = source[PLAYWRIGHT_BROWSERS_PATH_ENV];
   if (explicit !== undefined) {
     // An explicit operator value (including `0` = per-package browsers) wins
-    // and is carried so a `clean` child env keeps it.
+    // over the automatic cache and is carried so a `clean` child env keeps it.
     out[PLAYWRIGHT_BROWSERS_PATH_ENV] = explicit;
   } else {
     const cache = playwrightCacheDir(source, platform);

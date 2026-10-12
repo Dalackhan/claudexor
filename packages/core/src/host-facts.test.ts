@@ -80,6 +80,32 @@ describe("harnessHostFactsEnv (CX item 6)", () => {
     }
   });
 
+  it("an explicit value already in the spec patch wins over the daemon value and the cache (both directions)", () => {
+    const cache = "/Users/op/Library/Caches/ms-playwright";
+    for (const explicit of ["0", "/spec/browsers"]) {
+      const probe = stat([cache]);
+      const env = harnessHostFactsEnv(
+        { HOME: "/tmp/scoped/home", PLAYWRIGHT_BROWSERS_PATH: explicit },
+        {
+          source: { ...operator, PLAYWRIGHT_BROWSERS_PATH: "/daemon/browsers" },
+          platform: "darwin",
+          directoryExists: probe.exists,
+        },
+      );
+      // The facts never emit the key: the spec's own value stands untouched.
+      expect(PLAYWRIGHT_BROWSERS_PATH_ENV in env).toBe(false);
+      expect(env[HOME_SCOPED_ENV]).toBe("1");
+      expect(probe.calls).toEqual([]);
+    }
+    // Without a spec value the automatic cache (or the daemon value) applies.
+    const probe = stat([cache]);
+    const auto = harnessHostFactsEnv(
+      { HOME: "/tmp/scoped/home" },
+      { source: operator, platform: "darwin", directoryExists: probe.exists },
+    );
+    expect(auto[PLAYWRIGHT_BROWSERS_PATH_ENV]).toBe(cache);
+  });
+
   it("resolves the cache location per platform from the UNSCOPED operator env", () => {
     expect(playwrightCacheDir({ HOME: "/home/op" }, "linux")).toBe("/home/op/.cache/ms-playwright");
     expect(playwrightCacheDir({ HOME: "/home/op", XDG_CACHE_HOME: "/xdg" }, "linux")).toBe(

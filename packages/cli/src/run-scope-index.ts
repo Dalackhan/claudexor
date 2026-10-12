@@ -22,7 +22,7 @@
  * shells, so a shell and its `find` are captured within one tick of being
  * spawned), new rows appended to that run's entry and persisted.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, renameSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
@@ -56,6 +56,7 @@ interface RunScopeOutcomeSummary {
   unreadable: number[];
   reused_groups: number[];
   restricted: boolean;
+  completeness: ScopeReapOutcome["completeness"];
 }
 
 export interface RunScopeEntry {
@@ -100,6 +101,7 @@ function summarize(outcome: ScopeReapOutcome): RunScopeOutcomeSummary {
     unreadable: outcome.unreadable.map((u) => u.pid),
     reused_groups: outcome.reusedGroups,
     restricted: outcome.restricted,
+    completeness: outcome.completeness,
   };
 }
 
@@ -298,7 +300,10 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
 
   private retireOrKeep(entry: RunScopeEntry, outcome: ScopeReapOutcome): void {
     const entries = this.load();
-    if (outcome.settled) {
+    // A host with no census at all (`unsupported`, Windows) can never settle
+    // an entry: keeping it would re-reap it at every start and grow the file
+    // without bound, so it is retired once its outcome has been disclosed.
+    if (outcome.settled || outcome.census === "unsupported") {
       const at = entries.indexOf(entry);
       if (at >= 0) entries.splice(at, 1);
       return;
@@ -320,42 +325,80 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
   private load(): RunScopeEntry[] {
     if (this.entries) return this.entries;
     this.entries = [];
+    let text: string;
     try {
-      const raw = JSON.parse(readFileSync(this.options.path, "utf8")) as Partial<RunScopeIndexFile>;
-      if (raw.schema_version === 1 && Array.isArray(raw.entries)) {
-        for (const value of raw.entries) {
-          const entry = value as Partial<RunScopeEntry>;
-          if (
-            typeof entry.marker !== "string" ||
-            typeof entry.run_id !== "string" ||
-            (entry.state !== "open" && entry.state !== "unresolved")
-          )
-            continue;
-          this.entries.push({
-            marker: entry.marker,
-            run_id: entry.run_id,
-            owner: isKnownProcessIdentity(entry.owner) ? entry.owner : null,
-            state: entry.state,
-            opened_at: typeof entry.opened_at === "string" ? entry.opened_at : "",
-            ...(typeof entry.settled_at === "string" ? { settled_at: entry.settled_at } : {}),
-            scope_start: typeof entry.scope_start === "string" ? entry.scope_start : null,
-            captured: Array.isArray(entry.captured)
-              ? entry.captured.filter(
-                  (c): c is CapturedProcess =>
-                    !!c &&
-                    Number.isSafeInteger((c as CapturedProcess).pid) &&
-                    Number.isSafeInteger((c as CapturedProcess).pgid) &&
-                    typeof (c as CapturedProcess).birth === "string",
-                )
-              : [],
-            ...(entry.outcome ? { outcome: entry.outcome } : {}),
-          });
-        }
-      }
-    } catch {
-      /* absent or unreadable: start empty; a corrupt file is replaced on the next write */
+      text = readFileSync(this.options.path, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return this.entries; // never written: empty
+      // Unknown is not empty: an unreadable index is disclosed and left in
+      // place (the next write would replace it, so it is moved aside first).
+      this.preserveUnreadable(
+        `read failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return this.entries;
+    }
+    let raw: Partial<RunScopeIndexFile>;
+    try {
+      raw = JSON.parse(text) as Partial<RunScopeIndexFile>;
+      if (
+        !raw ||
+        typeof raw !== "object" ||
+        raw.schema_version !== 1 ||
+        !Array.isArray(raw.entries)
+      )
+        throw new Error("not a run-scope index (schema_version 1 with an entries array)");
+    } catch (error) {
+      this.preserveUnreadable(
+        `parse failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return this.entries;
+    }
+    for (const value of raw.entries) {
+      const entry = value as Partial<RunScopeEntry>;
+      if (
+        typeof entry.marker !== "string" ||
+        typeof entry.run_id !== "string" ||
+        (entry.state !== "open" && entry.state !== "unresolved")
+      )
+        continue;
+      this.entries.push({
+        marker: entry.marker,
+        run_id: entry.run_id,
+        owner: isKnownProcessIdentity(entry.owner) ? entry.owner : null,
+        state: entry.state,
+        opened_at: typeof entry.opened_at === "string" ? entry.opened_at : "",
+        ...(typeof entry.settled_at === "string" ? { settled_at: entry.settled_at } : {}),
+        scope_start: typeof entry.scope_start === "string" ? entry.scope_start : null,
+        captured: Array.isArray(entry.captured)
+          ? entry.captured.filter(
+              (c): c is CapturedProcess =>
+                !!c &&
+                Number.isSafeInteger((c as CapturedProcess).pid) &&
+                Number.isSafeInteger((c as CapturedProcess).pgid) &&
+                typeof (c as CapturedProcess).birth === "string",
+            )
+          : [],
+        ...(entry.outcome ? { outcome: entry.outcome } : {}),
+      });
     }
     return this.entries;
+  }
+
+  /** The unreadable file's bytes are evidence of unknown obligations: keep them beside the index. */
+  private preserveUnreadable(reason: string): void {
+    const aside = `${this.options.path}.unreadable-${Date.now()}`;
+    let moved = false;
+    try {
+      renameSync(this.options.path, aside);
+      moved = true;
+    } catch {
+      /* nothing to move (or no permission): the disclosure below still names the problem */
+    }
+    this.log(
+      `run-scope index ${this.options.path} is unreadable (${reason}); ` +
+        (moved ? `preserved as ${aside}; ` : "could not be moved aside; ") +
+        "its cleanup obligations are UNKNOWN until an operator inspects it; starting an empty index",
+    );
   }
 
   /** Serialized atomic rewrite (tmp + rename), one writer at a time. */

@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -49,6 +49,8 @@ function settledOutcome(over: Partial<ScopeReapOutcome> = {}): ScopeReapOutcome 
     unreadable: [],
     reusedGroups: [],
     settled: true,
+    completeness: "complete",
+    completenessReason: null,
     restricted: false,
     durationMs: 1,
     ...over,
@@ -197,7 +199,7 @@ describe("DaemonRunScopeIndex", () => {
     });
   });
 
-  it("start: reaps a dead generation's scopes, spares a live owner's, never touches an unindexed marker, and tolerates a missing or corrupt file", async () => {
+  it("start: reaps a dead generation's scopes, spares a live owner's, never touches an unindexed marker, treats a missing file as empty and an unreadable one as unknown (preserved aside)", async () => {
     const root = tempRoot();
     const path = join(root, RUN_SCOPE_INDEX_FILE);
     const deadDaemon = known(4242, "4242");
@@ -259,16 +261,55 @@ describe("DaemonRunScopeIndex", () => {
       roots: () => [],
     });
     expect(await empty.settleDeadOwners()).toEqual([]);
-    // Corrupt file: start empty, never throw.
+    // Corrupt file: UNKNOWN, not empty — disclosed, preserved aside, index usable.
     const corruptPath = join(root, "corrupt.json");
     writeFileSync(corruptPath, "{not json");
+    const disclosures: string[] = [];
     const corrupt = new DaemonRunScopeIndex({
       path: corruptPath,
       reap: reaper.reap,
       table: fakeTable([]),
       roots: () => [],
+      log: (message) => disclosures.push(message),
     });
     expect(await corrupt.settleDeadOwners()).toEqual([]);
+    expect(disclosures.join("\n")).toMatch(/unreadable .*parse failed.*UNKNOWN/);
+    const aside = readdirSync(root).find((name) => name.startsWith("corrupt.json.unreadable-"));
+    expect(aside).toBeDefined();
+    expect(readFileSync(join(root, aside!), "utf8")).toBe("{not json");
+    // The index stays usable: a new run is recorded in a fresh file.
+    await corrupt.open("run-after-corrupt");
+    expect(JSON.parse(readFileSync(corruptPath, "utf8")).entries).toHaveLength(1);
+    // A readable, well-formed file is never moved aside; a missing one is simply empty.
+    expect(disclosures).toHaveLength(1);
+  });
+
+  it("an entry whose census is unsupported (Windows) is retired after disclosure, never kept forever", async () => {
+    const root = tempRoot();
+    const path = join(root, RUN_SCOPE_INDEX_FILE);
+    const unsupported = settledOutcome({
+      coverage: "tree_only",
+      census: "unsupported",
+      settled: false,
+    });
+    const index = new DaemonRunScopeIndex({
+      path,
+      owner: async () => known(process.pid, "7"),
+      reap: fakeReaper({}).reap,
+      table: fakeTable([]),
+      roots: () => [],
+    });
+    const { marker } = await index.open("run-win");
+    const retiring = new DaemonRunScopeIndex({
+      path,
+      owner: async () => known(process.pid, "7"),
+      reap: fakeReaper({ [marker]: unsupported }).reap,
+      table: fakeTable([]),
+      roots: () => [],
+    });
+    const outcome = await retiring.settle("run-win", marker);
+    expect(outcome.settled).toBe(false);
+    expect(readIndex(root).entries).toEqual([]);
   });
 
   it("start: a leader that exited before any snapshot is reaped by marker alone (empty capture, no floor)", async () => {

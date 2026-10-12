@@ -86,6 +86,12 @@ export const RunProcessScopeOutcome = z
         "Whether a settled reap proves the scope empty: complete only where the census reads every same-uid environment (Linux) and every source succeeded; not_provable on macOS (SIP hides platform-binary environments, so a system binary started in the background by a shell that exited before capture cannot be ruled out), on Windows, and after any census failure.",
       ),
     completeness_reason: z.string().nullable().default(null),
+    incomplete: z
+      .boolean()
+      .default(false)
+      .describe(
+        "The single settlement deadline expired before every source was read: scanning and signalling stopped at that moment and what is known is disclosed; never a verdict.",
+      ),
   })
   .strict()
   .describe("What the whole-run terminal barrier found carrying the run's scope marker, and did.");

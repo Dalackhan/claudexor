@@ -90,6 +90,7 @@ function toFacts(marker: string, outcome: ScopeReapOutcome): RunProcessScopeOutc
     settled: outcome.settled,
     completeness: outcome.completeness,
     completeness_reason: outcome.completenessReason,
+    incomplete: outcome.incomplete,
   });
 }
 
@@ -104,6 +105,7 @@ export function failedScopeOutcome(reason: string): ScopeReapOutcome {
     unreadable: [],
     reusedGroups: [],
     settled: false,
+    incomplete: false,
     completeness: "not_provable",
     completenessReason: reason,
     restricted: process.platform === "darwin",

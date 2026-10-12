@@ -52,6 +52,7 @@ function settledOutcome(over: Partial<ScopeReapOutcome> = {}): ScopeReapOutcome 
     unreadable: [],
     reusedGroups: [],
     settled: true,
+    incomplete: false,
     completeness: "complete",
     completenessReason: null,
     restricted: false,

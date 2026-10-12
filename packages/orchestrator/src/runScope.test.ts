@@ -343,6 +343,7 @@ describe("Orchestrator run scope: cancel, Windows coverage, concurrency (item 8)
           unreadable: [],
           reusedGroups: [],
           settled: false,
+          incomplete: false,
           completeness: "not_provable",
           completenessReason: "no environment census exists on this platform",
           restricted: false,

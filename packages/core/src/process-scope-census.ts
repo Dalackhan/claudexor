@@ -40,7 +40,7 @@
  * disclosed, never turned into a failure.
  */
 import { spawn } from "node:child_process";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import {
   compareProcessIdentity,
@@ -73,10 +73,13 @@ export interface ScopeCensusReader {
   confirm(pid: number, marker: string): Promise<boolean | null>;
 }
 
-// `ps` resolved through the pinned PATH, exactly like `process-tree.ts` (a host
-// without /bin/ps — NixOS, some containers — still has it on PATH).
+// `ps` resolved through the pinned child PATH (`/usr/bin:/bin`), exactly like
+// `process-tree.ts`: both readers find or miss `ps` the same way (a host that
+// keeps it elsewhere — NixOS — is a disclosed, consistent miss).
 const PS_COMMAND = "ps";
 const CENSUS_TIMEOUT_MS = 10_000;
+/** The settlement deadline won a race against a read. */
+const DEADLINE: unique symbol = Symbol("deadline");
 const LINUX_CONCURRENCY = 8;
 
 function markerEntry(marker: string): string {
@@ -273,10 +276,23 @@ export function createLinuxScopeCensusReader(
   deps: {
     readTextFile?: (path: string) => Promise<string>;
     listProc?: () => Promise<string[]>;
+    /** The owning uid of `/proc/<pid>` (null when unknown); default: fs.stat. */
+    statUid?: (pid: number) => Promise<number | null>;
+    selfUid?: number;
   } = {},
 ): ScopeCensusReader {
   const readTextFile = deps.readTextFile ?? ((path: string) => readFile(path, "utf8"));
   const listProc = deps.listProc ?? (() => readdir("/proc"));
+  const statUid =
+    deps.statUid ??
+    (async (pid: number) => {
+      try {
+        return (await stat(`/proc/${pid}`)).uid;
+      } catch {
+        return null;
+      }
+    });
+  const selfUid = deps.selfUid ?? process.getuid?.() ?? null;
   const readEnviron = async (pid: number): Promise<string | null | "vanished"> => {
     try {
       return await readTextFile(`/proc/${pid}/environ`);
@@ -300,7 +316,12 @@ export function createLinuxScopeCensusReader(
       const environ = await readEnviron(pid);
       if (environ === "vanished") return;
       if (environ === null) {
-        unreadable += 1;
+        // Only a process of OUR uid could carry our marker through ordinary
+        // spawn (another uid cannot inherit our environment; a setuid binary
+        // is part of the disclosed residual), so only a same-uid unreadable
+        // environment makes the census incomplete.
+        const uid = await statUid(pid);
+        if (uid === null || selfUid === null || uid === selfUid) unreadable += 1;
         return;
       }
       for (const marker of markers) {
@@ -320,13 +341,27 @@ export function createLinuxScopeCensusReader(
   };
 }
 
-/** The census reader for a platform; null where no environment census exists. */
+const defaultReaders = new Map<string, ScopeCensusReader | null>();
+
+/**
+ * The census reader for a platform; null where no environment census exists.
+ * Memoised per platform so concurrent default reaps share ONE coalescing
+ * scanner (the coalescer only helps when every reap uses the same instance).
+ */
 export function createScopeCensusReader(
   platform: string = process.platform,
 ): ScopeCensusReader | null {
-  if (platform === "darwin") return createDarwinScopeCensusReader();
-  if (platform === "linux") return createLinuxScopeCensusReader();
-  return null;
+  if (!defaultReaders.has(platform)) {
+    defaultReaders.set(
+      platform,
+      platform === "darwin"
+        ? createDarwinScopeCensusReader()
+        : platform === "linux"
+          ? createLinuxScopeCensusReader()
+          : null,
+    );
+  }
+  return defaultReaders.get(platform) ?? null;
 }
 
 export interface ScopeMemberRecord {
@@ -364,6 +399,13 @@ export interface ScopeReapOutcome {
   reusedGroups: number[];
   /** True only when every census source succeeded and nothing survived or stayed unreadable. */
   settled: boolean;
+  /**
+   * The single settlement deadline expired before discovery, confirmation,
+   * probing and escalation finished: scanning and signalling stopped at that
+   * moment (no late signal), and what is known is disclosed as incomplete —
+   * never a verdict.
+   */
+  incomplete: boolean;
   /**
    * Whether a settled reap PROVES the scope empty. `complete` only on a host
    * whose census reads every same-uid process environment (Linux /proc) with
@@ -407,6 +449,8 @@ export interface ScopeReapOptions {
   deadlineMs?: number;
   /** Probe cadence (default 250ms). */
   probeIntervalMs?: number;
+  /** The real-time deadline timer (injectable; default an unref'd setTimeout). */
+  deadlineTimer?: (ms: number) => Promise<void>;
   /** Never signalled whatever the census says (default pid 1 and this process). */
   excludePids?: readonly number[];
   platform?: string;
@@ -478,6 +522,7 @@ function unsupportedOutcome(durationMs: number): ScopeReapOutcome {
     unreadable: [],
     reusedGroups: [],
     settled: false,
+    incomplete: false,
     completeness: "not_provable",
     completenessReason: "no environment census exists on this platform",
     restricted: false,
@@ -492,11 +537,23 @@ export const DARWIN_COMPLETENESS_LIMIT =
 export function reapCompleteness(
   platform: string,
   censusFailure: string | null,
+  incomplete = false,
+  censusUnreadable = 0,
 ): Pick<ScopeReapOutcome, "completeness" | "completenessReason"> {
   if (censusFailure !== null)
     return { completeness: "not_provable", completenessReason: `census failed: ${censusFailure}` };
+  if (incomplete)
+    return {
+      completeness: "not_provable",
+      completenessReason: "settlement deadline expired before every source was read",
+    };
   if (platform === "darwin")
     return { completeness: "not_provable", completenessReason: DARWIN_COMPLETENESS_LIMIT };
+  if (censusUnreadable > 0)
+    return {
+      completeness: "not_provable",
+      completenessReason: `${censusUnreadable} same-uid process environment(s) were unreadable (other uids cannot inherit our environment through ordinary spawn and are not counted; setuid binaries are a disclosed residual)`,
+    };
   return { completeness: "complete", completenessReason: null };
 }
 
@@ -517,6 +574,28 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
   const excluded = new Set(opts.excludePids ?? [1, process.pid]);
   const restricted = platform === "darwin";
 
+  // ONE deadline for the whole settlement: every read (census, confirmation,
+  // identity, table) races it, and once it expires nothing is scanned or
+  // signalled any more — the outcome is disclosed as incomplete.
+  let expired = false;
+  const deadlineTimer =
+    opts.deadlineTimer ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, ms);
+        timer.unref?.();
+      }));
+  const expiry = deadlineTimer(deadlineMs).then(() => {
+    expired = true;
+  });
+  void expiry.catch(() => {});
+  const bounded = <T>(work: Promise<T>): Promise<T | typeof DEADLINE> =>
+    expired
+      ? Promise.resolve<T | typeof DEADLINE>(DEADLINE)
+      : Promise.race<T | typeof DEADLINE>([work, expiry.then(() => DEADLINE)]);
+  const pastDeadline = (): boolean => expired || now() - start >= deadlineMs;
+  let censusUnreadable = 0;
+
   const live = new Map<number, LiveMember>();
   const ended: ScopeMemberRecord[] = [];
   const unreadable = new Map<number, string>();
@@ -524,6 +603,7 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
   const seen = new Set<number>();
 
   const signalMember = (member: LiveMember, signal: NodeJS.Signals): void => {
+    if (pastDeadline()) return; // never a late signal after the deadline
     try {
       deliver(member.pid, signal);
     } catch (error) {
@@ -542,20 +622,21 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
     // accepted only for the ONE process that was alive under the same birth
     // before and after `confirm`, so a pid that was freed and reused between
     // the census and the signal can never enrol a stranger (item 7).
-    const before = await identity.read(pid);
-    if (before.status === "missing") return;
+    if (pastDeadline()) return;
+    const before = await bounded(identity.read(pid));
+    if (before === DEADLINE || before.status === "missing") return;
     if (before.status === "unknown") {
       unreadable.set(pid, `identity_${before.reason}`);
       return;
     }
-    const member = await census.confirm(pid, opts.marker);
-    if (member === false) return; // vanished (or the pid was reused): not ours any more
+    const member = await bounded(census.confirm(pid, opts.marker));
+    if (member === DEADLINE || member === false) return; // vanished (or reused): not ours any more
     if (member === null) {
       unreadable.set(pid, "membership_unreadable");
       return;
     }
-    const observed = await identity.read(pid);
-    if (observed.status === "missing") return; // gone between confirm and read
+    const observed = await bounded(identity.read(pid));
+    if (observed === DEADLINE || observed.status === "missing") return; // gone between confirm and read
     if (observed.status === "unknown") {
       unreadable.set(pid, `identity_${observed.reason}`);
       return;
@@ -577,10 +658,10 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
     expectedBirth: string,
     signal: NodeJS.Signals,
   ): Promise<void> => {
-    if (!table || excluded.has(pid) || seen.has(pid)) return;
+    if (!table || excluded.has(pid) || seen.has(pid) || pastDeadline()) return;
     seen.add(pid);
-    const row = await table.row(pid);
-    if (row === null) return; // gone
+    const row = await bounded(table.row(pid));
+    if (row === DEADLINE || row === null) return; // gone (or out of time)
     if (row === "unreadable") {
       unreadable.set(pid, "birth_unreadable");
       return;
@@ -597,16 +678,20 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
   };
 
   const scanMarker = async (signal: NodeJS.Signals): Promise<string | null> => {
-    const result = await census.census([opts.marker]);
+    if (pastDeadline()) return null;
+    const result = await bounded(census.census([opts.marker]));
+    if (result === DEADLINE) return null; // disclosed as incomplete, not as a failed census
     if (result.status !== "ok") return result.reason;
+    censusUnreadable = Math.max(censusUnreadable, result.unreadable);
     const pids = result.members.get(opts.marker) ?? [];
     await mapBounded(pids, LINUX_CONCURRENCY, (pid) => admitMarker(pid, signal));
     return null;
   };
 
   const scanCaptured = async (signal: NodeJS.Signals): Promise<string | null> => {
-    if (!captured || !table) return null;
-    const rows = await table.snapshot();
+    if (!captured || !table || pastDeadline()) return null;
+    const rows = await bounded(table.snapshot());
+    if (rows === DEADLINE) return null;
     if (rows === null) return "process table unreadable";
     const found = capturedCandidates(captured, rows, opts.scopeStart);
     for (const group of found.reusedGroups) reusedGroups.add(group);
@@ -625,14 +710,16 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
   /** Is the member still the process we signalled? */
   const stillSame = async (member: LiveMember): Promise<"same" | "gone" | "unreadable"> => {
     if (member.birth.kind === "identity") {
-      const observed = await identity.read(member.pid);
+      const observed = await bounded(identity.read(member.pid));
+      if (observed === DEADLINE) return "same"; // out of time: still a survivor, never a false "gone"
       const comparison = compareProcessIdentity(member.birth.identity, observed);
       if (comparison === "same") return "same";
       if (comparison === "unknown") return "unreadable";
       return "gone"; // missing, or a different process now owns the pid
     }
     if (!table) return "unreadable";
-    const row = await table.row(member.pid);
+    const row = await bounded(table.row(member.pid));
+    if (row === DEADLINE) return "same";
     if (row === null) return "gone";
     if (row === "unreadable") return "unreadable";
     return row.birth === member.birth.birth ? "same" : "gone";
@@ -656,20 +743,28 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
     survivors: [...live.values()].map((m) => ({ pid: m.pid, startToken: m.startToken })),
     unreadable: [...unreadable].map(([pid, reason]) => ({ pid, reason })),
     reusedGroups: [...reusedGroups],
-    settled: censusFailure === null && live.size === 0 && unreadable.size === 0,
-    ...reapCompleteness(platform, censusFailure),
+    settled: censusFailure === null && !pastDeadline() && live.size === 0 && unreadable.size === 0,
+    incomplete: pastDeadline(),
+    ...reapCompleteness(platform, censusFailure, pastDeadline(), censusUnreadable),
     restricted,
     durationMs: now() - start,
   });
 
   let censusFailure = await scan("SIGTERM");
-  if (live.size === 0) return outcome(censusFailure);
+  if (live.size === 0) {
+    // Members that were already gone at the first signal (ESRCH) count as
+    // ended; a fork after that snapshot would be missed without one more look.
+    if (ended.length > 0 && !pastDeadline()) censusFailure ??= await scan("SIGTERM");
+    if (live.size === 0) return outcome(censusFailure);
+  }
 
   let escalated = false;
   let rescans = 0;
   for (;;) {
+    if (pastDeadline()) return outcome(censusFailure);
     await sleep(probeIntervalMs);
     await probe();
+    if (pastDeadline()) return outcome(censusFailure);
     const elapsed = now() - start;
     if (elapsed >= graceMs && !escalated) {
       escalated = true;
@@ -690,7 +785,7 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
         if (live.size === 0) return outcome(censusFailure);
       } else return outcome(censusFailure);
     }
-    if (now() - start >= deadlineMs) return outcome(censusFailure);
+    if (pastDeadline()) return outcome(censusFailure);
   }
 }
 

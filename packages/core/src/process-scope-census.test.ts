@@ -642,6 +642,144 @@ describe("reapScopeMembers with recorded sources (fake table)", () => {
   });
 });
 
+describe("fix round 2: deadline, census readability, fork rescan", () => {
+  it("one settlement deadline bounds slow census reads, stops signalling and discloses incomplete (both directions)", async () => {
+    const signals: number[] = [];
+    const slowCensus: ScopeCensusReader = {
+      async census(markers) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        return { status: "ok", members: new Map(markers.map((m) => [m, [100]])), unreadable: 0 };
+      },
+      async confirm() {
+        return true;
+      },
+    };
+    const identity: AsyncProcessIdentityReader = {
+      async read(pid) {
+        return {
+          status: "known",
+          pid,
+          platform: "linux",
+          source: "procfs_stat",
+          startToken: "linux:1",
+          processGroupId: pid,
+        };
+      },
+    };
+    const started = Date.now();
+    const outcome = await new ScopeReaper().reap({
+      marker: A,
+      census: slowCensus,
+      identity,
+      signal: (pid) => {
+        signals.push(pid);
+      },
+      graceMs: 100,
+      deadlineMs: 200,
+      probeIntervalMs: 50,
+      platform: "linux",
+    });
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeLessThan(1_000);
+    expect(outcome.incomplete).toBe(true);
+    expect(outcome.settled).toBe(false);
+    expect(outcome.completeness).toBe("not_provable");
+    expect(outcome.completenessReason).toMatch(/deadline/);
+    expect(outcome.census).toBe("ok"); // not a failed census: an incomplete one
+    // The slow census resolves after the deadline: still no late signal.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(signals).toEqual([]);
+    // Fast census: complete settlement, not incomplete.
+    const fast = fakeWorld({ procs: [{ pid: 100, marker: A }], coopLethal: true });
+    const settled = await reapWith(fast, A);
+    expect(settled.incomplete).toBe(false);
+    expect(settled.settled).toBe(true);
+  }, 10_000);
+
+  it("a same-uid process with an unreadable environment makes completeness not provable; another uid's does not", async () => {
+    const reader = (uidOf: Record<number, number>) =>
+      createLinuxScopeCensusReader({
+        listProc: async () => ["10", "11"],
+        readTextFile: async (path) => {
+          if (path === "/proc/10/environ")
+            throw Object.assign(new Error("denied"), { code: "EACCES" });
+          if (path === "/proc/11/environ") return "PATH=/x\0";
+          throw Object.assign(new Error("gone"), { code: "ENOENT" });
+        },
+        statUid: async (pid) => uidOf[pid] ?? null,
+        selfUid: 501,
+      });
+    const sameUid = await new ScopeReaper().reap({
+      marker: A,
+      census: reader({ 10: 501, 11: 501 }),
+      platform: "linux",
+      graceMs: 10,
+      probeIntervalMs: 5,
+    });
+    expect(sameUid.settled).toBe(true);
+    expect(sameUid.completeness).toBe("not_provable");
+    expect(sameUid.completenessReason).toMatch(/same-uid/);
+    const otherUid = await new ScopeReaper().reap({
+      marker: A,
+      census: reader({ 10: 0, 11: 501 }),
+      platform: "linux",
+      graceMs: 10,
+      probeIntervalMs: 5,
+    });
+    expect(otherUid.completeness).toBe("complete");
+    expect(otherUid.completenessReason).toBeNull();
+  });
+
+  it("when the first pass ended members that were already gone, one more rescan catches a later fork", async () => {
+    // First census lists 100 (already gone by the time it is signalled:
+    // ESRCH); the rescan lists 150, a fork after the first snapshot.
+    let calls = 0;
+    const alive = new Set([150]);
+    const census: ScopeCensusReader = {
+      async census(markers) {
+        calls += 1;
+        const pids = calls === 1 ? [100] : [...alive];
+        return { status: "ok", members: new Map(markers.map((m) => [m, pids])), unreadable: 0 };
+      },
+      async confirm(pid) {
+        return pid === 100 || alive.has(pid);
+      },
+    };
+    const identity: AsyncProcessIdentityReader = {
+      async read(pid) {
+        if (pid === 100 || alive.has(pid))
+          return {
+            status: "known",
+            pid,
+            platform: "linux",
+            source: "procfs_stat",
+            startToken: `linux:${pid}`,
+            processGroupId: pid,
+          };
+        return { status: "missing", pid, platform: "linux" };
+      },
+    };
+    const signalled: number[] = [];
+    const outcome = await new ScopeReaper().reap({
+      marker: A,
+      census,
+      identity,
+      signal: (pid) => {
+        signalled.push(pid);
+        if (pid === 100) throw Object.assign(new Error("gone"), { code: "ESRCH" });
+        alive.delete(pid);
+      },
+      graceMs: 100,
+      deadlineMs: 2_000,
+      probeIntervalMs: 10,
+      platform: "linux",
+    });
+    expect(outcome.ended.map((m) => m.pid).sort()).toEqual([100, 150]);
+    expect(signalled).toEqual([100, 150]);
+    expect(calls).toBeGreaterThanOrEqual(2);
+  });
+});
+
 const posix = process.platform === "darwin" || process.platform === "linux";
 
 function alive(pid: number): boolean {

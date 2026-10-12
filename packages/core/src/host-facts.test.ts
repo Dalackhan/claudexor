@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  CLAUDEXOR_HOME_SCOPED_ENV,
-  CLAUDEXOR_OPERATOR_HOME_ENV,
+  HOME_SCOPED_ENV,
+  OPERATOR_HOME_ENV,
   PLAYWRIGHT_BROWSERS_PATH_ENV,
   harnessHostFactsEnv,
   playwrightCacheDir,
@@ -27,8 +27,8 @@ describe("harnessHostFactsEnv (CX item 6)", () => {
       { HOME: "/tmp/scoped/home" },
       { source: operator, platform: "darwin", directoryExists: probe.exists },
     );
-    expect(env[CLAUDEXOR_HOME_SCOPED_ENV]).toBe("1");
-    expect(env[CLAUDEXOR_OPERATOR_HOME_ENV]).toBe("/Users/op");
+    expect(env[HOME_SCOPED_ENV]).toBe("1");
+    expect(env[OPERATOR_HOME_ENV]).toBe("/Users/op");
     expect(PLAYWRIGHT_BROWSERS_PATH_ENV in env).toBe(false);
   });
 
@@ -40,8 +40,8 @@ describe("harnessHostFactsEnv (CX item 6)", () => {
         platform: "darwin",
         directoryExists: probe.exists,
       });
-      expect(CLAUDEXOR_HOME_SCOPED_ENV in env).toBe(false);
-      expect(CLAUDEXOR_OPERATOR_HOME_ENV in env).toBe(false);
+      expect(HOME_SCOPED_ENV in env).toBe(false);
+      expect(OPERATOR_HOME_ENV in env).toBe(false);
     }
   });
 

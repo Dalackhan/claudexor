@@ -20,8 +20,8 @@
 import { statSync } from "node:fs";
 import { posix, win32 } from "node:path";
 
-export const CLAUDEXOR_HOME_SCOPED_ENV = "CLAUDEXOR_HOME_SCOPED";
-export const CLAUDEXOR_OPERATOR_HOME_ENV = "CLAUDEXOR_OPERATOR_HOME";
+export const HOME_SCOPED_ENV = "CLAUDEXOR_HOME_SCOPED";
+export const OPERATOR_HOME_ENV = "CLAUDEXOR_OPERATOR_HOME";
 export const PLAYWRIGHT_BROWSERS_PATH_ENV = "PLAYWRIGHT_BROWSERS_PATH";
 
 export interface HostFactsOptions {
@@ -82,8 +82,8 @@ export function harnessHostFactsEnv(
   // HOME. An in-place run that inherits the operator's own HOME needs none of
   // them (its caches are already in reach), so say nothing.
   if (!scopedHome || !home || scopedHome === home) return out;
-  out[CLAUDEXOR_HOME_SCOPED_ENV] = "1";
-  out[CLAUDEXOR_OPERATOR_HOME_ENV] = home;
+  out[HOME_SCOPED_ENV] = "1";
+  out[OPERATOR_HOME_ENV] = home;
   const explicit = source[PLAYWRIGHT_BROWSERS_PATH_ENV];
   if (explicit !== undefined) {
     // An explicit operator value (including `0` = per-package browsers) wins

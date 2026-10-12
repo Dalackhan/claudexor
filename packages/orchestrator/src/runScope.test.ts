@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
-  CLAUDEXOR_HOME_SCOPED_ENV,
+  HOME_SCOPED_ENV,
   isRunScopeMarkerName,
   mintRunScopeMarker,
   runCapture,
@@ -146,7 +146,7 @@ describe("scopedSpecEnv", () => {
     const marker = mintRunScopeMarker();
     const scoped = scopedSpecEnv(marker, { HOME: "/tmp/scoped", CODEX_HOME: "/x" }, { source });
     expect(scoped).toMatchObject({ HOME: "/tmp/scoped", CODEX_HOME: "/x", [marker]: "1" });
-    expect(scoped?.[CLAUDEXOR_HOME_SCOPED_ENV]).toBe("1");
+    expect(scoped?.[HOME_SCOPED_ENV]).toBe("1");
     const inPlace = scopedSpecEnv(marker, undefined, { source });
     expect(inPlace).toEqual({ [marker]: "1" });
     expect(scopedSpecEnv(undefined, { HOME: "/tmp/scoped" }, { source })).toEqual({
@@ -199,7 +199,7 @@ describe("Orchestrator run scope (item 1-2)", () => {
     for (const env of reviewerSeen) {
       expect(markerOf(env)).toBe(marker);
       // The reviewer runs under a scoped scratch HOME: it is told so.
-      expect(env?.[CLAUDEXOR_HOME_SCOPED_ENV]).toBe("1");
+      expect(env?.[HOME_SCOPED_ENV]).toBe("1");
     }
     const factsPath = join(res.runDir, "final", "process_scope.yaml");
     expect(existsSync(factsPath)).toBe(true);

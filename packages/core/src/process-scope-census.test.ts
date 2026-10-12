@@ -162,6 +162,11 @@ describe("census line matchers", () => {
         if (text === undefined) throw Object.assign(new Error("gone"), { code: "ENOENT" });
         return text;
       },
+      // Hermetic uid facts: the unreadable pid 1 belongs to this test's uid,
+      // whatever the host's real /proc says (Linux CI runs as uid 1001 while
+      // its /proc/1 is root's; macOS has no /proc at all).
+      statUid: async (pid) => (pid === 1 ? 1_000 : null),
+      selfUid: 1_000,
     });
     const result = await reader.census([A, B]);
     expect(result).toEqual({

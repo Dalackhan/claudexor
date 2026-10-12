@@ -2625,6 +2625,13 @@ function controlRoute(
   };
 }
 
+/** The run lifecycle has ended (ControlRunState terminal members). */
+function isTerminalRunState(state: string): boolean {
+  return (
+    state === "succeeded" || state === "failed" || state === "cancelled" || state === "interrupted"
+  );
+}
+
 function detailFor(
   rec: DaemonRunRecord,
   pendingInteractions: ControlPendingInteraction[] = [],
@@ -2668,7 +2675,11 @@ function detailFor(
   const telemetry = safeReadStructuredArtifact(rec, "final/telemetry.yaml", RunTelemetry);
   // INV-144: the compact scope outcome for hosts deciding workspace reuse;
   // absent (null) while live and for historical runs — unknown, never clean.
-  const scope = safeReadStructuredArtifact(rec, "final/process_scope.yaml", RunProcessScopeOutcome);
+  // The artifact is written before the terminal is published, so a live run
+  // can already have it: the projection is null until the run is terminal.
+  const scope = isTerminalRunState(summary.state)
+    ? safeReadStructuredArtifact(rec, "final/process_scope.yaml", RunProcessScopeOutcome)
+    : null;
   const processScope: ControlProcessScope | null = scope
     ? {
         settled: scope.settled,

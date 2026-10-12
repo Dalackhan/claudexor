@@ -1488,6 +1488,40 @@ describe("DaemonControlApiServer", () => {
     });
   });
 
+  it("keeps processScope null while the run is still running even when the artifact already exists (INV-144)", async () => {
+    const { daemon, record } = fakeDaemon();
+    Object.assign(record, { state: "running" });
+    writeFileSync(
+      join(record.runDir as string, "final", "process_scope.yaml"),
+      stringifyYaml({
+        marker: `CLAUDEXOR_RUN_SCOPE_${"a".repeat(32)}`,
+        coverage: "marker",
+        census: "ok",
+        census_failure: null,
+        restricted: false,
+        ended: [],
+        survivors: [],
+        unreadable: [],
+        reused_groups: [],
+        settled: true,
+        completeness: "complete",
+        completeness_reason: null,
+      }),
+    );
+    await withDaemonServer(daemon, async (base) => {
+      const live = (await (
+        await apiFetch(`${base}/runs/run-d1`, { headers: { authorization: `Bearer ${token}` } })
+      ).json()) as { summary: { state: string; processScope: unknown } };
+      expect(live.summary.state).toBe("running");
+      expect(live.summary.processScope).toBeNull();
+      Object.assign(record, { state: "succeeded" });
+      const done = (await (
+        await apiFetch(`${base}/runs/run-d1`, { headers: { authorization: `Bearer ${token}` } })
+      ).json()) as { summary: { processScope: { settled: boolean } | null } };
+      expect(done.summary.processScope?.settled).toBe(true);
+    });
+  });
+
   it("runs: preserves a typed pre-start refusal's code and status", async () => {
     const typedFail: DaemonFacadeClient = {
       async enqueue() {

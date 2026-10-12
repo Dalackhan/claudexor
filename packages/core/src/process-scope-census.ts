@@ -50,6 +50,7 @@ import {
   createScopeCensusReader,
   LINUX_CONCURRENCY,
   mapBounded,
+  scopeAgeSeconds,
   type ScopeCensusReader,
 } from "./process-scope-readers.js";
 import {
@@ -439,7 +440,7 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
 
   const scanMarker = async (signal: NodeJS.Signals): Promise<string | null> => {
     if (pastDeadline()) return null;
-    const result = await bounded(census.census([opts.marker]));
+    const result = await bounded(census.census([opts.marker], scopeAgeSeconds(opts.scopeStartAt)));
     if (result === DEADLINE) return null; // disclosed as incomplete, not as a failed census
     if (result.status !== "ok") return result.reason;
     censusUnreadable = Math.max(censusUnreadable, result.unreadable);

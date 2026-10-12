@@ -33,10 +33,12 @@ import {
   isKnownProcessIdentity,
   liveChildProcesses,
   mintRunScopeMarker,
+  onChildProcessRegistered,
   reapScopeMembers,
   type AsyncProcessIdentityReader,
   type CapturedProcess,
   type KnownProcessIdentity,
+  type LiveChildProcess,
   type ProcessTableReader,
   type ScopeReapOptions,
   type ScopeReapOutcome,
@@ -59,6 +61,14 @@ interface RunScopeOutcomeSummary {
   completeness: ScopeReapOutcome["completeness"];
 }
 
+/** A harness root's own process group, recorded the moment it was spawned. */
+export interface RunScopeRootGroup {
+  pgid: number;
+  leader_pid: number;
+  /** The leader's `lstart` birth text (C locale, local time, 1 s resolution). */
+  leader_birth: string;
+}
+
 export interface RunScopeEntry {
   marker: string;
   run_id: string;
@@ -67,8 +77,10 @@ export interface RunScopeEntry {
   state: "open" | "unresolved";
   opened_at: string;
   settled_at?: string;
-  /** Birth floor of the scope: the harness root's `lstart` at first capture. */
+  /** Birth floor of the scope: the earliest harness root's `lstart`. */
   scope_start: string | null;
+  /** Every harness root the run spawned, seeded at spawn (fix round 1 item 2). */
+  root_groups: RunScopeRootGroup[];
   captured: CapturedProcess[];
   outcome?: RunScopeOutcomeSummary;
 }
@@ -86,7 +98,9 @@ export interface DaemonRunScopeIndexOptions {
   table?: ProcessTableReader;
   reap?: (opts: ScopeReapOptions) => Promise<ScopeReapOutcome>;
   /** Live harness roots with their markers (default: the process registry). */
-  roots?: () => ReadonlyArray<{ pid: number; scopeMarker?: string }>;
+  /** Live harness roots with their markers (default: the process registry,
+   * whose registrations also seed each root's group at spawn). */
+  roots?: () => ReadonlyArray<LiveChildProcess>;
   log?: (message: string) => void;
   now?: () => string;
 }
@@ -124,7 +138,9 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
   private readonly identity: AsyncProcessIdentityReader;
   private readonly table: ProcessTableReader | null;
   private readonly reap: (opts: ScopeReapOptions) => Promise<ScopeReapOutcome>;
-  private readonly roots: () => ReadonlyArray<{ pid: number; scopeMarker?: string }>;
+  private readonly roots: () => ReadonlyArray<LiveChildProcess>;
+  private readonly seeding = new Set<Promise<void>>();
+  private unsubscribe: (() => void) | null = null;
   private readonly log: (message: string) => void;
   private readonly now: () => string;
 
@@ -136,6 +152,68 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
     this.roots = options.roots ?? liveChildProcesses;
     this.log = options.log ?? (() => {});
     this.now = options.now ?? (() => new Date().toISOString());
+    // Production: every harness root the engine spawns seeds its own group the
+    // moment it is registered; tests inject `roots` and call `seedRoot` directly.
+    if (!options.roots) {
+      this.unsubscribe = onChildProcessRegistered((child) => {
+        if (child.scopeMarker) void this.seedRoot(child);
+      });
+    }
+  }
+
+  /** Stop observing registrations (tests; the daemon's index lives as long as the daemon). */
+  dispose(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+  }
+
+  /**
+   * Record a freshly spawned harness root's own process group (pgid, leader
+   * pid, leader birth) and the scope floor BEFORE any capture tick, so a root
+   * that exits within milliseconds still leaves its group on record and a
+   * same-group leftover (a platform binary started with `&` by that shell) is
+   * ended at the barrier. The root's measured identity is checked against the
+   * registry's spawn-time handle first; a pid that no longer is that process
+   * seeds nothing. Resolves once the seed is persisted (or found impossible).
+   */
+  seedRoot(child: LiveChildProcess): Promise<void> {
+    const job = (async () => {
+      if (!this.table || !child.scopeMarker) return;
+      const entry = this.load().find((item) => item.marker === child.scopeMarker);
+      if (!entry || entry.state !== "open") return;
+      if (!(await this.rootStillSame(child))) return;
+      const row = await this.table.row(child.pid);
+      if (row === null || row === "unreadable") return; // exited already, or unreadable: nothing to seed
+      if (entry.root_groups.some((g) => g.leader_pid === row.pid && g.leader_birth === row.birth))
+        return;
+      entry.root_groups.push({ pgid: row.pgid, leader_pid: row.pid, leader_birth: row.birth });
+      if (!entry.captured.some((c) => c.pid === row.pid && c.birth === row.birth))
+        entry.captured.push({ pid: row.pid, pgid: row.pgid, birth: row.birth });
+      if (entry.scope_start === null) entry.scope_start = row.birth;
+      try {
+        await this.persist();
+      } catch (error) {
+        this.log(
+          `run-scope index: root group of ${child.pid} could not be persisted (${
+            error instanceof Error ? error.message : String(error)
+          })`,
+        );
+      }
+    })();
+    this.seeding.add(job);
+    void job.finally(() => this.seeding.delete(job));
+    return job;
+  }
+
+  /** Awaited by settle so a seed in flight is never raced by the reap. */
+  private async seedsSettled(): Promise<void> {
+    await Promise.allSettled([...this.seeding]);
+  }
+
+  /** The registry handle's measured leader identity still owns the pid. */
+  private async rootStillSame(child: LiveChildProcess): Promise<boolean> {
+    const observed = await this.identity.read(child.pid);
+    return compareProcessIdentity(child.processGroup.leader, observed) === "same";
   }
 
   /** The entries as last loaded/written (a fresh read on first use). */
@@ -153,6 +231,7 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
       state: "open",
       opened_at: this.now(),
       scope_start: null,
+      root_groups: [],
       captured: [],
     });
     // Durable BEFORE the first launch. A persistence failure degrades to
@@ -171,6 +250,7 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
   }
 
   async settle(runId: string, marker: string): Promise<ScopeReapOutcome> {
+    await this.seedsSettled();
     const entry = this.load().find((item) => item.marker === marker);
     const outcome = await this.reap({
       marker,
@@ -219,6 +299,9 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
         (item) => item.marker === root.scopeMarker && item.state === "open",
       );
       if (!entry) continue;
+      // A root whose measured identity no longer matches its spawn-time handle
+      // (pid freed and reused) must not have a stranger's tree captured (item 7).
+      if (!(await this.rootStillSame(root))) continue;
       const known = new Set(entry.captured.map((c) => `${c.pid}:${c.birth}`));
       for (const row of descendantProcessRows(root.pid, rows)) {
         if (row.pid === root.pid && entry.scope_start === null) {
@@ -369,6 +452,15 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
         opened_at: typeof entry.opened_at === "string" ? entry.opened_at : "",
         ...(typeof entry.settled_at === "string" ? { settled_at: entry.settled_at } : {}),
         scope_start: typeof entry.scope_start === "string" ? entry.scope_start : null,
+        root_groups: Array.isArray(entry.root_groups)
+          ? entry.root_groups.filter(
+              (g): g is RunScopeRootGroup =>
+                !!g &&
+                Number.isSafeInteger((g as RunScopeRootGroup).pgid) &&
+                Number.isSafeInteger((g as RunScopeRootGroup).leader_pid) &&
+                typeof (g as RunScopeRootGroup).leader_birth === "string",
+            )
+          : [],
         captured: Array.isArray(entry.captured)
           ? entry.captured.filter(
               (c): c is CapturedProcess =>

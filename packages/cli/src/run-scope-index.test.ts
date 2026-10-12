@@ -6,6 +6,8 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   mintRunScopeMarker,
   type KnownProcessIdentity,
+  type LiveChildProcess,
+  type ProcessGroupHandle,
   type ProcessIdentity,
   type ProcessTableReader,
   type ProcessTableRow,
@@ -13,6 +15,7 @@ import {
   type ScopeReapOutcome,
 } from "@claudexor/core";
 import { DaemonRunScopeIndex, RUN_SCOPE_INDEX_FILE } from "./run-scope-index.js";
+import { spawnProcess } from "@claudexor/core";
 import { armDaemonLifecycle, runStartupCrashGc } from "./daemon-lifecycle.js";
 
 const dirs: string[] = [];
@@ -80,6 +83,17 @@ function fakeTable(rows: ProcessTableRow[]): ProcessTableReader {
   };
 }
 
+/** A registry root as `liveChildProcesses()` reports it: pid, marker and the spawn-time handle. */
+function fakeRoot(pid: number, scopeMarker: string): LiveChildProcess {
+  const leader = known(pid, String(pid));
+  return {
+    pid,
+    cmd: "harness",
+    scopeMarker,
+    processGroup: { schemaVersion: 1, pgid: pid, leader } as unknown as ProcessGroupHandle,
+  };
+}
+
 function fakeIdentity(live: Record<number, KnownProcessIdentity>) {
   return {
     async read(pid: number): Promise<ProcessIdentity> {
@@ -131,7 +145,8 @@ describe("DaemonRunScopeIndex", () => {
       owner: async () => known(process.pid, "7"),
       reap: fakeReaper().reap,
       table: fakeTable(rows),
-      roots: () => [{ pid: 100, scopeMarker: marker }],
+      identity: fakeIdentity({ 100: known(100, "100") }),
+      roots: () => [fakeRoot(100, marker)],
     });
     const { marker } = await index.open("run-1");
     await index.captureTick();
@@ -148,6 +163,38 @@ describe("DaemonRunScopeIndex", () => {
     expect(readIndex(root).entries[0]!["captured"]).toHaveLength(3);
   });
 
+  it("capture revalidates the root's spawn-time identity: a reused root pid captures nothing (item 7)", async () => {
+    const root = tempRoot();
+    const rows: ProcessTableRow[] = [
+      { pid: 100, ppid: 1, pgid: 100, birth: T1 }, // a stranger now owns pid 100
+      { pid: 200, ppid: 100, pgid: 200, birth: T1 },
+    ];
+    const reused = new DaemonRunScopeIndex({
+      path: join(root, RUN_SCOPE_INDEX_FILE),
+      owner: async () => known(process.pid, "7"),
+      reap: fakeReaper().reap,
+      table: fakeTable(rows),
+      // The registry handle says birth "100"; the live reading says "999".
+      identity: fakeIdentity({ 100: known(100, "999") }),
+      roots: () => [fakeRoot(100, marker)],
+    });
+    const { marker } = await reused.open("run-reused");
+    await reused.captureTick();
+    expect(reused.list()[0]!.captured).toEqual([]);
+    // Unchanged identity: walked as usual.
+    const same = new DaemonRunScopeIndex({
+      path: join(root, "same.json"),
+      owner: async () => known(process.pid, "7"),
+      reap: fakeReaper().reap,
+      table: fakeTable(rows),
+      identity: fakeIdentity({ 100: known(100, "100") }),
+      roots: () => [fakeRoot(100, marker2)],
+    });
+    const { marker: marker2 } = await same.open("run-same");
+    await same.captureTick();
+    expect(same.list()[0]!.captured.map((c) => c.pid)).toEqual([100, 200]);
+  });
+
   it("settle hands the recorded rows to the reaper, retires a settled entry and keeps an unresolved one with its outcome", async () => {
     const root = tempRoot();
     const path = join(root, RUN_SCOPE_INDEX_FILE);
@@ -157,7 +204,8 @@ describe("DaemonRunScopeIndex", () => {
       owner: async () => known(process.pid, "7"),
       reap: reaper.reap,
       table: fakeTable([{ pid: 100, ppid: process.pid, pgid: 100, birth: T0 }]),
-      roots: () => [{ pid: 100, scopeMarker: marker }],
+      identity: fakeIdentity({ 100: known(100, "100") }),
+      roots: () => [fakeRoot(100, marker)],
     });
     const { marker } = await index.open("run-1");
     await index.captureTick();
@@ -219,6 +267,7 @@ describe("DaemonRunScopeIndex", () => {
             state: "open",
             opened_at: "x",
             scope_start: T0,
+            root_groups: [],
             captured: [{ pid: 210, pgid: 200, birth: T1 }],
           },
           {
@@ -228,6 +277,7 @@ describe("DaemonRunScopeIndex", () => {
             state: "open",
             opened_at: "x",
             scope_start: null,
+            root_groups: [],
             captured: [],
           },
         ],
@@ -329,6 +379,7 @@ describe("DaemonRunScopeIndex", () => {
             state: "open",
             opened_at: "x",
             scope_start: null,
+            root_groups: [],
             captured: [],
           },
         ],
@@ -349,6 +400,90 @@ describe("DaemonRunScopeIndex", () => {
     expect(readIndex(root).entries).toEqual([]);
   });
 });
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+/** Spawn a marked /bin/sh root through the engine's own spawn path; it starts a
+ * background /bin/sleep (platform binary: env invisible on darwin) in ITS OWN
+ * group and exits within ~100 ms — before any 2 s capture tick could run. */
+async function shortRootLeavingSleep(marker: string): Promise<{ sleepPid: number }> {
+  let sleepPid = 0;
+  for await (const ev of spawnProcess(
+    "/bin/sh",
+    ["-c", "/bin/sleep 600 & echo sleep:$!; /bin/sleep 0.1"],
+    { env: { [marker]: "1" } },
+  )) {
+    if (ev.type === "stdout" && ev.line.startsWith("sleep:")) sleepPid = Number(ev.line.slice(6));
+  }
+  return { sleepPid };
+}
+
+describe.runIf(process.platform !== "win32")(
+  "root group seeded at spawn (fix round 1 item 2)",
+  () => {
+    it("a short root that exits before the first tick still leaves its group on record, and its background /bin/sleep is ended at the barrier", async () => {
+      const root = tempRoot();
+      const index = new DaemonRunScopeIndex({ path: join(root, RUN_SCOPE_INDEX_FILE) });
+      let sleepPid = 0;
+      try {
+        const { marker } = await index.open("run-short");
+        ({ sleepPid } = await shortRootLeavingSleep(marker));
+        expect(sleepPid).toBeGreaterThan(0);
+        expect(alive(sleepPid)).toBe(true);
+        // No captureTick was ever called: only the spawn-time seed exists.
+        const outcome = await index.settle("run-short", marker);
+        expect(outcome.ended.map((m) => m.pid)).toContain(sleepPid);
+        expect(outcome.settled).toBe(true);
+        expect(alive(sleepPid)).toBe(false);
+      } finally {
+        index.dispose();
+        try {
+          if (sleepPid) process.kill(sleepPid, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
+    }, 30_000);
+
+    it("a daemon that crashed before the first tick: the next start settles the seeded group and ends the leftover", async () => {
+      const root = tempRoot();
+      const path = join(root, RUN_SCOPE_INDEX_FILE);
+      const dying = new DaemonRunScopeIndex({ path });
+      let sleepPid = 0;
+      try {
+        const { marker } = await dying.open("run-crashed");
+        ({ sleepPid } = await shortRootLeavingSleep(marker));
+        // Let the spawn-time seed land on disk, then "crash" (no settle).
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        dying.dispose();
+        const persisted = readIndex(root).entries[0]!;
+        expect((persisted["root_groups"] as unknown[]).length).toBe(1);
+        expect(persisted["scope_start"]).toBeTruthy();
+        expect(alive(sleepPid)).toBe(true);
+        // Next daemon life: the previous owner's identity is gone.
+        const next = new DaemonRunScopeIndex({ path, identity: fakeIdentity({}), roots: () => [] });
+        const actions = await next.settleDeadOwners();
+        expect(actions.join("\n")).toMatch(/run-crashed: settled/);
+        expect(alive(sleepPid)).toBe(false);
+        expect(readIndex(root).entries).toEqual([]);
+      } finally {
+        dying.dispose();
+        try {
+          if (sleepPid) process.kill(sleepPid, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
+    }, 30_000);
+  },
+);
 
 describe("daemon lifecycle wiring", () => {
   it("startup crash GC settles scopes BEFORE the workspace sweep and discloses each action", async () => {

@@ -292,6 +292,53 @@ describe("reapScopeMembers (fake kernel)", () => {
     expect(other.ended.map((m) => m.pid)).toEqual([300]);
   });
 
+  it("identity bracket: a pid reused between the census and the signal is never signalled; an unchanged identity is accepted", async () => {
+    // Replacement: the census listed 100 (marked); by the first identity read a
+    // stranger owns pid 100 with another birth; confirm still answers true for
+    // the stale census view. Nothing may be signalled.
+    const replaced = fakeWorld({
+      procs: [{ pid: 100, marker: A, token: "old" }],
+      coopLethal: true,
+    });
+    const confirmOnce = replaced.census.confirm;
+    let reads = 0;
+    const flipping: AsyncProcessIdentityReader = {
+      async read(pid) {
+        reads += 1;
+        // first read: the stranger; second read: the stranger again (same) —
+        // but confirm answered for the old process: the bracket must still
+        // reject because the births around confirm do not match the censused
+        // process... modelled by making the two reads DIFFER.
+        return {
+          status: "known",
+          pid,
+          platform: "linux",
+          source: "procfs_stat",
+          startToken: reads % 2 === 1 ? "linux:old" : "linux:new",
+          processGroupId: pid,
+        };
+      },
+    };
+    replaced.census.confirm = async (pid, marker) => confirmOnce(pid, marker);
+    const outcome = await new ScopeReaper().reap({
+      marker: A,
+      census: replaced.census,
+      identity: flipping,
+      signal: replaced.signal,
+      now: replaced.now,
+      sleep: replaced.sleep,
+      graceMs: 1_000,
+      probeIntervalMs: 250,
+      platform: "linux",
+    });
+    expect(replaced.signals).toEqual([]);
+    expect(outcome.ended).toEqual([]);
+    // Unchanged identity across the bracket: accepted and ended as before.
+    const steady = fakeWorld({ procs: [{ pid: 100, marker: A, token: "7" }], coopLethal: true });
+    const accepted = await reapWith(steady, A);
+    expect(accepted.ended).toEqual([{ pid: 100, startToken: "linux:7" }]);
+  });
+
   it("coalesces concurrent reaps of the same marker onto one ladder and one census", async () => {
     const world = fakeWorld({ procs: [{ pid: 100, marker: A }], coopLethal: true });
     const reaper = new ScopeReaper();
@@ -312,6 +359,22 @@ describe("reapScopeMembers (fake kernel)", () => {
     // A later request after settlement starts a fresh ladder.
     const three = await reaper.reap(opts);
     expect(three).not.toBe(one);
+  });
+
+  it("completeness: complete only with a readable census on a non-darwin host; not provable on darwin, on failure, and without a census", async () => {
+    const clean = fakeWorld({ procs: [], coopLethal: true });
+    const linux = await reapWith(clean, A);
+    expect(linux.settled).toBe(true);
+    expect(linux.completeness).toBe("complete");
+    const darwin = await reapWith(clean, A, { platform: "darwin" });
+    expect(darwin.settled).toBe(true); // settled, but...
+    expect(darwin.completeness).toBe("not_provable");
+    expect(darwin.completenessReason).toMatch(/SIP|platform-binary/);
+    const failed = await reapWith(fakeWorld({ procs: [], censusFailure: "ps exceeded" }), A);
+    expect(failed.completeness).toBe("not_provable");
+    expect(failed.completenessReason).toMatch(/census failed/);
+    const win = await new ScopeReaper().reap({ marker: A, platform: "win32" });
+    expect(win.completeness).toBe("not_provable");
   });
 
   it("refuses a name outside the grammar before touching any process", async () => {

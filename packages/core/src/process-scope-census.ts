@@ -365,6 +365,17 @@ export interface ScopeReapOutcome {
   /** True only when every census source succeeded and nothing survived or stayed unreadable. */
   settled: boolean;
   /**
+   * Whether a settled reap PROVES the scope empty. `complete` only on a host
+   * whose census reads every same-uid process environment (Linux /proc) with
+   * every source succeeding. `not_provable` on macOS even when settled: SIP
+   * hides Apple platform-binary environments, so a system binary started in
+   * the background by a shell that exited before any capture cannot be ruled
+   * out (owner-accepted, disclosed residual); also whenever a census failed or
+   * no census exists (Windows). `completenessReason` says which.
+   */
+  completeness: "complete" | "not_provable";
+  completenessReason: string | null;
+  /**
    * The platform hides some processes' environments from the marker census
    * (macOS: SIP withholds KERN_PROCARGS2 for Apple *platform* binaries such as
    * /bin/sleep, /usr/bin/find and /bin/bash). Those are reached through the
@@ -467,9 +478,26 @@ function unsupportedOutcome(durationMs: number): ScopeReapOutcome {
     unreadable: [],
     reusedGroups: [],
     settled: false,
+    completeness: "not_provable",
+    completenessReason: "no environment census exists on this platform",
     restricted: false,
     durationMs,
   };
+}
+
+export const DARWIN_COMPLETENESS_LIMIT =
+  "macOS hides Apple platform-binary environments (SIP): a system binary started in the background by a shell that exited before any capture cannot be ruled out";
+
+/** The completeness verdict of one reap (see `ScopeReapOutcome.completeness`). */
+export function reapCompleteness(
+  platform: string,
+  censusFailure: string | null,
+): Pick<ScopeReapOutcome, "completeness" | "completenessReason"> {
+  if (censusFailure !== null)
+    return { completeness: "not_provable", completenessReason: `census failed: ${censusFailure}` };
+  if (platform === "darwin")
+    return { completeness: "not_provable", completenessReason: DARWIN_COMPLETENESS_LIMIT };
+  return { completeness: "complete", completenessReason: null };
 }
 
 async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
@@ -510,6 +538,16 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
   const admitMarker = async (pid: number, signal: NodeJS.Signals): Promise<void> => {
     if (excluded.has(pid) || seen.has(pid)) return;
     seen.add(pid);
+    // Bracket the membership read with two identity reads: the marker is
+    // accepted only for the ONE process that was alive under the same birth
+    // before and after `confirm`, so a pid that was freed and reused between
+    // the census and the signal can never enrol a stranger (item 7).
+    const before = await identity.read(pid);
+    if (before.status === "missing") return;
+    if (before.status === "unknown") {
+      unreadable.set(pid, `identity_${before.reason}`);
+      return;
+    }
     const member = await census.confirm(pid, opts.marker);
     if (member === false) return; // vanished (or the pid was reused): not ours any more
     if (member === null) {
@@ -522,6 +560,7 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
       unreadable.set(pid, `identity_${observed.reason}`);
       return;
     }
+    if (compareProcessIdentity(before, observed) !== "same") return; // reused across the bracket
     const entry: LiveMember = {
       pid,
       birth: { kind: "identity", identity: observed },
@@ -618,6 +657,7 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
     unreadable: [...unreadable].map(([pid, reason]) => ({ pid, reason })),
     reusedGroups: [...reusedGroups],
     settled: censusFailure === null && live.size === 0 && unreadable.size === 0,
+    ...reapCompleteness(platform, censusFailure),
     restricted,
     durationMs: now() - start,
   });

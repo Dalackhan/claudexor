@@ -338,6 +338,48 @@ describe("DaemonRunScopeIndex", () => {
     expect(disclosures).toHaveLength(1);
   });
 
+  it("settle is bounded by ONE deadline: a seed hung on its table read cannot extend it; a fast seed leaves the reap the remainder (fix round 3)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "cx-scope-"));
+    const hungRow = new Promise<never>(() => {});
+    const hung = fakeReaper();
+    const index = new DaemonRunScopeIndex({
+      path: join(root, RUN_SCOPE_INDEX_FILE),
+      owner: async () => known(process.pid, "self"),
+      reap: hung.reap,
+      table: { snapshot: async () => [], row: () => hungRow },
+      identity: fakeIdentity({ 100: known(100, "100") }),
+      roots: () => [fakeRoot(100, "x")],
+      deadlineMs: 200,
+    });
+    const { marker } = await index.open("run-hung");
+    void index.seedRoot(fakeRoot(100, marker)); // the refinement never returns from `ps -p`
+    const started = Date.now();
+    const outcome = await index.settle("run-hung", marker);
+    expect(Date.now() - started).toBeLessThan(1_500);
+    expect(outcome.settled).toBe(true);
+    // The reap received what was left of the one deadline, not a fresh one.
+    expect(hung.calls[0]?.deadlineMs).toBeGreaterThanOrEqual(0);
+    expect(hung.calls[0]?.deadlineMs).toBeLessThanOrEqual(10);
+    // The synchronous seed landed before the hang: the group is on record.
+    expect(hung.calls[0]?.rootGroups?.map((g) => g.pgid)).toEqual([100]);
+
+    const fast = fakeReaper();
+    const quick = new DaemonRunScopeIndex({
+      path: join(root, "quick-" + RUN_SCOPE_INDEX_FILE),
+      owner: async () => known(process.pid, "self"),
+      reap: fast.reap,
+      table: fakeTable([{ pid: 100, ppid: process.pid, pgid: 100, birth: T0 }]),
+      identity: fakeIdentity({ 100: known(100, "100") }),
+      roots: () => [fakeRoot(100, "x")],
+      deadlineMs: 200,
+    });
+    const quickMarker = (await quick.open("run-fast")).marker;
+    void quick.seedRoot(fakeRoot(100, quickMarker));
+    await quick.settle("run-fast", quickMarker);
+    expect(fast.calls[0]?.deadlineMs).toBeGreaterThan(150);
+    expect(fast.calls[0]?.deadlineMs).toBeLessThanOrEqual(200);
+  }, 10_000);
+
   it("an entry whose census is unsupported (Windows) is retired after disclosure, never kept forever", async () => {
     const root = tempRoot();
     const path = join(root, RUN_SCOPE_INDEX_FILE);

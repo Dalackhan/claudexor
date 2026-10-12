@@ -34,6 +34,7 @@ import {
   mintRunScopeMarker,
   onChildProcessRegistered,
   reapScopeMembers,
+  scopeReapDeadlineMs,
   type AsyncProcessIdentityReader,
   type KnownProcessIdentity,
   type LiveChildProcess,
@@ -71,6 +72,9 @@ export interface DaemonRunScopeIndexOptions {
   /** Live harness roots with their markers (default: the process registry,
    * whose registrations also seed each root's group at spawn). */
   roots?: () => ReadonlyArray<LiveChildProcess>;
+  /** The one settlement deadline (ms) a `settle` is bounded by: the wait for
+   * in-flight seeds and the reap share it. Default: the reap's own. */
+  deadlineMs?: number;
   log?: (message: string) => void;
   now?: () => string;
 }
@@ -84,6 +88,7 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
   private readonly table: ProcessTableReader | null;
   private readonly reap: (opts: ScopeReapOptions) => Promise<ScopeReapOutcome>;
   private readonly roots: () => ReadonlyArray<LiveChildProcess>;
+  private readonly deadlineMs: number;
   private readonly seeding = new Set<Promise<void>>();
   private unsubscribe: (() => void) | null = null;
   /** Set when the index file had to be preserved aside; surfaced as a startup action. */
@@ -97,6 +102,7 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
       options.table ?? (process.platform === "win32" ? null : createProcessTableReader());
     this.reap = options.reap ?? reapScopeMembers;
     this.roots = options.roots ?? liveChildProcesses;
+    this.deadlineMs = options.deadlineMs ?? scopeReapDeadlineMs();
     this.log = options.log ?? (() => {});
     this.now = options.now ?? (() => new Date().toISOString());
     // Production: every harness root the engine spawns seeds its own group the
@@ -182,9 +188,24 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
     }
   }
 
-  /** Awaited by settle so a seed in flight is never raced by the reap. */
-  private async seedsSettled(): Promise<void> {
-    await Promise.allSettled([...this.seeding]);
+  /**
+   * Awaited by settle so a seed in flight is never raced by the reap — for at
+   * most `deadlineMs`: a seed hung on a `ps -p` or identity read (bounded by
+   * their own longer timeouts) must not extend the cancel path past the one
+   * settlement deadline; the reap then runs on what is recorded.
+   */
+  private async seedsSettled(deadlineMs: number): Promise<void> {
+    if (this.seeding.size === 0) return;
+    let timer: NodeJS.Timeout | undefined;
+    const expiry = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, deadlineMs);
+      timer.unref?.();
+    });
+    try {
+      await Promise.race([Promise.allSettled([...this.seeding]), expiry]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   /** The registry handle's measured leader identity still owns the pid. */
@@ -227,10 +248,14 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
   }
 
   async settle(runId: string, marker: string): Promise<ScopeReapOutcome> {
-    await this.seedsSettled();
+    // ONE settlement deadline: the seed wait consumes part of it and the reap
+    // gets the remainder (expiry is disclosed by the reap as `incomplete`).
+    const started = Date.now();
+    await this.seedsSettled(this.deadlineMs);
     const entry = this.load().find((item) => item.marker === marker);
     const outcome = await this.reap({
       marker,
+      deadlineMs: Math.max(0, this.deadlineMs - (Date.now() - started)),
       ...(entry ? reapSources(entry) : {}),
       ...(this.table ? { table: this.table } : {}),
     });

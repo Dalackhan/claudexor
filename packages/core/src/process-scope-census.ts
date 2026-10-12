@@ -305,6 +305,18 @@ export function reapCompleteness(
   return { completeness: "complete", completenessReason: null };
 }
 
+/** Default grace between TERM and KILL (ms). */
+export const SCOPE_REAP_GRACE_MS = 1_000;
+
+/**
+ * The ONE settlement deadline (ms) for a scope: every read, signal and wait of
+ * a settlement — the daemon index's wait for in-flight seeds included — races
+ * it, and expiry is disclosed as `incomplete`, never extended.
+ */
+export function scopeReapDeadlineMs(graceMs: number = SCOPE_REAP_GRACE_MS): number {
+  return graceMs + 4_000;
+}
+
 async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
   const now = opts.now ?? Date.now;
   const sleep = opts.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -316,8 +328,8 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
   const captured = opts.captured;
   const table = opts.table ?? (captured || opts.rootGroups ? createProcessTableReader() : null);
   const deliver = opts.signal ?? ((pid, signal) => process.kill(pid, signal));
-  const graceMs = opts.graceMs ?? 1_000;
-  const deadlineMs = opts.deadlineMs ?? graceMs + 4_000;
+  const graceMs = opts.graceMs ?? SCOPE_REAP_GRACE_MS;
+  const deadlineMs = opts.deadlineMs ?? scopeReapDeadlineMs(graceMs);
   const probeIntervalMs = Math.max(1, opts.probeIntervalMs ?? 250);
   const excluded = new Set(opts.excludePids ?? [1, process.pid]);
   const restricted = platform === "darwin";

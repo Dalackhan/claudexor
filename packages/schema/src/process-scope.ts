@@ -79,6 +79,13 @@ export const RunProcessScopeOutcome = z
       .describe(
         "True only when every census source succeeded and nothing survived or stayed unreadable.",
       ),
+    completeness: z
+      .enum(["complete", "not_provable"])
+      .default("not_provable")
+      .describe(
+        "Whether a settled reap proves the scope empty: complete only where the census reads every same-uid environment (Linux) and every source succeeded; not_provable on macOS (SIP hides platform-binary environments, so a system binary started in the background by a shell that exited before capture cannot be ruled out), on Windows, and after any census failure.",
+      ),
+    completeness_reason: z.string().nullable().default(null),
   })
   .strict()
   .describe("What the whole-run terminal barrier found carrying the run's scope marker, and did.");

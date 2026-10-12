@@ -88,6 +88,8 @@ function toFacts(marker: string, outcome: ScopeReapOutcome): RunProcessScopeOutc
     unreadable: outcome.unreadable.map((u) => ({ pid: u.pid, reason: u.reason })),
     reused_groups: outcome.reusedGroups,
     settled: outcome.settled,
+    completeness: outcome.completeness,
+    completeness_reason: outcome.completenessReason,
   });
 }
 
@@ -102,6 +104,8 @@ export function failedScopeOutcome(reason: string): ScopeReapOutcome {
     unreadable: [],
     reusedGroups: [],
     settled: false,
+    completeness: "not_provable",
+    completenessReason: reason,
     restricted: process.platform === "darwin",
     durationMs: 0,
   };

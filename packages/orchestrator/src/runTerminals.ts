@@ -241,6 +241,17 @@ export async function guardAnnouncedRun(
       throw error;
     }
   };
+  /** The barrier for a HELD terminal: true when it (already) succeeded. */
+  let heldBarrierError: unknown = null;
+  const barrierHeld = async (context: AnnouncedRunContext): Promise<boolean> => {
+    try {
+      await runBarrier(context);
+      return true;
+    } catch (error) {
+      heldBarrierError = error;
+      return false;
+    }
+  };
   try {
     let result: OrchestratorResult;
     try {
@@ -435,17 +446,19 @@ export async function guardAnnouncedRun(
               ...(spendUsd !== null ? { spendUsd } : {}),
             }
           : committedResult(a, outcome, spendUsd);
-      } else if (a.log.deferredTerminalPending() && !signal?.aborted) {
+      } else if (
+        a.log.deferredTerminalPending() &&
+        !signal?.aborted &&
+        !barrierFailed &&
+        (await barrierHeld(a))
+      ) {
         // The strategy already produced its terminal — held for the barrier
         // (INV-144: custody settles before the terminal is published) — and
-        // then threw. Exactly like a committed terminal, its verdict stands:
-        // settle custody, publish the held terminal, keep its outcome.
+        // then threw. Exactly like a committed terminal, its verdict stands
+        // once the barrier itself succeeded: publish the held terminal and
+        // keep its outcome. A FAILED barrier (a child drain that timed out)
+        // falls through to the typed failure below, as before.
         const pending = a.log.deferredTerminalPending()!;
-        try {
-          await runBarrier(a);
-        } catch {
-          /* the barrier owner disclosed its own failure; the held verdict still publishes */
-        }
         await flushContinuationTerminal(a, terminalOutcomeFromPayload(pending.payload));
         const outcome = canonicalOutcome ?? committedOutcome(a);
         if (!outcome) throw err;
@@ -460,7 +473,7 @@ export async function guardAnnouncedRun(
           : committedResult(a, outcome, spendUsd);
       } else {
         a.log.clearDeferredTerminal();
-        let terminalError = err;
+        let terminalError = heldBarrierError ?? err;
         try {
           await runBarrier(a);
         } catch (barrierError) {

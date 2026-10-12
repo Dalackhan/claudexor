@@ -78,8 +78,13 @@ export function parseEntry(value: unknown): RunScopeEntry | null {
     (entry.state !== "open" && entry.state !== "unresolved")
   )
     return null;
+  // A MISSING membership container is the deliberate compatibility default
+  // (an older row); a PRESENT one that is not an array is a malformed row and
+  // takes the preservation path like any other, never a silent rewrite to [].
+  if (entry.root_groups !== undefined && !Array.isArray(entry.root_groups)) return null;
+  if (entry.captured !== undefined && !Array.isArray(entry.captured)) return null;
   const rootGroups: RunScopeRootGroup[] = [];
-  for (const g of Array.isArray(entry.root_groups) ? entry.root_groups : []) {
+  for (const g of entry.root_groups ?? []) {
     const group = g as Partial<RunScopeRootGroup> | null;
     if (
       !group ||
@@ -99,7 +104,7 @@ export function parseEntry(value: unknown): RunScopeEntry | null {
     });
   }
   const captured: CapturedProcess[] = [];
-  for (const c of Array.isArray(entry.captured) ? entry.captured : []) {
+  for (const c of entry.captured ?? []) {
     const row = c as Partial<CapturedProcess> | null;
     if (
       !row ||

@@ -380,6 +380,39 @@ describe("DaemonRunScopeIndex", () => {
     expect(fast.calls[0]?.deadlineMs).toBeLessThanOrEqual(200);
   }, 10_000);
 
+  it("settlement never waits for ANOTHER run's seed: a slow refinement elsewhere leaves this run its whole budget, which starts at settlement entry (round 4, Astra R3)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "cx-scope-"));
+    const slow = <T>(ms: number, value: T): Promise<T> =>
+      new Promise((resolve) => setTimeout(resolve, ms, value).unref());
+    const reaper = fakeReaper();
+    // Astra's shape scaled: two slow identity reads around a slower table read
+    // (each below its own per-read timeout) for the OTHER run's root.
+    const index = new DaemonRunScopeIndex({
+      path: join(root, RUN_SCOPE_INDEX_FILE),
+      owner: async () => known(process.pid, "self"),
+      reap: reaper.reap,
+      table: {
+        snapshot: async () => [],
+        row: (pid) => slow(900, { pid, ppid: process.pid, pgid: pid, birth: T0 }),
+      },
+      identity: { read: (pid) => slow(300, known(pid, String(pid))) },
+      roots: () => [],
+      deadlineMs: 200,
+    });
+    const other = await index.open("run-other");
+    void index.seedRoot(fakeRoot(100, other.marker)); // ~1.5 s of refinement in flight
+    const mine = await index.open("run-mine");
+    const started = Date.now();
+    const outcome = await index.settle("run-mine", mine.marker);
+    expect(Date.now() - started).toBeLessThan(150);
+    expect(outcome.settled).toBe(true);
+    const call = reaper.calls.find((c) => c.marker === mine.marker);
+    // The reap received (almost) the whole budget: nothing was spent waiting
+    // for the other run's seed.
+    expect(call?.deadlineMs).toBeGreaterThan(150);
+    expect(call?.deadlineMs).toBeLessThanOrEqual(200);
+  });
+
   it("an entry whose census is unsupported (Windows) is retired after disclosure, never kept forever", async () => {
     const root = tempRoot();
     const path = join(root, RUN_SCOPE_INDEX_FILE);
@@ -463,6 +496,62 @@ describe("DaemonRunScopeIndex", () => {
     });
     expect((await second.settleDeadOwners()).join("\n")).toMatch(/malformed entry #0/);
     expect(readdirSync(root).some((name) => name.startsWith("rows.json.unreadable-"))).toBe(true);
+  });
+
+  it("a PRESENT but malformed membership container (captured or root_groups not an array) is preserved aside and disclosed; a missing one keeps the compatibility default (round 4)", async () => {
+    const root = tempRoot();
+    const row = (over: Record<string, unknown>) => ({
+      marker: mintRunScopeMarker(),
+      run_id: "r",
+      owner: null,
+      state: "open",
+      opened_at: "x",
+      scope_start: null,
+      root_groups: [],
+      captured: [],
+      ...over,
+    });
+    const reaper = fakeReaper();
+    const make = (name: string, entry: Record<string, unknown>) => {
+      const path = join(root, name);
+      const original = JSON.stringify({ schema_version: 1, entries: [entry] });
+      writeFileSync(path, original);
+      const index = new DaemonRunScopeIndex({
+        path,
+        identity: fakeIdentity({}),
+        reap: reaper.reap,
+        table: fakeTable([]),
+        roots: () => [],
+        log: () => {},
+      });
+      return { path, original, index };
+    };
+    // Object-valued `captured` carrying a real pid/pgid/birth: unknown, never [].
+    const captured = make("captured.json", row({ captured: { pid: 100, pgid: 100, birth: T0 } }));
+    expect((await captured.index.settleDeadOwners()).join("\n")).toMatch(/malformed entry #0/);
+    expect(captured.index.list()).toEqual([]);
+    const capturedAside = readdirSync(root).find((n) => n.startsWith("captured.json.unreadable-"));
+    expect(capturedAside).toBeDefined();
+    expect(readFileSync(join(root, capturedAside!), "utf8")).toBe(captured.original);
+    // Opening another run afterwards never overwrites the original silently:
+    // the preserved copy keeps its bytes.
+    await captured.index.open("run-after");
+    expect(readFileSync(join(root, capturedAside!), "utf8")).toBe(captured.original);
+    // Object-valued `root_groups`: the same path.
+    const groups = make(
+      "groups.json",
+      row({ root_groups: { pgid: 100, leader_pid: 100, leader_birth: null } }),
+    );
+    expect((await groups.index.settleDeadOwners()).join("\n")).toMatch(/malformed entry #0/);
+    expect(readdirSync(root).some((n) => n.startsWith("groups.json.unreadable-"))).toBe(true);
+    // A MISSING container is the compatibility default: the row loads as-is.
+    const legacy = row({});
+    delete (legacy as Record<string, unknown>)["captured"];
+    delete (legacy as Record<string, unknown>)["root_groups"];
+    const missing = make("missing.json", legacy);
+    expect(missing.index.list()).toMatchObject([{ run_id: "r", root_groups: [], captured: [] }]);
+    expect((await missing.index.settleDeadOwners()).join("\n")).not.toMatch(/malformed/);
+    expect(readdirSync(root).some((n) => n.startsWith("missing.json.unreadable-"))).toBe(false);
   });
 
   it("capture re-checks the root's identity AFTER the snapshot and stores nothing when it changed (item 8)", async () => {

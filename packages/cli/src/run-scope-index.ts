@@ -89,7 +89,8 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
   private readonly reap: (opts: ScopeReapOptions) => Promise<ScopeReapOutcome>;
   private readonly roots: () => ReadonlyArray<LiveChildProcess>;
   private readonly deadlineMs: number;
-  private readonly seeding = new Set<Promise<void>>();
+  /** In-flight seed refinements per marker (a settle waits only for its own run's). */
+  private readonly seeding = new Map<string, Set<Promise<void>>>();
   private unsubscribe: (() => void) | null = null;
   /** Set when the index file had to be preserved aside; surfaced as a startup action. */
   private unreadableNotice: string | null = null;
@@ -171,8 +172,16 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
         );
       }
     })();
-    this.seeding.add(job);
-    void job.finally(() => this.seeding.delete(job));
+    if (child.scopeMarker) {
+      const marker = child.scopeMarker;
+      const jobs = this.seeding.get(marker) ?? new Set<Promise<void>>();
+      jobs.add(job);
+      this.seeding.set(marker, jobs);
+      void job.finally(() => {
+        jobs.delete(job);
+        if (jobs.size === 0 && this.seeding.get(marker) === jobs) this.seeding.delete(marker);
+      });
+    }
     return job;
   }
 
@@ -189,20 +198,23 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
   }
 
   /**
-   * Awaited by settle so a seed in flight is never raced by the reap — for at
-   * most `deadlineMs`: a seed hung on a `ps -p` or identity read (bounded by
-   * their own longer timeouts) must not extend the cancel path past the one
-   * settlement deadline; the reap then runs on what is recorded.
+   * Awaited by settle so THIS run's seed refinement in flight (the optional
+   * birth/identity read that follows the synchronous group record) is never
+   * raced by the reap — for at most the budget remainder: a refinement hung
+   * on a `ps -p` or identity read (bounded by their own longer timeouts) must
+   * not extend the cancel path, and the reap then runs on what is recorded.
+   * Another run's seeds are never awaited (Astra R3).
    */
-  private async seedsSettled(deadlineMs: number): Promise<void> {
-    if (this.seeding.size === 0) return;
+  private async seedsSettled(marker: string, deadlineMs: number): Promise<void> {
+    const jobs = this.seeding.get(marker);
+    if (!jobs || jobs.size === 0) return;
     let timer: NodeJS.Timeout | undefined;
     const expiry = new Promise<void>((resolve) => {
       timer = setTimeout(resolve, deadlineMs);
       timer.unref?.();
     });
     try {
-      await Promise.race([Promise.allSettled([...this.seeding]), expiry]);
+      await Promise.race([Promise.allSettled([...jobs]), expiry]);
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -248,10 +260,13 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
   }
 
   async settle(runId: string, marker: string): Promise<ScopeReapOutcome> {
-    // ONE settlement deadline: the seed wait consumes part of it and the reap
-    // gets the remainder (expiry is disclosed by the reap as `incomplete`).
+    // ONE absolute settlement budget starts HERE, when the custodian enters
+    // settlement for this run: this run's own seed refinement wait consumes
+    // part of it and the reap gets the remainder (every census, identity and
+    // table read and every signal race it; expiry is disclosed by the reap as
+    // `incomplete`). Other runs' seeds are never awaited.
     const started = Date.now();
-    await this.seedsSettled(this.deadlineMs);
+    await this.seedsSettled(marker, this.deadlineMs);
     const entry = this.load().find((item) => item.marker === marker);
     const outcome = await this.reap({
       marker,

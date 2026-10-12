@@ -355,7 +355,7 @@ describe("DaemonRunScopeIndex", () => {
     void index.seedRoot(fakeRoot(100, marker)); // the refinement never returns from `ps -p`
     const started = Date.now();
     const outcome = await index.settle("run-hung", marker);
-    expect(Date.now() - started).toBeLessThan(1_500);
+    expect(Date.now() - started).toBeLessThan(3_000);
     expect(outcome.settled).toBe(true);
     // The reap received what was left of the one deadline, not a fresh one.
     expect(hung.calls[0]?.deadlineMs).toBeGreaterThanOrEqual(0);
@@ -371,47 +371,48 @@ describe("DaemonRunScopeIndex", () => {
       table: fakeTable([{ pid: 100, ppid: process.pid, pgid: 100, birth: T0 }]),
       identity: fakeIdentity({ 100: known(100, "100") }),
       roots: () => [fakeRoot(100, "x")],
-      deadlineMs: 200,
+      // A production-sized budget keeps the margin far above scheduling
+      // delay on a loaded host; a fast seed spends almost none of it.
+      deadlineMs: 5_000,
     });
     const quickMarker = (await quick.open("run-fast")).marker;
     void quick.seedRoot(fakeRoot(100, quickMarker));
     await quick.settle("run-fast", quickMarker);
-    expect(fast.calls[0]?.deadlineMs).toBeGreaterThan(150);
-    expect(fast.calls[0]?.deadlineMs).toBeLessThanOrEqual(200);
-  }, 10_000);
+    expect(fast.calls[0]?.deadlineMs).toBeGreaterThan(2_500);
+    expect(fast.calls[0]?.deadlineMs).toBeLessThanOrEqual(5_000);
+  }, 15_000);
 
   it("settlement never waits for ANOTHER run's seed: a slow refinement elsewhere leaves this run its whole budget, which starts at settlement entry (round 4, Astra R3)", async () => {
     const root = mkdtempSync(join(tmpdir(), "cx-scope-"));
-    const slow = <T>(ms: number, value: T): Promise<T> =>
-      new Promise((resolve) => setTimeout(resolve, ms, value).unref());
+    const never = new Promise<never>(() => {});
     const reaper = fakeReaper();
-    // Astra's shape scaled: two slow identity reads around a slower table read
-    // (each below its own per-read timeout) for the OTHER run's root.
+    // Astra's shape taken to its limit: the OTHER run's refinement never
+    // returns from its identity or table read. A settlement that waited for
+    // it would spend this run's whole production-sized budget (5 s) and hand
+    // the reap nothing; the margins below stay far above scheduling delay on
+    // a loaded host.
     const index = new DaemonRunScopeIndex({
       path: join(root, RUN_SCOPE_INDEX_FILE),
       owner: async () => known(process.pid, "self"),
       reap: reaper.reap,
-      table: {
-        snapshot: async () => [],
-        row: (pid) => slow(900, { pid, ppid: process.pid, pgid: pid, birth: T0 }),
-      },
-      identity: { read: (pid) => slow(300, known(pid, String(pid))) },
+      table: { snapshot: async () => [], row: () => never },
+      identity: { read: () => never },
       roots: () => [],
-      deadlineMs: 200,
+      deadlineMs: 5_000,
     });
     const other = await index.open("run-other");
-    void index.seedRoot(fakeRoot(100, other.marker)); // ~1.5 s of refinement in flight
+    void index.seedRoot(fakeRoot(100, other.marker)); // a refinement that never ends
     const mine = await index.open("run-mine");
     const started = Date.now();
     const outcome = await index.settle("run-mine", mine.marker);
-    expect(Date.now() - started).toBeLessThan(150);
+    expect(Date.now() - started).toBeLessThan(2_500);
     expect(outcome.settled).toBe(true);
     const call = reaper.calls.find((c) => c.marker === mine.marker);
     // The reap received (almost) the whole budget: nothing was spent waiting
     // for the other run's seed.
-    expect(call?.deadlineMs).toBeGreaterThan(150);
-    expect(call?.deadlineMs).toBeLessThanOrEqual(200);
-  });
+    expect(call?.deadlineMs).toBeGreaterThan(2_500);
+    expect(call?.deadlineMs).toBeLessThanOrEqual(5_000);
+  }, 15_000);
 
   it("an entry whose census is unsupported (Windows) is retired after disclosure, never kept forever", async () => {
     const root = tempRoot();

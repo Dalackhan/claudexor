@@ -777,7 +777,11 @@ becoming finality; the terminal discloses `subagent_threads`. After the root
 turn completed, "thread settled" is re-checked on any notification and, in
 silence, after the poll interval. A sub-agent's failed command therefore stays
 tool-warning evidence beside the root's delivered final instead of escalating
-through the deliverable-less tool-error exception.
+through the deliverable-less tool-error exception. On normal shutdown, an explicit
+completed root answer with settled lifecycle and no other failure survives the
+Windows-only whole-tree proof limitation. Its unchanged `termination_unconfirmed`
+payload records uncertainty separately from answer text; empty survivors prove no
+death. Other unresolved reasons, observed survivors and cancellation remain errors.
 Native in-turn retry notices use the existing nonterminal `api_retry` status;
 their wire mapping is documented in INTEGRATIONS' Harness Stream Reference.
 Adapters without a verified prompt transport retain their vendor-specific path.

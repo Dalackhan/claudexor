@@ -1,7 +1,56 @@
 import type { HarnessEvent } from "@claudexor/schema";
+import { WINDOWS_TREE_DEATH_PROOF_UNAVAILABLE, type ProcEvent } from "@claudexor/core";
 import { nowIso } from "@claudexor/util";
 import { asObject, codexAppServerEvents, type JsonObject } from "./app-server-protocol.js";
 import { parseCodexEvent, type CodexParseState } from "./parse.js";
+
+/** This producer reason limits observation; it never proves whole-tree death. */
+export function codexCleanupIsProofLimitation(
+  event: Extract<ProcEvent, { type: "termination_unconfirmed" }>,
+): boolean {
+  return (
+    event.survivors.length === 0 &&
+    event.unresolved.length > 0 &&
+    event.unresolved.every(({ reason }) => reason === WINDOWS_TREE_DEATH_PROOF_UNAVAILABLE)
+  );
+}
+
+/** Positive finality for normal teardown, not catch/cancel or an unknown turn. */
+export function codexHasCompletedAnswer(
+  status: unknown,
+  lifecycle: { threadSettled: boolean; goalActive: boolean; ownedBackground: unknown[] },
+  events: HarnessEvent[],
+): boolean {
+  return (
+    status === "completed" &&
+    lifecycle.threadSettled &&
+    !lifecycle.goalActive &&
+    lifecycle.ownedBackground.length === 0 &&
+    events.some(
+      (event) => event.final && typeof event.text === "string" && event.text.trim() !== "",
+    )
+  );
+}
+
+/** Drained root lifecycle frames can invalidate the pre-stop terminal snapshot. */
+export function codexTeardownFailed(
+  notifications: JsonObject[],
+  rootThreadId: string | null,
+  failed: boolean,
+): boolean {
+  return (
+    failed ||
+    notifications.some((notification) => {
+      const params = asObject(notification["params"]);
+      if (!ownsNotification(params, rootThreadId)) return false;
+      return (
+        notification["method"] === "turn/started" ||
+        (notification["method"] === "turn/completed" &&
+          asObject(params?.["turn"])?.["status"] !== "completed")
+      );
+    })
+  );
+}
 
 /**
  * Root-thread ownership of Codex app-server notifications.

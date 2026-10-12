@@ -38,9 +38,9 @@ export const RunProcessScopeOutcome = z
       .regex(/^[A-Z][A-Z0-9_]*_SCOPE_[0-9a-f]{32}$/)
       .describe("The run's scope marker NAME (the value is always 1; never persisted)."),
     coverage: z
-      .enum(["marker", "tree_only"])
+      .enum(["marker+capture", "marker", "tree_only"])
       .describe(
-        "marker: an environment census ran (POSIX); tree_only: no environment census exists on this host (Windows), the parent-chain tree kill ran instead.",
+        "marker+capture: environment census plus the daemon's recorded descendants/process groups (POSIX with the daemon index); marker: environment census only (an embedder without the index); tree_only: no environment census exists on this host (Windows), the parent-chain tree kill ran instead.",
       ),
     census: z
       .enum(["ok", "failed", "unsupported"])
@@ -68,9 +68,17 @@ export const RunProcessScopeOutcome = z
       .describe(
         "Known members whose identity or membership could not be read; never signalled unverified.",
       ),
+    reused_groups: z
+      .array(z.number().int().positive())
+      .default([])
+      .describe(
+        "Recorded process groups skipped entirely because the pgid-reuse rule failed (a live process owns the id with another birth, or a member predates the scope); disclosed residual, never signalled.",
+      ),
     settled: z
       .boolean()
-      .describe("True only when a census ran and nothing survived or stayed unreadable."),
+      .describe(
+        "True only when every census source succeeded and nothing survived or stayed unreadable.",
+      ),
   })
   .strict()
   .describe("What the whole-run terminal barrier found carrying the run's scope marker, and did.");

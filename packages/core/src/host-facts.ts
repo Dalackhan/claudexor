@@ -78,10 +78,12 @@ export function harnessHostFactsEnv(
   const out: Record<string, string> = {};
   const home = operatorHome(source, platform);
   const scopedHome = specEnv?.["HOME"];
-  if (scopedHome && home && scopedHome !== home) {
-    out[CLAUDEXOR_HOME_SCOPED_ENV] = "1";
-    out[CLAUDEXOR_OPERATOR_HOME_ENV] = home;
-  }
+  // These facts are only true for a session running under a scoped native-state
+  // HOME. An in-place run that inherits the operator's own HOME needs none of
+  // them (its caches are already in reach), so say nothing.
+  if (!scopedHome || !home || scopedHome === home) return out;
+  out[CLAUDEXOR_HOME_SCOPED_ENV] = "1";
+  out[CLAUDEXOR_OPERATOR_HOME_ENV] = home;
   const explicit = source[PLAYWRIGHT_BROWSERS_PATH_ENV];
   if (explicit !== undefined) {
     // An explicit operator value (including `0` = per-package browsers) wins

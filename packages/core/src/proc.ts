@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { registerChildProcess, unregisterChildProcess } from "./process-registry.js";
 import { readProcessLines, type ProcessStreamLimits } from "./process-lines.js";
 import { composeSpawnEnv } from "./env-scope.js";
+import { isRunScopeMarkerName } from "./process-scope.js";
 import { prepareHarnessCommand } from "./runtime-env.js";
 import {
   killWindowsProcessTree,
@@ -95,6 +96,11 @@ export interface SpawnOptions {
   onExit?: (code: number | null, signal: NodeJS.Signals | null) => void;
 }
 
+/** The run scope marker NAME carried by a composed spawn env, if any (never its value). */
+function runScopeMarkerOf(env: NodeJS.ProcessEnv): string | undefined {
+  return Object.keys(env).find((key) => isRunScopeMarkerName(key) && env[key] === "1");
+}
+
 /** Minimal live stdin handle for bidirectional CLI protocols. */
 export interface ChildStdin {
   /** Write one line/frame; errors are swallowed (exit carries the outcome). */
@@ -157,7 +163,7 @@ export async function* spawnProcess(
     // keep writing to the worktree, or hang the run forever.
     detached: true,
   });
-  if (typeof child.pid === "number") registerChildProcess(child.pid, cmd);
+  if (typeof child.pid === "number") registerChildProcess(child.pid, cmd, runScopeMarkerOf(env));
   // Bounded post-exit output drain (item 2): the direct child may exit while a
   // descendant keeps our stdout/stderr pipe open, so `close` — which finishes
   // capture — never fires and the run hangs on its terminal barrier. Once no
@@ -542,7 +548,7 @@ export async function runCaptureRaw(
     windowsHide: true,
     detached: true,
   });
-  if (typeof child.pid === "number") registerChildProcess(child.pid, cmd);
+  if (typeof child.pid === "number") registerChildProcess(child.pid, cmd, runScopeMarkerOf(env));
   child.once("exit", (code, signal) => opts.onExit?.(code, signal));
   let captureChildClosed = false;
   child.once("close", () => {

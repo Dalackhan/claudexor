@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
   ScopeReaper,
+  capturedCandidates,
   createLinuxScopeCensusReader,
   createScopeCensusReader,
   darwinLineCarriesMarker,
@@ -12,6 +13,13 @@ import {
   type ScopeCensusResult,
 } from "./process-scope-census.js";
 import { mintRunScopeMarker } from "./process-scope.js";
+import {
+  createProcessTableReader,
+  descendantProcessRows,
+  type CapturedProcess,
+  type ProcessTableReader,
+  type ProcessTableRow,
+} from "./process-table.js";
 import {
   createAsyncProcessIdentityReader,
   type AsyncProcessIdentityReader,
@@ -326,6 +334,251 @@ describe("reapScopeMembers (fake kernel)", () => {
   });
 });
 
+/**
+ * Fake table for the RECORDED sources: processes whose environment is
+ * invisible (platform binaries on macOS) and are reachable only by the
+ * (pid, pgid, birth) rows the daemon captured. The marker census sees nothing.
+ */
+function tableWorld(opts: {
+  rows: ProcessTableRow[];
+  immortal?: number[];
+  coopLethal?: boolean;
+  unreadable?: number[];
+  snapshotFails?: boolean;
+}) {
+  const rows = new Map(opts.rows.map((row) => [row.pid, { ...row }]));
+  const immortal = new Set(opts.immortal ?? []);
+  const unreadable = new Set(opts.unreadable ?? []);
+  const signals: Array<{ pid: number; signal: string }> = [];
+  let t = 0;
+  const table: ProcessTableReader = {
+    async snapshot() {
+      return opts.snapshotFails ? null : [...rows.values()];
+    },
+    async row(pid) {
+      if (unreadable.has(pid)) return "unreadable";
+      return rows.get(pid) ?? null;
+    },
+  };
+  const emptyCensus: ScopeCensusReader = {
+    async census(markers) {
+      return { status: "ok", members: new Map(markers.map((m) => [m, []])), unreadable: 0 };
+    },
+    async confirm() {
+      return false;
+    },
+  };
+  return {
+    table,
+    census: emptyCensus,
+    signals,
+    signal: (pid: number, signal: NodeJS.Signals) => {
+      signals.push({ pid, signal });
+      if (!rows.has(pid)) throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+      const lethal = signal === "SIGKILL" || (opts.coopLethal && signal === "SIGTERM");
+      if (lethal && !immortal.has(pid)) rows.delete(pid);
+    },
+    now: () => t,
+    sleep: async (ms: number) => {
+      t += ms;
+    },
+    isAlive: (pid: number) => rows.has(pid),
+  };
+}
+
+const T0 = "Mon Oct 12 14:00:00 2026";
+const T1 = "Mon Oct 12 14:00:05 2026";
+const T2 = "Mon Oct 12 14:00:09 2026";
+const EARLIER = "Mon Oct 12 13:00:00 2026";
+
+function reapCaptured(
+  world: ReturnType<typeof tableWorld>,
+  captured: CapturedProcess[],
+  scopeStart: string | null = T0,
+) {
+  return new ScopeReaper().reap({
+    marker: A,
+    census: world.census,
+    table: world.table,
+    captured,
+    scopeStart,
+    signal: world.signal,
+    now: world.now,
+    sleep: world.sleep,
+    graceMs: 1_000,
+    deadlineMs: 3_000,
+    probeIntervalMs: 250,
+    excludePids: [1, 4242],
+    platform: "darwin",
+  });
+}
+
+describe("capturedCandidates (DIRECTIVE 1 rule 2, pure)", () => {
+  // Harness root 100 (own group), its setsid shell 200 (pgid 200), the shell's
+  // child 210 (pgid 200). Captured while the chain was intact.
+  const captured: CapturedProcess[] = [
+    { pid: 100, pgid: 100, birth: T0 },
+    { pid: 200, pgid: 200, birth: T1 },
+    { pid: 210, pgid: 200, birth: T1 },
+  ];
+
+  it("ends a leaderless group member by recorded group: the orphaned child of a dead shell", () => {
+    // The shell (200) was killed by the model; 210 was reparented to pid 1 and
+    // kept pgid 200. Nothing owns pid 200 now.
+    const rows: ProcessTableRow[] = [{ pid: 210, ppid: 1, pgid: 200, birth: T1 }];
+    const found = capturedCandidates(captured, rows, T0);
+    expect([...found.candidates]).toEqual([[210, T1]]);
+    expect(found.reusedGroups).toEqual([]);
+  });
+
+  it("includes a fork born inside a recorded group after the capture", () => {
+    const rows: ProcessTableRow[] = [
+      { pid: 210, ppid: 1, pgid: 200, birth: T1 },
+      { pid: 230, ppid: 210, pgid: 200, birth: T2 }, // never individually captured
+    ];
+    const found = capturedCandidates(captured, rows, T0);
+    expect([...found.candidates.keys()].sort()).toEqual([210, 230]);
+  });
+
+  it("skips a group whose id is now owned by a process with another birth (pid reused as leader)", () => {
+    const rows: ProcessTableRow[] = [
+      { pid: 200, ppid: 1, pgid: 200, birth: T2 }, // a stranger reusing pid 200
+      { pid: 210, ppid: 1, pgid: 200, birth: T1 },
+    ];
+    const found = capturedCandidates(captured, rows, T0);
+    expect(found.candidates.has(200)).toBe(false);
+    expect(found.reusedGroups).toEqual([200]);
+    // 210 is still individually captured with its own birth, so it is ended
+    // on its own evidence — never through the group.
+    expect([...found.candidates]).toEqual([[210, T1]]);
+  });
+
+  it("keeps a group whose live leader still has the recorded birth", () => {
+    const rows: ProcessTableRow[] = [
+      { pid: 200, ppid: 100, pgid: 200, birth: T1 },
+      { pid: 210, ppid: 200, pgid: 200, birth: T1 },
+    ];
+    const found = capturedCandidates(captured, rows, T0);
+    expect([...found.candidates.keys()].sort()).toEqual([200, 210]);
+    expect(found.reusedGroups).toEqual([]);
+  });
+
+  it("skips a group with a member born before the scope, and every group without a birth floor", () => {
+    const rows: ProcessTableRow[] = [
+      { pid: 210, ppid: 1, pgid: 200, birth: T1 },
+      { pid: 7, ppid: 1, pgid: 200, birth: EARLIER }, // predates the run: not ours
+    ];
+    expect(capturedCandidates(captured, rows, T0).reusedGroups).toEqual([200]);
+    // 210 keeps its individual evidence either way.
+    expect(capturedCandidates(captured, rows, T0).candidates.has(210)).toBe(true);
+    const noFloor = capturedCandidates(
+      captured,
+      [{ pid: 210, ppid: 1, pgid: 200, birth: T1 }],
+      null,
+    );
+    expect(noFloor.reusedGroups).toEqual([200]);
+    expect([...noFloor.candidates]).toEqual([[210, T1]]);
+  });
+
+  it("drops an individually captured pid whose birth changed (reused) and a group that emptied", () => {
+    const rows: ProcessTableRow[] = [{ pid: 210, ppid: 1, pgid: 999, birth: T2 }];
+    const found = capturedCandidates(captured, rows, T0);
+    expect(found.candidates.size).toBe(0);
+    expect(found.reusedGroups).toEqual([]);
+  });
+});
+
+describe("reapScopeMembers with recorded sources (fake table)", () => {
+  const captured: CapturedProcess[] = [
+    { pid: 100, pgid: 100, birth: T0 },
+    { pid: 200, pgid: 200, birth: T1 },
+  ];
+
+  it("ends an env-invisible orphan through its recorded group and reports marker+capture coverage", async () => {
+    const world = tableWorld({
+      rows: [{ pid: 210, ppid: 1, pgid: 200, birth: T1 }],
+      coopLethal: true,
+    });
+    const outcome = await reapCaptured(world, captured);
+    expect(outcome.coverage).toBe("marker+capture");
+    expect(outcome.settled).toBe(true);
+    expect(outcome.ended).toEqual([{ pid: 210, startToken: `ps:${T1}` }]);
+    expect(world.isAlive(210)).toBe(false);
+  });
+
+  it("re-measures the birth immediately before signalling and never signals a reused pid", async () => {
+    const world = tableWorld({ rows: [{ pid: 210, ppid: 1, pgid: 200, birth: T1 }] });
+    // Swap the pid for a stranger between the snapshot and the signal.
+    const snapshot = world.table.snapshot.bind(world.table);
+    world.table.snapshot = async () => {
+      const rows = await snapshot();
+      queueMicrotask(() => {
+        world.table.row = async () => ({ pid: 210, ppid: 1, pgid: 210, birth: T2 });
+      });
+      return rows;
+    };
+    const outcome = await reapCaptured(world, captured);
+    expect(world.signals).toEqual([]);
+    expect(outcome.ended).toEqual([]);
+    expect(outcome.settled).toBe(true);
+  });
+
+  it("escalates a recorded member to SIGKILL and reports an immortal one as a survivor", async () => {
+    const world = tableWorld({
+      rows: [
+        { pid: 210, ppid: 1, pgid: 200, birth: T1 },
+        { pid: 220, ppid: 1, pgid: 200, birth: T1 },
+      ],
+      immortal: [220],
+    });
+    const outcome = await reapCaptured(world, captured);
+    expect(outcome.ended.map((m) => m.pid)).toEqual([210]);
+    expect(outcome.survivors).toEqual([{ pid: 220, startToken: `ps:${T1}` }]);
+    expect(outcome.settled).toBe(false);
+    expect(world.signals.filter((s) => s.pid === 210).map((s) => s.signal)).toEqual([
+      "SIGTERM",
+      "SIGKILL",
+    ]);
+  });
+
+  it("an unreadable process table is a census failure: nothing is claimed settled", async () => {
+    const world = tableWorld({
+      rows: [{ pid: 210, ppid: 1, pgid: 200, birth: T1 }],
+      snapshotFails: true,
+    });
+    const outcome = await reapCaptured(world, captured);
+    expect(outcome.census).toBe("failed");
+    expect(outcome.censusFailure).toBe("process table unreadable");
+    expect(outcome.settled).toBe(false);
+    expect(world.signals).toEqual([]);
+  });
+
+  it("discloses a reused group and leaves its members alone", async () => {
+    const world = tableWorld({
+      rows: [
+        { pid: 200, ppid: 1, pgid: 200, birth: T2 },
+        { pid: 300, ppid: 200, pgid: 200, birth: T2 },
+      ],
+    });
+    const outcome = await reapCaptured(world, captured);
+    expect(outcome.reusedGroups).toEqual([200]);
+    expect(world.signals).toEqual([]);
+    expect(world.isAlive(300)).toBe(true);
+  });
+
+  it("without captured rows coverage stays marker-only", async () => {
+    const world = tableWorld({ rows: [] });
+    const outcome = await new ScopeReaper().reap({
+      marker: A,
+      census: world.census,
+      signal: world.signal,
+      platform: "linux",
+    });
+    expect(outcome.coverage).toBe("marker");
+    expect(outcome.settled).toBe(true);
+  });
+});
+
 const posix = process.platform === "darwin" || process.platform === "linux";
 
 function alive(pid: number): boolean {
@@ -457,6 +710,53 @@ describe.runIf(posix)("reapScopeMembers on real processes", () => {
         process.kill(orphan, "SIGKILL");
       } catch {
         /* already gone */
+      }
+    }
+  }, 20_000);
+
+  it("ends a platform-binary background child (env invisible on darwin) through the recorded group (DIRECTIVE 1 item 5)", async () => {
+    const marker = mintRunScopeMarker();
+    // The incident shape with a platform binary: a detached shell starts a
+    // background /bin/sleep and exits. The sleep keeps the shell's pgid and
+    // is reparented to pid 1; on darwin its environment is hidden by SIP, so
+    // only the rows the daemon captured while the shell was alive reach it.
+    const shell = spawn("/bin/sh", ["-c", "/bin/sleep 600 & /bin/sleep 0.5"], {
+      env: { ...process.env, [marker]: "1" },
+      detached: true,
+      stdio: "ignore",
+    });
+    const shellPid = shell.pid!;
+    const table = createProcessTableReader();
+    // The daemon's capture tick, while the chain is intact.
+    let captured: CapturedProcess[] = [];
+    for (let i = 0; i < 20 && captured.length < 2; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const rows = (await table.snapshot()) ?? [];
+      captured = descendantProcessRows(shellPid, rows).map((r) => ({
+        pid: r.pid,
+        pgid: r.pgid,
+        birth: r.birth,
+      }));
+    }
+    const orphan = captured.find((c) => c.pid !== shellPid && c.pgid === shellPid);
+    try {
+      expect(orphan).toBeDefined();
+      const scopeStart = captured.find((c) => c.pid === shellPid)!.birth;
+      await new Promise<void>((resolve) => shell.once("close", () => resolve()));
+      expect(alive(orphan!.pid)).toBe(true);
+      const outcome = await reapScopeMembers({ marker, captured, scopeStart, graceMs: 1_000 });
+      expect(outcome.coverage).toBe("marker+capture");
+      expect(outcome.census).toBe("ok");
+      expect(outcome.settled).toBe(true);
+      expect(outcome.ended.map((m) => m.pid)).toContain(orphan!.pid);
+      expect(alive(orphan!.pid)).toBe(false);
+    } finally {
+      for (const pid of [shellPid, orphan?.pid ?? 0]) {
+        try {
+          if (pid) process.kill(pid, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
       }
     }
   }, 20_000);

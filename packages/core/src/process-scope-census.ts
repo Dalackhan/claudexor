@@ -5,7 +5,13 @@
  * the PPID/process-group ladder (`process-tree.ts`) stays the fast path for a
  * cancel while the tree is intact; a descendant that `setsid`-ed and was
  * reparented to pid 1 after its parent died (the #449 orphans) is reachable
- * only through the marker it inherited.
+ * only through the marker it inherited — or, where the kernel hides that
+ * marker, through the group and birth the daemon RECORDED while the run was
+ * live (DIRECTIVE 1): macOS SIP withholds the environment of Apple platform
+ * binaries, so membership on POSIX is the UNION of (a) marker members,
+ * (b) members of recorded process groups under the pgid-reuse rule and
+ * (c) individually recorded descendants, every one signalled by pid after its
+ * birth is re-measured (`capturedCandidates` below).
  *
  * Contract (shared with the embedding host):
  * - one asynchronous process-table read per census: macOS streams
@@ -43,6 +49,13 @@ import {
   type KnownProcessIdentity,
 } from "./process-identity.js";
 import { isScopeMarkerName, SCOPE_MARKER_VALUE } from "./process-scope.js";
+import {
+  birthEpochSeconds,
+  createProcessTableReader,
+  type CapturedProcess,
+  type ProcessTableReader,
+  type ProcessTableRow,
+} from "./process-table.js";
 
 export type ScopeCensusResult =
   /** Every requested marker mapped to the pids that carry it right now. */
@@ -327,8 +340,12 @@ export interface ScopeUnreadableRecord {
 
 /** What one reap of one marker found and did. Pids and birth tokens only. */
 export interface ScopeReapOutcome {
-  /** `marker`: an environment census ran; `tree_only`: no census on this host. */
-  coverage: "marker" | "tree_only";
+  /**
+   * `marker+capture`: environment census plus the recorded descendants and
+   * process groups (POSIX with the daemon index); `marker`: environment census
+   * only; `tree_only`: no census on this host (Windows).
+   */
+  coverage: "marker+capture" | "marker" | "tree_only";
   census: "ok" | "failed" | "unsupported";
   censusFailure: string | null;
   /** Members found alive, signalled and proven gone. */
@@ -337,16 +354,20 @@ export interface ScopeReapOutcome {
   survivors: ScopeMemberRecord[];
   /** Known members whose identity or membership could not be read; never signalled unverified. */
   unreadable: ScopeUnreadableRecord[];
-  /** True only when a census ran and nothing survived or stayed unreadable. */
+  /**
+   * Recorded groups skipped entirely because the pgid-reuse rule failed (a
+   * live process owns the group id with a different birth, or a member was
+   * born before the scope): disclosed residual, never signalled.
+   */
+  reusedGroups: number[];
+  /** True only when every census source succeeded and nothing survived or stayed unreadable. */
   settled: boolean;
   /**
-   * The platform hides some processes' environments from the census (macOS:
-   * SIP withholds KERN_PROCARGS2 for Apple *platform* binaries such as
-   * /bin/sleep, /usr/bin/find and /bin/bash, so a marker on one of those is
-   * invisible). When true, an empty census does NOT exclude a hidden
-   * platform-binary leftover — a disclosed residual, the darwin analogue of
-   * Windows `tree_only`, never a failure. `false` on Linux, where
-   * /proc/<pid>/environ is readable for every same-uid process.
+   * The platform hides some processes' environments from the marker census
+   * (macOS: SIP withholds KERN_PROCARGS2 for Apple *platform* binaries such as
+   * /bin/sleep, /usr/bin/find and /bin/bash). Those are reached through the
+   * recorded groups/descendants instead; a platform binary born, setsid-ed and
+   * orphaned within one capture tick is the disclosed residual.
    */
   restricted: boolean;
   durationMs: number;
@@ -356,6 +377,15 @@ export interface ScopeReapOptions {
   marker: string;
   census?: ScopeCensusReader | null;
   identity?: AsyncProcessIdentityReader;
+  /**
+   * The scope's recorded descendants (DIRECTIVE 1 sources b and c). Present —
+   * even empty — means the daemon captured for this scope: coverage is
+   * `marker+capture`. Absent: marker census only.
+   */
+  captured?: readonly CapturedProcess[];
+  /** Birth floor of the scope (the harness root's `lstart` at first capture). */
+  scopeStart?: string | null;
+  table?: ProcessTableReader;
   /** Per-pid signal delivery (default `process.kill`). */
   signal?: (pid: number, signal: NodeJS.Signals) => void;
   /** Cooperative grace before KILL (default 1000ms). */
@@ -371,9 +401,56 @@ export interface ScopeReapOptions {
   now?: () => number;
 }
 
+/**
+ * The candidates of the recorded sources against one fresh table snapshot:
+ * every individually captured pid still alive with its recorded birth, plus
+ * every live member of a recorded group G under the pgid-reuse rule — POSIX
+ * does not reuse a pid as a group id while that group has members, so G is
+ * still ours when (i) every live member of G was born at or after the scope
+ * and (ii) a live process with pid == G has the birth we recorded for G's
+ * leader; otherwise G was reused and is skipped entirely. Pure.
+ */
+export function capturedCandidates(
+  captured: readonly CapturedProcess[],
+  rows: readonly ProcessTableRow[],
+  scopeStart: string | null | undefined,
+): { candidates: Map<number, string>; reusedGroups: number[] } {
+  const byPid = new Map(rows.map((row) => [row.pid, row] as const));
+  const candidates = new Map<number, string>();
+  const reusedGroups: number[] = [];
+  for (const item of captured) {
+    const row = byPid.get(item.pid);
+    if (row && row.birth === item.birth) candidates.set(row.pid, row.birth);
+  }
+  const floor = scopeStart ? birthEpochSeconds(scopeStart) : null;
+  for (const group of new Set(captured.map((item) => item.pgid))) {
+    const members = rows.filter((row) => row.pgid === group);
+    if (members.length === 0) continue; // emptied: simply gone
+    const recordedLeaderBirth = captured.find((item) => item.pid === group)?.birth;
+    const liveLeader = byPid.get(group);
+    const leaderReused = liveLeader !== undefined && liveLeader.birth !== recordedLeaderBirth;
+    const bornBefore =
+      floor === null ||
+      members.some((row) => {
+        const at = birthEpochSeconds(row.birth);
+        return at === null || at < floor;
+      });
+    if (leaderReused || bornBefore) {
+      reusedGroups.push(group);
+      continue;
+    }
+    for (const row of members) candidates.set(row.pid, row.birth);
+  }
+  return { candidates, reusedGroups };
+}
+
+type MemberBirth =
+  { kind: "identity"; identity: KnownProcessIdentity } | { kind: "table"; birth: string };
+
 interface LiveMember {
   pid: number;
-  identity: KnownProcessIdentity;
+  birth: MemberBirth;
+  startToken: string;
   /** The hard signal was delivered under the recorded identity. */
   killed: boolean;
 }
@@ -386,6 +463,7 @@ function unsupportedOutcome(durationMs: number): ScopeReapOutcome {
     ended: [],
     survivors: [],
     unreadable: [],
+    reusedGroups: [],
     settled: false,
     restricted: false,
     durationMs,
@@ -400,6 +478,8 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
   const census = opts.census === undefined ? createScopeCensusReader(platform) : opts.census;
   if (!census) return unsupportedOutcome(now() - start);
   const identity = opts.identity ?? defaultAsyncProcessIdentityReader;
+  const captured = opts.captured;
+  const table = opts.table ?? (captured ? createProcessTableReader() : null);
   const deliver = opts.signal ?? ((pid, signal) => process.kill(pid, signal));
   const graceMs = opts.graceMs ?? 1_000;
   const deadlineMs = opts.deadlineMs ?? graceMs + 4_000;
@@ -410,6 +490,7 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
   const live = new Map<number, LiveMember>();
   const ended: ScopeMemberRecord[] = [];
   const unreadable = new Map<number, string>();
+  const reusedGroups = new Set<number>();
   const seen = new Set<number>();
 
   const signalMember = (member: LiveMember, signal: NodeJS.Signals): void => {
@@ -417,18 +498,14 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
       deliver(member.pid, signal);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException)?.code;
-      if (code === "ESRCH") {
-        live.delete(member.pid);
-        ended.push({ pid: member.pid, startToken: member.identity.startToken });
-      } else {
-        live.delete(member.pid);
-        unreadable.set(member.pid, `signal_failed:${code ?? "unknown"}`);
-      }
+      live.delete(member.pid);
+      if (code === "ESRCH") ended.push({ pid: member.pid, startToken: member.startToken });
+      else unreadable.set(member.pid, `signal_failed:${code ?? "unknown"}`);
     }
   };
 
   /** Admit a censused pid: confirm membership + measure identity, then signal. */
-  const admit = async (pid: number, signal: NodeJS.Signals): Promise<void> => {
+  const admitMarker = async (pid: number, signal: NodeJS.Signals): Promise<void> => {
     if (excluded.has(pid) || seen.has(pid)) return;
     seen.add(pid);
     const member = await census.confirm(pid, opts.marker);
@@ -443,52 +520,108 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
       unreadable.set(pid, `identity_${observed.reason}`);
       return;
     }
-    const entry: LiveMember = { pid, identity: observed, killed: signal === "SIGKILL" };
+    const entry: LiveMember = {
+      pid,
+      birth: { kind: "identity", identity: observed },
+      startToken: observed.startToken,
+      killed: signal === "SIGKILL",
+    };
     live.set(pid, entry);
     signalMember(entry, signal);
   };
 
-  const scan = async (signal: NodeJS.Signals): Promise<string | null> => {
+  /** Admit a recorded candidate: re-measure its birth right before the signal. */
+  const admitCaptured = async (
+    pid: number,
+    expectedBirth: string,
+    signal: NodeJS.Signals,
+  ): Promise<void> => {
+    if (!table || excluded.has(pid) || seen.has(pid)) return;
+    seen.add(pid);
+    const row = await table.row(pid);
+    if (row === null) return; // gone
+    if (row === "unreadable") {
+      unreadable.set(pid, "birth_unreadable");
+      return;
+    }
+    if (row.birth !== expectedBirth) return; // the pid was reused since the snapshot
+    const entry: LiveMember = {
+      pid,
+      birth: { kind: "table", birth: row.birth },
+      startToken: `ps:${row.birth}`,
+      killed: signal === "SIGKILL",
+    };
+    live.set(pid, entry);
+    signalMember(entry, signal);
+  };
+
+  const scanMarker = async (signal: NodeJS.Signals): Promise<string | null> => {
     const result = await census.census([opts.marker]);
     if (result.status !== "ok") return result.reason;
     const pids = result.members.get(opts.marker) ?? [];
-    await mapBounded(pids, LINUX_CONCURRENCY, (pid) => admit(pid, signal));
+    await mapBounded(pids, LINUX_CONCURRENCY, (pid) => admitMarker(pid, signal));
     return null;
+  };
+
+  const scanCaptured = async (signal: NodeJS.Signals): Promise<string | null> => {
+    if (!captured || !table) return null;
+    const rows = await table.snapshot();
+    if (rows === null) return "process table unreadable";
+    const found = capturedCandidates(captured, rows, opts.scopeStart);
+    for (const group of found.reusedGroups) reusedGroups.add(group);
+    await mapBounded([...found.candidates], LINUX_CONCURRENCY, ([pid, birth]) =>
+      admitCaptured(pid, birth, signal),
+    );
+    return null;
+  };
+
+  const scan = async (signal: NodeJS.Signals): Promise<string | null> => {
+    const markerFailure = await scanMarker(signal);
+    const capturedFailure = await scanCaptured(signal);
+    return markerFailure ?? capturedFailure;
+  };
+
+  /** Is the member still the process we signalled? */
+  const stillSame = async (member: LiveMember): Promise<"same" | "gone" | "unreadable"> => {
+    if (member.birth.kind === "identity") {
+      const observed = await identity.read(member.pid);
+      const comparison = compareProcessIdentity(member.birth.identity, observed);
+      if (comparison === "same") return "same";
+      if (comparison === "unknown") return "unreadable";
+      return "gone"; // missing, or a different process now owns the pid
+    }
+    if (!table) return "unreadable";
+    const row = await table.row(member.pid);
+    if (row === null) return "gone";
+    if (row === "unreadable") return "unreadable";
+    return row.birth === member.birth.birth ? "same" : "gone";
   };
 
   const probe = async (): Promise<void> => {
     await mapBounded([...live.values()], LINUX_CONCURRENCY, async (member) => {
-      const observed = await identity.read(member.pid);
-      const comparison = compareProcessIdentity(member.identity, observed);
-      if (comparison === "same") return;
+      const state = await stillSame(member);
+      if (state === "same") return;
       live.delete(member.pid);
-      if (comparison === "unknown") {
-        unreadable.set(
-          member.pid,
-          `identity_${observed.status === "unknown" ? observed.reason : "unknown"}`,
-        );
-        return;
-      }
-      // missing, or a different process now owns the pid: our member is gone.
-      ended.push({ pid: member.pid, startToken: member.identity.startToken });
+      if (state === "unreadable") unreadable.set(member.pid, "identity_unreadable");
+      else ended.push({ pid: member.pid, startToken: member.startToken });
     });
   };
 
   const outcome = (censusFailure: string | null): ScopeReapOutcome => ({
-    coverage: "marker",
+    coverage: captured ? "marker+capture" : "marker",
     census: censusFailure === null ? "ok" : "failed",
     censusFailure,
     ended,
-    survivors: [...live.values()].map((m) => ({ pid: m.pid, startToken: m.identity.startToken })),
+    survivors: [...live.values()].map((m) => ({ pid: m.pid, startToken: m.startToken })),
     unreadable: [...unreadable].map(([pid, reason]) => ({ pid, reason })),
+    reusedGroups: [...reusedGroups],
     settled: censusFailure === null && live.size === 0 && unreadable.size === 0,
     restricted,
     durationMs: now() - start,
   });
 
-  const firstFailure = await scan("SIGTERM");
-  if (firstFailure !== null) return outcome(firstFailure);
-  if (live.size === 0) return outcome(null);
+  let censusFailure = await scan("SIGTERM");
+  if (live.size === 0) return outcome(censusFailure);
 
   let escalated = false;
   let rescans = 0;
@@ -500,11 +633,10 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
       escalated = true;
       // One bounded rescan for forks before the hard signal; late arrivals get KILL.
       rescans += 1;
-      await scan("SIGKILL");
+      censusFailure ??= await scan("SIGKILL");
       for (const member of live.values()) {
         if (member.killed) continue;
-        const observed = await identity.read(member.pid);
-        if (compareProcessIdentity(member.identity, observed) !== "same") continue;
+        if ((await stillSame(member)) !== "same") continue;
         member.killed = true;
         signalMember(member, "SIGKILL");
       }
@@ -512,11 +644,11 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
     if (live.size === 0) {
       if (rescans < 2) {
         rescans += 1;
-        await scan(escalated ? "SIGKILL" : "SIGTERM");
-        if (live.size === 0) return outcome(null);
-      } else return outcome(null);
+        censusFailure ??= await scan(escalated ? "SIGKILL" : "SIGTERM");
+        if (live.size === 0) return outcome(censusFailure);
+      } else return outcome(censusFailure);
     }
-    if (now() - start >= deadlineMs) return outcome(null);
+    if (now() - start >= deadlineMs) return outcome(censusFailure);
   }
 }
 
@@ -544,7 +676,7 @@ export class ScopeReaper {
 
 export const defaultScopeReaper = new ScopeReaper();
 
-/** End every live process carrying `marker` (see the module doc). */
+/** End every live process of the scope (see the module doc). */
 export function reapScopeMembers(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
   return defaultScopeReaper.reap(opts);
 }

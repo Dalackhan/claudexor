@@ -17,6 +17,7 @@ import type { normalizeRunStartRequest } from "@claudexor/control-api";
 import { buildRegistry } from "./registry.js";
 import type { RuntimeConcurrencyCaps } from "@claudexor/schema";
 import { logLine } from "./daemon-lifecycle.js";
+import { daemonRunScopeIndex } from "./run-scope-index.js";
 
 /**
  * Daemon-lifetime typed `credential_unusable` evidence (A7): in-memory and
@@ -114,5 +115,7 @@ export function buildRunOrchestrator(args: {
     reviewerEfforts:
       p.reviewerEfforts && typeof p.reviewerEfforts === "object" ? p.reviewerEfforts : undefined,
     runtimeConcurrencyCaps: args.runtimeConcurrencyCaps,
+    // Durable process custody: the daemon's run-scope index.
+    runScopes: daemonRunScopeIndex(),
   });
 }

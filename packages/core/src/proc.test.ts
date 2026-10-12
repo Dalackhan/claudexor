@@ -67,6 +67,99 @@ describe("spawnProcess", () => {
     void childPid;
   }, 15_000);
 
+  it("delivers every frame to a slow (backpressured) bounded consumer after exit, untruncated", async () => {
+    // 24 valid ~1 KB frames, then exit. The consumer accepts one frame at a
+    // time and pauses 700 ms after the first; the reader is blocked on
+    // capacity, which must never count as idle, and raw bytes already in the
+    // pipe are progress. Every frame arrives; the exit is not truncated.
+    const script = [
+      "for (let i = 0; i < 24; i++) console.log(JSON.stringify({ i, pad: 'x'.repeat(1000) }))",
+      "process.exit(0)",
+    ].join(";");
+    const frames: number[] = [];
+    let exitDrain: string | undefined = "unset";
+    let paused = false;
+    for await (const ev of spawnProcess(process.execPath, ["-e", script], {
+      exitDrainMs: 150,
+      streamLimits: { stdoutFrameBytes: 65_536, queuedFrames: 1, stderrBytes: 4096 },
+    })) {
+      if (ev.type === "stdout") {
+        frames.push((JSON.parse(ev.line) as { i: number }).i);
+        if (!paused) {
+          paused = true;
+          await new Promise((resolve) => setTimeout(resolve, 700));
+        }
+      }
+      if (ev.type === "exit") exitDrain = ev.drain;
+    }
+    expect(frames).toEqual(Array.from({ length: 24 }, (_, i) => i));
+    expect(exitDrain).toBeUndefined();
+  }, 15_000);
+
+  it("bounds the drain absolutely when a leftover keeps writing to the inherited pipe", async () => {
+    // The descendant writes every 25 ms for 10 s; the quiet window never
+    // elapses, so only the absolute post-exit bound can end the drain.
+    const script = [
+      "const {spawn}=require('node:child_process')",
+      "console.log('parent-line')",
+      "spawn(process.execPath,['-e','setInterval(()=>console.log(\"tick\"),25);setTimeout(()=>{},10000)'],{stdio:['ignore',1,'ignore']})",
+      "setTimeout(()=>process.exit(0),100)",
+    ].join(";");
+    const started = Date.now();
+    let ticks = 0;
+    let exitDrain: string | undefined;
+    let threw: unknown = null;
+    try {
+      for await (const ev of spawnProcess(process.execPath, ["-e", script], {
+        exitDrainMs: 200,
+        exitDrainMaxMs: 1_000,
+      })) {
+        if (ev.type === "stdout" && ev.line === "tick") ticks += 1;
+        if (ev.type === "exit") exitDrain = ev.drain;
+      }
+    } catch (error) {
+      threw = error;
+    }
+    expect(threw).toBeNull();
+    expect(ticks).toBeGreaterThan(0);
+    expect(exitDrain).toBe("truncated");
+    expect(Date.now() - started).toBeLessThan(4_000);
+  }, 15_000);
+
+  it("a forced closure on the bounded (ACP) reader path is never a read failure or an unconfirmed death", async () => {
+    const script = [
+      "const {spawn}=require('node:child_process')",
+      "console.log(JSON.stringify({hello:1}))",
+      "spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:['ignore',1,'ignore']})",
+      "setTimeout(()=>process.exit(0),50)",
+    ].join(";");
+    const lines: string[] = [];
+    let exitDrain: string | undefined;
+    let unconfirmed = false;
+    let threw: unknown = null;
+    const started = Date.now();
+    try {
+      for await (const ev of spawnProcess(process.execPath, ["-e", script], {
+        exitDrainMs: 300,
+        streamLimits: { stdoutFrameBytes: 65_536, queuedFrames: 8, stderrBytes: 4096 },
+        onTerminationUnconfirmed: () => {
+          unconfirmed = true;
+        },
+      })) {
+        if (ev.type === "stdout") lines.push(ev.line);
+        if (ev.type === "exit") exitDrain = ev.drain;
+        if (ev.type === "termination_unconfirmed") unconfirmed = true;
+      }
+    } catch (error) {
+      threw = error;
+    }
+    expect(threw).toBeNull();
+    expect(unconfirmed).toBe(false);
+    expect(lines).toEqual([JSON.stringify({ hello: 1 })]);
+    expect(exitDrain).toBe("truncated");
+    expect(Date.now() - started).toBeLessThan(4_000);
+  }, 15_000);
+
   it("does not truncate a clean exit whose pipe closes normally", async () => {
     let exitDrain: string | undefined = "unset";
     for await (const ev of spawnProcess(process.execPath, ["-e", "console.log('hi')"], {

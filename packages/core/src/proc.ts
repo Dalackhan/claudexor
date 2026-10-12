@@ -57,6 +57,12 @@ export interface SpawnOptions {
    */
   exitDrainMs?: number;
   /**
+   * Absolute bound (ms) on the post-exit drain that ongoing descendant writes
+   * cannot renew: a leftover logging to the inherited pipe forever must not
+   * hold the run. Default `max(10 * exitDrainMs, 30000)`.
+   */
+  exitDrainMaxMs?: number;
+  /**
    * Fail-closed disclosure (QA-027) for a consumer that broke the stream EARLY
    * (it is no longer iterating, so the typed `termination_unconfirmed` event
    * cannot be delivered): called once when a proven-alive descendant group
@@ -164,26 +170,51 @@ export async function* spawnProcess(
     detached: true,
   });
   if (typeof child.pid === "number") registerChildProcess(child.pid, cmd, runScopeMarkerOf(env));
-  // Bounded post-exit output drain (item 2): the direct child may exit while a
-  // descendant keeps our stdout/stderr pipe open, so `close` — which finishes
-  // capture — never fires and the run hangs on its terminal barrier. Once no
-  // output has arrived for `exitDrainMs` after exit, force the parent-side
-  // streams closed so capture completes and the barrier (which then reaps the
-  // leftover by its scope marker) is reached. Reset by each chunk below.
+  // Bounded post-exit output drain (#449 item 2): the direct child may exit
+  // while a descendant keeps our stdout/stderr pipe open, so `close` — which
+  // finishes capture — never fires and the run hangs on its terminal barrier.
+  // After exit, the OS pipe is read until it is QUIET for `exitDrainMs` (raw
+  // bytes, so a frame the consumer has not accepted yet still counts as
+  // progress, and time the bounded reader spends blocked on consumer capacity
+  // is never idle) or an ABSOLUTE post-exit bound passes that a chatty
+  // descendant cannot renew. Then our side of the pipes is closed — frames
+  // already read or queued are kept, the line reader is told first so the
+  // forced closure is never a protocol read failure — and the exit event says
+  // `drain: "truncated"`. The run-end reap ends the leftover itself.
   const exitDrainMs = opts.exitDrainMs ?? 2_000;
-  let lastOutputAt = Date.now();
+  const exitDrainMaxMs = opts.exitDrainMaxMs ?? Math.max(10 * exitDrainMs, 30_000);
+  const rawBytesRead = (): number =>
+    ((child.stdout as unknown as { bytesRead?: number } | null)?.bytesRead ?? 0) +
+    ((child.stderr as unknown as { bytesRead?: number } | null)?.bytesRead ?? 0);
   let drainTruncated = false;
   let drainTimer: NodeJS.Timeout | undefined;
   const armExitDrain = (): void => {
     if (exitDrainMs <= 0 || drainTimer) return;
+    const exitedAt = Date.now();
+    let progressBytes = rawBytesRead();
+    let progressAt = exitedAt;
     drainTimer = setInterval(
       () => {
-        if (Date.now() - lastOutputAt < exitDrainMs) return;
+        const now = Date.now();
+        const read = rawBytesRead();
+        if (read !== progressBytes) {
+          progressBytes = read;
+          progressAt = now;
+        }
+        // Blocked on consumer capacity: the reader is not idle, it is waiting
+        // for the consumer; the absolute bound still applies.
+        if (capacity !== undefined) progressAt = now;
+        const quiet = now - progressAt >= exitDrainMs;
+        const overdue = now - exitedAt >= exitDrainMaxMs;
+        if (!quiet && !overdue) return;
         drainTruncated = true;
         if (drainTimer) clearInterval(drainTimer);
         drainTimer = undefined;
-        // Our side only: ends the readers so `close` fires. The leftover keeps
-        // its own copy of the fd; the run-end reap ends the leftover itself.
+        // Tell the line reader first (its guarded readers then swallow the
+        // premature-close rejection instead of failing the attempt), then end
+        // our side of the pipes so `close` fires. The leftover keeps its own
+        // copy of the fd.
+        lines.close();
         child.stdout?.destroy();
         child.stderr?.destroy();
       },
@@ -270,7 +301,6 @@ export async function* spawnProcess(
   let capacity: (() => void) | undefined;
 
   const push = (e: ProcEvent): void => {
-    if (e.type === "stdout" || e.type === "stderr") lastOutputAt = Date.now();
     queue.push(e);
     if (wake) {
       wake();

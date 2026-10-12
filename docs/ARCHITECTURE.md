@@ -3077,15 +3077,20 @@ event. Independently of that cancel ladder, every run owns a process SCOPE
 run carries it (a `clean` env also forwards an enclosing host's grammar-shaped
 markers); the same pids tick takes one asynchronous process-table snapshot and
 records each live harness root's descendants (pid, group, birth) into the run's
-entry, after the root's own group (pgid, leader pid, leader birth) was seeded
-the moment it was spawned. Every announced run holds its terminal event (the
+entry, after the root's own group (pgid and the leader's measured identity)
+was recorded synchronously the moment it was registered — its `lstart` birth
+is added once a table read confirms the same leader before and after the
+read, and the scope floor is `opened_at` until a birth is known. Every announced run holds its terminal event (the
 deferred-terminal mechanism) until the whole-run barrier has ended the scope's
 members by measured identity — environment-marker members (`ps -E` on macOS,
 `/proc/<pid>/environ` on Linux), members of recorded process groups under the
 pgid-reuse rule and recorded descendants, TERM then a bounded KILL, each signal
 after a fresh birth read — and written `final/process_scope.yaml` (what was
 ended, what survived, what was unreadable, which recorded groups were skipped
-as reused, and `completeness`); only then is the terminal published, so the
+as reused, `completeness`, and `incomplete` when the single settlement
+deadline expired first — scanning and signalling stop at that moment, never a
+late signal); only then is the terminal published — also on the path where a
+delegated child drain failed (the record step is the barrier's `finally`) — so the
 SQL command state and the SSE stream a host observes already carry the outcome,
 which `GET /v2/runs/:id` projects compactly as `summary.processScope` (null for
 runs without the artifact: unknown, never clean). The reap never changes the
@@ -3096,11 +3101,18 @@ Limits are disclosed, never failures: Windows has no environment census
 hides Apple platform-binary environments, so a system binary started in the
 background by a shell that exited before any capture cannot be ruled out —
 `completeness` is `not_provable` there even when settled, and `complete` only
-on Linux with every census source succeeding.
+on Linux when every census source succeeded and every same-uid process
+environment was readable (another uid cannot inherit our environment through
+ordinary spawn and is not counted; a setuid binary is a disclosed residual).
+A host cancel that arrives during the settlement barrier does not rewrite a
+completed run as cancelled: the cancellation decision is frozen when the
+strategy's terminal is held.
 `daemon/run-scopes.json` (`schema_version: 1`) is a stable contract a host may
 read directly when the daemon is dead: per entry `run_id`, `marker`, `state`
 (`open` | `unresolved`), `scope_start` (birth floor), `root_groups[]` with
-`{pgid, leader_pid, leader_birth}`, and `captured[]` rows `{pid, pgid, birth}`;
+`{pgid, leader_pid, leader_birth | null, leader_identity?}` (the identity is
+the daemon's proc-identity token, recorded at registration; `leader_birth` is
+filled once confirmed), and `captured[]` rows `{pid, pgid, birth}`;
 every `birth` is `ps -o lstart=` text under the C locale in local time
 (`Mon Oct 12 14:08:47 2026`, 1 s resolution) and is only ever compared with
 another `lstart` reading, never with the proc-identity helper's token. The sweep covers orphaned envelopes (with their

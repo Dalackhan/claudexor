@@ -850,7 +850,10 @@ invariant or operator decision before proceeding.
   child the engine spawns for a run inherits the run's scope marker
   (`CLAUDEXOR_RUN_SCOPE_<id>=1`, minted and durably recorded before the first
   launch; the diff-review CLI has no run and is the one disclosed exception),
-  the root's own process group is recorded the moment it is spawned, and
+  the root's own process group and leader identity are recorded synchronously
+  the moment it is registered (a shell that exits within milliseconds still
+  leaves its group on record; a binary that left that group before any
+  capture is the disclosed residual), and
   while the run is live the daemon records the run's descendants (pid,
   process group, birth) from kernel state. On every terminal — success,
   failure, cancel and timeout alike — the scope's members (marker members,
@@ -861,9 +864,11 @@ invariant or operator decision before proceeding.
   artifact, projected into the run detail); the next daemon start does the
   same for a crashed generation. What could not be ended or read is recorded
   instead of declared clean, and the record states its completeness honestly:
-  provable only where the census reads every environment (Linux), never on
-  macOS for a system binary started in the background by a shell that exited
-  before capture, never on Windows. The outcome is a disclosure, not a
+  provable only where the census read every same-uid environment (Linux),
+  never on macOS for a system binary started in the background by a shell
+  that exited before capture, never on Windows, never after a settlement
+  that outran its single deadline (disclosed as incomplete, never a late
+  signal, never a verdict). The outcome is a disclosure, not a
   verdict axis: it never turns a delivered answer into a failure. Work meant
   to outlive a run belongs to a longer-lived custodian, never to pid 1.
   verify: core scope census/reap tests (fake kernel and real orphan

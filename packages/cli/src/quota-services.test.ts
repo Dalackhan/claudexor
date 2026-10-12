@@ -39,6 +39,70 @@ const raw: ControlQuotaResponse = {
 };
 
 describe("quotaControlServices", () => {
+  it.each([undefined, "resources", "constraint_freshness"] as const)(
+    "keeps image quota visible and scoped across the %s read view",
+    async (view) => {
+      const mixed = structuredClone(raw);
+      mixed.snapshots[0]!.constraints = [
+        {
+          ...raw.snapshots[0]!.constraints[0]!,
+          id: "text",
+          applies_to_models: null,
+          applies_to_request_kinds: ["text"],
+          used_ratio: 0.2,
+        },
+        {
+          ...raw.snapshots[0]!.constraints[0]!,
+          id: "image",
+          applies_to_models: ["gpt-image-2"],
+          applies_to_request_kinds: ["image"],
+        },
+      ];
+      const projected = {
+        ...mixed,
+        snapshots: mixed.snapshots.map((snapshot) => ({
+          ...snapshot,
+          constraints: snapshot.constraints.map((constraint) => ({
+            ...constraint,
+            freshness: "fresh" as const,
+          })),
+        })),
+      };
+      const registry = {
+        read: () => mixed,
+        readResources: () => [],
+        readConstraintFreshness: () => projected,
+        refresh: vi.fn(async () => mixed),
+        refreshResources: vi.fn(async () => ({ ...mixed, resources: [] })),
+      };
+      const services = quotaControlServices(() => registry as never);
+      const text = await services.quota({ view });
+      const image = await services.quota({ view, requestKind: "image", model: "gpt-image-2" });
+      expect(text.snapshots[0]!.availability?.state).toBe("available");
+      expect(image.snapshots[0]!.availability).toMatchObject({
+        state: "exhausted",
+        blocking_constraints: ["image"],
+      });
+      expect(image.snapshots[0]!.constraints).toHaveLength(2);
+      expect(image.snapshots[0]!.constraints[1]!.applies_to_request_kinds).toEqual(["image"]);
+      if (view === "constraint_freshness")
+        expect(
+          ControlQuotaFreshnessResponse.parse(image).snapshots[0]!.constraints[1]!.freshness,
+        ).toBe("fresh");
+      if (view === "resources") expect(image).toHaveProperty("resources", []);
+      const other = await services.quota({ view, requestKind: "image", model: "different-model" });
+      expect(other.snapshots[0]!.availability?.state).toBe("available");
+      const refreshed = await services.refreshQuota({
+        ...(view === "resources" ? { view } : {}),
+        requestKind: "image",
+        model: "gpt-image-2",
+      });
+      expect(refreshed.snapshots[0]!.availability?.state).toBe("exhausted");
+      expect(mixed.snapshots[0]).not.toHaveProperty("availability");
+      expect(mixed.snapshots[0]!.constraints[0]).not.toHaveProperty("freshness");
+    },
+  );
+
   it("decorates cheap and refreshed responses without changing registry-owned raw quota", async () => {
     const read = vi.fn(() => raw);
     const refresh = vi.fn(async () => raw);

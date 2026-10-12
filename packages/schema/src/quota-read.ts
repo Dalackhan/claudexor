@@ -1,4 +1,5 @@
 import { z } from "zod/v3";
+import { ControlQuotaRefreshRequest } from "./account-target.js";
 import {
   ControlQuotaResponse,
   ControlQuotaSnapshot,
@@ -10,9 +11,12 @@ import {
  * accept constraint freshness. Clients explicitly select the read projection;
  * operation discovery is optional, and old engines may return strict legacy data
  * (3.24) or reject the selector with HTTP 400 (3.25.0/3.25.1). */
-export const ControlQuotaReadRequest = z
-  .object({ view: z.enum(["resources", "constraint_freshness"]).optional() })
-  .strict();
+export const ControlQuotaReadRequest = ControlQuotaRefreshRequest.omit({ target: true })
+  .extend({ view: z.enum(["resources", "constraint_freshness"]).optional() })
+  .strict()
+  .describe(
+    "GET /v2/quota query selectors, each at most once; there is no body. Omitted requestKind means text availability, omitted model keeps the model-agnostic projection, and omitted view keeps the legacy shape. Reads cached snapshots without refreshing quota.",
+  );
 export type ControlQuotaReadRequest = z.infer<typeof ControlQuotaReadRequest>;
 
 export const ControlQuotaFreshnessSnapshot = ControlQuotaSnapshot.extend({

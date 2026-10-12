@@ -11645,6 +11645,12 @@ describe("DaemonControlApiServer", () => {
           mutability: "read_only",
           parameters: [
             expect.objectContaining({
+              name: "requestKind",
+              location: "query",
+              enum: ["text", "image"],
+            }),
+            expect.objectContaining({ name: "model", location: "query" }),
+            expect.objectContaining({
               name: "view",
               location: "query",
               enum: ["resources", "constraint_freshness"],

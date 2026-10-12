@@ -1,5 +1,10 @@
 export { parseCodexAccountResources } from "./account-resources.js";
-import type { HarnessEvent, QuotaConstraint, QuotaSnapshot } from "@claudexor/schema";
+import type {
+  HarnessEvent,
+  QuotaConstraint,
+  QuotaSnapshot,
+  QuotaRequestKind,
+} from "@claudexor/schema";
 import { nowIso, redactSecrets } from "@claudexor/util";
 
 /** Full inventory reads may clear old restrictions, so malformed/unknown
@@ -41,6 +46,7 @@ function parseCodexRateLimits(
   value: unknown,
   observedAt: Date,
   subjectId: string | null = null,
+  diagnostics = false,
 ): QuotaSnapshot[] {
   if (!value || typeof value !== "object") return [];
   const response = value as Record<string, unknown>;
@@ -49,6 +55,8 @@ function parseCodexRateLimits(
   const constraints: QuotaConstraint[] = [];
   for (const [fallbackId, bucket] of buckets) {
     const bucketId = textOrNull(bucket["limitId"]) ?? fallbackId;
+    const requestKind = codexQuotaRequestKind(bucketId);
+    if (requestKind === null && !diagnostics) continue;
     const bucketLabel = textOrNull(bucket["limitName"]) ?? bucketId;
     for (const [windowName, candidate] of Object.entries(bucket)) {
       const window = objectOrNull(candidate);
@@ -59,6 +67,7 @@ function parseCodexRateLimits(
       constraints.push({
         id: `${bucketId}:${windowName}`,
         label: `${bucketLabel} ${windowName}`,
+        ...(requestKind ? { applies_to_request_kinds: [requestKind] } : {}),
         used_ratio: usedPercent === null ? null : Math.min(1, Math.max(0, usedPercent / 100)),
         window_seconds:
           durationMins !== null && durationMins > 0 && Number.isFinite(durationMins * 60)
@@ -96,12 +105,14 @@ export function codexRateLimitEvents(value: unknown, sessionId: string): Harness
     const [snapshot] = parseCodexRateLimits(
       { rateLimits: { ...bucket, limitId: id } },
       new Date(ts),
+      null,
+      true,
     );
     return (snapshot?.constraints ?? []).map((constraint): HarnessEvent => {
       const event: HarnessEvent = { type: "status", session_id: sessionId, ts };
       // The ordinary Codex bucket is account-wide. A named additional bucket
       // is not a model alias contract; retain its evidence without inventing one.
-      if (id === "codex" || id === "default") {
+      if (id === "codex" || id === "default" || id === "image_gen") {
         event.quota = {
           source: "codex_app_server_event",
           plan_label: snapshot?.subject.plan_label ?? null,
@@ -202,4 +213,13 @@ function finiteNumber(value: unknown): number | null {
 
 function textOrNull(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+/** A named bucket is a vendor request-kind contract, never a model alias. */
+export function codexQuotaRequestKind(bucketId: string): QuotaRequestKind | null {
+  return bucketId === "image_gen"
+    ? "image"
+    : bucketId === "codex" || bucketId === "default"
+      ? "text"
+      : null;
 }

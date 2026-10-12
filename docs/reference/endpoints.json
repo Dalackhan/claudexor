@@ -420,6 +420,17 @@
       "request_schema": "ControlModelOperationCreateRequest",
       "parameters": [
         {
+          "name": "requestKind",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": [
+            "image"
+          ],
+          "schema_ref": null,
+          "description": "Select ImageCallRequest for the uploaded model-purpose JSON payload and ImageCallResult for the result bytes (generated payload schemas, not the query value). Omitted keeps ModelCallRequest/ModelCallResult byte-for-byte. Bound to idempotency; cannot be combined with the evidence-capture flags. Absent from this descriptor means the engine has no image operations."
+        },
+        {
           "name": "captureEffortEvidence",
           "in": "query",
           "required": false,
@@ -719,6 +730,27 @@
       "auth": "loopback_bearer",
       "request_schema": null,
       "parameters": [
+        {
+          "name": "requestKind",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": [
+            "text",
+            "image"
+          ],
+          "schema_ref": null,
+          "description": "Availability scope, text when omitted; all scoped constraints remain visible."
+        },
+        {
+          "name": "model",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": null,
+          "schema_ref": null,
+          "description": "Optional model for quota applicability."
+        },
         {
           "name": "view",
           "in": "query",

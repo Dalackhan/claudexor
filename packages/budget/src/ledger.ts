@@ -9,12 +9,11 @@ import type {
   Intent,
   PaidBudget,
   QuotaSnapshot,
-  QuotaConstraint,
 } from "@claudexor/schema";
 import {
   BudgetLease as BudgetLeaseSchema,
   CostEvidence as CostEvidenceSchema,
-  quotaModelPrefixMatches,
+  quotaConstraintAppliesToRequestKind,
   quotaSnapshotIdentity,
 } from "@claudexor/schema";
 import { newId, nowIso, sha256 } from "@claudexor/util";
@@ -33,21 +32,8 @@ export type CircuitTier = "ok" | "soft" | "downgrade" | "hard";
  * reasons — the old status words exhausted/exhausted_overshoot are gone. */
 export type BudgetTerminal = "budget_exhausted" | "budget_overshoot" | "cost_unverifiable" | null;
 
-/** Canonical admission predicate. Null model uses the vendor default's scope;
- * undefined has no model context and preserves conservative matching. */
-export function quotaConstraintAppliesToModel(
-  constraint: Pick<
-    QuotaConstraint,
-    "applies_to_models" | "applies_to_model_prefixes" | "applies_to_unspecified_model"
-  >,
-  model?: string | null,
-): boolean {
-  const scopedModels = constraint.applies_to_models;
-  const prefixes = constraint.applies_to_model_prefixes;
-  if ((scopedModels == null && !prefixes?.length) || model === undefined) return true;
-  if (model === null) return constraint.applies_to_unspecified_model === true;
-  return scopedModels?.includes(model) === true || quotaModelPrefixMatches(prefixes, model);
-}
+export { quotaConstraintAppliesToModel } from "./quota-model-scope.js";
+import { quotaConstraintAppliesToModel } from "./quota-model-scope.js";
 
 export interface CircuitThresholds {
   soft: number;
@@ -469,7 +455,11 @@ export class BudgetLedger {
         observation.credential_route !== credentialRoute
       )
         return false;
-      if (!quotaConstraintAppliesToModel(observation, model)) return false;
+      if (
+        !quotaConstraintAppliesToRequestKind(observation) ||
+        !quotaConstraintAppliesToModel(observation, model)
+      )
+        return false;
 
       if (!observation.cooldown_until) return false;
       const time = Date.parse(observation.cooldown_until);
@@ -479,7 +469,11 @@ export class BudgetLedger {
     if (!credentialRoute) return false;
     return this.snapshotsFor(harnessId, credentialRoute, credentialSubjectId).some((snapshot) =>
       snapshot.constraints.some((constraint) => {
-        if (!quotaConstraintAppliesToModel(constraint, model)) return false;
+        if (
+          !quotaConstraintAppliesToRequestKind(constraint) ||
+          !quotaConstraintAppliesToModel(constraint, model)
+        )
+          return false;
         const cooldown = constraint.cooldown_until
           ? Date.parse(constraint.cooldown_until)
           : Number.NaN;
@@ -520,7 +514,11 @@ export class BudgetLedger {
         observation.credential_route !== credentialRoute
       )
         continue;
-      if (!quotaConstraintAppliesToModel(observation, model)) continue;
+      if (
+        !quotaConstraintAppliesToRequestKind(observation) ||
+        !quotaConstraintAppliesToModel(observation, model)
+      )
+        continue;
       latest.set(
         `${observation.credential_route ?? ""}\0${observation.subject_id ?? ""}\0${observation.constraint_id}`,
         observation,
@@ -546,7 +544,11 @@ export class BudgetLedger {
     if (credentialRoute) {
       for (const snapshot of this.snapshotsFor(harnessId, credentialRoute, credentialSubjectId)) {
         for (const constraint of snapshot.constraints) {
-          if (!quotaConstraintAppliesToModel(constraint, model)) continue;
+          if (
+            !quotaConstraintAppliesToRequestKind(constraint) ||
+            !quotaConstraintAppliesToModel(constraint, model)
+          )
+            continue;
           if (
             typeof constraint.used_ratio !== "number" ||
             typeof constraint.window_seconds !== "number" ||

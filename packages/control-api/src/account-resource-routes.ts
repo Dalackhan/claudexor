@@ -3,6 +3,7 @@ import {
   ControlAccountResourcesResponse,
   ControlQuotaFreshnessResponse,
   ControlQuotaResponse,
+  ControlQuotaReadRequest,
   ControlQuotaRefreshRequest,
   ControlAccountResetRequest,
   ControlAccountResetResponse,
@@ -10,9 +11,9 @@ import {
 import type { DaemonControlApiOptions } from "./daemon-server.js";
 import type { OperationDraft } from "./operation-draft.js";
 import { quotaReadViewQuery, resourceViewQuery } from "./catalog-query.js";
-import { assertOnlyQueryParams } from "./query.js";
+import { assertOnlyQueryParams, singleQuery } from "./query.js";
 import { requiredIdempotencyKey } from "./run-start.js";
-import { queryParam } from "./operation-parameters.js";
+import { queryParam, QUOTA_READ_PARAMETERS } from "./operation-parameters.js";
 
 const parameters = [
   queryParam({
@@ -22,6 +23,7 @@ const parameters = [
   }),
 ];
 const readParameters = [
+  ...QUOTA_READ_PARAMETERS,
   queryParam({
     name: "view",
     enum: ["resources", "constraint_freshness"],
@@ -115,8 +117,20 @@ export async function handleAccountResourceRoute(
 ): Promise<boolean> {
   try {
     if ((method === "GET" && path === "/quota") || (method === "POST" && path === "/quota")) {
-      assertOnlyQueryParams(url, ["view"]);
+      assertOnlyQueryParams(url, method === "GET" ? ["view", "requestKind", "model"] : ["view"]);
       const view = method === "GET" ? quotaReadViewQuery(url) : resourceViewQuery(url);
+      const input =
+        method === "GET"
+          ? ControlQuotaReadRequest.parse({
+              ...(view ? { view } : {}),
+              ...(singleQuery(url, "requestKind") !== undefined
+                ? { requestKind: singleQuery(url, "requestKind") }
+                : {}),
+              ...(singleQuery(url, "model") !== undefined
+                ? { model: singleQuery(url, "model") }
+                : {}),
+            })
+          : undefined;
       const schema =
         view === "resources"
           ? ControlAccountResourcesResponse
@@ -125,7 +139,9 @@ export async function handleAccountResourceRoute(
             : ControlQuotaResponse;
       const payload =
         method === "GET"
-          ? await required(ctx.services?.quota)(view ? { view } : undefined)
+          ? await required(ctx.services?.quota)(
+              input && Object.keys(input).length ? input : undefined,
+            )
           : await required(ctx.services?.refreshQuota)({
               ...ControlQuotaRefreshRequest.parse(await ctx.readBody(req)),
               ...(view === "resources" ? { view } : {}),

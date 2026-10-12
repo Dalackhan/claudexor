@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { ReviewFinding, type HarnessEvent } from "@claudexor/schema";
+import { ReviewFinding, type BudgetObservation, type HarnessEvent } from "@claudexor/schema";
+import { codexRateLimitEvents } from "../../harness-codex/src/quota.js";
 import {
   harnessEventPayload,
+  observeBudgetSignals,
   promptWithEngineConstraints,
   promptWithGateArgvDisclosure,
   redactHarnessEvent,
@@ -291,5 +293,80 @@ describe("winnerNeedsHuman (D9: winner-only NEEDS_HUMAN, fail-closed)", () => {
     expect(winnerNeedsHuman(null, [{ attemptId: "a01", findings: [escalation("f4")] }])).toBe(
       false,
     );
+  });
+});
+
+describe("observeBudgetSignals (one-shot quota pressure describes the text run)", () => {
+  const RESET = 1_800_000_000;
+  /** The real Codex app-server notification producer, image or text bucket. */
+  const notification = (limitId: string, usedPercent: number) =>
+    codexRateLimitEvents(
+      {
+        rateLimits: { limitId, primary: { usedPercent, windowDurationMins: 300, resetsAt: RESET } },
+      },
+      "s",
+    );
+  function attempt() {
+    const observed: BudgetObservation[] = [];
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    const state = { quotaPressureDisclosed: false };
+    const observe = (events: HarnessEvent[]) => {
+      for (const ev of events)
+        observeBudgetSignals(
+          { observe: (o) => observed.push(o) },
+          { emit: (type, payload) => emitted.push([type, payload]) },
+          "codex",
+          "attempt-1",
+          ev,
+          state,
+        );
+    };
+    return { observed, emitted, state, observe };
+  }
+
+  it("ledgers an image window but discloses the later text window as the run's pressure", () => {
+    const run = attempt();
+    run.observe(notification("image_gen", 90));
+    expect(run.observed).toMatchObject([
+      {
+        kind: "quota_constraint",
+        constraint_id: "image_gen:primary",
+        applies_to_request_kinds: ["image"],
+        used_ratio: 0.9,
+      },
+    ]);
+    expect(run.emitted).toEqual([]);
+    expect(run.state.quotaPressureDisclosed).toBe(false);
+    run.observe(notification("codex", 60));
+    run.observe(notification("codex", 80));
+    expect(run.observed.map((o) => [o.constraint_id, o.used_ratio])).toEqual([
+      ["image_gen:primary", 0.9],
+      ["codex:primary", 0.6],
+      ["codex:primary", 0.8],
+    ]);
+    expect(run.emitted).toEqual([
+      [
+        "budget.quota_pressure",
+        {
+          harness_id: "codex",
+          attempt_id: "attempt-1",
+          constraint_id: "codex:primary",
+          used_ratio: 0.6,
+          resets_at: new Date(RESET * 1000).toISOString(),
+        },
+      ],
+    ]);
+  });
+
+  it("still discloses a window without request-kind scope once", () => {
+    const run = attempt();
+    const [event] = notification("codex", 70);
+    const { applies_to_request_kinds: _kinds, ...unscoped } = event!.quota!.constraints[0]!;
+    run.observe([{ ...event!, quota: { ...event!.quota!, constraints: [unscoped] } }]);
+    run.observe(notification("codex", 90));
+    expect(run.observed).toHaveLength(2);
+    expect(run.emitted.map(([type, payload]) => [type, payload.used_ratio])).toEqual([
+      ["budget.quota_pressure", 0.7],
+    ]);
   });
 });

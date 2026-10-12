@@ -37,6 +37,7 @@ import { processingAdmissionProblem } from "./processing-refusal.js";
 import { ResponseFailureCapture } from "./failure-evidence.js";
 import { RequestDelivery } from "./request-delivery.js";
 import { codexModelEfforts, codexModelEffortResolution } from "./model-effort.js";
+import { createCodexImageFacet } from "./images.js";
 
 const ENDPOINT = "https://chatgpt.com/backend-api/codex";
 const CLIENT = "claudexor";
@@ -239,6 +240,8 @@ export function createCodexModelAdapter(deps: CodexModelAdapterDeps = {}): Model
   const clientVersion = deps.clientVersion ?? (() => codexCatalogClientVersion());
   return {
     id: "codex",
+    // Same managed account, auth and delivery owners; a different wire.
+    image: createCodexImageFacet(deps),
     inventoryAbsence: "advisory",
     async catalog(context) {
       const auth = await prepareCodexModelAuth(context.profile, context.signal, deps);

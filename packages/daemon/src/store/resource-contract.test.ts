@@ -214,6 +214,48 @@ describe("SQL ResourceStore contract", () => {
     expect(f.logs).toEqual([]);
   });
 
+  it("isolates image request uploads from Agent attachments without filtering caller image content", async () => {
+    const path = root();
+    const first = await resourceFixture(path);
+    fixtures.push(first);
+    const bytes = Buffer.from(JSON.stringify({ prompt: `ghp_${"z".repeat(24)}` }));
+    const upload = first.resources.create(
+      { ...uploadRequest, name: "image-request.json", sizeBytes: bytes.length },
+      "image-upload",
+    );
+    await first.resources.write(upload.uploadId, chunks(bytes));
+    const image = first.resources.finalize(upload.uploadId, undefined, "image-finalize");
+    const imageRef = {
+      resourceId: image.resourceId,
+      sha256: image.sha256,
+      sizeBytes: image.sizeBytes,
+    };
+    expect(first.resources.readModel(imageRef)).toEqual(bytes);
+    expect(() => first.resources.resolve([{ resourceId: image.resourceId }])).toThrow(
+      expect.objectContaining({ code: "resource_purpose_mismatch" }),
+    );
+    expect(first.resources.listModelResources().map((ref) => ref.resourceId)).toEqual([
+      image.resourceId,
+    ]);
+    const modelRef = first.resources.publishModel(bytes);
+    await first.tick();
+    first.resources.releaseModel(modelRef);
+    await first.resources.drainCleanup();
+    expect(first.resources.readModel(imageRef)).toEqual(bytes); // shared blob remains owned
+    await first.close();
+    const second = await resourceFixture(path);
+    fixtures.push(second);
+    expect((await second.obligations.completeOpen()).failed).toEqual([]);
+    expect(second.resources.readModel(imageRef)).toEqual(bytes);
+    second.resources.releaseModel(imageRef);
+    await second.resources.drainCleanup();
+    expect(second.resources.listModelResources()).toEqual([]);
+    expect(() => second.resources.readModel(imageRef)).toThrow(
+      expect.objectContaining({ code: "resource_not_found" }),
+    );
+    expect(fs.existsSync(second.blobs.filePath(imageRef.sha256.slice(7)))).toBe(false);
+  });
+
   it("keeps sensitive names/content checks for attachments and rejects short or oversized streams", async () => {
     const f = await fixture();
     expect(() => f.resources.create({ ...uploadRequest, name: ".env" }, "sensitive-name")).toThrow(

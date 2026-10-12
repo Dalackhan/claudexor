@@ -26,6 +26,8 @@ import {
   ControlProblem,
   GlobalConfig,
   type CredentialProfile,
+  type ImageCallRequest,
+  type QuotaRequestKind,
   type ModelAccountChoice,
   type ModelCallResult,
   type JobAdmission,
@@ -36,8 +38,9 @@ import { buildRegistry } from "./registry.js";
 import { credentialUnusableLedger } from "./run-orchestrator.js";
 import type { RetentionRunner } from "./retention-service.js";
 import { catalogProfiles, enumerateAccountCatalogs } from "./account-catalog.js";
-import { bindModelAccountEvidence } from "./model-account-evidence.js";
+import { bindModelAccountEvidence, withImageAccountEvidence } from "./model-account-evidence.js";
 import { modelOperationControlServices } from "./model-operation-control.js";
+import { modelError, poolExhausted } from "./model-service-refusals.js";
 
 /**
  * Daemon-lifetime model-substitution observations: in-memory and bounded, like
@@ -65,10 +68,6 @@ type Dependencies = ModelOperationPersistence &
     migrationGate?: typeof accountsMigrationGate;
   };
 
-function modelError(code: string, message: string, status = 409): Error {
-  return Object.assign(new Error(message), { code, status, retryable: false });
-}
-
 /** Model transport composition shares account, quota, command, and retention owners
  * with Agents. It never starts an Agent Run or creates another routing ledger. */
 export function createModelServices(deps: Dependencies) {
@@ -95,6 +94,18 @@ export function createModelServices(deps: Dependencies) {
     model: string | null,
     signal: AbortSignal,
   ): Promise<{ profile: CredentialProfile; catalog: ControlModelCatalogResponse }> => {
+    const admitted = await admitAccount(source, account, model, signal);
+    return resolveCatalog(source, account, model, signal, admitted);
+  };
+
+  /** Pin/pool admission shared by text and image selection: harness enabled,
+   * managed-login rows only, strict pin revocation and probe checks. */
+  const admitAccount = async (
+    source: ModelSource,
+    account: ModelAccountChoice,
+    model: string | null,
+    signal: AbortSignal,
+  ) => {
     signal.throwIfAborted();
     const cfg = config();
     const harnessId = source.credentialHarness;
@@ -154,115 +165,85 @@ export function createModelServices(deps: Dependencies) {
           "The pinned model account has no verified current authentication",
         );
     }
+    return { cfg, harnessId, harness, profiles, probe, pinnedProfile };
+  };
+
+  /** One pool pick for the given model, or a typed pool refusal. The resolver
+   * never generates; an `excluded` set lets a selection epoch move on. */
+  const pickAccount = async (
+    source: ModelSource,
+    account: ModelAccountChoice,
+    model: string | null,
+    admitted: Awaited<ReturnType<typeof admitAccount>>,
+    excluded: Set<string>,
+    catalogRefusals: Map<string, ControlProblem>,
+    requestKind: QuotaRequestKind = "text",
+  ): Promise<CredentialProfile> => {
+    const { harnessId, harness, profiles, probe, pinnedProfile } = admitted;
+    const currentQuota = quotaEvidence();
+    let profile: CredentialProfile | null;
+    try {
+      profile = await resolveAccountForRun({
+        harnessId,
+        registry: profiles,
+        policy:
+          harness?.profile_policy ??
+          GlobalConfig.parse({ harnesses: { [harnessId]: {} } }).harnesses[harnessId]!
+            .profile_policy,
+        profileCardinality: credentialProfilePolicyState({
+          adapter: registry.get(harnessId),
+          registry: profiles,
+        }),
+        snapshots: currentQuota.snapshots,
+        requestKind,
+        quota: currentQuota,
+        unusable: unusable.live(),
+        substitutions: substitutions.live(),
+        probe,
+        pinnedProfile,
+        boundProfileId: account.mode === "auto" ? (account.preferredProfileId ?? null) : null,
+        threadId: null,
+        model,
+        excludedProfileIds: excluded,
+        defaultRoute: null,
+        // Model calls cannot borrow an unregistered/default login or a paid route.
+        nativeCredentialsDisabled: true,
+        authPreference: "subscription",
+        notePoolApiKeyRoute: () => {},
+        emit: () => {},
+      });
+    } catch (error) {
+      if (errorCode(error) === "credential_pool_exhausted")
+        throw poolExhausted(source.adapter.id, error, catalogRefusals);
+      throw error;
+    }
+    if (!profile)
+      throw modelError("model_account_unavailable", "Connect a managed account for model calls");
+    return profile;
+  };
+
+  const resolveCatalog = async (
+    source: ModelSource,
+    account: ModelAccountChoice,
+    model: string | null,
+    signal: AbortSignal,
+    admitted: Awaited<ReturnType<typeof admitAccount>>,
+  ): Promise<{ profile: CredentialProfile; catalog: ControlModelCatalogResponse }> => {
+    const { harnessId } = admitted;
     const excluded = new Set<string>();
     const catalogRefusals = new Map<string, ControlProblem>();
     // Exact-account discovery follows the raw source's absence declaration.
     // Actual catalog failures retain their causes; this loop never generates.
     while (true) {
       signal.throwIfAborted();
-      const currentQuota = quotaEvidence();
-      let profile: CredentialProfile | null;
-      try {
-        profile = await resolveAccountForRun({
-          harnessId,
-          registry: profiles,
-          policy:
-            harness?.profile_policy ??
-            GlobalConfig.parse({ harnesses: { [harnessId]: {} } }).harnesses[harnessId]!
-              .profile_policy,
-          profileCardinality: credentialProfilePolicyState({
-            adapter: registry.get(harnessId),
-            registry: profiles,
-          }),
-          snapshots: currentQuota.snapshots,
-          quota: currentQuota,
-          unusable: unusable.live(),
-          substitutions: substitutions.live(),
-          probe,
-          pinnedProfile,
-          boundProfileId: account.mode === "auto" ? (account.preferredProfileId ?? null) : null,
-          threadId: null,
-          model,
-          excludedProfileIds: excluded,
-          defaultRoute: null,
-          // Model calls cannot borrow an unregistered/default login or a paid route.
-          nativeCredentialsDisabled: true,
-          authPreference: "subscription",
-          notePoolApiKeyRoute: () => {},
-          emit: () => {},
-        });
-      } catch (error) {
-        if (errorCode(error) === "credential_pool_exhausted") {
-          const provided = ControlProblem.safeParse(
-            error && typeof error === "object" && "problem" in error ? error.problem : null,
-          );
-          const recordedCauses = provided.success ? provided.data.context.poolCauses : null;
-          const causes = new Set(Array.isArray(recordedCauses) ? recordedCauses : []);
-          const resets: Array<string | null> = causes.has("quota")
-            ? [
-                provided.success && typeof provided.data.context.resetsAt === "string"
-                  ? provided.data.context.resetsAt
-                  : null,
-              ]
-            : [];
-          for (const refusal of catalogRefusals.values()) {
-            causes.add(
-              refusal.code === "auth_required"
-                ? "auth"
-                : refusal.code === "subscription_window_exhausted"
-                  ? "quota"
-                  : refusal.code === "model_unavailable"
-                    ? "model"
-                    : "unavailable",
-            );
-            if (refusal.code === "subscription_window_exhausted")
-              resets.push(
-                typeof refusal.context.resetsAt === "string" ? refusal.context.resetsAt : null,
-              );
-          }
-          const poolCause =
-            causes.size === 1 && causes.has("quota")
-              ? "quota"
-              : causes.size === 1 && causes.has("auth")
-                ? "auth"
-                : causes.size === 2 && causes.has("auth") && causes.has("quota")
-                  ? "mixed"
-                  : "unavailable";
-          const code =
-            poolCause === "quota"
-              ? "subscription_window_exhausted"
-              : poolCause === "auth"
-                ? "auth_required"
-                : causes.size === 1 && causes.has("model")
-                  ? "model_unavailable"
-                  : "credential_pool_exhausted";
-          const message =
-            poolCause === "quota"
-              ? "Every available model account is blocked by subscription quota"
-              : poolCause === "auth"
-                ? "Every available model account requires sign-in"
-                : "No managed account can currently serve this model request";
-          const resetsAt =
-            poolCause !== "unavailable" &&
-            resets.length > 0 &&
-            resets.every((at): at is string => at !== null && Number.isFinite(Date.parse(at)))
-              ? resets.reduce((earliest, at) =>
-                  Date.parse(at) < Date.parse(earliest) ? at : earliest,
-                )
-              : null;
-          throw Object.assign(modelError(code, message), {
-            problem: ControlProblem.parse({
-              code,
-              message,
-              retryable: false,
-              context: { source: source.adapter.id, poolCause, resetsAt },
-            }),
-          });
-        }
-        throw error;
-      }
-      if (!profile)
-        throw modelError("model_account_unavailable", "Connect a managed account for model calls");
+      const profile = await pickAccount(
+        source,
+        account,
+        model,
+        admitted,
+        excluded,
+        catalogRefusals,
+      );
       signal.throwIfAborted();
       let catalog: ControlModelCatalogResponse;
       const evidence = bindModelAccountEvidence({
@@ -345,6 +326,46 @@ export function createModelServices(deps: Dependencies) {
     }
   };
 
+  /** Images share readiness, quota and credential generations, with explicit
+   * request-kind scope and no text catalog membership requirement. */
+  const resolveImage = async (
+    request: ImageCallRequest,
+    signal: AbortSignal,
+  ): Promise<{ profile: CredentialProfile; adapter: ModelAdapter }> => {
+    const source = getSource(request.source);
+    const image = source.adapter.image;
+    if (!image)
+      throw modelError(
+        "model_source_unavailable",
+        "This model source declares no image operations",
+        404,
+      );
+    const admitted = await admitAccount(source, request.account, request.model, signal);
+    const profile = await pickAccount(
+      source,
+      request.account,
+      request.model,
+      admitted,
+      new Set<string>(),
+      new Map<string, ControlProblem>(),
+      "image",
+    );
+    return {
+      profile,
+      adapter: {
+        ...source.adapter,
+        image: withImageAccountEvidence(image, {
+          sourceId: source.adapter.id,
+          harnessId: source.credentialHarness,
+          profileId: profile.profile_id,
+          unusable,
+          quota: deps.quota,
+          warn: deps.warn,
+        }),
+      },
+    };
+  };
+
   const operations = new ModelOperations({
     commands: deps.commands,
     resourceQueries: deps.resourceQueries,
@@ -352,6 +373,7 @@ export function createModelServices(deps: Dependencies) {
     warn: deps.warn,
     enqueue: ({ request, ...options }) => deps.client.enqueue(request, options),
     cancel: (id, reason) => deps.client.cancel(id, reason),
+    resolveImage,
     resolve: async (request, signal) => {
       const source = getSource(request.source);
       const { profile, catalog } = await resolve(source, request.account, request.model, signal);
@@ -435,7 +457,12 @@ export function createModelServices(deps: Dependencies) {
           label,
           credentialHarness,
           ...(view === "accounts"
-            ? { processingPreferences: ["standard", "fast", "economy"], accountCatalog: true }
+            ? {
+                processingPreferences: ["standard", "fast", "economy"],
+                accountCatalog: true,
+                // Structural declaration from the adapter; absent means no image operations.
+                ...(adapter.image ? { imageGeneration: adapter.image.capability } : {}),
+              }
             : {}),
         })),
       }),

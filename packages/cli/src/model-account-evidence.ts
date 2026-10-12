@@ -1,3 +1,5 @@
+import type { ModelImageFacet } from "@claudexor/core";
+import { redactSecrets } from "@claudexor/util";
 import type { CredentialUnusableLedger, QuotaRegistry } from "@claudexor/daemon";
 import { createCredentialExecutionObserver } from "@claudexor/orchestrator";
 import type { ControlProblem, HarnessEvent, ModelUsage } from "@claudexor/schema";
@@ -11,6 +13,8 @@ export function bindModelAccountEvidence(args: {
   model: string | null;
   unusable: CredentialUnusableLedger;
   quota: () => QuotaRegistry;
+  /** Images share credential revocation, but never text usage/quota or entitlement. */
+  authenticationOnly?: boolean;
 }) {
   const binding = args.unusable.bind({
     harnessId: args.harnessId,
@@ -29,6 +33,10 @@ export function bindModelAccountEvidence(args: {
       model?: string | null,
       dispatched = false,
     ) => {
+      if (args.authenticationOnly) {
+        if (problem?.code !== "auth_required") return;
+        usage = undefined;
+      }
       const event: HarnessEvent = {
         type: usage ? "usage" : "error",
         ts: new Date().toISOString(),
@@ -46,9 +54,10 @@ export function bindModelAccountEvidence(args: {
             }
           : {}),
       };
-      const context = problem?.context ?? {};
+      const context = args.authenticationOnly ? {} : (problem?.context ?? {});
       if (typeof context.resetsAt === "string" || typeof context.retryAfterMs === "number") {
         event.rate_limit = {
+          applies_to_request_kinds: ["text"],
           resets_at: typeof context.resetsAt === "string" ? context.resetsAt : null,
           retry_delay_ms: typeof context.retryAfterMs === "number" ? context.retryAfterMs : null,
         };
@@ -78,7 +87,62 @@ export function bindModelAccountEvidence(args: {
         rate_limit: undefined,
         payload: { exit_code: problem ? 1 : 0, harness_reported_error: problem !== null },
       });
-      if (args.unusable.current(binding)) args.quota().ingest(args.harnessId, event);
+      if (!args.authenticationOnly && args.unusable.current(binding))
+        args.quota().ingest(args.harnessId, event);
+    },
+  };
+}
+
+/** Bind each image invocation before auth/dispatch; share only authentication
+ * evidence, under the same credential generation as text/native execution. */
+export function withImageAccountEvidence(
+  image: ModelImageFacet,
+  args: Omit<Parameters<typeof bindModelAccountEvidence>[0], "model" | "authenticationOnly"> & {
+    sourceId: string;
+    warn?: (message: string) => void;
+  },
+): ModelImageFacet {
+  return {
+    ...image,
+    async invoke(input, context) {
+      const evidence = bindModelAccountEvidence({ ...args, model: null, authenticationOnly: true });
+      try {
+        const result = await image.invoke(input, {
+          ...context,
+          onQuota: (snapshot) => {
+            if (
+              !evidence.current() ||
+              snapshot.subject.harness !== args.harnessId ||
+              snapshot.subject.subject_id !== args.profileId ||
+              snapshot.subject.credential_route !== "vendor_native"
+            )
+              return;
+            try {
+              args.quota().upsert(snapshot);
+            } catch (error) {
+              args.warn?.(`Image quota evidence was not recorded: ${redactSecrets(String(error))}`);
+            }
+          },
+        });
+        try {
+          if (
+            result.route.source === args.sourceId &&
+            result.route.credentialProfileId === args.profileId
+          )
+            evidence.observe(result.problem);
+        } catch (error) {
+          args.warn?.(`Model account evidence was not recorded: ${redactSecrets(String(error))}`);
+        }
+        return result;
+      } finally {
+        try {
+          evidence.finish();
+        } catch (error) {
+          args.warn?.(
+            `Model account evidence finalization failed: ${redactSecrets(String(error))}`,
+          );
+        }
+      }
     },
   };
 }

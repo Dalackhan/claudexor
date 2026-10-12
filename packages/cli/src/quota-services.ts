@@ -11,12 +11,15 @@ import {
 } from "@claudexor/schema";
 import { accountManagementTarget } from "./account-management.js";
 
+type AvailabilityScope = Pick<ControlQuotaRefreshRequest, "requestKind" | "model">;
+
 export function accountResourcesResponse(
   registry: QuotaRegistry,
   response: ControlQuotaResponse = registry.read(),
   resources: AccountResourceSnapshot[] = registry.readResources(),
+  scope: AvailabilityScope = {},
 ): ControlAccountResourcesResponse {
-  return { ...withQuotaAvailability(response), resources };
+  return { ...withQuotaAvailability(response, scope), resources };
 }
 
 type DecoratedSnapshot = ControlQuotaResponse["snapshots"][number];
@@ -63,8 +66,9 @@ export function legacyQuotaResponse(
   registry: QuotaRegistry,
   response: ControlQuotaResponse,
   resources = registry.readResources?.() ?? [],
+  scope: AvailabilityScope = {},
 ): ControlQuotaResponse {
-  const decorated = withQuotaAvailability(response);
+  const decorated = withQuotaAvailability(response, scope);
   return {
     ...decorated,
     snapshots: decorated.snapshots.map((snapshot) => {
@@ -79,9 +83,10 @@ export function legacyQuotaResponse(
  * the resets facet its count came from, never fresher than an unknown snapshot. */
 export function constraintFreshnessQuotaResponse(
   registry: QuotaRegistry,
+  scope: AvailabilityScope = {},
 ): ControlQuotaFreshnessResponse {
   const resources = registry.readResources?.() ?? [];
-  const decorated = withQuotaAvailability(registry.readConstraintFreshness());
+  const decorated = withQuotaAvailability(registry.readConstraintFreshness(), scope);
   return ControlQuotaFreshnessResponse.parse({
     ...decorated,
     snapshots: decorated.snapshots.map((snapshot) => {
@@ -104,10 +109,12 @@ export function constraintFreshnessQuotaResponse(
 export function quotaControlServices(quotaRegistry: () => QuotaRegistry) {
   return {
     quota: async (input?: ControlQuotaReadRequest) => {
-      const { view } = ControlQuotaReadRequest.parse(input ?? {});
-      if (view === "resources") return accountResourcesResponse(quotaRegistry());
-      if (view === "constraint_freshness") return constraintFreshnessQuotaResponse(quotaRegistry());
-      return legacyQuotaResponse(quotaRegistry(), quotaRegistry().read());
+      const { view, ...scope } = ControlQuotaReadRequest.parse(input ?? {});
+      const registry = quotaRegistry();
+      if (view === "resources")
+        return accountResourcesResponse(registry, registry.read(), registry.readResources(), scope);
+      if (view === "constraint_freshness") return constraintFreshnessQuotaResponse(registry, scope);
+      return legacyQuotaResponse(registry, registry.read(), undefined, scope);
     },
     refreshQuota: async (input?: ControlQuotaRefreshRequest & { view?: "resources" }) => {
       const { view, ...body } = input ?? {};
@@ -116,13 +123,13 @@ export function quotaControlServices(quotaRegistry: () => QuotaRegistry) {
       if (view === "resources") {
         const result = await quotaRegistry().refreshResources(request.target);
         return {
-          ...withQuotaAvailability(result, { model: request.model }),
+          ...withQuotaAvailability(result, request),
           resources: result.resources,
         };
       }
       return withQuotaAvailability(
         legacyQuotaResponse(quotaRegistry(), await quotaRegistry().refresh(request.target)),
-        { model: request.model },
+        request,
       );
     },
   };

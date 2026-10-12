@@ -682,9 +682,7 @@ export class DaemonControlApiServer {
     );
   }
 
-  private readBody(req: IncomingMessage): Promise<unknown> {
-    return readControlRequestBody(req);
-  }
+  private readBody = readControlRequestBody;
 
   private onRequest(req: IncomingMessage, res: ServerResponse): void {
     const tracked: Promise<void> = this.handle(req, res)

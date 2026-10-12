@@ -1,3 +1,4 @@
+import { quotaConstraintAppliesToRequestKind, type QuotaRequestKind } from "@claudexor/schema";
 import type {
   CredentialProfile,
   ModelSubstitutionObservation,
@@ -68,6 +69,7 @@ function freshModelHeadroom(
   harnessId: string,
   profileId: string,
   model: string | null | undefined,
+  requestKind?: QuotaRequestKind,
 ): number | null {
   let worst: number | null = null;
   for (const snapshot of snapshots) {
@@ -75,6 +77,7 @@ function freshModelHeadroom(
     if (snapshot.subject.harness !== harnessId) continue;
     if ((snapshot.subject.subject_id ?? null) !== profileId) continue;
     for (const constraint of snapshot.constraints) {
+      if (!quotaConstraintAppliesToRequestKind(constraint, requestKind)) continue;
       if (!quotaConstraintAppliesToModel(constraint, model)) continue;
       if (constraint.used_ratio === null) continue;
       const headroom = 1 - constraint.used_ratio;
@@ -96,6 +99,7 @@ export function rankAccountPool(args: {
   excludedProfileIds?: ReadonlySet<string>;
   headroomThreshold: number;
   model?: string | null;
+  requestKind?: QuotaRequestKind;
   /** Live model-substitution observations; only this harness and model apply. */
   substitutions?: readonly ModelSubstitutionObservation[];
   /** Live pre-progress refusal observations; only this harness and model apply. */
@@ -120,6 +124,7 @@ export function rankAccountPool(args: {
       profile.profile_id,
       args.headroomThreshold,
       args.model,
+      args.requestKind,
     );
     if (breach) {
       candidates.push({
@@ -140,6 +145,8 @@ export function rankAccountPool(args: {
       profile.profile_id,
       limitSubjectRoute(profile),
       args.model,
+      undefined,
+      args.requestKind,
     );
     if (block) {
       candidates.push({
@@ -153,6 +160,7 @@ export function rankAccountPool(args: {
       args.harnessId,
       profile.profile_id,
       args.model,
+      args.requestKind,
     );
     candidates.push({
       profile,

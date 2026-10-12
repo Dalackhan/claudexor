@@ -11,7 +11,7 @@ changing Claudexor.
 | Surface | Current role | Stability |
 |---|---|---|
 | CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, retry, run-again, apply, decision, review), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
-| Daemon and control API | Local durable queue, Agent runs, caller-owned model operations, artifacts, SSE events, settings, harness status, secrets metadata, apply, and run control. | Stable contract: endpoints and DTOs per `docs/reference/endpoints.json` + generated schemas (add-only fields). Loopback + bearer token only. |
+| Daemon and control API | Local durable queue, Agent runs, caller-owned model and image operations, artifacts, SSE events, settings, harness status, secrets metadata, apply, and run control. | Stable contract: endpoints and DTOs per `docs/reference/endpoints.json` + generated schemas (add-only fields). Loopback + bearer token only. |
 | MCP server | Exposes Claudexor tools to MCP clients. | Stable contract: the tool set with input/output schemas. Tool list follows the implementation, not old docs. |
 | ACP server | Lets compatible editors or agents talk to Claudexor as a local agent surface. | Experimental (may change in minors, disclosed in the CHANGELOG). |
 | Host plugins | User-global Claude Code, Codex, Cursor, and OpenCode integrations managed by `claudexor plugin`. | Experimental file layout (regenerate with `claudexor plugin repair all`). Installs owned local files/config only; host enablement can still require reload/manual action. |
@@ -32,6 +32,20 @@ reading alone does not acknowledge custody. See
 [Caller-owned model operations](ARCHITECTURE.md#caller-owned-model-operations)
 for lifecycle, retention, continuation and capacity semantics, and the
 [feature ledger](FEATURES.md) for transport and acceptance limitations.
+
+For images, discover `requestKind=image` on the create operation and the
+source's `imageGeneration` facet in the accounts view. The query value is the
+string `image`; the create descriptor's description names the separate generated
+payload contracts. Upload an
+[`ImageCallRequest`](../packages/schema/generated/ImageCallRequest.schema.json),
+then recover and acknowledge the
+[`ImageCallResult`](../packages/schema/generated/ImageCallResult.schema.json) through the same operation
+identity and whole-result digest. Decode images into caller-owned files before
+ACK; keep base64 out of model text and make viewing or sending a separate action.
+The [image contract](ARCHITECTURE.md#image-generation-and-editing) owns request,
+quota, provenance and uncertainty semantics. Live qualification is one real-adapter
+generate and edit on one managed account, made before the SQL store; the
+[feature ledger](FEATURES.md) lists the rest.
 
 Selected-account discovery can negotiate `includeAdmission=true` with an exact
 `requestedModel`. Its `admission` reports the source's inventory-absence policy
@@ -281,8 +295,8 @@ files. Every product route is under `/v2`: clients first `POST /v2/handshake`,
 then send `X-Claudexor-Protocol-Major: 3`; incompatible or missing negotiation
 returns a typed `426`. `GET /v2/operations` is the runtime operation catalog,
 and unversioned product aliases do not exist.
-`GET /v2/quota` returns every independently reported vendor-owned quota window
-with provenance and freshness; `POST /v2/quota` requests a live refresh and
+`GET /v2/quota` returns recognised vendor-owned windows with provenance and
+freshness (Codex: codex/default and image_gen; unknown buckets are not constraints); `POST /v2/quota` requests a live refresh and
 fails explicitly when no official refresher is available. Missing usage stays
 unknown and an elapsed reset marks data stale rather than locally setting it to
 zero. Each snapshot also carries a derived `availability` projection (`state`,
@@ -293,7 +307,9 @@ available and is disclosed separately, so consumers never aggregate raw
 constraints themselves. `POST /v2/quota` accepts an optional `{"model": …}`
 body to compute `state` against the model the caller intends to spend
 (case-insensitive alias containment in either direction). The CLI projection
-is `claudexor quota [--refresh] --json`.
+is `claudexor quota [--refresh] --json`. Request-kind availability selection is
+HTTP-only (`requestKind` on GET/POST quota); CLI and MCP retain text-default
+availability. JSON retains raw image constraints; CLI text has only vendor labels.
 Typed account resources are opt-in: request `view=resources` on either quota
 operation, or on `GET /v2/credential-profiles` with `snapshot=true`. Detect the query
 parameter in the operation catalog. The rich quota response adds `resources`, with

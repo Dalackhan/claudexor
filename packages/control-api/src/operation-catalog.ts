@@ -14,12 +14,10 @@ import type { OperationDraft } from "./operation-draft.js";
 import { OPERATION_SUMMARIES } from "./operation-summaries.js";
 
 function descriptor(input: OperationDraft): ControlOperationDescriptor {
-  // Resource-family classification (QA-054): an operation is grouped under the
-  // resource plane it acts on. Collection/create routes inherit their family
-  // even without an instance id (GET/POST /v2/projects are project-applicable,
-  // matching how /v2/runs and /v2/threads are already run/thread). `/projects`
-  // had no branch, so every project route falsely reported `global` and the
-  // typed `project` enum value had no live producer.
+  // Resource-family classification (QA-054) follows the resource plane.
+  // Collection/create routes inherit their family without an instance id:
+  // GET/POST /v2/projects are project-applicable, just as runs/threads are.
+  // A missing collection branch would falsely report global applicability.
   const applicability =
     input.path.includes("/threads/") || input.path === "/v2/threads"
       ? "thread"

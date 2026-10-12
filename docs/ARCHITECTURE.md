@@ -1101,17 +1101,17 @@ the status invocation they already need; no credential file is read, no raw
 status output is persisted, and no extra subprocess is launched for identity.
 
 The orchestrator is the ONE resolve owner. There is no user-settable "Active"
-account — enabling/disabling a row is the only routing control. The
+account: enabling/disabling a row is the only routing control. The
 per-harness EFFECTIVE account is resolved by the owner-locked order (INV-135):
-(1) an explicit per-run/per-thread pin (`credentialProfileId`) is STRICT — an
-unknown/disabled/harness-mismatched id is a typed refusal before spawn, a
-fresh exhausted quota window refuses typed (`subscription_window_exhausted`
-with its reset time), and a pin never silently rotates. (2) An unpinned
-THREAD turn stays on its durable bound account — the daemon derives the
-binding from the thread's own lane evidence (latest live session, else lane
-checkpoint, per harness) and hands it to the run as `threadAccountBindings`;
-a binding whose row became disabled/deleted/revoked/exhausted moves to a pool
-sibling with a typed `route.account.lane_switch` disclosure, never silently.
+(1) an explicit per-run/per-thread pin (`credentialProfileId`) is STRICT: an
+unknown/disabled/harness-mismatched id is a typed refusal before spawn, a fresh
+exhausted quota window refuses typed (`subscription_window_exhausted` with its
+reset time), and a pin never silently rotates. (2) An unpinned THREAD turn stays
+on its durable bound account, which the daemon derives from the thread's own lane
+evidence (latest live session, else lane checkpoint, per harness) and hands to
+the run as `threadAccountBindings`; a binding whose row became
+disabled/deleted/revoked/exhausted moves to a pool sibling with a typed
+`route.account.lane_switch` disclosure, never silently.
 (3) Otherwise the quota-aware POOL of enabled+ready subscription rows selects
 the account (`route.account.pool_selected`); "ready" is fresh readiness except
 a Cursor row's bounded last positive status answer after a timed-out probe
@@ -1119,76 +1119,68 @@ a Cursor row's bounded last positive status answer after a timed-out probe
 descending, unknown/stale quota after known-positive headroom but before
 exhausted (stale quota never authorizes routing), deterministic profile-id
 tie-break; a row under an observed live block (a reactive vendor-limit
-cooldown or spent window — the A4 reader) ranks exhausted with its release
+cooldown or spent window: the A4 reader) ranks exhausted with its release
 instant. Two live observations add one ordering key among the selectable rows:
 a marked row ranks after every other selectable row for that requested model,
 a row's newest mark counts, oldest mark first, and a mark never excludes a row
 or makes the pool exhausted. Model operations pass a model-substitution
 observation (see [Caller-owned model operations](#caller-owned-model-operations));
 Agent Runs, reviewer seats and the `next_up` projection pass a pre-progress
-refusal observation. That observation is recorded when an unpinned try on a
-subscription row reported a typed `started` session and then ended in the
-structural rotation branch's own evidence (a terminal non-transient death with
-no agent progress, no deliverable and no mutation) without a typed vendor limit,
-which is already a cooldown; an adapter's own pre-spawn refusal and an explicit
-pin never record one, and the vendor's wording is never read. It is keyed by
-harness, row and requested model (the harness default model is its own key),
-lives in daemon memory for one hour, and clears when a later try on that row and
-model makes agent progress or ends cleanly, or on a credential-generation
-change. A try binds its row's credential generation before it spawns, so an
-outcome arriving after such a change neither records nor clears a mark; while
-a login of that harness holds its credential-mutation window the generation is
-no number at all, so a try bound before or inside the window never records or
-clears one (#363). When
-the default route is not ready and no registered row admits a
-lane, the lane refusal names every row with its own observed readiness
-(`<harness> has no ready account (<row>: <detail>; …)`) instead of the default
-route's doctor advice, so login advice appears only where a row's probe
-positively reported logged-out; `next_up` names unready rows the same way. An
-empty or exhausted pool is a TYPED TERMINAL
-(`route.account.pool_exhausted`, then `credential_pool_exhausted` with the
-pool's earliest known reset — owner Q3=A): an unpinned run under `auto` or
-explicit `subscription` waits for a window instead of silently taking the
-paid route. Only the EXPLICIT `api_key` preference opts the exhausted pool
-onto the paid API-key route (billing classifies it `managed_api_key`; the
-adapter's typed key refusal is the backstop) — the same principle as the
-kind-aware `limit_action: auto`, which resolves a metered subject to `fail`:
-`auto` never silently spends money. Harnesses with NO registered rows keep
-the legacy default-subject ladder (unmigrated stores); an excluded legacy
-login (`native_credentials_enabled: false`) can only be served by the
-explicitly-requested paid route — nothing ever silently falls back INTO a
-disabled login. The resolved row
-becomes the typed `credential_profile` on every `HarnessRunSpec` the run
-builds and keys the lane's read-only home, so the resolution flows to the
-spec, preflight, continuity, and session recording. An explicit profile is
-STRICT in the adapter — exactly the row's transport or a typed error event,
-never a fallback to
-default credentials (claude: config-dir login / stored token non-bare / stored
-key; codex: scoped `CODEX_HOME` login / scoped key `auth.json`; cursor: scoped
-file-store HOME login / namespaced key; opencode, copilot, raw-api:
-secret-ref keys only). Adapters stamp
-`credential_profile_id` beside `credential_route` on stream events so quota
-and retry evidence stays profile-attributable, and the run's `auth_route`
-receipt carries `profile_id`; Control API projects it as `authRoute.profileId`
-without re-deriving it. Vendor sessions record the profile they were
-created under (the attempt's session capsule, `session-capsule.json`); a
-session has one holder row at a time. History lookup uses the full
-`(harness_id, profile_id)` identity for source, target and capsule relocation;
-a disabled holder remains readable for transfer, independently of dispatch
-admission. The engine boundary re-verifies every
-cached session against the RESOLVED account, and a pool switch either MOVES
-the session file into the next row's store through the adapter's
-`continuity` (claude, codex) and resumes it there, or starts a fresh vendor
-session with a continuation packet. `claudexor profiles login
-<harness> <id>` runs the vendor login with the named binding's exact scoped
+refusal observation, recorded when an unpinned try on a subscription row reported
+a typed `started` session and then ended in the structural rotation branch's own
+evidence (a terminal non-transient death with no agent progress, deliverable or
+mutation) without a typed vendor limit, which is already a cooldown. An adapter's
+own pre-spawn refusal and an explicit pin never record one, and the vendor's
+wording is never read. It is keyed by harness, row and requested model (the
+harness default model is its own key), lives in daemon memory for one hour, and
+clears when a later try on that row and model makes agent progress or ends
+cleanly, or on a credential-generation change. A try binds its row's credential
+generation before it spawns, so an outcome after such a change neither records
+nor clears a mark; while a login of that harness holds its credential-mutation
+window the generation is no number at all, so a try bound before or inside the
+window never records or clears one (#363). When the default route is not ready
+and no registered row admits a lane, the refusal names every row with its own
+observed readiness (`<harness> has no ready account (<row>: <detail>; …)`)
+instead of the default route's doctor advice, so login advice appears only where
+a row's probe positively reported logged-out; `next_up` names unready rows the
+same way. An empty or exhausted pool is a TYPED TERMINAL (`route.account.pool_exhausted`,
+then `credential_pool_exhausted` with the pool's earliest known reset; owner
+Q3=A): an unpinned run under `auto` or explicit `subscription` waits for a window
+instead of silently taking the paid route. Only the EXPLICIT `api_key` preference
+moves the exhausted pool onto the paid API-key route (billed as
+`managed_api_key`; the adapter's typed key refusal is the backstop), the same
+principle as kind-aware `limit_action: auto` resolving a metered subject to
+`fail`: `auto` never silently spends money. Harnesses with NO registered rows keep
+the legacy default-subject ladder (unmigrated stores); an excluded legacy login
+(`native_credentials_enabled: false`) can only be served by the explicitly
+requested paid route, so nothing silently falls back INTO a disabled login. The resolved row becomes
+the typed `credential_profile` on every `HarnessRunSpec` the run builds and keys
+the lane's read-only home, so the resolution flows to spec, preflight, continuity
+and session recording. An explicit profile is STRICT in the adapter: exactly the
+row's transport or a typed error event, never default credentials (claude:
+config-dir login / stored token non-bare / stored key; codex: scoped `CODEX_HOME`
+login / scoped key `auth.json`; cursor: scoped file-store HOME login / namespaced
+key; opencode, copilot, raw-api: secret-ref keys only). Adapters stamp
+`credential_profile_id` beside `credential_route` on stream events so quota and
+retry evidence stays profile-attributable; the run's `auth_route` receipt carries
+`profile_id`, projected by the Control API as `authRoute.profileId` without
+re-derivation. Vendor sessions record the profile they were created under (the
+attempt's `session-capsule.json`), one holder row at a time. History lookup uses
+the full `(harness_id, profile_id)` identity for source, target and capsule
+relocation, and a disabled holder stays readable for transfer independently of
+dispatch admission. The engine boundary re-verifies every cached session against
+the RESOLVED account; a pool switch either MOVES the session file into the next
+row's store through the adapter's `continuity` (claude, codex) and resumes it, or
+starts a fresh vendor session with a continuation packet. `claudexor profiles login
+<harness> <id>` runs the vendor login in the named binding's exact scoped
 environment: codex rides the SAME durable device-code setup job as the default
-login (D-17); Cursor runs the vendor command in this terminal through a
-`client_pty` setup job and the existing `setup attach` owner. Claude/AGY keep
-their direct scoped terminal flow (see the profile-login note under
+login (D-17), Cursor runs the vendor command in this terminal through a
+`client_pty` setup job and the `setup attach` owner, and Claude/AGY keep their
+direct scoped terminal flow (see the profile-login note under
 [Design constraints](#design-constraints)).
-Credential custody remains an effective platform fact, so a scoped
-HOME may select Claudexor-owned vendor state without representing a separate
-OS-user credential.
+Credential custody stays an effective platform fact: a scoped HOME
+may select Claudexor-owned vendor state without representing a separate OS-user
+credential.
 
 Removal is daemon-owned and mirrors registration: `DELETE
 /v2/credential-profiles/:harness/:id` (CLI `claudexor profiles remove`)
@@ -1364,24 +1356,24 @@ route and successful-contact evidence as account admission.
 
 `CredentialGeneration`, extracted from the existing pre-progress ledger, is the
 shared managed-lifecycle authority. Dispatch captures subject, effective route,
-requested model, generation and ordering. Both recording and success clearing
-respect that binding: old-generation results cannot affect a newer login, and
-a success from an older dispatch cannot erase a newer dispatch's refusal. A
-negative observation made after the last successful contact remains meaningful
-even when it comes from a session that started earlier. The ledger retains
-negative observation boundaries within its existing memory and expiry bounds,
-including after a success hides the current refusal. A later-arriving concurrent
-refusal therefore cannot restore only an incomplete part of that evidence.
-Readiness suppresses the merged refusal only when one real successful contact
-covers both its dispatch order and actual observation time. Successful contacts
-that cover different boundaries remain separate until one actual contact covers
-them both; combining their maxima would fabricate a recovery that never happened.
-The bounded collection counts retained contacts, not only account keys.
-An actual observed model is required to heal a model-scoped refusal; the request
-is not proof of which model was served. Credential mutation windows still make
-observations ineligible while the vendor may be changing the store. External
-native changes not observed by that lifecycle remain a limitation until a
-covering vendor observation or expiry; this is not a token-change detector.
+requested model, generation and ordering, and both recording and success
+clearing respect that binding: old-generation results cannot affect a newer
+login, and a success from an older dispatch cannot erase a newer dispatch's
+refusal. A negative observation made after the last successful contact stays
+meaningful even from a session that started earlier. The ledger keeps negative
+observation boundaries within its memory and expiry bounds, including after a
+success hides the current refusal, so a later-arriving concurrent refusal cannot
+restore only part of that evidence. Readiness suppresses the merged refusal only
+when one real successful contact covers both its dispatch order and observation
+time; contacts covering different boundaries stay separate until one actual
+contact covers both, because combining their maxima would fabricate a recovery
+that never happened. The bounded
+collection counts retained contacts, not only account keys. Only an observed
+model heals a model-scoped refusal; the request does not prove which model was
+served. Credential mutation windows still make observations ineligible while the
+vendor may be changing the store. External native changes not observed by that
+lifecycle remain a limitation until a covering vendor observation or expiry; this
+is not a token-change detector.
 
 The pure `composeCredentialProfileEvidence` owner combines local readiness,
 applicable hard refusals and authenticated quota evidence for admission, catalog,
@@ -1399,17 +1391,17 @@ authentication recovery receipt.
 
 Hard credential evidence, soft pool ordering, quota windows and poll pacing stay
 separate. The bound native observer is the single quota intake owner; projected
-run events never write a second profile-less observation. Numeric measurements and
-explicit cooldowns from an already-running session remain observable through an
-unrelated managed login or a mutation window. The generation fence governs auth
+run events never write a second profile-less observation. Numeric measurements
+and explicit cooldowns from an already-running session stay observable through an
+unrelated managed login or a mutation window: the generation fence governs auth
 refusal and recovery, not whether an ongoing session may report its quota. Run
-refusals never become poller `auth_revoked` absences and never retire last-known
-numeric quota. A native session already running when the same profile is signed
-into another identity can still report the old identity's numbers under its bound
-profile; full-reader reconciliation remains authoritative for that changed store.
-This preserved session limitation can temporarily affect quota ranking, but those
-passive numbers do not certify authentication. Raw model operations retain their
-separate dispatch-generation check for their single terminal cooldown observation.
+refusals never become poller `auth_revoked` absences or retire last-known numeric
+quota. A session already running when its profile is signed into another identity
+can still report the old identity's numbers under that profile; full-reader
+reconciliation stays authoritative for the changed store, and those passive
+numbers may briefly affect ranking but never certify authentication. Raw model
+operations keep a separate dispatch-generation check for their single
+terminal cooldown observation.
 A profile-level refusal does not suppress quota discovery:
 the Claude poller retains its existing present-token rejection memo, so external
 replacement remains discoverable. The hard ledger is non-durable, expires within
@@ -1857,274 +1849,284 @@ the actual account's chosen variant. Result/event Processing receipts separate
 request, submission and observation; sessions may remain mixed or unknown.
 
 Existing catalog endpoints provide an opt-in `view=accounts` declared in the
-operation catalog. The view includes every enabled compatible account, its
-availability/problem, and its own catalog/provenance/observation time. One failed
-account does not erase siblings. Manifest hints and cached observations never
-acquire a new provider timestamp. Explicit profile selection narrows only that
-account. Execution still performs its independent current readiness and model
-admission. Legacy queries retain their strict pre-existing response shape.
+operation catalog. It includes every enabled compatible account with its
+availability/problem and its own catalog, provenance and observation time; one
+failed account does not erase siblings, and manifest hints or cached observations
+never acquire a new provider timestamp. Explicit profile selection narrows only
+that account, execution keeps its own current readiness and model admission, and
+legacy queries keep their strict response shape.
 
 The operation descriptor's `view` parameter is the negotiation marker. Raw
 `/v2/model-sources` metadata is enriched only with `view=accounts`, including
-`processingPreferences` and `accountCatalog`; Agent capability rows expose their
-supported contract separately. Account model responses carry `source` or
-`harnessId`, `accounts` and `partial`. Each row keeps `credentialProfileId`,
+`processingPreferences`, `accountCatalog` and a source's structural
+`imageGeneration` facet (absent means no image operations); Agent capability rows
+expose their contract separately. Account model responses carry `source` or
+`harnessId`, `accounts` and `partial`; each row keeps `credentialProfileId`,
 `availability`, `problem` and a nullable catalog. A missing catalog sets
-`partial:true`; a quota-blocked account may still have a readable inventory.
-Catalog union is for discovery, not an inference entitlement or a maximum
-capacity assembled from different accounts. A network failure remains unknown,
-not proof of absent authentication. Native array-only inventories have no
-observation receipt and therefore use a null observation time; manifest hints
-remain identified as manifest data.
+`partial:true`, and a quota-blocked account may still have a readable inventory.
+Catalog union serves discovery, not an inference entitlement or a capacity
+assembled from different accounts. A network failure stays unknown, not proof of
+absent authentication. Native array-only inventories have no observation receipt
+and use a null observation time; manifest hints stay identified as manifest data.
 
 ### Caller-owned model operations
 
-Live model enumeration is qualified by the adapter's declared credential routes.
-A declared producer is used only on a known supported route; otherwise existing
-manifest truth applies. Codex account enumeration is native-session-specific,
-so API-key and unscoped legacy queries retain their manifest source instead of
-borrowing a subscription catalog. A failed supported live inventory remains
-unverifiable; it never falls back to a convenient manifest to admit a model.
-Where the harness declared absences advisory, an unverifiable answer — and a
-manifest miss — instead sends the explicit model to the vendor unchanged
-(above). Authenticated raw sources separately declare `inventoryAbsence` on `ModelAdapter`:
-omitted means authoritative, while Codex declares advisory. A successfully read
-catalog that lacks an explicit model therefore permits the exact Codex request;
-failed catalog acquisition remains a typed failure. Auth and model-scoped quota
-still participate in account selection. An authoritative miss retains its own
-cause; a pool containing model/general unavailability never inherits a quota-only
-reset promise from other accounts.
+#### Image generation and editing
+
+`ImageCallRequest`, uploaded with `purpose: "model"`, uses `requestKind=image`
+(omitted stays text). Kind joins stored parameters and same-key identity; the
+existing command, queue, flush barrier, custody and whole-digest ACK serve both
+kinds, without another scheduler or resource purpose. Request/result schemas own
+verbatim edit bytes, explicit options, requested/observed model, unknown cash and
+usable images beside rejected siblings. Rejected or absent images mean a failed
+command with a ready result; viewing/sending remain caller actions. Codex image
+model ids are hints, not entitlement or an allowlist: explicit models pass unchanged,
+without the text catalog. The shared resolver selects source/model/account apart
+from the conversation model; only fresh confirmed auth refusal revokes the bound
+credential generation. Subscription never falls back to API. The adapter records
+its wire anchor/bounds, sniffs magic bytes without decoding and derives a turn-id
+header from the operation id, claiming no provider deduplication.
+
+Large edits parse twice and validate base64 on the daemon thread; near-cap requests
+can delay other clients. Admission quota refusal is `subscription_window_exhausted`;
+provider image exhaustion is `image_generation_limit_reached`. Aggregate byte limits
+use `image_request_too_large`/`image_response_too_large`; an oversized individual
+edit image returns `invalid_request`.
+
+Live model enumeration is qualified by the adapter's declared credential routes:
+a declared producer is used only on a known supported route, otherwise manifest
+truth applies. Codex account enumeration is native-session-specific, so API-key
+and unscoped legacy queries keep their manifest source instead of borrowing a
+subscription catalog. A failed supported live inventory stays unverifiable and
+never falls back to a convenient manifest to admit a model; under advisory
+absences, an unverifiable answer or manifest miss sends the explicit model
+unchanged (above). Authenticated raw sources declare
+`inventoryAbsence` on `ModelAdapter`: omitted means authoritative, while Codex
+declares advisory, so a successfully read catalog lacking an explicit model
+permits the exact Codex request and failed catalog acquisition stays a typed
+failure. Auth and model-scoped quota still participate in account selection. An
+authoritative miss keeps its own cause; a pool containing model/general
+unavailability never inherits a quota-only reset promise from other accounts.
 
 Claude's producer is the prompt-free `initialize` handshake of the installed
 `claude` binary (`harness-claude/src/model-probe.ts`): one stdin frame, the
 picker rows of the `control_response` (`value`, `displayName`, `resolvedModel`),
-exit on EOF, never `--model` (the CLI echoes it as a row), `--setting-sources
-""` and `--strict-mcp-config` (no hooks, no settings echo), model-override env
+exit on EOF, never `--model` (the CLI echoes it as a row), `--setting-sources ""`
+and `--strict-mcp-config` (no hooks or settings echo), model-override env
 scrubbed. Scopes (owner decision 2026-09-24): a `config_dir_login` profile is
-probed under its own config dir and keychain bridge, an `api_key` /
-`oauth_token` profile with its own credential in the env var its runs use
-under a scratch HOME (cache keyed by profile id, never by a secret), so the
-account view carries the account's own rows; the unscoped listing runs
-credential-free under a scratch HOME with non-essential traffic off and
-describes the binary alone. The probe resolves the binary exactly as the spawn
-layer does (a caller's PATH patch replaces the normalized PATH). Rows carry `origin` (`live`: the
-picker selectors and their resolutions as pinnable exact ids; `hint`: the frozen
-`CLAUDE_KNOWN_MODELS` ids appended so presence never shrinks below the manifest)
-and `resolved_model` (diagnostic; the row id is what travels). The answer is
-total: any failure yields the hint rows alone, and the registry then reports
-the list as `source: manifest` with its frozen `verifiedAgainst` stamp rather
-than a live `api` claim. One cached single-flight capture per (scope, binary
-identity — realpath, inode, size, mtime; `harnessBinaryIdentity` in core) lives
-an hour, a failure a minute, so an in-place CLI update is re-read without a
-daemon restart. The `--help` effort memo is keyed by the same identity and
-follows a run's PATH patch the same way, as do the readonly-flag probe and the
-`--version` read behind the snapshot-trust gate, so every question about "the
-binary this run executes" is asked of that binary. Two stated bounds: the memo
-is one slot (a patched run alternating with host-keyed callers re-reads
-`--help`, one bounded spawn per alternation), and a relative entry in a patch
-PATH is resolved as the daemon sees it, so a binary reachable only through a
-project-relative entry falls back to the snapshot ladder.
+probed under its own config dir and keychain bridge, an `api_key`/`oauth_token`
+profile with its own credential in its runs' env var under a scratch HOME (cache
+keyed by profile id, never a secret), so the account view carries the account's
+own rows; the unscoped listing runs credential-free under a scratch HOME with
+non-essential traffic off and describes the binary alone. The probe resolves the
+binary exactly as the spawn layer does (a caller's PATH patch replaces the
+normalized PATH). Rows carry `origin` (`live`: picker selectors and their
+resolutions as pinnable exact ids; `hint`: the frozen `CLAUDE_KNOWN_MODELS` ids
+appended so presence never shrinks below the manifest) and diagnostic
+`resolved_model` (the row id travels). The answer is total: any failure yields the
+hint rows alone, reported as `source: manifest` with its frozen `verifiedAgainst`
+stamp, not a live `api` claim. One cached single-flight capture per scope and
+binary identity (realpath, inode, size, mtime; `harnessBinaryIdentity` in core)
+lives an hour, a failure a minute, so an in-place CLI update is re-read without a
+daemon restart. The `--help` effort memo, the readonly-flag probe and the
+`--version` read behind the snapshot-trust gate use the same identity and follow
+a run's PATH patch, so every question about "the binary this run executes" asks
+that binary. Two stated bounds: the memo is one slot (a patched run alternating
+with host-keyed callers re-reads `--help`, one bounded spawn per alternation),
+and a relative patch PATH entry resolves as the daemon sees it, so a binary
+reachable only through a project-relative entry falls back to the snapshot ladder.
 
 The engine also accepts one raw model generation independently of Agent Runs.
 `ModelAdapter` in core and the model-operation schemas define caller-owned
 messages, function tools, tool choice, generation options, account selection,
 native continuation and the observed result. The caller keeps its system prompt,
-conversation, tool execution and cognitive loop. No Run, Thread, plan, workspace,
-review loop, model fallback or internal compaction is created for this capability.
+conversation, tool execution and cognitive loop; no Run, Thread, plan, workspace,
+review loop, model fallback or internal compaction is created.
 
-The Codex transport lives in `harness-codex`. It uses a selected managed ChatGPT
-profile, the official CLI for an expired-token refresh, and the raw account's
-model catalog. Server discovery varies with the client version the caller
-declares; a missing row does not prove a minimum-version or entitlement refusal.
-The transport declares ITS OWN verified level,
-`CODEX_HTTP_CLIENT_VERSION` (`http-client-version.ts`), raised to the installed
-Codex CLI's version when that is newer and never below the constant — not the
-managed-installer pin, which is a different fact (a release that only moves
-the installer must never decide which models an account can see). The account
-view carries the declared `clientVersion` and its source per catalog. Selected-account
-discovery can negotiate `includeAdmission=true` with `requestedModel` to obtain
-those version facts and `admission: {requestedModel, inventoryAbsence}`. This permits
-an attempt, without adding a synthetic model row or claiming successful generation.
-Without the opt-in the legacy query keeps its exact shape. The constant moves together with a recorded catalog
-fixture pair (`fixtures/models-http-*.json`) whose shared rows must stay
-identical. In-process refresh work is serialized by canonical managed home;
-cancelled callers cannot release another caller past a still-live refresh. Each
-caller rereads current authorization. Selection hands its exact-profile catalog
-to this operation's invocation, which rechecks the current account fingerprint;
-no catalog or credentials are cached across operations. Unknown fingerprints
-retain fresh discovery and cannot authorize native continuation reuse.
+The Codex transport in `harness-codex` uses a selected managed ChatGPT profile,
+the official CLI for an expired-token refresh and the raw account's model
+catalog. Discovery varies with the declared client version, so a missing row
+proves no minimum-version or entitlement refusal. The transport declares ITS OWN
+verified level, `CODEX_HTTP_CLIENT_VERSION` (`http-client-version.ts`), raised to
+a newer installed Codex CLI and never below the constant; the managed-installer
+pin is a different fact (moving the installer must never decide which models an
+account sees). The account view carries each catalog's declared `clientVersion` and
+source. Selected-account discovery can negotiate `includeAdmission=true` with
+`requestedModel` for those facts and `admission: {requestedModel,
+inventoryAbsence}`, which permits an attempt without a synthetic model row or
+generation claim; the legacy query keeps its exact shape. The
+constant moves with a recorded catalog fixture pair (`fixtures/models-http-*.json`)
+whose shared rows must stay identical. Refresh work is serialized per canonical
+managed home; a cancelled caller cannot release another past a still-live
+refresh, and each caller rereads current authorization. Selection hands its
+exact-profile catalog to the invocation, which rechecks the account fingerprint; no catalog or credentials are cached across operations, and an
+unknown fingerprint keeps fresh discovery and cannot authorize native
+continuation reuse.
 Its single inference POST follows a committed dispatch receipt and a completed
-`flushed()` barrier. A barrier failure or cancellation while the adapter is still
-waiting inside that callback sends nothing and retains `not_started` with the
-attempt stamp and route. Once the callback returns, an uncertain outcome remains
-unknown. Exact JSON bytes stream with Content-Length. `request-delivery.ts` observes public callbacks on
-the existing dispatcher; its lazy `dispatcher-accessor.cts` preserves native
-cold initialization, proxy, TLS and pool ownership. Positive connector or
-incomplete-upload proof yields `transport_not_delivered`; full handoff or
-unobserved transport stays unknown. `ModelOperations` refines the terminal to
-`not_started` only after publishing proof, retaining the attempted-send timestamp
-and route. Crash/publication failure stays unknown. No adapter retry is added.
-The caller's canonical instruction messages retain their roles and ordered text
-parts in Ouroboros history. Codex's provider-specific wire projection maps each
-canonical `system` message to the high-priority `developer` role because this
-subscription backend rejects `system` messages in `input`; existing
-`developer`, `user`, `assistant` and tool messages keep their roles and order.
-Callers that intentionally provide both canonical `system` and `developer` roles
-should expect those two roles to share the provider's `developer` level on this
-route; the canonical distinction remains available in the caller's history.
-The separate string-valued `instructions` field is always empty on this route,
-and its field limit remains distinct from the model's token capacity.
-Responses SSE is translated structurally, including image blocks, original tool
-IDs and complete native output items. Unknown model/window/usage/cash remains
-unknown; `maxOutputTokens` and `temperature` are explicit unsupported options,
-not silently dropped. CLI compaction percentages do not reduce catalog capacity.
-Other installed harnesses remain Agent capabilities, not raw model sources.
+`flushed()` barrier. A barrier failure or cancellation while the adapter still
+waits inside that callback sends nothing and keeps `not_started` with the attempt
+stamp and route; once the callback returns, an uncertain outcome stays unknown.
+Exact JSON bytes stream with Content-Length. `request-delivery.ts` observes public
+callbacks on the existing dispatcher; its lazy `dispatcher-accessor.cts` preserves
+native cold initialization, proxy, TLS and pool ownership. Positive connector or
+incomplete-upload proof yields `transport_not_delivered`, and `ModelOperations`
+refines the terminal to `not_started` only after publishing that proof, keeping
+the attempted-send stamp and route; full handoff, unobserved transport, crash and
+publication failure stay unknown, and no adapter retry is added.
+Canonical instruction messages keep their roles and ordered text parts in
+Ouroboros history. Because this subscription backend rejects `system` messages in
+`input`, Codex's wire projection maps each canonical `system` message to the
+high-priority `developer` role; existing `developer`, `user`, `assistant` and tool
+messages keep their roles and order. Callers that provide both canonical `system`
+and `developer` roles share the provider's `developer` level on this route; the
+caller's history keeps the distinction. The string-valued
+`instructions` field is always empty here, and its field limit is distinct from
+the model's token capacity. Responses SSE is translated structurally, including
+image blocks, original tool IDs and complete native output items. Unknown
+model/window/usage/cash stays unknown; `maxOutputTokens` and `temperature` are
+explicit unsupported options, not silently dropped, and CLI compaction percentages
+do not reduce catalog capacity. Other installed harnesses remain Agent
+capabilities, not raw model sources.
 
 The optional top-level `nativeContinuation` carries live transport state in the
-same private request/result resources, separately from historical assistant
+same private request/result resources, apart from historical assistant
 `codex.responses.v1` output items. Omission preserves stateless result shapes;
 null starts an empty caller-owned turn. `codex.turn.v1` binds the first successful
 `x-codex-turn-state` response header to the actual source, profile, account and
-model. Matching calls replay it unchanged, even if a later body is incomplete;
-changed or unknown route identity starts empty without refusing generation.
-The caller retains it through tools, steering and compaction within a live turn,
-then clears it at a new turn or cold restart. There is no daemon state map,
-checkpoint token, automatic retry, or token in public receipts and usage fields.
+model; matching calls replay it unchanged even after an incomplete body, and
+changed or unknown route identity starts empty without refusing generation. The
+caller keeps it through tools, steering and compaction within a live turn and
+clears it at a new turn or cold restart; there is no daemon state map, checkpoint
+token, automatic retry, or token in public receipts and usage.
 
 Historical assistant `codex.responses.v1` items replay only under the exact
-account, profile and model that produced them, so the binding stays truthful
-when the vendor answers a request with another model. A turn the same account
-served with another or an undisclosed model is not replayed: it is sent through
-its canonical content and tool calls, with the original tool IDs. A message that has nothing
-to send that way, a changed or unknown account, and a continuation whose format
-or payload shape is wrong still refuse with `invalid_continuation` before
-dispatch. The projection carries the caller's canonical content and tool calls,
-so an assistant turn's native item boundaries, phases and encrypted arguments do
-not survive it; the original payload stays in the caller's own history.
-The live transport continuation is bound to the model the terminal response
-named, so a turn another model answered is not replayed under the requested
-model either, and an unknown model leaves it unbound.
+account, profile and model that produced them, so the binding stays truthful when
+the vendor answers with another model. A turn the same account served with
+another or an undisclosed model is sent through its canonical content and tool
+calls with the original tool IDs instead. A message with nothing to send that way,
+a changed or unknown account, or a continuation of the wrong format or payload
+shape refuses with `invalid_continuation` before dispatch. That projection drops
+an assistant turn's native item boundaries, phases and encrypted arguments; the
+original payload stays in the caller's history. The live transport continuation
+binds to the model the terminal response named, so a turn another model answered
+is not replayed under the requested model, and an unknown model leaves it unbound.
 
 `ModelOperations` uses the existing daemon command store, idempotency lookup,
 queue capacity, cancellation and terminal boundary. Model runners use their class
-limit and any explicit global limit described in [Main Execution Paths](#6-main-execution-paths).
-Their permit remains occupied until runner settlement, including cancellation;
-waiting for a client's result-digest ACK does not hold it. Model commands do not appear
-as Agent Runs. The command store contains content hashes and resource references, not
-the full conversation. A model-purpose upload uses `ResourceStore`'s atomic
-finalization; its contents are not filtered for secret-like text, and it cannot
-be resolved as an ordinary Agent attachment. Engine authorization never enters
-the model payload. This narrow content boundary is INV-062, not a general bypass.
+limit and any explicit global limit described in [Main Execution Paths](#6-main-execution-paths);
+their permit stays occupied until runner settlement, including cancellation, but
+not while awaiting a client's result-digest ACK, and they are not Agent Runs. The command store holds content hashes and resource references, not the
+conversation. A model-purpose upload uses `ResourceStore`'s atomic finalization;
+its contents are not filtered for secret-like text, and it cannot resolve as an
+ordinary Agent attachment. Engine authorization never enters the model payload.
+This narrow content boundary is INV-062, not a general bypass.
 
 Result GET returns exact digest-bound bytes without acknowledging them. A client
-accepts custody before ACK; a lost local reply is recovered using the same
+accepts custody before ACK and recovers a lost local reply through the same
 operation identity. Request bytes are released at terminal state, response bytes
-after ACK, and unacknowledged responses after 30 days from readiness. Existing
-maintenance reclaims crash residue. A recorded response expiry remains its
-release timestamp through delayed cleanup and restart; ordinary ACK uses its
-actual release time. Redundant uploads on an idempotent create are
-released without touching another live command's input. Compact model receipts
-and idempotency bindings are excluded from Agent history age/cap pruning, so an expired or
-acknowledged result cannot accidentally trigger another generation. A provider
-refusal, an operation that never dispatched and an unknown outcome after engine
-death are separate facts. A crash after response bytes are published but before
-the command's terminal SQL commit retains an unknown outcome; uncommitted
-bytes cannot certify a completed response and are reclaimed as crash residue.
+after ACK and unacknowledged responses 30 days after readiness; existing
+maintenance reclaims crash residue. A recorded response expiry stays the release
+timestamp through delayed cleanup and restart, while an ordinary ACK uses its
+actual release time. Redundant uploads on an idempotent create are released
+without touching another live command's input. Compact model receipts and
+idempotency bindings are excluded from Agent history age/cap pruning, so an
+expired or acknowledged result cannot trigger another generation. A provider
+refusal, a never-dispatched operation and an unknown outcome after engine death
+are separate facts. A crash after response bytes are published but before the
+terminal SQL commit keeps an unknown outcome; uncommitted bytes cannot certify a
+completed response and are reclaimed as crash residue.
 
-Callers may request `captureEffortEvidence=true` on the existing model-operation
-POST, discovered through its query descriptor, to retain the adapter's typed
+Callers may request `captureEffortEvidence=true` on the model-operation POST,
+discovered through its query descriptor, to retain the adapter's typed
 `effortResolution` receipt. Omission and false strip only that field before
 immutable result publication, preserving strict legacy result bytes. The literal
-true choice is captured in command parameters and idempotency identity: rejoining
-the same operation retains it, and changing it under the same key conflicts.
-GET still returns the stored bytes and their original digest for ACK; it performs
-no projection. This choice never changes the inference request, real provider
-`appliedOptions`, dispatch or generation count. Historical results remain unchanged.
+true choice is part of command parameters and idempotency identity: a rejoin keeps
+it, and changing it under the same key conflicts. GET returns the stored bytes and
+original digest for ACK without projection. The choice never changes the
+inference request, real provider `appliedOptions`, dispatch or generation count;
+historical results are unchanged.
 
 Callers may independently request `captureFailureEvidence=true` on the same POST,
-discovered through that operation's query descriptor. Omission and false
-retain the legacy command identity and strict result shape; true is bound to the
-same idempotency key and cannot change during a create rejoin. This is transport
-evidence intent, not a provider generation option.
-For failed, incomplete or locally rejected processing, the optional private
-`failureEvidence` in `ModelCallResult` contains every byte returned to the reader,
-encoded reversibly, plus the original exception, causes and aggregate members. SSE, non-success
-inference HTTP bodies and post-dispatch fetch errors share the same capture owner.
-An absent response contributes zero body bytes. `bodyComplete` means observed
-reader EOF, independently of provider terminal framing; an unreceived suffix is
-never claimed captured. Successful completed results carry no duplicate wire.
-The evidence follows the existing result resource, GET, ACK and expiry; only
-compact structural diagnostics enter the problem, event ledger and status.
-For a failed or unknown stream, compact problem context also carries
-`timeToFirstChunkMs`, `lastChunkAfterResponseMs`, `silenceMs`, and
-`largestSilenceMs` when the reader saw bytes. `lastEventAfterResponseMs` and
-`eventSilenceMs` independently measure the last parsed SSE event: a later comment
-heartbeat or unfinished frame advances only the chunk clock. First-chunk,
-last-chunk and last-event offsets start at response headers, not request dispatch.
-These are measurements, not an idle watchdog or retry signal; a missing
-terminal frame remains `transport_unknown` and the existing custody/no-blind-
-retry rule stays authoritative.
+discovered through its query descriptor. Omission and false keep the legacy
+command identity and strict result shape; true is bound to the idempotency key
+and cannot change during a create rejoin. It is transport evidence intent, not a
+generation option. For failed, incomplete or locally rejected processing,
+the optional private `failureEvidence` in `ModelCallResult` holds every byte
+returned to the reader, encoded reversibly, plus the original exception, causes
+and aggregate members. SSE, non-success inference HTTP bodies and post-dispatch
+fetch errors share one capture owner. An absent response contributes zero body
+bytes. `bodyComplete` means observed reader EOF, independently of provider
+terminal framing; an unreceived suffix is never claimed captured. Successful
+completed results carry no duplicate wire. The evidence follows the existing
+result resource, GET, ACK and expiry; only compact structural diagnostics enter
+the problem, event ledger and status.
+For a failed or unknown stream whose reader saw bytes, compact problem context
+also carries `timeToFirstChunkMs`, `lastChunkAfterResponseMs`,
+`silenceMs` and `largestSilenceMs`; `lastEventAfterResponseMs` and
+`eventSilenceMs` measure the last parsed SSE event, so a later comment heartbeat
+or unfinished frame advances only the chunk clock. All offsets start at response
+headers, not request dispatch. They are measurements, not an idle watchdog or
+retry signal: a missing terminal frame stays `transport_unknown` under the
+existing custody/no-blind-retry rule.
 Coherent provider terminal facts precede message conversion: unusable completed
-or incomplete output retains its provider outcome and usage, with null message,
+or incomplete output keeps its provider outcome and usage, with null message,
 `response_rejected`, `response_received` dispatch and failed operation lifecycle.
-Provider failures retain their typed problem even when irrelevant output is
+Provider failures keep their typed problem even when irrelevant output is
 malformed. A caller must distinguish this known rejection from unknown dispatch;
-neither result authorizes an engine retry or a never-sent/free claim.
+neither authorizes an engine retry or a never-sent/free claim.
 
 An opted-in advisory request may return `processing_unavailable` with context
-`generationStarted: false`, `processingFallback: "standard"`, and
-`processingRefusal: "capacity" | "unsupported"`. This is restricted to a
-non-success HTTP response: HTTP 429 `resource_unavailable` on submitted Flex,
-or HTTP 400 `unsupported_parameter` for `service_tier` on submitted Fast/Flex.
-An explicit native `serviceTier`
-override never becomes an advisory fallback. The operation still records the
-physical send and `response_received`; the proof concerns generation, not
-dispatch. The caller may create a separate Standard request and reservation.
-No engine retry is introduced, and generic auth/quota failures, timeouts,
-unknown outcomes or failures inside a response stream provide no such proof.
+`generationStarted: false`, `processingFallback: "standard"` and
+`processingRefusal: "capacity" | "unsupported"`, only for a non-success HTTP
+response: HTTP 429 `resource_unavailable` on submitted Flex, or HTTP 400
+`unsupported_parameter` for `service_tier` on submitted Fast/Flex. An explicit
+native `serviceTier` override never becomes an advisory fallback. The operation
+still records the physical send and `response_received`: the proof concerns
+generation, not dispatch, and a Standard follow-up is the caller's separate
+request and reservation. No engine retry is added; generic auth/quota failures,
+timeouts, unknown outcomes and in-stream failures provide no such proof.
 
 The operation catalog and generated endpoint reference below are the wire SSOT.
 Account Auto reuses the existing compatible pool, preferring the prior suitable
-profile; explicit pin never rotates. Any typed catalog refusal excludes that
-account from the remaining selection epoch and hands selection to the next
-candidate, while an explicit pin still refuses with that same typed refusal.
-A failed quota observation feeds that same pool's existing quota owner, without
-a second retry planner or account store. Cooldown evidence is written only when
-the vendor itself named a reset time or a retry delay; a refusal that carries
-neither creates no cooldown, rather than a block until an invented time.
-Pool refusal is projected from typed per-account causes: an all-quota pool is
+profile; an explicit pin never rotates. A typed catalog refusal excludes that
+account for the rest of the selection epoch and hands selection to the next
+candidate, while a pin refuses with that same typed refusal. A failed quota
+observation feeds the pool's existing quota owner, with no second retry planner
+or account store. Cooldown evidence is written only when the vendor named a reset
+time or retry delay; a refusal carrying neither creates no cooldown rather than a
+block until an invented time. Pool refusal is projected
+from typed per-account causes: an all-quota pool is
 `subscription_window_exhausted`, an all-authentication pool is `auth_required`,
-and a mixed, unknown, empty or disabled pool remains unavailable with its compact
-`poolCause` evidence. The generic `credential_pool_exhausted` code alone does not
-prove quota exhaustion. Legacy selected-account catalog reads obey the same current quota admission
+and a mixed, unknown, empty or disabled pool stays unavailable with compact
+`poolCause` evidence; `credential_pool_exhausted` alone does not prove quota
+exhaustion. Legacy selected-account catalog reads obey the same current quota admission
 without starting a generation. The opt-in account view enumerates enabled
 inventories separately, as described [above](#processing-and-account-catalogs).
 
 A terminal response may disclose a model other than the requested one, with no
 error and nothing in the account's quota. The result then carries the optional
-`modelMismatch` fact (`requested`, `observed`). It is set only for a completed or
-incomplete response whose observed model is known and differs by exact id;
-outcome, message, usage and custody are unchanged, and the engine neither
-retries nor discards the generation. Accepting it or creating another operation
-is the caller's decision. The same composition point records a
+`modelMismatch` fact (`requested`, `observed`), set only for a completed or
+incomplete response whose known observed model differs by exact id; outcome,
+message, usage and custody are unchanged, and the engine neither retries nor
+discards the generation. Accepting it or creating another operation is the
+caller's choice. The same composition point records a
 `ModelSubstitutionObservation` in the daemon's in-memory
 `ModelSubstitutionLedger`: bounded, newest-wins per account and requested model,
-kept for 30 minutes (observation retention, not a vendor reset time), never
-cleared by a later success, voided with the credential generation at the
-unusable ledger's call sites, and never recorded while a login of that harness
-holds its credential-mutation window (#363). While one is live, Auto selection for that
-requested model ranks the account after every other selectable account, oldest
-observation first, so a fully marked pool takes turns. The observation never
-excludes an account or exhausts a pool, and a pin or a usable preferred account
-is resolved before it. Agent Runs do not pass it.
+kept 30 minutes (observation retention, not a vendor reset time), never cleared
+by a later success, voided with the credential generation at the unusable
+ledger's call sites, and never recorded while a login of that harness holds its
+credential-mutation window (#363). While one is live, Auto selection for that
+model ranks the account after every other selectable account, oldest observation
+first, so a fully marked pool takes turns; it never excludes an account or
+exhausts a pool, and a pin or usable preferred account resolves first. Agent Runs
+do not pass it.
 
 Catalog `provenance: "provider_http"` means the adapter read and validated a
-successful upstream HTTP catalog response at `observedAt`. Reusing that catalog
-preserves its original time; other provenance values, including historical
-diagnostic strings, do not certify provider contact. The control API forwards
-these adapter-owned fields without turning loopback reachability into upstream
-evidence. Catalog failure returns the existing typed problem, never a refreshed
-timestamp on an earlier successful catalog.
+successful upstream HTTP catalog response at `observedAt`; reuse keeps that time.
+Other provenance values, including historical diagnostic strings, certify no
+provider contact. The control API forwards these adapter-owned fields without
+turning loopback reachability into upstream evidence, and catalog failure returns
+the typed problem, never a refreshed timestamp on an earlier catalog.
 
 The daemon is the durable scheduler. `DaemonServer` requires an injected durable
 command authority and has no in-memory command-record fallback. The HTTP control API is a live viewport and
@@ -3924,19 +3926,20 @@ comes from `budget.paid_budget_per_run`. A single root ledger grants leases to
 planner, candidates, synthesis, and review, and settles
 observed spend even when work errors. Every route carries cost knowledge
 (`exact | estimated | unknown`), billing knowledge, source, and provenance.
-Ordinary included-subscription token valuation is telemetry, not a cash debit — estimated OR
-exact, for candidates and each reviewer route. It is projected BESIDE cash on
-`ControlBudgetSnapshot` (`valuationUsd` + `valuationKnowledge`, also on the MCP
-read result), so proven included ordinary work reads as exact `$0` cash with a
-non-null valuation; an unknown valuation stays null, never a fabricated `$0`.
-Codex's token-only usage remains unpriced unless explicit
-`CLAUDEXOR_CODEX_PRICE_INPUT`, `_OUTPUT`, and `_CACHED` rates cover every used
-token category. Model names never imply a fallback tariff. Included ordinary subscription cash remains exact zero independently of that optional
+Ordinary included-subscription token valuation (estimated or exact, for
+candidates and each reviewer route) is telemetry, not a cash debit. It is
+projected BESIDE cash on `ControlBudgetSnapshot` (`valuationUsd` +
+`valuationKnowledge`, also on the MCP read result), so proven included ordinary
+work reads as exact `$0` cash with a non-null valuation; an unknown valuation
+stays null, never a fabricated `$0`. Codex's token-only usage stays unpriced
+unless explicit `CLAUDEXOR_CODEX_PRICE_INPUT`, `_OUTPUT` and `_CACHED` rates cover
+every used token category; model names never imply a fallback tariff, and
+included ordinary subscription cash stays exact zero regardless of that optional
 valuation. Premium native processing is separately qualified before ranking and
-reservation; verified login alone cannot prove inclusion. Observed amount basis
-is independent: vendor list prices are valuation, while unknown cash or credit
+reservation; verified login alone cannot prove inclusion. Observed amount basis is
+independent: vendor list prices are valuation, while unknown cash or credit
 consumption stays unknown. Current native transports expose no authoritative
-paid-credit debit amount; the engine never invents one from token prices or a
+paid-credit debit amount, and the engine never invents one from token prices or a
 session-level Fast setting.
 Persisted routing cost averages carry a cost-evidence generation in the existing
 metrics file. Older unclassified costs are read as unknown while duration,
@@ -3983,173 +3986,175 @@ proven-zero route. It NEVER recommends authentication/setup for a budget cause,
 and it warns that an unchanged Exact Retry replays the immutable cap. Surfaces
 choose remediation from the typed `code`, never by parsing the message.
 
-Quota is typed and vendor-owned, never inferred from model prose. Constraints carry
-exact `applies_to_models` and optional producer-declared `applies_to_model_prefixes`.
-Without either scope they are vendor-wide. AGY's named Gemini and Claude/GPT groups
-declare their known prefixes once, so new IDs in those families retain their limits;
-unknown families receive no invented group. Display and budget consume that contract.
-Routing, pacing, and profile headroom consume that same applicability predicate,
-so a saturated Fable-only window cannot cool an explicit Opus run. Codex rollout
-`token_count.rate_limits` preserves every reported window as an independent
-constraint with usage, duration, reset, provenance, and freshness. The global
-event ledger is authority; an elapsed reset marks a snapshot stale and requests a
-refresh, never locally invents zero usage. Unknown usage remains `null`.
-One exhaustive schema-owned trait registry classifies every source along four
-independent axes: vendor-authenticated credential evidence, the primary harness
-whose missing observation creates refresh demand, whether a top-level
-refresher produces it, and full-inventory versus incremental-window replacement. Refresh demand is computed per enabled credential
-subject. Display and routing evaluate freshness at the actual current time:
-absent an earlier reset boundary, a snapshot is still fresh exactly five
-minutes after observation and becomes stale only after that boundary.
-Passive consumers can opt in with `GET /v2/quota` and query `view=constraint_freshness`.
-They may request it directly; discovery through the GET quota operation's `view`
-query enum in `/v2/operations` is optional and must not block a passive read.
-The 3.24 engine ignores the selector and returns its legacy shape; 3.25.0 and
-3.25.1 reject it with HTTP 400 (`view must be resources`).
-The strict `ControlQuotaFreshnessResponse` adds required
-`constraints[].freshness` (`fresh`, `stale`, or `unknown`). Each value uses the
-raw snapshot's freshness and observation time, the same five-minute TTL
-(stale only after 300000ms), and only that constraint's reset (stale at or
-after reset). Raw stale/unknown remain so, null resets add no expiry, and null
-usage remains null. Evidence observed before an account reset cutoff is stale
-for every window, exactly as for the aggregate. An expired 5h window therefore
-does not stale a still-fresh weekly sibling in this display projection. The
-historical Codex `reset_credits` label is not a quota window: it carries the
-freshness of the resets facet its count was read from, and `unknown` under an
-unknown snapshot. Snapshot freshness remains the
-conservative aggregate. No usage, reset, observation time, or availability is
-rewritten, and an elapsed reset never implies refill. The read uses existing
-pruning rules without refresh or event writes. The legacy GET, POST refresh
-(whose `view` remains `resources` only), Accounts responses, raw schemas, routing,
-and refresh demand retain their existing contract. Supporting engines reject empty,
-unknown, and repeated `view`; the catalog's `ControlQuotaQueryResponse` is a union
-of the strict whole-response shapes (legacy, `resources`, and `constraint_freshness`).
-A direct caller accepts only a fully valid explicit response or fully valid
-legacy response. Missing nested freshness in valid legacy data retains conservative
-snapshot freshness, never implies independent freshness or refill. Malformed or
-partial explicit metadata, including mixed explicit/legacy constraints or snapshots,
-is rejected without stripping metadata or silently downgrading. For an engine that
-explicitly rejects the selector with HTTP 400, a caller may make one plain GET
-fallback and validate its strict legacy response; transport failures, HTTP 500/other
-statuses, and malformed successful payloads do not permit that fallback. Neither
-direct reads nor the optional plain-GET fallback trigger provider refresh.
-Background demand additionally looks through
-the next existing 60-second poll tick, so a matching primary snapshot whose TTL
-or reset boundary is due by that deadline (including equality) no longer
-satisfies demand. Typed absence is still a successful, displayable observation,
-but retains soft demand under exponential pacing; reactive rollout/retry and
-status-line evidence remains available to display and routing without triggering
-or satisfying primary demand. The poll lifecycle is a single-flight sweep paced PER VENDOR LANE:
-each vendor with a registered refresher owns an independent
-completion-anchored exponential RETRY backoff (15-minute ceiling) that
-advances after partial/absence outcomes and resets when credential or
-routability state changes, so one vendor's unsatisfiable subject never pins a
-sibling vendor's refresh cadence. The retry ladder paces subjects that produced
-no evidence and never postpones RENEWAL: a lane whose satisfied primary
-evidence is due by the next poll tick runs even mid-ladder — whether that
-evidence came from the lane's own cycle, an explicit foreground refresh, or an
-ingested harness event — so a revoked, never-logged-in, or failing sibling
-cannot hold the healthy subjects of its own vendor past their five-minute
-freshness — they renew on the last tick before expiry exactly like a lane with
-no absent subject, and a vendor window reset that falls within the next tick of
-the cycle that observed it is picked up on that tick. A subject's poll rate-limit floor is never bypassed. An absence-only lane keeps
-the pure ladder, and a lane whose last satisfied subject disappears continues
-at the rung it has earned. Every refresher of a cycle is told whether the cycle
-is an explicit foreground refresh or a paced background poll, so a source may
-re-present on request a credential it otherwise leaves alone. A typed `rate_limited` poll absence
-arms a subject-and-route floor in the same pacer/store. A bare 429 has unknown vendor
-bucket scope: policy holds the observed subject and known token-identical aliases,
-while unrelated accounts continue serially at their normal cadence. Token hashes
-are transient alias evidence, never persisted. Missing Retry-After uses that
-subject's existing exponential ladder. Foreground refresh respects these floors;
-`refresh_skipped.subject` names individual omissions. Old vendor-wide persisted
-floors remain in force until their recorded deadlines. A credential change clears
-soft demand backoff, not an existing rate-limit floor. Poll pacing is not inference
-quota and is never stored as an exhausted window. Failed or suppressed refreshes remain explained alongside stale data:
-refresh-gap absences (`refresh_failed`, `rate_limited`,
-`probe_skipped_rate_limited`, `poll_paced`) are silenced only by a FRESH
-full-source snapshot under the existing coverage rule; a new incremental
-window cannot hide a failed full refresh. A paused subject lacking fresh
-cover and a stored absence is stated as a
-derived `poll_paced` row (a live projection, never a stored event), so an
-exhaustion reader that skips stale snapshots stays fail-open instead of
-promoting a stale spent window into "window exhausted". A registry-owned
-credential generation fences a provider cycle after validation and before its
-first event, memory, absence, marker, response, or cursor write. A foreground
-caller from a newer generation waits for obsolete work to retire, then all such
-callers coalesce into one current-generation cycle; an obsolete poll cannot
-restore removed evidence or satisfy a post-login refresh. Within one cycle the
-selected refreshers run concurrently, validate every fulfilled snapshot and absence
-before the first write, then fold in declaration order so first-claim and marker
-semantics remain deterministic; each refresher's per-account vendor calls stay
-serial. Both `/v2/quota` and the atomic Accounts response decorate snapshots
-with the same server-owned model-aware availability projection. Stored event
-records and projection signatures remain undecorated, and clients never promote
-a model-scoped exhausted window into an account-wide percentage or block.
-A refresh persists a subject's snapshot only when its evidence changed
-(everything except `observed_at`; a freshness flip counts): an unchanged
-re-observation keeps the fresh observation time in memory, and the projection
-marker still publishes it. After a restart a replayed snapshot therefore
-carries the observation time of its last persisted change until the first
-admission poll (immediate on arm, then every 60 s) re-observes it — it may read
-stale, or past the 24-hour window drop out of the projection, for up to one poll
-interval. The marker's `projection_signature` is the sha256 digest of the
-projection (snapshots plus absences), compared only for equality. A later recognized
-primary observation reconciles old reactive constraints at the registry write owner.
-The observation witness and changed reactive snapshots commit in one SQL event transaction,
-even for timestamp-only re-observation. Reversed arrival uses the same witness;
-a delayed old refusal cannot revive a retired block. Request-start timestamps keep
-an older in-flight poll from erasing a newer refusal. A generic unclassified block
+Quota is typed, vendor-owned, never inferred from prose. Exact `applies_to_models`
+and producer-declared `applies_to_model_prefixes` scope models. Without either,
+model scope is vendor-wide. Independent `applies_to_request_kinds` defaults to text and image.
+Codex maps codex/default to text, image_gen to image; full reads and rollout
+`token_count.rate_limits` omit unrecognised buckets rather than invent applicability.
+Notifications retain unknown buckets as diagnostic payloads, not constraints.
+An image 429 reset supplies image-scoped `codex_image_response` for that credential
+generation until its reset or a newer matching full window. Image admission uses
+image scope; Agent/text admission, run pressure and Accounts summaries stay text,
+while raw image windows remain visible and labelled. AGY declares Gemini and
+Claude/GPT prefixes once: new family IDs inherit limits, unknown families no group.
+Display, budget, routing, pacing and profile headroom share applicability; a spent
+Fable window cannot cool Opus. Each recognised Codex window retains usage, duration,
+reset, provenance and freshness. The global event ledger is authority. Elapsed
+reset marks stale and requests refresh, never zeroes usage; unknown stays `null`.
+The exhaustive schema trait registry classifies sources on four independent axes:
+vendor-authenticated credential evidence, primary harness whose absence demands
+refresh, top-level refresher production, and full-inventory versus incremental
+replacement. Refresh demand is per enabled credential subject. Display/routing use
+current-time freshness: without an earlier reset, fresh through exactly five minutes,
+stale only afterwards.
+Passive consumers can request `GET /v2/quota` with `view=constraint_freshness`
+directly; discovering the GET quota operation's `view` enum in `/v2/operations`
+is optional and must not block a passive read. The 3.24 engine
+ignores the selector and returns its legacy shape; 3.25.0 and 3.25.1 reject it
+with HTTP 400 (`view must be resources`). The strict
+`ControlQuotaFreshnessResponse` adds required `constraints[].freshness` (`fresh`,
+`stale` or `unknown`) from the raw snapshot's freshness and observation time, the
+same five-minute TTL (stale only after 300000ms) and only that constraint's reset
+(stale at or after reset). Raw stale/unknown stay so, null resets add no expiry,
+null usage stays null, and evidence observed before an account reset cutoff is
+stale for every window, as for the aggregate. An expired 5h window therefore does
+not stale a still-fresh weekly sibling in this display projection. The historical
+Codex `reset_credits` label is not a quota window: it carries the freshness of the
+resets facet its count was read from, or `unknown` under an unknown snapshot.
+Snapshot freshness stays the conservative aggregate; no usage, reset, observation
+time or availability is rewritten, and elapsed resets never imply refill. The
+read uses existing pruning rules without refresh or event writes. The legacy GET,
+POST refresh (whose `view` stays `resources` only), Accounts responses, raw
+schemas, routing and refresh demand keep their contract. Supporting engines reject
+empty, unknown and repeated `view`; the catalog's `ControlQuotaQueryResponse` is a
+union of the strict whole-response shapes (legacy, `resources`,
+`constraint_freshness`). A direct caller accepts only a fully valid explicit or
+legacy response; missing nested freshness in valid legacy data keeps conservative
+snapshot freshness and never implies independent freshness or refill. Malformed or
+partial explicit metadata, including mixed explicit/legacy constraints or
+snapshots, is rejected without stripping metadata or silently downgrading. Only an
+engine's explicit HTTP 400 for the selector permits one plain-GET fallback with a
+strict legacy response check; transport failures, HTTP 500/other statuses and
+malformed successful payloads do not. Neither the direct read nor that fallback
+triggers provider refresh.
+Background demand also looks through the next 60-second poll tick, so a matching
+primary snapshot whose TTL or reset boundary is due by then (including equality)
+no longer satisfies demand. Typed absence is a successful, displayable
+observation that keeps soft demand under exponential pacing; reactive
+rollout/retry and status-line evidence stays available to display and routing
+without triggering or satisfying primary demand. The poll lifecycle is a
+single-flight sweep paced PER VENDOR LANE: each vendor with a registered refresher
+owns an independent completion-anchored exponential RETRY backoff (15-minute
+ceiling) that advances after partial/absence outcomes and resets when credential
+or routability state changes, so one vendor's unsatisfiable subject never pins a
+sibling vendor's cadence. The ladder paces subjects that produced no evidence and
+never postpones RENEWAL: a lane whose satisfied primary evidence (from its own
+cycle, an explicit foreground refresh or an ingested harness event) is due by the
+next tick runs even mid-ladder, so a revoked, never-logged-in or failing sibling
+cannot hold its vendor's healthy subjects past their five-minute freshness; they
+renew on the last tick before expiry like a lane with no absent subject, and a
+vendor window reset within the next tick of the observing cycle is picked up on
+that tick. A subject's poll rate-limit floor is never bypassed. An absence-only
+lane keeps the pure ladder, and a lane whose last satisfied subject disappears
+continues at its earned rung. Every refresher learns whether the cycle is an
+explicit foreground refresh or a paced background poll, so a source may
+re-present on request a credential it otherwise leaves alone. A typed
+`rate_limited` poll absence arms a subject-and-route floor in the same
+pacer/store. A bare 429 has unknown vendor bucket scope: policy holds the
+observed subject and known token-identical aliases while unrelated accounts
+continue serially at their normal cadence; token hashes are transient alias
+evidence, never persisted. Missing Retry-After uses the subject's exponential
+ladder. Foreground refresh respects these floors, and `refresh_skipped.subject`
+names individual omissions. Old vendor-wide persisted floors stay in force until
+their recorded deadlines. A credential change clears soft demand backoff, not a
+rate-limit floor. Poll pacing is not inference quota and is never stored as an
+exhausted window. Failed or suppressed refreshes stay explained beside stale data: refresh-gap
+absences (`refresh_failed`, `rate_limited`, `probe_skipped_rate_limited`,
+`poll_paced`) are silenced only by a FRESH full-source snapshot under the
+coverage rule, so a new incremental window cannot hide a failed full refresh. A
+paused subject lacking fresh cover and a stored absence is stated as a derived
+`poll_paced` row (a live projection, never a stored event), so an exhaustion
+reader that skips stale snapshots stays fail-open instead of promoting a stale
+spent window into "window exhausted". A registry-owned credential generation
+fences a provider cycle after validation and before its first event, memory,
+absence, marker, response or cursor write. A foreground caller from a newer
+generation waits for obsolete work to retire, then such callers coalesce into one
+current-generation cycle; an obsolete poll cannot restore removed evidence or
+satisfy a post-login refresh. Within one cycle the selected refreshers run
+concurrently, validate every fulfilled snapshot and absence before the first
+write, then fold in declaration order so first-claim and marker semantics stay
+deterministic; each refresher's per-account vendor calls stay serial. `/v2/quota` and the atomic Accounts response decorate snapshots with the
+same server-owned model-aware availability projection; stored event records and
+projection signatures stay undecorated, and clients never promote a model-scoped
+exhausted window into an account-wide percentage or block. A refresh persists a
+subject's snapshot only when its evidence changed (all but `observed_at`; a
+freshness flip counts): an unchanged re-observation keeps the
+fresh observation time in memory, and the projection marker still publishes it.
+After a restart a replayed snapshot therefore carries the observation time of its
+last persisted change until the first admission poll (immediate on arm, then
+every 60 s) re-observes it, so for up to one poll interval it may read stale or,
+past the 24-hour window, drop out of the projection. The marker's
+`projection_signature` is the sha256 digest of the projection (snapshots plus
+absences), compared only for equality. A later recognized
+primary observation reconciles old reactive constraints at the registry write owner;
+its witness and changed reactive snapshots commit in one SQL event transaction, even
+for timestamp-only re-observation. Reversed arrival uses the same witness, so a
+delayed old refusal cannot revive a retired block, and request-start timestamps
+keep an older in-flight poll from erasing a newer refusal. A generic unclassified block
 can yield to a successful response without measured windows (usage stays unknown),
-while independently identified/scoped windows need matching measured replacement.
+while independently identified or model-scoped windows need matching measured
+replacement; a Codex refusal's text scope limits what it blocks, not which read
+retires it.
 This permits purchased or vendor-granted early resets without waiting for an obsolete
 timer. Malformed Codex responses never become successful empty observations.
 
-Native Claude `rate_limit_event` measurements and Codex's existing execution
-app-server `account/rateLimits/updated` notifications use incremental sources
-`claude_rate_limit_event` and `codex_app_server_event`. They produce ordinary
-singleton-window snapshots with independent observation time and freshness.
-`quotaSnapshotIdentity` in schema includes subject, route, source and, for these
-sources, the stable vendor window identity, duration and applicability, including
-normalized model-prefix sets. Empty prefix sets preserve existing identities. Percent,
-reset instant and observation time do not change identity. Registry, budget cache
-and event retention/replay share that key; control projections derive `snapshot_id`
-for Swift instead of making the UI duplicate source policy. Full-reader sources
-continue replacing their complete inventory. Incremental observations neither
-refresh siblings nor satisfy full-inventory demand; fresh applicable values keep
-the existing ranking/headroom meaning, and missing windows stay unknown.
+Native Claude `rate_limit_event` measurements and Codex's execution app-server
+`account/rateLimits/updated` notifications use incremental sources
+`claude_rate_limit_event` and `codex_app_server_event`: ordinary singleton-window
+snapshots with independent observation time and freshness. For these sources
+`quotaSnapshotIdentity` adds the stable vendor window identity, duration and
+applicability, including normalized model-prefix sets, to subject, route and
+source; empty prefix sets keep existing identities, and percent, reset instant
+and observation time never change identity. Registry, budget cache and event
+retention/replay share that key; control projections derive `snapshot_id` for
+Swift so the UI does not duplicate source policy. Full-reader sources still
+replace their complete inventory. Incremental observations neither refresh
+siblings nor satisfy full-inventory demand; fresh applicable values keep the
+ranking/headroom meaning, and missing windows stay unknown.
 
 Incremental snapshots use `quota.window.observed` in the global event ledger,
-with window slots grouped by subject for removal and retention. Historical
-records retain their original typed shape; the importer never fabricates a
-primary/cooldown snapshot to represent them.
+with window slots grouped by subject for removal and retention. Historical records
+keep their typed shape; the importer fabricates no primary/cooldown snapshot for
+them.
 
 A newer authenticated full read can supersede an older incremental observation
-of the same measured window, duration, applicability, account and route. The
-registry writes its full witness and `quota.window.superseded` atomically in
-one SQL event transaction, then removes that exact effective window. Its cutoff
-survives later full-inventory replacement, display aging and event retention, so an
-old delayed event cannot resurrect a cleared limit. Newer partial evidence is
-admitted again; equal timestamps remain conservative. Missing or unmeasured
-windows do not supersede known limits. Subject removal clears observations
-and cutoffs together. Older rollback readers ignore the new record and may
-conservatively retain old window evidence under their earlier semantics.
-Unknown native applicability is retained as numerical diagnostic evidence rather
-than turned into an account-wide restriction. An overage name does not identify
-an additional model family. Numeric source units are translated by each adapter:
-Claude stream utilization is a ratio; Codex `usedPercent` is a percentage.
+of the same measured window, duration, applicability, account and route: the
+registry writes its full witness and `quota.window.superseded` in one SQL event
+transaction, then removes that exact effective window. Its cutoff survives later
+full-inventory replacement, display aging and event retention, so an old delayed
+event cannot resurrect a cleared limit. A window recorded before request-kind
+scope applies to both kinds; a measured replacement declaring a kind retires it
+only with the same id, model scope and identical duration (unknown matches only
+unknown), including the rollout `primary` → `codex:primary` mapping, and
+explicit text and image scopes never retire each other.
+Newer partial evidence is admitted again; equal timestamps stay conservative.
+Missing or unmeasured windows never supersede known limits, and subject removal
+clears observations and cutoffs together.
+Unknown native applicability stays numerical diagnostic evidence, never an
+account-wide restriction, and an overage name identifies no additional model
+family. Each adapter translates numeric units: Claude stream utilization is a
+ratio, Codex `usedPercent` a percentage.
 
-Historical quota payloads remain readable: a scoped snapshot — or one
-whose source postdates v3.2.0's strict enum (`cursor_rate_limit`) — is first
-prepared under a typed record that an older engine ignores, then committed by
-the established upsert using an explicit v3.2.0 field allowlist with the
-nearest v3.2.0 source label in the base. The imported journal pair retains its
-original adjacency, and new pairs commit
-in one SQL event transaction. Current reducers apply the exact scope and true
-source only when the matching base follows. This historical payload encoding
-does not permit an older engine to open a migrated SQL root; the semantic floor
-and forward-fix rule still apply.
-A background cycle uses the same vendor refresher sweep; an explicit foreground
+Historical quota payloads remain readable: a scoped snapshot, or one whose
+source postdates v3.2.0's strict enum (`cursor_rate_limit`), is first prepared
+under a typed record an older engine ignores, then committed by the established
+upsert with an explicit v3.2.0 field allowlist and the nearest v3.2.0 source label
+in the base, which omits image-only windows rather than widening them to text.
+Imported journal pairs keep their adjacency and new pairs commit in one SQL event
+transaction; current reducers apply the exact scope and true source only when the
+matching base follows. This encoding does not let an older engine open a migrated
+SQL root; the semantic floor and forward-fix rule still apply.
+A background cycle uses the same vendor refresher sweep; explicit foreground
 refresh runs all eligible subjects. Paused subjects return last-known data with
 `refresh_skipped` subject identity and deadline; only a legacy broad floor skips
 the whole vendor lane. Join semantics are asymmetric: a
@@ -4183,36 +4188,34 @@ remediation, never a re-auth/harness-wait prompt — rather than
 `harness_unavailable`.
 
 Routing rationale: pool ordering records a typed `RouteRankingRationale` ONCE as
-run evidence (`RunTelemetry.routing_rationale`), not an event — the ordered pool,
+run evidence (`RunTelemetry.routing_rationale`), not an event: the ordered pool,
 the ids dropped by `paid_fallback`/cooldown, the decisive `reason`
 (`subscription_entitlement_first` / `lowest_incremental_cash` / `quality_tier` /
 `expiring_quota_slack` / `all_incremental_cash_unknown` / `declared_order`), and a
-per-candidate `{billing_knowledge, incremental_cost_usd, eligible}` tuple. The
-rationale is axis-aligned with the ranker, so it can never disagree with the order
-actually taken. Mode-qualified billing evidence takes priority over ordinary
-auth-route evidence: verified included ordinary service proves
-`subscription_entitlement`, so that route survives
-`paid_fallback: never` and ranks with a real economy tuple instead of reading as
-unknown/paid. Surfaces project the rationale verbatim (run detail) and never
-reconstruct the order from prose. A named account's ordinary billing evidence
-requires vendor-backed verification: an authenticated adapter response, or the
-existing exact-profile full-reader vendor observation over a passing local probe.
-Numeric quota expiry does not erase the fact or time of that authenticated contact;
-a newer applicable refusal still overrides it.
-Local store presence alone and stale local readiness do not prove subscription
-entitlement. Passive window notifications alone do not establish that proof.
-Default-store doctor evidence applies only to a profile-less route. The admission
-probe is reused for ranking and the initial reservation. Each physical dispatch
-reads its actual account's current verification again, including when the account
-ID is unchanged, and re-admits it against the existing budget lease and
-paid-fallback policy. This includes inline continuity summaries, rotation and runs
+per-candidate `{billing_knowledge, incremental_cost_usd, eligible}` tuple. It is
+axis-aligned with the ranker, so it can never disagree with the order taken.
+Mode-qualified billing evidence outranks ordinary auth-route evidence: verified
+included ordinary service proves `subscription_entitlement`, so that route
+survives `paid_fallback: never` and ranks with a real economy tuple instead of
+reading as unknown/paid. Surfaces project the rationale verbatim (run detail) and
+never reconstruct the order from prose. A named account's ordinary billing
+evidence needs vendor-backed verification: an authenticated adapter response, or
+the exact-profile full-reader vendor observation over a passing local probe.
+Numeric quota expiry does not erase the fact or time of that contact; a newer
+applicable refusal still overrides it. Local store presence, stale local
+readiness and passive window notifications alone do not prove subscription
+entitlement, and default-store doctor evidence applies only to a profile-less
+route. The admission probe is reused for ranking and the initial reservation.
+Each physical dispatch rereads its actual account's current verification, even
+for an unchanged account ID, and re-admits it against the budget lease and
+paid-fallback policy, including inline continuity summaries, rotation and runs
 without Processing controls. A newer vendor observation is not frozen to the
-initial selection; a valid positive reservation estimate remains independent of
+initial selection; a valid positive reservation estimate stays independent of
 billing verification. A Plan refused before any physical send releases its lease
-and retains the typed policy cause; started work without cost evidence stays unknown. A policy
-refusal is a configuration failure, separate from a monetary-cap or provider
-failure. The ranking rationale remains the
-original selection evidence; the execution receipt names the account that ran.
+and keeps the typed policy cause; started work without cost evidence stays
+unknown. A policy refusal is a configuration failure, separate from a
+monetary-cap or provider failure. The ranking rationale stays the original
+selection evidence; the execution receipt names the account that ran.
 A deep-scan swarm reserves n>1 subscription
 scouts under a finite cap against the per-run estimate floor (mirroring the
 candidate loop), so later scouts are not refused for lacking a per-attempt cash

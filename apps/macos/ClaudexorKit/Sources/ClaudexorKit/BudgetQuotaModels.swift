@@ -73,6 +73,8 @@ public struct QuotaSubject: Codable, Sendable, Equatable, Hashable {
 }
 
 public struct QuotaConstraint: Codable, Sendable, Equatable, Identifiable {
+    public var appliesToRequestKinds: [String]? = nil
+    public var appliesToText: Bool { appliesToRequestKinds?.contains("text") ?? true }
     public let id: String
     public let label: String
     /// nil/empty means the window applies to every model. A non-empty list is
@@ -92,6 +94,7 @@ public struct QuotaConstraint: Codable, Sendable, Equatable, Identifiable {
         case appliesToModels = "applies_to_models"
         case appliesToModelPrefixes = "applies_to_model_prefixes"
         case appliesToUnspecifiedModel = "applies_to_unspecified_model"
+        case appliesToRequestKinds = "applies_to_request_kinds"
         case usedRatio = "used_ratio"
         case windowSeconds = "window_seconds"
         case resetsAt = "resets_at"
@@ -108,6 +111,7 @@ public struct QuotaConstraint: Codable, Sendable, Equatable, Identifiable {
         if let prefixes = appliesToModelPrefixes, !prefixes.isEmpty {
             fields.append(Array(Set(prefixes)).sorted())
         }
+        if let kinds = appliesToRequestKinds { fields.append(["requestKinds": Array(Set(kinds)).sorted()]) }
         let data = try? JSONSerialization.data(withJSONObject: fields)
         return data.flatMap { String(data: $0, encoding: .utf8) } ?? id
     }

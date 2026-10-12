@@ -150,7 +150,7 @@ describe("Codex app-server quota source", () => {
     },
   );
 
-  it("keeps every bucket/window and vendor metadata without an aggregate", () => {
+  it("keeps recognized text and image windows without giving unknown buckets global scope", () => {
     const [snapshot] = parseCodexRateLimitsResponse(
       {
         rateLimits: { planType: "plus", limitId: "codex" },
@@ -163,6 +163,9 @@ describe("Codex app-server quota source", () => {
             burst: { usedPercent: 5, windowDurationMins: 15, resetsAt: 1782351000 },
             metadata: { display: "not a window" },
           },
+          image_gen: {
+            primary: { usedPercent: 90, windowDurationMins: 1440, resetsAt: 1782360000 },
+          },
           review: {
             limitId: "review",
             limitName: "Review",
@@ -173,11 +176,17 @@ describe("Codex app-server quota source", () => {
       new Date("2026-07-15T12:00:00.000Z"),
     );
     expect(snapshot?.subject.plan_label).toBe("plus");
+    expect(snapshot?.constraints.map((c) => c.applies_to_request_kinds)).toEqual([
+      ["text"],
+      ["text"],
+      ["text"],
+      ["image"],
+    ]);
     expect(snapshot?.constraints.map((item) => [item.id, item.used_ratio])).toEqual([
       ["codex:primary", 0.2],
       ["codex:secondary", 0.4],
       ["codex:burst", 0.05],
-      ["review:primary", 0.1],
+      ["image_gen:primary", 0.9],
     ]);
   });
 

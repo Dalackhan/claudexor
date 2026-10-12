@@ -24,6 +24,9 @@ public enum QuotaPresentation {
         public let resetsAt: String?
         /// Empty/nil is account-wide; a non-empty list is model-scoped.
         public let appliesToModels: [String]?
+        /// False for a window scoped away from text (image-only). Text-account
+        /// summaries skip it; detail rows keep it, labelled "(images)".
+        public let appliesToText: Bool
         /// Freshness of the snapshot this window's FRESHEST copy came from.
         public let freshness: String
     }
@@ -133,7 +136,7 @@ public enum QuotaPresentation {
                     }
                 }
                 for constraint in snapshot.constraints {
-                    if let until = constraint.cooldownUntil, let date = parseOffsetTimestamp(until) {
+                    if constraint.appliesToText, let until = constraint.cooldownUntil, let date = parseOffsetTimestamp(until) {
                         if date > now, date > (cooldownEnd ?? .distantPast) {
                             cooldownEnd = date
                             cooldownRaw = until
@@ -146,10 +149,11 @@ public enum QuotaPresentation {
                     if !seen.insert(constraint.presentationID).inserted { continue }
                     windows.append(Window(
                         id: constraint.presentationID,
-                        label: constraint.label,
+                        label: constraint.appliesToText ? constraint.label : "\(constraint.label) (images)",
                         usedRatio: constraint.usedRatio,
-                        resetsAt: constraint.resetsAt,
+                        resetsAt: constraint.resetsAt ?? (constraint.appliesToText ? nil : constraint.cooldownUntil),
                         appliesToModels: constraint.modelScope.isEmpty ? nil : constraint.modelScope,
+                        appliesToText: constraint.appliesToText,
                         freshness: snapshot.freshness
                     ))
                 }

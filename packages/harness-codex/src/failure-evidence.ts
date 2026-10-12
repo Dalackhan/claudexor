@@ -1,5 +1,12 @@
-import type { ModelCallResult, ModelFailureEvidence } from "@claudexor/schema";
+import type { ControlProblem, ModelFailureEvidence } from "@claudexor/schema";
 import { redactSecrets } from "@claudexor/util";
+
+/** The slice of a model or image result this capture annotates. */
+interface CapturedResult {
+  outcome: string;
+  problem: ControlProblem | null;
+  failureEvidence?: ModelFailureEvidence;
+}
 
 /** One response reader's evidence, carried only by its existing private result. */
 export class ResponseFailureCapture {
@@ -79,7 +86,7 @@ export class ResponseFailureCapture {
     visit(error);
   }
 
-  finish(result: ModelCallResult): ModelCallResult {
+  finish<T extends CapturedResult>(result: T): T {
     if (result.outcome === "completed" && result.problem === null) return result;
     const first = this.errors[0];
     const code = this.errors.find((error) => error.code !== null)?.code;

@@ -1,5 +1,12 @@
 # @claudexor/arbitration
 
+## 4.1.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/schema@4.1.0
+
 ## 4.0.1
 
 ### Patch Changes

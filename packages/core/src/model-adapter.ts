@@ -1,9 +1,13 @@
 import type {
   ControlModelCatalogResponse,
   CredentialProfile,
+  ImageCallRequest,
+  ImageCallResult,
+  ImageGenerationCapability,
   ModelCallRequest,
   ModelCallResult,
   ModelRoute,
+  QuotaSnapshot,
   ModelInventoryAbsence,
 } from "@claudexor/schema";
 
@@ -20,6 +24,20 @@ export interface ModelAdapterContext {
   onDispatch: (route: ModelRoute) => Promise<void>;
 }
 
+/** Image generation/edit is the same one-generation discipline over a
+ * different wire: no text catalog read, no text quota, no retry. The facet is
+ * absent on sources that have no image operations; absence is structural. */
+export interface ModelImageFacet {
+  readonly capability: ImageGenerationCapability;
+  invoke(
+    request: ImageCallRequest,
+    context: Omit<ModelAdapterContext, "catalog"> & {
+      imageTurnId: string;
+      onQuota?: (snapshot: QuotaSnapshot) => void;
+    },
+  ): Promise<ImageCallResult>;
+}
+
 /** One generation, not a harness session: no tools, retries, or conversation ownership. */
 export interface ModelAdapter {
   readonly id: string;
@@ -27,4 +45,5 @@ export interface ModelAdapter {
   readonly inventoryAbsence?: ModelInventoryAbsence;
   catalog(context: Omit<ModelAdapterContext, "onDispatch">): Promise<ControlModelCatalogResponse>;
   invoke(request: ModelCallRequest, context: ModelAdapterContext): Promise<ModelCallResult>;
+  readonly image?: ModelImageFacet;
 }

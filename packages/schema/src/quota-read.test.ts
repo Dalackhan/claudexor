@@ -63,7 +63,15 @@ describe("strict quota read negotiation", () => {
     expect(ControlQuotaReadRequest.parse({})).toEqual({});
     for (const view of ["constraint_freshness", "resources"] as const) {
       expect(ControlQuotaReadRequest.parse({ view })).toEqual({ view });
+      const image = { view, requestKind: "image", model: "gpt-image-2" };
+      expect(ControlQuotaReadRequest.parse(image)).toEqual(image);
     }
+    for (const input of [
+      { requestKind: "future" },
+      { model: "" },
+      { target: { harness: "codex", profile_id: "work" } },
+    ])
+      expect(() => ControlQuotaReadRequest.parse(input)).toThrow();
     for (const input of [{ view: "" }, { view: "future" }, { view: null }, { extra: true }]) {
       expect(() => ControlQuotaReadRequest.parse(input)).toThrow();
     }

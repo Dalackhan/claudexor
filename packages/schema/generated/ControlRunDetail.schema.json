@@ -1941,6 +1941,68 @@
               "default": false,
               "description": "True while at least one interactive question awaits answer, timeout, run-terminal, or interruption release."
             },
+            "processScope": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "settled": {
+                      "type": "boolean",
+                      "description": "Every census source succeeded and nothing survived or stayed unreadable."
+                    },
+                    "coverage": {
+                      "type": "string",
+                      "enum": [
+                        "marker+capture",
+                        "marker",
+                        "tree_only"
+                      ]
+                    },
+                    "completeness": {
+                      "type": "string",
+                      "enum": [
+                        "complete",
+                        "not_provable"
+                      ],
+                      "description": "Whether a settled reap proves the scope empty (not on macOS for background system binaries, not on Windows, not after a census failure)."
+                    },
+                    "census": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "failed",
+                        "unsupported"
+                      ]
+                    },
+                    "survivors": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Members still alive when the bounded ladder ended."
+                    },
+                    "unreadable": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Known members whose identity or membership could not be read."
+                    }
+                  },
+                  "required": [
+                    "settled",
+                    "coverage",
+                    "completeness",
+                    "census",
+                    "survivors",
+                    "unreadable"
+                  ],
+                  "additionalProperties": false,
+                  "description": "Compact process-scope outcome of a terminal run (full artifact: final/process_scope.yaml)."
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Compact process-scope outcome from final/process_scope.yaml (settled, coverage, completeness, survivors, unreadable, census); null while live or when unknown.",
+              "default": null
+            },
             "route": {
               "anyOf": [
                 {

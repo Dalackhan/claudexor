@@ -1,5 +1,12 @@
 # @claudexor/event-log
 
+## 4.1.1
+
+### Patch Changes
+
+- @claudexor/schema@4.1.1
+- @claudexor/util@4.1.1
+
 ## 4.1.0
 
 ### Patch Changes

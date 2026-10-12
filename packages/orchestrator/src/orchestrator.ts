@@ -919,14 +919,19 @@ export class Orchestrator {
         },
         async ({ runId }) => {
           // The whole-run barrier: drain delegated children, then end the run's
-          // process scope and record its outcome — all before the held terminal
-          // is flushed. Bounded by the reap deadline.
+          // process scope and record its outcome — all before ANY terminal is
+          // flushed, including the typed failure a child-drain rejection
+          // becomes (the original drain error is kept). Bounded by the reap
+          // deadline.
           const authority = this.deps.delegationBudgetAuthority;
-          if (authority?.hasParent(runId)) {
-            authority.beginParentClose(runId);
-            await authority.waitForChildren(runId);
+          try {
+            if (authority?.hasParent(runId)) {
+              authority.beginParentClose(runId);
+              await authority.waitForChildren(runId);
+            }
+          } finally {
+            await recordScope();
           }
-          await recordScope();
         },
         // Single per-run terminalization hook: the custody fallback for a path
         // that never reached the barrier, then release per-run engine state

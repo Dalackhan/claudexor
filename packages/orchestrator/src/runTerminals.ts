@@ -231,6 +231,13 @@ export async function guardAnnouncedRun(
   let terminalPreparationError: string | null = null;
   let barrierAttempted = false;
   let barrierFailed = false;
+  // The cancellation decision is frozen the moment the strategy's terminal is
+  // held (the strategy returned): a host cancel or wall-clock abort that
+  // arrives DURING the settlement barrier must not turn a completed run into
+  // a cancelled one. Null until the strategy has returned.
+  let abortedAtStrategyEnd: boolean | null = null;
+  const cancellationDecided = (): boolean =>
+    abortedAtStrategyEnd !== null ? abortedAtStrategyEnd : signal?.aborted === true;
   const runBarrier = async (context: AnnouncedRunContext): Promise<void> => {
     if (barrierAttempted) return;
     barrierAttempted = true;
@@ -263,9 +270,10 @@ export async function guardAnnouncedRun(
               // Cancellation wins only until the synchronous terminal commit
               // starts. A later abort cannot rewrite an already-durable success.
               const payloadOutcome = terminalOutcomeFromPayload(payload);
-              const terminalOutcome = signal?.aborted
-                ? cancellationFacts(signal, payloadOutcome)
-                : payloadOutcome;
+              const terminalOutcome =
+                cancellationDecided() && signal
+                  ? cancellationFacts(signal, payloadOutcome)
+                  : payloadOutcome;
               const prepared = prepareRunFactsReceipt(a, terminalOutcome);
               canonicalOutcome = prepared.facts.outcome;
               return {
@@ -355,19 +363,20 @@ export async function guardAnnouncedRun(
           (_type, payload) =>
             publishRetainedOutput(
               a,
-              !signal?.aborted &&
+              !cancellationDecided() &&
                 (RunOutcomeFacts.safeParse(payload["facts"]).data?.lifecycle ??
                   payload["lifecycle"]) === "succeeded",
             ),
         );
       });
       preparedResult = result;
+      abortedAtStrategyEnd = signal?.aborted === true;
       const context = announced as AnnouncedRunContext | null;
       if (context) {
         await runBarrier(context);
         const budget = settledBudgetSnapshot(context);
         const delegateBarrierArmed = ownsDelegateDrain(context);
-        if (delegateBarrierArmed && signal?.aborted) {
+        if (delegateBarrierArmed && abortedAtStrategyEnd && signal) {
           context.log.clearDeferredTerminal();
           const cancelFacts = terminalOutcomeFacts(
             result.facts,

@@ -560,5 +560,97 @@ describe("Orchestrator run scope: terminal after cleanup (fix round 1 item 3)", 
   );
 });
 
+describe("fix round 2: barrier finally and frozen cancellation", () => {
+  it("records the scope before the typed failure a delegated child-drain rejection becomes (item 4)", async () => {
+    const repo = await initRepo();
+    const trace: string[] = [];
+    const custodian: RunScopeCustodian = {
+      open: (runId) => inProcessRunScopeCustodian.open(runId),
+      async settle(runId, marker) {
+        const runDir = join(projectRuntimeDir(repo), "runs", runId);
+        const events = existsSync(join(runDir, "events.jsonl"))
+          ? readFileSync(join(runDir, "events.jsonl"), "utf8")
+          : "";
+        trace.push(`settle:terminal=${/"type":"run\.(completed|failed|blocked)"/.test(events)}`);
+        return inProcessRunScopeCustodian.settle(runId, marker);
+      },
+    };
+    const drainError = Object.assign(new Error("delegated children did not settle"), {
+      code: "delegation_child_drain_timeout",
+    });
+    const authority = {
+      hasParent: () => true,
+      beginParentClose: () => trace.push("drain-begin"),
+      waitForChildren: async () => {
+        trace.push("drain-reject");
+        throw drainError;
+      },
+      releaseRun: () => trace.push("released"),
+      registerParent: () => {},
+    } as unknown as NonNullable<
+      ConstructorParameters<typeof Orchestrator>[0]["delegationBudgetAuthority"]
+    >;
+    const res = await new Orchestrator({
+      registry: new Map([["impl", recordingImplementer("impl", [])]]),
+      runScopes: custodian,
+      delegationBudgetAuthority: authority,
+    }).run({ repoRoot: repo, prompt: "do it", mode: "agent", harnesses: ["impl"], n: 1 });
+    // The drain failure keeps its typed verdict; custody settled BEFORE it was published.
+    expect(res.lifecycle).toBe("failed");
+    expect(trace.indexOf("drain-reject")).toBeLessThan(trace.indexOf("settle:terminal=false"));
+    expect(trace.filter((t) => t.startsWith("settle:"))).toEqual(["settle:terminal=false"]);
+    expect(trace.indexOf("released")).toBeGreaterThan(trace.indexOf("settle:terminal=false"));
+    expect(existsSync(join(res.runDir, "final", "process_scope.yaml"))).toBe(true);
+    const events = readFileSync(join(res.runDir, "events.jsonl"), "utf8");
+    expect(events).toContain('"type":"run.failed"');
+    expect(events).toContain("delegation_drain");
+  }, 60_000);
+
+  it("an abort that arrives DURING the settlement barrier does not turn a completed run into cancelled (item 9)", async () => {
+    const repo = await initRepo();
+    const controller = new AbortController();
+    const custodian: RunScopeCustodian = {
+      open: (runId) => inProcessRunScopeCustodian.open(runId),
+      async settle(runId, marker) {
+        controller.abort("host_cancelled"); // the host cancels while cleanup runs
+        return inProcessRunScopeCustodian.settle(runId, marker);
+      },
+    };
+    const res = await new Orchestrator({
+      registry: new Map([["impl", recordingImplementer("impl", [])]]),
+      runScopes: custodian,
+    }).run({
+      repoRoot: repo,
+      prompt: "do it",
+      mode: "agent",
+      harnesses: ["impl"],
+      n: 1,
+      signal: controller.signal,
+    });
+    expect(res.lifecycle).toBe("succeeded");
+    const events = readFileSync(join(res.runDir, "events.jsonl"), "utf8");
+    expect(events).toContain('"type":"run.completed"');
+    expect(events).not.toContain('"type":"run.failed"');
+    // An abort that arrived BEFORE the strategy finished still cancels.
+    const early = new AbortController();
+    const impl = recordingImplementer("impl2", [], async function* () {
+      early.abort("host_cancelled");
+      yield;
+    });
+    const cancelled = await new Orchestrator({
+      registry: new Map([["impl2", impl]]),
+      runScopes: inProcessRunScopeCustodian,
+    }).run({
+      repoRoot: await initRepo(),
+      prompt: "do it",
+      mode: "agent",
+      harnesses: ["impl2"],
+      n: 1,
+      signal: early.signal,
+    });
+    expect(cancelled.lifecycle).toBe("cancelled");
+  }, 90_000);
+});
+
 // Keep `spawn` referenced for the platform-binary shape documented above.
 void spawn;

@@ -73,7 +73,9 @@ export interface ScopeCensusReader {
   confirm(pid: number, marker: string): Promise<boolean | null>;
 }
 
-const PS_PATH = "/bin/ps";
+// `ps` resolved through the pinned PATH, exactly like `process-tree.ts` (a host
+// without /bin/ps — NixOS, some containers — still has it on PATH).
+const PS_COMMAND = "ps";
 const CENSUS_TIMEOUT_MS = 10_000;
 const LINUX_CONCURRENCY = 8;
 
@@ -171,7 +173,7 @@ function runPs(args: string[], onLine: (line: string) => void): Promise<PsFailur
     };
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(PS_PATH, args, {
+      child = spawn(PS_COMMAND, args, {
         stdio: ["ignore", "pipe", "ignore"],
         env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" },
       });

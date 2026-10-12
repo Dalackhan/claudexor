@@ -36,7 +36,9 @@ export interface ProcessTableReader {
   row(pid: number): Promise<ProcessTableRow | null | "unreadable">;
 }
 
-const PS_PATH = "/bin/ps";
+// `ps` resolved through the pinned PATH, exactly like `process-tree.ts` (a host
+// without /bin/ps — NixOS, some containers — still has it on PATH).
+const PS_COMMAND = "ps";
 const TABLE_TIMEOUT_MS = 5_000;
 const ROW_RE = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s*$/;
 
@@ -60,7 +62,7 @@ export function birthEpochSeconds(birth: string): number | null {
 function runPsRows(args: string[]): Promise<{ rows: ProcessTableRow[]; failure: string | null }> {
   return new Promise((resolve) => {
     execFile(
-      PS_PATH,
+      PS_COMMAND,
       args,
       {
         encoding: "utf8",

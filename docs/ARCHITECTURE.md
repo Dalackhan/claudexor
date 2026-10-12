@@ -3071,7 +3071,23 @@ terminalized as `interrupted` (`resumable.cause: host_restart`, with its
 that workspace keeps it and reconciles quiescence itself before refreshing or
 reusing it. An in-run cancel reaps its own process tree and discloses any
 unconfirmed death as `termination_unconfirmed` on the harness's completion
-event. The sweep covers orphaned envelopes (with their
+event. Independently of that cancel ladder, every run owns a process SCOPE
+(INV-144): `run()` mints a `CLAUDEXOR_RUN_SCOPE_<id>=1` marker and records it in
+`daemon/run-scopes.json` before the first launch; every harness spec env of the
+run carries it (a `clean` env also forwards an enclosing host's grammar-shaped
+markers); the same pids tick takes one asynchronous process-table snapshot and
+records each live harness root's descendants (pid, group, birth) into the run's
+entry. At the run's terminal on every path the scope's members are ended by
+measured identity — environment-marker members (`ps -E` on macOS,
+`/proc/<pid>/environ` on Linux), members of recorded process groups under the
+pgid-reuse rule and recorded descendants, TERM then a bounded KILL, each signal
+after a fresh birth read — and `final/process_scope.yaml` records what was
+ended, what survived, what was unreadable and which recorded groups were skipped
+as reused. The next start settles or discloses entries whose owning daemon is no
+longer live BEFORE this sweep and never touches a marker absent from the index.
+Limits are disclosed, never failures: Windows has no environment census
+(`tree_only`); macOS SIP hides Apple platform-binary environments, so such a
+leftover is reached only through the group it was captured in. The sweep covers orphaned envelopes (with their
 seeded-credential homes), dead per-attempt `claudexor/<task>/<attempt>`
 branches, leaked `claudexor/verify-*` branches, and stale
 `claudexor-ro-*`/`claudexor-verify-*` tmp dirs. Envelopes whose creating

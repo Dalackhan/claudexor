@@ -846,6 +846,25 @@ invariant or operator decision before proceeding.
   `[INV-116:work-state-veto]`, `[INV-116:work-report-contract]`,
   `[INV-116:context-interrupted]`, `[INV-116:continuation]`; the
   whole-strategy terminal net and interrupt-stamping tests.
+- **INV-144** A finished run ends every OS process it left. Every process
+  that exists because of a run inherits the run's scope marker
+  (`CLAUDEXOR_RUN_SCOPE_<id>=1`, minted and durably recorded before the first
+  launch), and while the run is live the daemon records the run's descendants
+  (pid, process group, birth) from kernel state. At the run's terminal — on
+  success, failure, cancel and timeout alike — and at the next daemon start
+  after a crash, the scope's members (marker members, members of recorded
+  groups under the pgid-reuse rule, recorded descendants) are ended by
+  measured identity: never by command line, never by a bare group id. What
+  could not be ended or read is recorded on the run (the final
+  process_scope.yaml artifact) instead of declared clean; unreadable never
+  means gone. The outcome is a disclosure, not a verdict axis: a survivor,
+  Windows `tree_only` coverage or a macOS platform binary whose environment
+  the kernel hides never turns a delivered answer into a failure. Work meant
+  to outlive a run belongs to a longer-lived custodian, never to pid 1.
+  verify: core scope census/reap tests (fake kernel and real orphan
+  fixtures incl. a platform-binary child ended through its recorded group),
+  the orchestrator run-scope barrier test, the cli run-scope index
+  start/settle tests.
 
 ## 12. Keep The Codebase Small And Direct
 

@@ -376,7 +376,11 @@ export async function guardAnnouncedRun(
         await runBarrier(context);
         const budget = settledBudgetSnapshot(context);
         const delegateBarrierArmed = ownsDelegateDrain(context);
-        if (delegateBarrierArmed && abortedAtStrategyEnd && signal) {
+        // Delegate parents keep their explicit cancel branch on the LIVE
+        // signal: a cancel that arrives while the child drain is still running
+        // wins there (the drain is part of their work). The frozen decision
+        // applies only to an ordinary run's held terminal.
+        if (delegateBarrierArmed && signal?.aborted) {
           context.log.clearDeferredTerminal();
           const cancelFacts = terminalOutcomeFacts(
             result.facts,

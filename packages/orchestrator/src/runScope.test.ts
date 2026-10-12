@@ -23,7 +23,6 @@ import type { ReviewerSpec } from "@claudexor/review";
 import { ArtifactStore } from "@claudexor/artifact-store";
 import { projectRuntimeDir } from "@claudexor/util";
 import { Orchestrator } from "./orchestrator.js";
-import { createFakeHarness } from "@claudexor/harness-fake";
 import { inProcessRunScopeCustodian, scopedSpecEnv, type RunScopeCustodian } from "./runScope.js";
 
 const reapDirs: string[] = [];
@@ -481,8 +480,8 @@ describe("Orchestrator run scope: terminal after cleanup (fix round 1 item 3)", 
   it("a refused run (announced, then failed before any launch) still settles its minted marker exactly once", async () => {
     // Every refusal that could precede the announcement happens BEFORE the
     // marker is minted (mode/secret/admission checks), so the reachable
-    // property is: a run the engine refuses after routing — here an effective
-    // Delegate without a budget authority — ends with one settle, never none.
+    // property is: a run the engine refuses after announcing — here an
+    // unknown harness — ends with one settle and a recorded outcome, never none.
     const repo = await initRepo();
     const calls: string[] = [];
     const custodian: RunScopeCustodian = {
@@ -495,15 +494,11 @@ describe("Orchestrator run scope: terminal after cleanup (fix round 1 item 3)", 
         return inProcessRunScopeCustodian.settle(runId, marker);
       },
     };
-    const res = await new Orchestrator({
-      registry: new Map([["fake-success", createFakeHarness("fake-success")]]),
-      runScopes: custodian,
-    }).run({
+    const res = await new Orchestrator({ registry: new Map(), runScopes: custodian }).run({
       repoRoot: repo,
       prompt: "do it",
       mode: "agent",
-      harnesses: ["fake-success"],
-      delegate: true,
+      harnesses: ["nope"],
       n: 1,
     });
     expect(res.lifecycle).toBe("failed");

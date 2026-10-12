@@ -210,11 +210,12 @@ export async function* spawnProcess(
         drainTruncated = true;
         if (drainTimer) clearInterval(drainTimer);
         drainTimer = undefined;
-        // Tell the line reader first (its guarded readers then swallow the
-        // premature-close rejection instead of failing the attempt), then end
-        // our side of the pipes so `close` fires. The leftover keeps its own
-        // copy of the fd.
-        lines.close();
+        // Tell the line reader to STOP reading (not to discard): every frame
+        // it already assembled — including one waiting for consumer capacity —
+        // and its stderr tail are still delivered, and the premature-close
+        // rejection that follows is the expected end of input. Then end our
+        // side of the pipes so `close` fires. The leftover keeps its own fd.
+        lines.stop();
         child.stdout?.destroy();
         child.stderr?.destroy();
       },

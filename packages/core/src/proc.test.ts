@@ -160,6 +160,70 @@ describe("spawnProcess", () => {
     expect(Date.now() - started).toBeLessThan(4_000);
   }, 15_000);
 
+  it("forced closure delivers every frame already read: paused bounded consumer + held pipe + absolute cap (24/24)", async () => {
+    // 24 frames in one batch, a silent descendant holding stdout, a consumer
+    // that pauses 700 ms after the first frame, and a drain that is forced by
+    // the ABSOLUTE cap (300 ms) long before the consumer resumes: every frame
+    // already read from the pipe must still arrive; the exit says truncated.
+    const script = [
+      "const {spawn}=require('node:child_process')",
+      "let out='';for (let i = 0; i < 24; i++) out += JSON.stringify({ i, pad: 'x'.repeat(1000) }) + '\\n'",
+      "process.stdout.write(out)",
+      "spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:['ignore',1,'ignore']})",
+      "setTimeout(()=>process.exit(0),50)",
+    ].join(";");
+    const frames: number[] = [];
+    let exitDrain: string | undefined = "unset";
+    let paused = false;
+    let threw: unknown = null;
+    try {
+      for await (const ev of spawnProcess(process.execPath, ["-e", script], {
+        exitDrainMs: 100,
+        exitDrainMaxMs: 300,
+        streamLimits: { stdoutFrameBytes: 65_536, queuedFrames: 1, stderrBytes: 4096 },
+      })) {
+        if (ev.type === "stdout") {
+          frames.push((JSON.parse(ev.line) as { i: number }).i);
+          if (!paused) {
+            paused = true;
+            await new Promise((resolve) => setTimeout(resolve, 700));
+          }
+        }
+        if (ev.type === "exit") exitDrain = ev.drain;
+      }
+    } catch (error) {
+      threw = error;
+    }
+    expect(threw).toBeNull();
+    expect(frames).toEqual(Array.from({ length: 24 }, (_, i) => i));
+    expect(exitDrain).toBe("truncated");
+  }, 20_000);
+
+  it("forced closure keeps a diagnostic already written to stderr while a descendant holds stderr", async () => {
+    const script = [
+      "const {spawn}=require('node:child_process')",
+      "process.stderr.write('diag: something went wrong\\n')",
+      "spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:['ignore','ignore',2]})",
+      "setTimeout(()=>process.exit(3),50)",
+    ].join(";");
+    const stderr: string[] = [];
+    let exitDrain: string | undefined;
+    let code: number | null = null;
+    for await (const ev of spawnProcess(process.execPath, ["-e", script], {
+      exitDrainMs: 200,
+      streamLimits: { stdoutFrameBytes: 65_536, queuedFrames: 8, stderrBytes: 4096 },
+    })) {
+      if (ev.type === "stderr") stderr.push(ev.line);
+      if (ev.type === "exit") {
+        exitDrain = ev.drain;
+        code = ev.code;
+      }
+    }
+    expect(stderr.join("\n")).toContain("diag: something went wrong");
+    expect(exitDrain).toBe("truncated");
+    expect(code).toBe(3);
+  }, 15_000);
+
   it("does not truncate a clean exit whose pipe closes normally", async () => {
     let exitDrain: string | undefined = "unset";
     for await (const ev of spawnProcess(process.execPath, ["-e", "console.log('hi')"], {

@@ -31,58 +31,83 @@ export function readProcessLines(
   }
   // `closed`: the consumer is gone — discard everything (early break).
   // `stopped`: the OS reads are being ended by the post-exit drain — deliver
-  // every COMPLETE frame already assembled (including one waiting for consumer
-  // capacity) and the retained stderr tail, then finish; the premature-close
-  // rejection that follows is the expected end of input, never a failure.
+  // every COMPLETE frame already read (including one waiting for consumer
+  // capacity, and chunks the OS had already handed to the Readable's buffer
+  // that the loop had not pulled yet: `stop()` takes them synchronously before
+  // the caller ends the stream, so a frame that arrived in several pipe chunks
+  // is still assembled) and the retained stderr tail, then finish; the
+  // premature-close rejection that follows is the expected end of input.
   let closed = false;
   let stopped = false;
+  let stdoutTail: Buffer[] = [];
+  let stderrTail: Buffer[] = [];
   const stdout = async () => {
     let parts: Buffer[] = [];
     let bytes = 0;
+    const feed = async (buffer: Buffer): Promise<void> => {
+      let start = 0;
+      while (start < buffer.length && !closed) {
+        const lf = buffer.indexOf(10, start);
+        const end = lf === -1 ? buffer.length : lf + 1;
+        const part = buffer.subarray(start, end);
+        bytes += part.length;
+        if (bytes > limits.stdoutFrameBytes) throw new Error("stdout frame exceeds byte limit");
+        parts.push(part);
+        if (lf !== -1) {
+          await waitForSpace();
+          if (closed) return;
+          const wire = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+            Buffer.concat(parts, bytes),
+          );
+          publish({ type: "stdout", line: wire.slice(0, -1), wire });
+          parts = [];
+          bytes = 0;
+        }
+        start = end;
+      }
+    };
     try {
       for await (const chunk of child.stdout) {
-        const buffer = chunk as Buffer;
-        let start = 0;
-        while (start < buffer.length && !closed) {
-          const lf = buffer.indexOf(10, start);
-          const end = lf === -1 ? buffer.length : lf + 1;
-          const part = buffer.subarray(start, end);
-          bytes += part.length;
-          if (bytes > limits.stdoutFrameBytes) throw new Error("stdout frame exceeds byte limit");
-          parts.push(part);
-          if (lf !== -1) {
-            await waitForSpace();
-            if (closed) return;
-            const wire = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
-              Buffer.concat(parts, bytes),
-            );
-            publish({ type: "stdout", line: wire.slice(0, -1), wire });
-            parts = [];
-            bytes = 0;
-          }
-          start = end;
-        }
+        await feed(chunk as Buffer);
         if (closed) return;
       }
     } catch (error) {
       if (!stopped) throw error;
-      return; // forced end of input: what was complete has been published
+    }
+    // Forced end of input: what the stop took from the Readable's buffer.
+    for (const chunk of stdoutTail) {
+      await feed(chunk);
+      if (closed) return;
     }
     if (bytes && !closed && !stopped) throw new Error("stdout ended with a truncated frame");
   };
   const stderr = async () => {
     let tail = Buffer.alloc(0);
+    const keep = (chunk: Buffer): void => {
+      tail = Buffer.concat([tail, chunk.subarray(-limits.stderrBytes)]).subarray(
+        -limits.stderrBytes,
+      );
+    };
     try {
       for await (const chunk of child.stderr) {
         if (closed) return;
-        tail = Buffer.concat([tail, (chunk as Buffer).subarray(-limits.stderrBytes)]).subarray(
-          -limits.stderrBytes,
-        );
+        keep(chunk as Buffer);
       }
     } catch (error) {
       if (!stopped) throw error;
     }
+    for (const chunk of stderrTail) keep(chunk);
     if (tail.length && !closed) publish({ type: "stderr", line: tail.toString("utf8") });
+  };
+  // Everything the OS already handed to the Readable that the loop has not
+  // pulled (paused mode: one synchronous read returns the whole buffer).
+  const buffered = (stream: NodeJS.ReadableStream & { destroyed?: boolean }): Buffer[] => {
+    const chunks: Buffer[] = [];
+    if (stream.destroyed) return chunks;
+    for (let chunk = stream.read(); chunk !== null; chunk = stream.read()) {
+      chunks.push(chunk as Buffer);
+    }
+    return chunks;
   };
   const guarded = (read: () => Promise<void>) =>
     read().catch((error: unknown) => {
@@ -96,6 +121,8 @@ export function readProcessLines(
     },
     stop: () => {
       stopped = true;
+      stdoutTail = buffered(child.stdout);
+      stderrTail = buffered(child.stderr);
     },
   };
 }

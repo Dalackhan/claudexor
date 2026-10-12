@@ -199,6 +199,44 @@ describe("spawnProcess", () => {
     expect(exitDrain).toBe("truncated");
   }, 20_000);
 
+  it("forced closure delivers frames that arrived as separate pipe chunks: paused consumer, cap mid-stall (24/24)", async () => {
+    // Same shape, but the 24 frames are written one per 10 ms so they arrive
+    // as many pipe chunks. While the bounded consumer is paused the reader
+    // sits on ONE chunk; the rest are read from the OS into the Readable's
+    // buffer and must survive the forced closure (they are handed to the
+    // parser before the stream is ended, never destroyed with it).
+    const script = [
+      "const {spawn}=require('node:child_process')",
+      "let i=0",
+      "const t=setInterval(()=>{process.stdout.write(JSON.stringify({ i, pad: 'x'.repeat(1000) })+'\\n');if(++i===24){clearInterval(t);spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:['ignore',1,'ignore']});setTimeout(()=>process.exit(0),50)}},10)",
+    ].join(";");
+    const frames: number[] = [];
+    let exitDrain: string | undefined = "unset";
+    let paused = false;
+    let threw: unknown = null;
+    try {
+      for await (const ev of spawnProcess(process.execPath, ["-e", script], {
+        exitDrainMs: 100,
+        exitDrainMaxMs: 300,
+        streamLimits: { stdoutFrameBytes: 65_536, queuedFrames: 1, stderrBytes: 4096 },
+      })) {
+        if (ev.type === "stdout") {
+          frames.push((JSON.parse(ev.line) as { i: number }).i);
+          if (!paused) {
+            paused = true;
+            await new Promise((resolve) => setTimeout(resolve, 1_500));
+          }
+        }
+        if (ev.type === "exit") exitDrain = ev.drain;
+      }
+    } catch (error) {
+      threw = error;
+    }
+    expect(threw).toBeNull();
+    expect(frames).toEqual(Array.from({ length: 24 }, (_, i) => i));
+    expect(exitDrain).toBe("truncated");
+  }, 20_000);
+
   it("forced closure keeps a diagnostic already written to stderr while a descendant holds stderr", async () => {
     const script = [
       "const {spawn}=require('node:child_process')",

@@ -16,7 +16,7 @@ import { Orchestrator, createCredentialExecutionObserver } from "@claudexor/orch
 import type { normalizeRunStartRequest } from "@claudexor/control-api";
 import { buildRegistry } from "./registry.js";
 import type { RuntimeConcurrencyCaps } from "@claudexor/schema";
-import { logLine } from "./daemon-lifecycle.js";
+import { logLine } from "./log-line.js";
 import { daemonRunScopeIndex } from "./run-scope-index.js";
 
 /**

@@ -59,6 +59,7 @@ export * from "./thread.js";
 export * from "./project.js";
 export * from "./cancel-reason.js";
 export * from "./control.js";
+export * from "./control-process-scope.js";
 export * from "./control-harness-list.js";
 export * from "./run-strategy.js";
 export * from "./plan.js";

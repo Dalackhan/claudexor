@@ -21,8 +21,7 @@ import {
 } from "@claudexor/daemon";
 import { DaemonControlApiServer, type DaemonControlApiOptions } from "@claudexor/control-api";
 import { createDaemonQuotaPoller, openStartupDiagnostics } from "./daemon-admission-runtime.js";
-import { armDaemonLifecycle, runStartupCrashGc } from "./daemon-lifecycle.js";
-import { daemonRunScopeIndex } from "./run-scope-index.js";
+import { armDaemonLifecycle, daemonRunScopeIndex, runStartupCrashGc } from "./daemon-lifecycle.js";
 import {
   bindRecoveryTransport,
   DaemonStartupAdmission,

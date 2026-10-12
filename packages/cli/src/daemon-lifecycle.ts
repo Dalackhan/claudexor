@@ -6,10 +6,9 @@
  * state machine (DaemonRuntimeShutdown, W3.5) — the escalation ladder lives
  * there so a socket-RPC stop gets the same bounded termination.
  */
-import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { startLoopFacts } from "@claudexor/daemon";
-import { safeProblemMessage } from "@claudexor/util";
+import { logLine } from "./log-line.js";
 import { PidsSnapshotWriter, reapRecordedOrphans, writePidsSnapshot } from "./orphan-reaper.js";
 import { sweepOrphanWorkspaces } from "./orphan-sweeper.js";
 import type {
@@ -39,13 +38,8 @@ interface LifecycleDeps {
   scopeCapture?: { captureTick(): Promise<void> };
 }
 
-export const logLine = (path: string, message: string): void => {
-  try {
-    appendFileSync(path, `[${new Date().toISOString()}] ${safeProblemMessage(message)}\n`);
-  } catch {
-    /* lifecycle safety must not depend on diagnostic I/O */
-  }
-};
+export { logLine } from "./log-line.js";
+export { daemonRunScopeIndex } from "./run-scope-index.js";
 
 function lifecycleDiagnostic(
   deps: Pick<LifecycleDeps, "diagnostics" | "logPath">,

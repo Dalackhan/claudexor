@@ -1,4 +1,5 @@
 import { handleAccountResourceRoute } from "./account-resource-routes.js";
+import { projectProcessScope } from "./run-detail-scope.js";
 import { ControlAccountResetRequest } from "@claudexor/schema";
 import { readThreadCommands } from "./command-reads.js";
 import { recoverInterruptedOutput } from "./retained-output.js";
@@ -168,8 +169,6 @@ import {
   ControlRunDetail,
   ControlRunListResponse,
   ControlRunSummary,
-  ControlProcessScope,
-  RunProcessScopeOutcome,
   ControlBudgetSnapshot,
   PaidBudget,
   ControlSettingsSnapshot,
@@ -2625,13 +2624,6 @@ function controlRoute(
   };
 }
 
-/** The run lifecycle has ended (ControlRunState terminal members). */
-function isTerminalRunState(state: string): boolean {
-  return (
-    state === "succeeded" || state === "failed" || state === "cancelled" || state === "interrupted"
-  );
-}
-
 function detailFor(
   rec: DaemonRunRecord,
   pendingInteractions: ControlPendingInteraction[] = [],
@@ -2673,23 +2665,6 @@ function detailFor(
   const retentionProblem = !runFacts ? recoverInterruptedOutput(rec) : null;
   const planProjection = planProjectionFor(rec, summary.mode);
   const telemetry = safeReadStructuredArtifact(rec, "final/telemetry.yaml", RunTelemetry);
-  // INV-144: the compact scope outcome for hosts deciding workspace reuse;
-  // absent (null) while live and for historical runs — unknown, never clean.
-  // The artifact is written before the terminal is published, so a live run
-  // can already have it: the projection is null until the run is terminal.
-  const scope = isTerminalRunState(summary.state)
-    ? safeReadStructuredArtifact(rec, "final/process_scope.yaml", RunProcessScopeOutcome)
-    : null;
-  const processScope: ControlProcessScope | null = scope
-    ? {
-        settled: scope.settled,
-        coverage: scope.coverage,
-        completeness: scope.completeness,
-        census: scope.census,
-        survivors: scope.survivors.length,
-        unreadable: scope.unreadable.length,
-      }
-    : null;
   return ControlRunDetail.parse({
     attemptExecution: telemetry?.attempts.map((attempt) => ({
       attemptId: attempt.attempt_id,
@@ -2702,7 +2677,7 @@ function detailFor(
       ...summary,
       outcomeFacts,
       waitingOnUser: pendingInteractions.length > 0,
-      processScope,
+      processScope: projectProcessScope(rec, summary.state),
     },
     children,
     runFacts,

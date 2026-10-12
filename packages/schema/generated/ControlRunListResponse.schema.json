@@ -1791,7 +1791,7 @@
                           "complete",
                           "not_provable"
                         ],
-                        "description": "Whether a settled reap proves the scope empty (not on macOS for background system binaries, not on Windows, not after a census failure)."
+                        "description": "Whether a settled reap proves the scope empty (not on macOS for background system binaries, not on Windows, not after a census failure, not when the single settlement deadline expired — then settled is false and the run's final/process_scope.yaml carries incomplete=true with completeness_reason naming the deadline)."
                       },
                       "census": {
                         "type": "string",

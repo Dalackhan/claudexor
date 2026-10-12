@@ -83,9 +83,15 @@ export const RunProcessScopeOutcome = z
       .enum(["complete", "not_provable"])
       .default("not_provable")
       .describe(
-        "Whether a settled reap proves the scope empty: complete only where the census reads every same-uid environment (Linux) and every source succeeded; not_provable on macOS (SIP hides platform-binary environments, so a system binary started in the background by a shell that exited before capture cannot be ruled out), on Windows, and after any census failure.",
+        "Whether a settled reap proves the scope empty: complete only where the census reads every same-uid environment (Linux) and every source succeeded; not_provable on macOS (SIP hides platform-binary environments, so a system binary started in the background by a shell that exited before capture cannot be ruled out), on Windows, after any census failure, and for an incomplete settlement (the single deadline expired: `incomplete` is true and completeness_reason names the deadline).",
       ),
-    completeness_reason: z.string().nullable().default(null),
+    completeness_reason: z
+      .string()
+      .nullable()
+      .default(null)
+      .describe(
+        "Why the scope is not provably empty (null when complete): the census failure, the expired settlement deadline, the macOS platform-binary limit, or the unreadable same-uid count.",
+      ),
     incomplete: z
       .boolean()
       .default(false)

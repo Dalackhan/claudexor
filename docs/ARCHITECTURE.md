@@ -3107,8 +3107,9 @@ ordinary spawn and is not counted; a setuid binary is a disclosed residual).
 A host cancel that arrives during the settlement barrier does not rewrite a
 completed run as cancelled: the cancellation decision is frozen when the
 strategy's terminal is held.
-`daemon/run-scopes.json` (`schema_version: 1`) is a stable contract a host may
-read directly when the daemon is dead: per entry `run_id`, `marker`, `state`
+`daemon/run-scopes.json` is a stable contract a host may read directly when
+the daemon is dead. Its top-level shape is
+`{ "schema_version": 1, "entries": [ ... ] }`; per entry `run_id`, `marker`, `state`
 (`open` | `unresolved`), `scope_start` (birth floor), `root_groups[]` with
 `{pgid, leader_pid, leader_birth | null, leader_identity?}` (the identity is
 the daemon's proc-identity token, recorded at registration; `leader_birth` is

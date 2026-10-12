@@ -10,7 +10,7 @@ export const ControlProcessScope = z
     completeness: z
       .enum(["complete", "not_provable"])
       .describe(
-        "Whether a settled reap proves the scope empty (not on macOS for background system binaries, not on Windows, not after a census failure).",
+        "Whether a settled reap proves the scope empty (not on macOS for background system binaries, not on Windows, not after a census failure, not when the single settlement deadline expired — then settled is false and the run's final/process_scope.yaml carries incomplete=true with completeness_reason naming the deadline).",
       ),
     census: z.enum(["ok", "failed", "unsupported"]),
     survivors: z

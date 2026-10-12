@@ -446,11 +446,10 @@ export async function reviewCandidate(input: ReviewCandidateInput): Promise<Revi
     // Scratch HOME last (it is the reviewer's scoped native-state home), then
     // the host facts that scoped home owes the child (operator home, Playwright
     // cache); the caller's env carries the run's process-scope marker.
-    const reviewerEnv = {
-      ...(input.env ?? {}),
-      ...reviewerScratch.env,
-      ...harnessHostFactsEnv(reviewerScratch.env),
-    };
+    // Facts are computed over the MERGED patch so an explicit value already in
+    // the caller's env (a per-package Playwright `0`) is seen and left alone.
+    const reviewerPatch = { ...(input.env ?? {}), ...reviewerScratch.env };
+    const reviewerEnv = { ...reviewerPatch, ...harnessHostFactsEnv(reviewerPatch) };
     let reviewerWorkspace: ReviewerWorkspace | null = null;
     let spec: HarnessRunSpec | null = null;
     try {

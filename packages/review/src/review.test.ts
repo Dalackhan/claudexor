@@ -171,6 +171,41 @@ describe("reviewer progress event schema contract", () => {
   });
 });
 
+describe("reviewer env: explicit Playwright value in the caller patch wins over the automatic cache (#449 item 10)", () => {
+  it("keeps an explicit 0 from the caller env, and otherwise never injects 0 (both directions)", async () => {
+    const seen: Array<Record<string, string>> = [];
+    const probe = () => {
+      const reviewer = makeReviewer("env-probe", "anthropic", []);
+      const run = reviewer.adapter.run.bind(reviewer.adapter);
+      reviewer.adapter.run = async function* (spec) {
+        seen.push({ ...spec.env });
+        yield* run(spec);
+      };
+      return reviewer;
+    };
+    const workspace = makeReviewWorkspace();
+    await reviewCandidate({
+      candidateLabel: "explicit",
+      diff: "diff --git a/a b/a\n",
+      ...workspace,
+      reviewers: [probe()],
+      env: { PLAYWRIGHT_BROWSERS_PATH: "0" },
+    });
+    await reviewCandidate({
+      candidateLabel: "automatic",
+      diff: "diff --git a/a b/a\n",
+      ...workspace,
+      reviewers: [probe()],
+    });
+    expect(seen).toHaveLength(2);
+    const [explicit, automatic] = seen as [Record<string, string>, Record<string, string>];
+    expect(explicit["PLAYWRIGHT_BROWSERS_PATH"]).toBe("0");
+    expect(explicit["CLAUDEXOR_HOME_SCOPED"]).toBe("1");
+    expect(automatic["PLAYWRIGHT_BROWSERS_PATH"]).not.toBe("0");
+    expect(automatic["CLAUDEXOR_HOME_SCOPED"]).toBe("1");
+  });
+});
+
 describe("sealed release native reviewer contract", () => {
   it("reviews explicit ordinary-folder postimages with an empty diff and no Git inventory", async () => {
     const workspace = makeReviewWorkspace();

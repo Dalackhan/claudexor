@@ -1,5 +1,6 @@
 import { constants, accessSync, readFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { execFile, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 export type ProcessIdentityPlatform = "linux" | "darwin" | "win32";
@@ -471,6 +472,100 @@ export class ProcessIdentityService implements ProcessIdentityReader {
 }
 
 export const defaultProcessIdentityService = new ProcessIdentityService();
+
+/** The asynchronous twin of {@link ProcessIdentityReader} for event-loop-bound owners. */
+export interface AsyncProcessIdentityReader {
+  read(pid: number): Promise<ProcessIdentity>;
+}
+
+export interface AsyncProcessIdentityReaderOptions {
+  platform?: string;
+  /** Absolute path to the bundled proc_pidinfo helper; null disables it. */
+  darwinHelperPath?: string | null;
+  readTextFile?: (path: string) => Promise<string>;
+  runDarwinHelper?: (path: string, pid: number) => Promise<ProcessHelperExecution>;
+}
+
+function executeDarwinHelperAsync(path: string, pid: number): Promise<ProcessHelperExecution> {
+  return new Promise((resolve) => {
+    execFile(
+      path,
+      ["--pid", String(pid)],
+      {
+        encoding: "utf8",
+        timeout: 1_500,
+        maxBuffer: 64 * 1024,
+        env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" },
+      },
+      (error, stdout, stderr) => {
+        const failure = error as (NodeJS.ErrnoException & { code?: unknown }) | null;
+        const status =
+          failure && typeof failure.code === "number" ? failure.code : failure ? null : 0;
+        resolve({
+          status,
+          stdout: stdout ?? "",
+          stderr: stderr ?? "",
+          ...(failure && typeof failure.code === "string" ? { errorCode: failure.code } : {}),
+        });
+      },
+    );
+  });
+}
+
+/**
+ * Identity reads that never block the event loop: `/proc/<pid>/stat` through
+ * fs/promises on Linux, the bundled helper through `execFile` on macOS. The
+ * parsing and the missing/permission/failed mapping are byte-for-byte the
+ * synchronous service's, so a handle captured by one reader compares equal
+ * under the other. win32 stays `unsupported_platform` here: its opt-in
+ * PowerShell reader is synchronous by design and no asynchronous owner
+ * (the scope reaper) censuses Windows at all.
+ */
+export function createAsyncProcessIdentityReader(
+  options: AsyncProcessIdentityReaderOptions = {},
+): AsyncProcessIdentityReader {
+  const platform = options.platform ?? process.platform;
+  const darwinHelperPath =
+    options.darwinHelperPath === undefined ? bundledDarwinHelperPath() : options.darwinHelperPath;
+  const readTextFile = options.readTextFile ?? ((path: string) => readFile(path, "utf8"));
+  const runDarwinHelper = options.runDarwinHelper ?? executeDarwinHelperAsync;
+  return {
+    async read(pid: number): Promise<ProcessIdentity> {
+      if (!validPositiveInteger(pid)) return unknown(pid, platform, "invalid_pid");
+      if (platform === "linux") {
+        try {
+          return parseLinuxProcStatObservation(await readTextFile(`/proc/${pid}/stat`), pid)
+            .identity;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException)?.code;
+          if (code === "ENOENT" || code === "ESRCH") return { status: "missing", pid, platform };
+          if (code === "EACCES" || code === "EPERM")
+            return unknown(pid, platform, "permission_denied");
+          return unknown(pid, platform, "io_error");
+        }
+      }
+      if (platform === "darwin") {
+        if (!darwinHelperPath) return unknown(pid, platform, "helper_unavailable");
+        let execution: ProcessHelperExecution;
+        try {
+          execution = await runDarwinHelper(darwinHelperPath, pid);
+        } catch {
+          return unknown(pid, platform, "helper_failed");
+        }
+        if (execution.errorCode === "ENOENT" || execution.errorCode === "EACCES") {
+          return unknown(pid, platform, "helper_unavailable");
+        }
+        if (execution.status === 3) return { status: "missing", pid, platform };
+        if (execution.status === 4) return unknown(pid, platform, "permission_denied");
+        if (execution.status !== 0) return unknown(pid, platform, "helper_failed");
+        return parseDarwinHelperOutput(execution.stdout, pid);
+      }
+      return unknown(pid, platform, "unsupported_platform");
+    },
+  };
+}
+
+export const defaultAsyncProcessIdentityReader = createAsyncProcessIdentityReader();
 
 export function createProcessObservationReader(
   options: ProcessIdentityServiceOptions = {},

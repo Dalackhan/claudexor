@@ -19,6 +19,7 @@ export * from "./auth-readiness.js";
 export * from "./auth-capability-verifier.js";
 export * from "./env-scope.js";
 export * from "./process-scope.js";
+export * from "./process-scope-census.js";
 export * from "./host-facts.js";
 export * from "./runtime-env.js";
 export * from "./npm-launch.js";

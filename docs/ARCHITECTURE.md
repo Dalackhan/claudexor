@@ -2863,8 +2863,9 @@ lost" when the stream ends without a terminal event.
 ### Daemon lifecycle (signals, orphans, crash GC)
 
 The engine-store migration is forward-fix only. Before publishing imported SQL
-state, startup advances the existing root-authority semantic floor to 4.0.0.
-Older engines then refuse that root with `root_authority_floor_regression`.
+state, startup advances the existing root-authority semantic floor to the
+running engine version. Older engines then refuse that root with
+`root_authority_floor_regression`.
 Keep preserved journals, SQL evidence and run artifacts; an older backup must
 not automatically replace later work. Logical partition recovery and physical
 whole-store recovery are described under
@@ -3173,7 +3174,11 @@ kept only for cold import and an independent frozen copy kept for tests.
   `EngineStore` owns this generation map; blob helpers, obligation completion
   and maintenance share it automatically, including when constructed separately.
 - Retention applies the existing fold verdicts as SQL retire/slot/group/drop
-  operations. Thread/turn/session/checkpoint state is kept in tables and is never
+  operations. Slot and group deletions name the partial indexes `event_slot`
+  and `event_group`, so each is an addressed `(pid, key)` lookup whose cost
+  depends on the rows it actually removes, not on the partition's other
+  history, during appends and cold import; retention query-plan tests pin those
+  plans. Thread/turn/session/checkpoint state is kept in tables and is never
   age-pruned; thread-entity snapshots consume sequence but are not event rows.
   Resolved interactions remain resolved across restart until command pruning.
   Model/account-reset stream copies have a 30-day lifetime independently of

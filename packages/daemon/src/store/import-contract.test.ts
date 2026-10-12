@@ -400,4 +400,41 @@ describe("single-connection legacy import", () => {
       }),
     ).rejects.toThrow(expect.objectContaining({ code: "store_import_source_changed" }));
   });
+  it("imports one partition of many command updates with every update holding its own slot (#446)", async () => {
+    // Retained accept/update pairs with ordinary inline payloads in ONE partition: each update's
+    // slot replacement used to walk the whole partition, so this shape grew quadratically.
+    const f = fixture();
+    const pairs = 10_000;
+    const prompt = "x".repeat(1_100);
+    const records: Array<{ type: string; payload: unknown }> = [];
+    for (let index = 0; index < pairs; index += 1) {
+      const id = `job-${index}`;
+      records.push(accepted(id, prompt), {
+        type: "command.updated",
+        payload: { record: { id, state: "succeeded", createdAt: TIME, finishedAt: TIME } },
+      });
+    }
+    f.append("global", records);
+    const receipt = await runLegacyImport(f.options);
+    expect(receipt.partitions).toEqual([
+      expect.objectContaining({
+        name: "global",
+        records: 2 * pairs,
+        status: "ready",
+        reused: false,
+      }),
+    ]);
+    expect(receipt.unclassified).toBe(0);
+    const db = new DatabaseSync(f.options.databasePath);
+    try {
+      const count = (sql: string) => Number((db.prepare(sql).get() as { n: number | bigint }).n);
+      expect(count("SELECT count(*) AS n FROM event")).toBe(2 * pairs);
+      expect(
+        count("SELECT count(DISTINCT slot_key) AS n FROM event WHERE slot_key IS NOT NULL"),
+      ).toBe(pairs);
+      expect(count("SELECT count(*) AS n FROM command WHERE state = 'succeeded'")).toBe(pairs);
+    } finally {
+      db.close();
+    }
+  }, 120_000);
 });

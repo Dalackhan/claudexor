@@ -1,5 +1,11 @@
 # claudexor
 
+## 4.0.1
+
+### Patch Changes
+
+- @claudexor/cli@4.0.1
+
 ## 4.0.0
 
 ### Patch Changes

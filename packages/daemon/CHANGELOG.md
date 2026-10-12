@@ -1,5 +1,15 @@
 # @claudexor/daemon
 
+## 4.0.1
+
+### Patch Changes
+
+- Fold-verdict event deletes address the slot and group indexes, so first-start legacy import and appends to a large partition no longer walk the whole partition.
+  - @claudexor/core@4.0.1
+  - @claudexor/schema@4.0.1
+  - @claudexor/util@4.0.1
+  - @claudexor/workspace@4.0.1
+
 ## 4.0.0
 
 ### Major Changes

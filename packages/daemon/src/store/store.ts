@@ -17,6 +17,8 @@ export interface EngineStoreOptions {
   workerEntry?: string;
   flusherHooks?: FlusherHooks;
   now?: () => Date;
+  /** Monotonic milliseconds for COMMIT timing (default `performance.now`); injectable. */
+  monotonicNow?: () => number;
   log?: (line: string) => void;
   /** Synchronous physical-fault notification; the caller owns serving admission. */
   onCorrupt?: (problem: StoreCorruptError) => void;
@@ -39,6 +41,8 @@ export interface StoreFacts {
   interval_ms: number;
   wal_bytes: number | null;
   busy_waits: number;
+  /** `transaction()` COMMIT calls since this store opened: a lifetime summary, not a window. */
+  commit: { attempts: number; failures: number; last_ms: number | null; max_ms: number | null };
   obligations_open: number | null;
   integrity: "pending" | "ok" | "failed";
   /** Filled by the importer (PR-D); the store core never migrates. */
@@ -67,7 +71,15 @@ export class EngineStore {
   private readonly syncedListeners = new Set<SyncedListener>();
   /** Clock for rows the store itself stamps (obligations, meta); injectable. */
   readonly now: () => Date;
+  private readonly monotonicNow: () => number;
   private busyWaits = 0;
+  /** Constant-space COMMIT timing; only `facts()` reads it. */
+  private readonly commits = {
+    attempts: 0,
+    failures: 0,
+    lastMs: null as number | null,
+    maxMs: null as number | null,
+  };
   private integrityState: StoreFacts["integrity"] = "pending";
   private closed = false;
   private closing: Promise<void> | null = null;
@@ -82,6 +94,7 @@ export class EngineStore {
     this.paths = paths;
     this.connection = connection;
     this.now = options.now ?? (() => new Date());
+    this.monotonicNow = options.monotonicNow ?? (() => performance.now());
     this.flusher = new FlusherController({
       dbPath: paths.database,
       ...(options.workerEntry ? { workerEntry: options.workerEntry } : {}),
@@ -168,7 +181,9 @@ export class EngineStore {
    * BEGIN IMMEDIATE … COMMIT with ROLLBACK in `finally`. `fn` must be
    * synchronous: returning a thenable rolls the transaction back and throws,
    * because an await inside a transaction would hold the writer lock across
-   * the event loop and break "returned means committed".
+   * the event loop and break "returned means committed". Only the native COMMIT
+   * call is timed for `facts().commit`, including any WAL header sync or
+   * automatic checkpoint SQLite runs inside it (see `pragmas.ts`).
    */
   transaction<T>(fn: () => T): T {
     this.assertOpen();
@@ -192,11 +207,14 @@ export class EngineStore {
           "engine store transaction bodies must be synchronous (a Promise was returned)",
         );
       }
+      const started = this.monotonicNow();
       try {
         this.connection.exec("COMMIT");
       } catch (error) {
+        this.recordCommit(this.monotonicNow() - started, true);
         throw this.failure(error, "committing a transaction");
       }
+      this.recordCommit(this.monotonicNow() - started, false);
       committed = true;
       return result;
     } finally {
@@ -277,6 +295,12 @@ export class EngineStore {
       interval_ms: flusher.interval_ms,
       wal_bytes: flusher.last_pass?.wal_bytes ?? null,
       busy_waits: this.busyWaits,
+      commit: {
+        attempts: this.commits.attempts,
+        failures: this.commits.failures,
+        last_ms: microsecondMs(this.commits.lastMs),
+        max_ms: microsecondMs(this.commits.maxMs),
+      },
       obligations_open: open,
       integrity: this.integrityState,
       migration: null,
@@ -342,6 +366,18 @@ export class EngineStore {
       throw new StoreError("store_closed", 503, false, "engine store is closed");
     }
   }
+
+  private recordCommit(elapsedMs: number, failed: boolean): void {
+    this.commits.attempts += 1;
+    if (failed) this.commits.failures += 1;
+    this.commits.lastMs = elapsedMs;
+    this.commits.maxMs = Math.max(this.commits.maxMs ?? elapsedMs, elapsedMs);
+  }
+}
+
+/** Measured durations keep microsecond resolution; a measured zero stays zero. */
+function microsecondMs(value: number | null): number | null {
+  return value === null ? null : Math.round(value * 1_000) / 1_000;
 }
 
 function ensureSchemaIdentityOrThrow(db: DatabaseSync): void {

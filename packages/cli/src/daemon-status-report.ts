@@ -2,7 +2,7 @@
  * (the last completed window the daemon measured). Facts only, no verdict. */
 import { DaemonLoopFacts, DaemonStoreFacts } from "@claudexor/schema";
 
-const msText = (value: number) => `${value.toFixed(1)} ms`;
+const msText = (value: number, digits = 1) => `${value.toFixed(digits)} ms`;
 
 export function daemonLoopLine(health: unknown): string {
   const loop =
@@ -40,6 +40,19 @@ export function daemonStoreLine(health: unknown): string {
   return (
     `engine store: integrity ${store.integrity ?? "not open"}; flusher ${store.flusher?.state ?? "not open"}; ` +
     `flush lag ${store.flush_lag_ms === null ? "unknown" : msText(store.flush_lag_ms)}; ` +
-    `WAL ${store.wal_bytes === null ? "unknown" : `${store.wal_bytes} bytes`}; obligations ${store.obligations_open ?? "unknown"}`
+    `WAL ${store.wal_bytes === null ? "unknown" : `${store.wal_bytes} bytes`}; obligations ${store.obligations_open ?? "unknown"}; ` +
+    commitText(store.commit)
   );
+}
+
+/** One summary since the store opened, not the loop's last window; commits are
+ * usually sub-millisecond, so durations keep their microsecond resolution. */
+function commitText(commit: DaemonStoreFacts["commit"]): string {
+  if (commit === undefined) return "COMMIT not reported by this daemon";
+  if (commit === null) return "COMMIT unknown";
+  const durations =
+    commit.last_ms === null || commit.max_ms === null
+      ? ""
+      : `, last ${msText(commit.last_ms, 3)}, max ${msText(commit.max_ms, 3)}`;
+  return `COMMIT since store open: ${commit.attempts} call(s), ${commit.failures} failed${durations}`;
 }

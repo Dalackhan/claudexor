@@ -2195,8 +2195,10 @@ late, so `windowMs` grows with the stall. `claudexor daemon status` prints the
 same window as one line. The status route reaches the daemon in process, so it
 answers while the loop is merely slow. The protocol handshake remains unchanged.
 The `store` facts report flusher state, interval, last barrier and lag, WAL bytes,
-open obligations, busy waits, integrity and current import progress. A field is
-null when its owner cannot observe it; pending integrity is not a successful check.
+open obligations, busy waits, request-thread COMMIT timing since the store opened
+([SQLite engine store](#sqlite-engine-store)), integrity and current import
+progress. A field is null when its owner cannot observe it; pending integrity is
+not a successful check.
 No memory, loop or store measurements impose automatic admission thresholds.
 
 <!-- BEGIN GENERATED ENDPOINTS (node scripts/gen-endpoints-doc.mjs; do not edit by hand) -->
@@ -3143,7 +3145,11 @@ kept only for cold import and an independent frozen copy kept for tests.
   large transaction the WAL keeps growing and resets once the reader
   releases, after which `journal_size_limit` truncates the file; the first
   such checkpoint after a long pinned read copies the accumulated backlog in
-  one longer stop on the request thread. The request thread itself calls no
+  one longer stop on the request thread. The writer's automatic checkpoint
+  runs inside a COMMIT call once the WAL reaches the threshold, and a COMMIT
+  that restarts the WAL syncs the new WAL header, so `synchronous=NORMAL`
+  removes the per-commit WAL sync, not every native sync on the request thread.
+  The request thread itself calls no
   Node storage-sync primitive: external files use `O_DSYNC` on POSIX and
   libuv's write-through open flag on Windows, where Node does not export the
   POSIX constant. The temp is renamed and its directory goes to the flusher via
@@ -3199,10 +3205,21 @@ kept only for cold import and an independent frozen copy kept for tests.
   `journal_cursor_invalid` and `resnapshot` as today.
 - Facts for the daemon status (measurements, never verdicts): `flush_lag_ms`,
   the last barrier time, `wal_bytes`, flusher state and counters,
-  `busy_waits`, `obligations_open`, the integrity verdict, and the importer's
-  phase/current partition/partition and byte progress. CLI daemon status consumes
-  that progress; unavailable facts stay null and a pending integrity check is
-  not reported as passed.
+  `busy_waits`, `commit`, `obligations_open`, the integrity verdict, and the
+  importer's phase/current partition/partition and byte progress. CLI daemon
+  status consumes that progress and the COMMIT summary; unavailable facts stay
+  null and a pending integrity check is not reported as passed.
+  `commit` covers the request thread's `transaction()` COMMIT calls since this
+  store opened (a new store, including an in-process replacement, starts
+  again): attempts, failures, and the last and longest duration on a monotonic
+  clock at microsecond resolution. Only the native COMMIT call is timed, so a
+  WAL header sync or checkpoint SQLite runs inside it is included, while BEGIN,
+  the body, error mapping, ROLLBACK, open-time schema setup and the flusher's
+  later barrier are not. It is one lifetime summary, not aligned with the
+  event-loop window; a long COMMIT is evidence of where the request thread
+  waited, not proof of a disk cause. Before any COMMIT the counts are 0 and
+  the durations null; a store that is not open reports null, and older
+  engines omit the field.
 
 Typed refusals of the core: `engine_runtime_unsupported`,
 `store_schema_unsupported`, `store_flush_unavailable`, `store_full` (ENOSPC

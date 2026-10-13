@@ -8,7 +8,9 @@ import {
   RunEventBus,
   encodeJournalCursor,
 } from "@claudexor/daemon";
+import { ControlDaemonStatus } from "@claudexor/schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { daemonStoreLine } from "./daemon-status-report.js";
 import { createSqlDaemonRuntime } from "./sql-daemon-runtime.js";
 import { SqlSetupLifecycleSlot } from "./sql-setup-lifecycle.js";
 import { SetupLifecycleBinding } from "./setup-lifecycle-binding.js";
@@ -141,22 +143,35 @@ describe("SQL state through real control HTTP and SSE", () => {
   });
   it("exposes store facts without turning unmeasured integrity into success", async () => {
     const f = await fixture();
-    const response = await fetch(f.url + "/v2/daemon/status", { headers: f.headers });
-    expect(response.status).toBe(200);
-    const status = (await response.json()) as {
-      store: {
-        integrity: string;
-        migration: unknown;
-        flusher: { state: string };
-        obligations_open: number;
-      };
+    const read = async () => {
+      const response = await fetch(f.url + "/v2/daemon/status", { headers: f.headers });
+      expect(response.status).toBe(200);
+      return ControlDaemonStatus.parse(await response.json());
     };
+    const status = await read();
     expect(status.store).toMatchObject({
       integrity: "pending",
       migration: null,
       obligations_open: 0,
     });
-    expect(status.store.flusher.state).toBe("up");
+    expect(status.store?.flusher?.state).toBe("up");
+    // The fixture's own setup committed through this store before the request.
+    const before = status.store!.commit!;
+    expect(before.attempts).toBeGreaterThanOrEqual(1);
+    expect(before.failures).toBe(0);
+    expect(before.max_ms).toBeGreaterThanOrEqual(before.last_ms!);
+    for (const key of ["status-1", "status-2", "status-3"])
+      f.store.transaction(
+        () => void f.store.prepare("INSERT INTO meta(key,value) VALUES(?, 'x')").run(key),
+      );
+    const later = await read();
+    const after = later.store!.commit!;
+    expect(after.attempts).toBeGreaterThanOrEqual(before.attempts + 3);
+    expect(after.failures).toBe(0);
+    expect(after.max_ms).toBeGreaterThanOrEqual(before.max_ms!);
+    expect(daemonStoreLine(later)).toContain(
+      `; COMMIT since store open: ${after.attempts} call(s), 0 failed, last `,
+    );
   });
   it("creates one accepted run through HTTP and replays the same SQL operation", async () => {
     const f = await fixture();

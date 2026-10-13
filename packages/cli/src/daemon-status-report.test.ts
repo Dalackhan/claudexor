@@ -39,12 +39,13 @@ describe("daemon status SQL facts", () => {
       interval_ms: null,
       wal_bytes: null,
       busy_waits: null,
+      commit: null,
       obligations_open: null,
       integrity: null,
       migration: null,
     };
-    expect(daemonStoreLine({ store })).toContain(
-      "integrity not open; flusher not open; flush lag unknown; WAL unknown; obligations unknown",
+    expect(daemonStoreLine({ store })).toBe(
+      "engine store: integrity not open; flusher not open; flush lag unknown; WAL unknown; obligations unknown; COMMIT unknown",
     );
     expect(
       daemonStoreLine({
@@ -65,5 +66,55 @@ describe("daemon status SQL facts", () => {
     expect(daemonStoreLine({ store: { integrity: "imagined" } })).toBe(
       "engine store: unreadable facts",
     );
+  });
+
+  it("states COMMIT facts since store open and keeps omitted, zero and malformed apart", async () => {
+    const { daemonStoreLine } = await import("./daemon-status-report.js");
+    const open = {
+      flusher: null,
+      flush_lag_ms: 0,
+      last_barrier_at: null,
+      interval_ms: 200,
+      wal_bytes: 4152,
+      busy_waits: 0,
+      obligations_open: 0,
+      integrity: "ok",
+      migration: null,
+    };
+    const prefix =
+      "engine store: integrity ok; flusher not open; flush lag 0.0 ms; WAL 4152 bytes; obligations 0; ";
+    expect(
+      daemonStoreLine({
+        store: {
+          ...open,
+          commit: { attempts: 1234, failures: 2, last_ms: 0.042, max_ms: 41.864 },
+        },
+      }),
+    ).toBe(
+      `${prefix}COMMIT since store open: 1234 call(s), 2 failed, last 0.042 ms, max 41.864 ms`,
+    );
+    expect(
+      daemonStoreLine({
+        store: { ...open, commit: { attempts: 3, failures: 0, last_ms: 0, max_ms: 0 } },
+      }),
+    ).toBe(`${prefix}COMMIT since store open: 3 call(s), 0 failed, last 0.000 ms, max 0.000 ms`);
+    expect(
+      daemonStoreLine({
+        store: { ...open, commit: { attempts: 0, failures: 0, last_ms: null, max_ms: null } },
+      }),
+    ).toBe(`${prefix}COMMIT since store open: 0 call(s), 0 failed`);
+    // An older engine omits the group; that is neither unknown nor zero.
+    expect(daemonStoreLine({ store: open })).toBe(`${prefix}COMMIT not reported by this daemon`);
+    for (const commit of [
+      { attempts: -1, failures: 0, last_ms: null, max_ms: null },
+      { attempts: 1, failures: 0, last_ms: -0.5, max_ms: 1 },
+      { attempts: 1.5, failures: 0, last_ms: 1, max_ms: 1 },
+      { attempts: 1, failures: 0, last_ms: 1 },
+      "fast",
+    ]) {
+      expect(daemonStoreLine({ store: { ...open, commit } })).toBe(
+        "engine store: unreadable facts",
+      );
+    }
   });
 });

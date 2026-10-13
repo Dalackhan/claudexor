@@ -640,8 +640,8 @@ do not enable paid usage, buy credits or change account-routing policy.
 ## Daemon And Control API
 
 The managed daemon is the mandatory runtime authority and normally auto-starts
-when a product command needs it: durable fsync-acknowledged command queueing
-over a Unix socket, idempotency-key retry binding, and a loopback HTTP/SSE
+when a product command needs it: synchronously committed command queueing
+over a Unix socket (power-loss durability follows a flusher barrier), idempotency-key retry binding, and a loopback HTTP/SSE
 control API as a thin viewport (`/v2` only; `POST /v2/handshake` negotiation;
 snapshot-then-subscribe run events). Harness setup/login is server-owned
 through observable setup jobs with typed phases, deadlines, and post-exit

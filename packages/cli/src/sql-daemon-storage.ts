@@ -83,6 +83,7 @@ export class SqlDaemonStorage {
         interval_ms: null,
         wal_bytes: null,
         busy_waits: null,
+        commit: null,
         obligations_open: null,
         integrity: this.problem ? ("failed" as const) : null,
       }),

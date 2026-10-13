@@ -15,12 +15,13 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { DaemonClient } from "@claudexor/daemon";
-import type {
+import {
   ControlDaemonStatus,
-  ControlJournalInspection,
-  ControlJournalQuarantineReceipt,
+  type ControlJournalInspection,
+  type ControlJournalQuarantineReceipt,
 } from "@claudexor/schema";
 import { afterEach, describe, expect, it } from "vitest";
+import { daemonStoreLine } from "./daemon-status-report.js";
 import {
   DurableJournal,
   journalPartitionDirectory,
@@ -358,7 +359,11 @@ describe.skipIf(!sqlite)("production SQL daemon startup process qualification", 
     await f.mode("normal");
     expect((await f.hello()).servingMode).toBe("normal");
     const status = await f.request<ControlDaemonStatus>("/v2/daemon/status");
-    expect(status.store).toMatchObject({ obligations_open: 0, migration: null });
+    expect(status.store).toMatchObject({
+      obligations_open: 0,
+      migration: null,
+      commit: { failures: 0 },
+    });
     const global = await f.request<{ id: string }>("/v2/threads", "POST", {
       title: "global SQL",
       workspace: "in_place",
@@ -381,6 +386,18 @@ describe.skipIf(!sqlite)("production SQL daemon startup process qualification", 
       ),
     ).toContain(project.id);
     expect((await f.request<{ runs: unknown[] }>("/v2/runs")).runs).toEqual([]);
+    // The three creations above committed through the production store; HTTP
+    // and the CLI's RPC health report the same lifetime COMMIT facts.
+    const later = await f.request<ControlDaemonStatus>("/v2/daemon/status");
+    expect(later.store?.commit?.attempts).toBeGreaterThanOrEqual(
+      status.store!.commit!.attempts + 3,
+    );
+    expect(later.store?.commit?.failures).toBe(0);
+    const health = await f.rpc().health();
+    expect(ControlDaemonStatus.parse(health).store?.commit?.failures).toBe(0);
+    expect(daemonStoreLine(health)).toMatch(
+      /; COMMIT since store open: \d+ call\(s\), 0 failed, last /,
+    );
     await f.stop();
     expect(existsSync(join(f.daemon, "journal"))).toBe(false);
     readSql(f, (db) => {
@@ -438,6 +455,7 @@ describe.skipIf(!sqlite)("production SQL daemon startup process qualification", 
     expect((await f.request<ControlDaemonStatus>("/v2/daemon/status")).store).toMatchObject({
       integrity: "failed",
       obligations_open: null,
+      commit: null,
     });
     const inspected = await f.request<ControlJournalInspection>(
       "/v2/recovery/partitions/engine-state",
@@ -539,6 +557,7 @@ describe.skipIf(!sqlite)("production SQL daemon startup process qualification", 
         : null;
     }, "actual import progress before shutdown");
     expect(status.store?.migration).not.toBeNull();
+    expect(status.store?.commit).toBeNull();
     await f.stop();
     expect(hash(legacy.source)).toBe(original);
     expect(existsSync(join(f.daemon, "journal"))).toBe(true);

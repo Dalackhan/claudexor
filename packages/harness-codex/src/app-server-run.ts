@@ -18,6 +18,7 @@ import {
 import { CodexCancellation } from "./app-server-cancel.js";
 import {
   CodexSubagentThreads,
+  codexCompletedEvent,
   codexCleanupIsProofLimitation,
   codexHasCompletedAnswer,
   codexTeardownFailed,
@@ -89,6 +90,7 @@ export async function* runCodexAppServer(
   let droppedUnrecognizedEvents = 0;
   let harnessReportedError = false;
   let terminationUnconfirmed: { survivors: number[]; unresolved: JsonObject[] } | null = null;
+  let outputDrainTruncated = false;
   let nativeSystemError = false;
   const requiredMcpStatuses = new Map<
     string,
@@ -209,10 +211,12 @@ export async function* runCodexAppServer(
           };
           if (!completedAnswer || cancellation.requested || !codexCleanupIsProofLimitation(event))
             throw new Error("Codex app-server process termination could not be confirmed");
-        } else if (event.type === "exit" && !abort.signal.aborted) {
-          throw new Error(
-            `Codex app-server exited before the run completed (code ${event.code ?? "null"})`,
-          );
+        } else if (event.type === "exit") {
+          outputDrainTruncated = event.drain === "truncated";
+          if (!abort.signal.aborted)
+            throw new Error(
+              `Codex app-server exited before the run completed (code ${event.code ?? "null"})`,
+            );
         }
       }
     } catch (error) {
@@ -312,14 +316,12 @@ export async function* runCodexAppServer(
     }
   };
   let stopPromise: Promise<void> | null = null;
-  const stopProcess = (): Promise<void> => {
-    stopPromise ??= (async () => {
+  const stopProcess = (): Promise<void> =>
+    (stopPromise ??= (async () => {
       if (!abort.signal.aborted) abort.abort();
       io?.end();
       await process.catch(() => {});
-    })();
-    return stopPromise;
-  };
+    })());
   const terminalPayload = (extra: JsonObject = {}): JsonObject => {
     const stderrTail = redactSecrets(stderrRing.join("\n")).slice(-1_000).trim();
     return {
@@ -333,6 +335,7 @@ export async function* runCodexAppServer(
         ? { dropped_unrecognized_events: droppedUnrecognizedEvents }
         : {}),
       ...(terminationUnconfirmed ? { termination_unconfirmed: terminationUnconfirmed } : {}),
+      ...(outputDrainTruncated ? { output_drain: "truncated" } : {}),
     };
   };
   const readLifecycle = (): Promise<CodexThreadLifecycle> =>
@@ -528,20 +531,21 @@ export async function* runCodexAppServer(
         await stopProcess();
         if (processFailure) throw processFailure;
         failed = nativeSystemError || harnessReportedError || cancellation.requested;
-        if (terminationUnconfirmed && codexTeardownFailed(notifications, nativeThreadId, failed))
+        // A late root event invalidates a completed answer even when POSIX
+        // cleanup proved death. Keep existing failed/interrupted terminals;
+        // only revalidate a candidate answer here.
+        if (completedAnswer && codexTeardownFailed(notifications, nativeThreadId, failed))
           throw new Error("Codex completion was invalidated during process teardown");
         for (const event of terminal.events) yield event;
-        yield {
-          type: "completed",
-          session_id: input.spec.session_id,
-          ts: nowIso(),
-          ...(status === "interrupted" ? { aborted: true } : {}),
-          payload: terminalPayload({
+        yield codexCompletedEvent(
+          input.spec.session_id,
+          terminalPayload({
             native_session_id: threadId,
             native_turn_id: pendingTerminal?.["id"] ?? activeTurnId,
             ...(subagents.count ? { subagent_threads: subagents.count } : {}),
           }),
-        };
+          status === "interrupted",
+        );
         return;
       }
     }
@@ -554,13 +558,11 @@ export async function* runCodexAppServer(
       !cancellation.failure &&
       !processFailure
     ) {
-      yield {
-        type: "completed",
-        session_id: input.spec.session_id,
-        ts: nowIso(),
-        aborted: true,
-        payload: terminalPayload({ code: "user_cancelled", native_session_id: nativeThreadId }),
-      };
+      yield codexCompletedEvent(
+        input.spec.session_id,
+        terminalPayload({ code: "user_cancelled", native_session_id: nativeThreadId }),
+        true,
+      );
       return;
     }
     const aborted = cancellation.requested;
@@ -583,13 +585,11 @@ export async function* runCodexAppServer(
       ...(requestRefusal ? { request_refusal: requestRefusal } : {}),
       payload: { code: requestRefusal?.kind ?? code },
     };
-    yield {
-      type: "completed",
-      session_id: input.spec.session_id,
-      ts: nowIso(),
-      ...(aborted ? { aborted: true } : {}),
-      payload: terminalPayload({ code, native_session_id: nativeThreadId }),
-    };
+    yield codexCompletedEvent(
+      input.spec.session_id,
+      terminalPayload({ code, native_session_id: nativeThreadId }),
+      aborted,
+    );
   } finally {
     if (externalAbort instanceof AbortSignal) externalAbort.removeEventListener("abort", onAbort);
     input.controller?.clear(cancel);

@@ -7,6 +7,7 @@ import { CredentialProfile, HarnessRunSpec } from "@claudexor/schema";
 import { copilot } from "./entry.js";
 import { acpArgs, acpEffortResolution, decidePermission } from "./policy.js";
 import { acpChildEnv, acpToken, probeAcpProfile } from "./env.js";
+import { composeSpawnEnv } from "@claudexor/core";
 
 const root = mkdtempSync(join(tmpdir(), "acp-policy-"));
 const cwd = join(root, "workspace");
@@ -187,6 +188,48 @@ describe("ACP credential and environment isolation", () => {
       "CODEX_THREAD_ID",
     ])
       expect(env[key] ?? null).toBeNull();
+  });
+});
+
+describe("ACP child env keeps run custody and host facts past the credential filter (#449 item 6)", () => {
+  const run = `CLAUDEXOR_RUN_SCOPE_${"a".repeat(32)}`;
+  const install = `OURO_INSTALL_SCOPE_${"b".repeat(32)}`;
+  const source = {
+    PATH: "/usr/bin",
+    HOME: "/host",
+    [run]: "1",
+    [install]: "1",
+    CLAUDEXOR_HOME_SCOPED: "1",
+    CLAUDEXOR_OPERATOR_HOME: "/Users/op",
+    PLAYWRIGHT_BROWSERS_PATH: "0",
+    GH_TOKEN: "host",
+    OPENAI_API_KEY: "paid",
+    [`FAKE_SCOPE_${"c".repeat(32)}`]: "2", // grammar-shaped name, wrong value: not custody
+  };
+  it("the final env carries the markers and facts in BOTH inheritance modes and still drops secrets", () => {
+    const patch = acpChildEnv(copilot, cwd, "managed", source);
+    for (const mode of ["mirror_native", "clean"] as const) {
+      const env = composeSpawnEnv(mode, patch);
+      expect(env[run]).toBe("1");
+      expect(env[install]).toBe("1");
+      expect(env["CLAUDEXOR_HOME_SCOPED"]).toBe("1");
+      expect(env["CLAUDEXOR_OPERATOR_HOME"]).toBe("/Users/op");
+      expect(env["PLAYWRIGHT_BROWSERS_PATH"]).toBe("0");
+      expect(env["HOME"]).toBe(cwd);
+      expect(env["COPILOT_GITHUB_TOKEN"]).toBe("managed");
+      expect(env["GH_TOKEN"] ?? null).toBeNull();
+      expect(env["OPENAI_API_KEY"] ?? null).toBeNull();
+      expect(env[`FAKE_SCOPE_${"c".repeat(32)}`] ?? null).toBeNull();
+    }
+  });
+  it("a source without custody entries adds none", () => {
+    const patch = acpChildEnv(copilot, cwd, "managed", { PATH: "/usr/bin", HOME: "/host" });
+    // The patch nulls every parent key (incl. any scope key this test process
+    // itself runs under); none may be SET.
+    expect(Object.entries(patch).filter(([k, v]) => k.includes("_SCOPE_") && v !== null)).toEqual(
+      [],
+    );
+    expect(patch["CLAUDEXOR_HOME_SCOPED"] ?? null).toBeNull();
   });
 });
 

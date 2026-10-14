@@ -9,22 +9,24 @@
  */
 import { join } from "node:path";
 import {
-  type CancelReasonCode,
   makeOutcomeFacts,
-  needsOperatorAttention,
-  normalizeCancelReasonCode,
   RunOutcomeFacts,
   type RunOutcomeFacts as RunOutcomeFactsType,
 } from "@claudexor/schema";
-import type { BudgetTerminal } from "@claudexor/budget";
-import type { TerminalRunEventType } from "@claudexor/event-log";
 import { readTextSafe, redactSecrets } from "@claudexor/util";
-import { budgetFailureRecord, classifyBudgetFailure } from "./budgetFailure.js";
+import { reconcileDecisionBudget, settledBudgetSnapshot } from "./decisionBudget.js";
 import {
-  reconcileDecisionBudget,
-  settledBudgetSnapshot,
-  type SettledBudgetSnapshot,
-} from "./decisionBudget.js";
+  cancelReasonFromSignalToken,
+  cancellationFacts,
+  committedOutcome,
+  committedResult,
+  isTerminalRecoveryRequired,
+  ownsDelegateDrain,
+  postDrainBudgetFailure,
+  settledSpend,
+  terminalEventTypeFor,
+  terminalOutcomeFromPayload,
+} from "./runTerminalHelpers.js";
 import { reconcileDecisionTerminal } from "./decisionTerminalReconciliation.js";
 import type { OrchestratorResult } from "./orchestrator.js";
 import { prepareRunFactsFailureReceipt, prepareRunFactsReceipt } from "./runFacts.js";
@@ -46,163 +48,7 @@ import {
 export type { AnnouncedRunContext } from "./runTerminalContext.js";
 export { cancelledResult, declaredFailure, failTerminally, writeFailure };
 export { attemptVendorFailure } from "./harnessFailure.js";
-
-function ownsDelegateDrain(context: AnnouncedRunContext): boolean {
-  try {
-    return context.recheckBudgetAfterBarrier?.() === true;
-  } catch {
-    // Reconciliation is an extra authority granted only to a proven Delegate
-    // drain owner. An unreadable ownership predicate must fail closed instead
-    // of touching an ordinary Agent's already-terminal artifacts.
-    return false;
-  }
-}
-
-function postDrainBudgetFailure(
-  context: AnnouncedRunContext,
-  terminal: Exclude<BudgetTerminal, null>,
-  budget: SettledBudgetSnapshot,
-  prior: OrchestratorResult,
-): OrchestratorResult {
-  const mapping = classifyBudgetFailure({ denial: null, terminal });
-  const facts = terminalOutcomeFacts(prior.facts, "failed", mapping.reason);
-  reconcileDecisionBudget(context, budget, { facts, why: mapping.safeMessage });
-  reconcileWorkProductTerminal(context, facts);
-  context.store.writeText(
-    join(context.paths.finalDir, "summary.md"),
-    `# Run ${context.runId} (${context.mode})\n\n- Lifecycle: failed (${mapping.reason})\n- Phase: budget\n\n${mapping.safeMessage}\n`,
-  );
-  writeFailure(
-    context.store,
-    context.paths,
-    budgetFailureRecord(mapping, { runDir: context.paths.root }),
-  );
-  context.log.emit("output.ready", {
-    kind: "summary",
-    path: "final/summary.md",
-    state: "diagnostic",
-  });
-  context.log.emit("run.failed", {
-    lifecycle: "failed",
-    facts,
-    reason: mapping.reason,
-    phase: "budget",
-    error: mapping.safeMessage,
-    failure_ref: "final/failure.yaml",
-  });
-  return {
-    ...prior,
-    lifecycle: "failed",
-    facts,
-    summary: mapping.safeMessage,
-    spendUsd: budget.spendUsd,
-  };
-}
-
-function terminalEventTypeFor(
-  _originalType: TerminalRunEventType,
-  outcome: RunOutcomeFactsType,
-): TerminalRunEventType {
-  if (outcome.lifecycle !== "succeeded") return "run.failed";
-  if (needsOperatorAttention(outcome, false)) return "run.blocked";
-  // The canonical axes own terminal type. Preserving a producer-authored
-  // run.blocked with clean axes creates an unexplainable block (no reason or
-  // required action), so it is normalized to completed.
-  return "run.completed";
-}
-
-/** Map an abort-signal reason token to its typed terminal RunReason. The
- * abort reason is the ONE channel a cancel's provenance survives on — before
- * this mapping every host-initiated cancel coerced to user_cancelled (the
- * daemon's own ctrl-c relay and the MCP host teardown included). The client
- * vocabulary is read from CANCEL_REASON_CODES so a future member cannot be
- * silently coerced away here while the HTTP boundary already admits it;
- * wall_clock_exceeded stays daemon-internal (deliberately NOT in the client
- * enum — unforgeable). Unknown tokens keep the user_cancelled coercion for
- * wire compatibility. */
-export function cancelReasonFromSignalToken(
-  reason: unknown,
-): "wall_clock_exceeded" | CancelReasonCode {
-  if (reason === "wall_clock_exceeded") return "wall_clock_exceeded";
-  return normalizeCancelReasonCode(reason) ?? "user_cancelled";
-}
-
-function cancellationFacts(signal: AbortSignal, prior: RunOutcomeFactsType): RunOutcomeFactsType {
-  return terminalOutcomeFacts(prior, "cancelled", cancelReasonFromSignalToken(signal.reason));
-}
-
-function terminalOutcomeFromPayload(payload: Record<string, unknown>): RunOutcomeFactsType {
-  const parsed = RunOutcomeFacts.safeParse(payload["facts"]);
-  if (parsed.success) return parsed.data;
-  // Older in-process terminal producers (including the Delegate drain
-  // contract) supplied only lifecycle. Keep that compatible while treating an
-  // explicitly malformed facts object as a contradiction that must fail
-  // closed through the terminal-facts path below.
-  if (!Object.prototype.hasOwnProperty.call(payload, "facts")) {
-    const lifecycle = payload["lifecycle"];
-    if (
-      lifecycle === "succeeded" ||
-      lifecycle === "failed" ||
-      lifecycle === "cancelled" ||
-      lifecycle === "interrupted"
-    ) {
-      return makeOutcomeFacts(lifecycle);
-    }
-  }
-  return RunOutcomeFacts.parse(payload["facts"]);
-}
-
-function settledSpend(a: AnnouncedRunContext): number | null {
-  try {
-    return a.spend ? a.spend() : null;
-  } catch {
-    return null;
-  }
-}
-
-function isTerminalRecoveryRequired(error: unknown): boolean {
-  return (
-    !!error &&
-    typeof error === "object" &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "terminal_recovery_required"
-  );
-}
-
-function committedOutcome(a: AnnouncedRunContext): RunOutcomeFactsType | null {
-  const terminal = [...a.log.readAll().events]
-    .reverse()
-    .find(
-      (event) =>
-        event.type === "run.completed" ||
-        event.type === "run.blocked" ||
-        event.type === "run.failed",
-    );
-  const parsed = RunOutcomeFacts.safeParse(terminal?.payload["facts"]);
-  return parsed.success ? parsed.data : null;
-}
-
-function committedResult(
-  a: AnnouncedRunContext,
-  outcome: RunOutcomeFactsType,
-  spendUsd: number | null,
-): OrchestratorResult {
-  const summary =
-    readTextSafe(join(a.paths.finalDir, "summary.md"))?.trim().slice(0, 400) ??
-    `run terminal committed with lifecycle ${outcome.lifecycle}`;
-  return {
-    runId: a.runId,
-    taskId: a.taskId,
-    mode: a.mode,
-    lifecycle: outcome.lifecycle,
-    facts: outcome,
-    winner: null,
-    runDir: a.paths.root,
-    summary,
-    candidates: [],
-    spendUsd,
-  };
-}
+export { cancelReasonFromSignalToken } from "./runTerminalHelpers.js";
 
 /**
  * Whole-strategy terminal net: run `body`; if it throws AFTER announcing,
@@ -231,6 +77,13 @@ export async function guardAnnouncedRun(
   let terminalPreparationError: string | null = null;
   let barrierAttempted = false;
   let barrierFailed = false;
+  // The cancellation decision is frozen the moment the strategy's terminal is
+  // held (the strategy returned): a host cancel or wall-clock abort that
+  // arrives DURING the settlement barrier must not turn a completed run into
+  // a cancelled one. Null until the strategy has returned.
+  let abortedAtStrategyEnd: boolean | null = null;
+  const cancellationDecided = (): boolean =>
+    abortedAtStrategyEnd !== null ? abortedAtStrategyEnd : signal?.aborted === true;
   const runBarrier = async (context: AnnouncedRunContext): Promise<void> => {
     if (barrierAttempted) return;
     barrierAttempted = true;
@@ -240,6 +93,28 @@ export async function guardAnnouncedRun(
       barrierFailed = true;
       throw error;
     }
+  };
+  /** The barrier for a HELD terminal: true when it (already) succeeded. */
+  let heldBarrierError: unknown = null;
+  const barrierHeld = async (context: AnnouncedRunContext): Promise<boolean> => {
+    try {
+      await runBarrier(context);
+      return true;
+    } catch (error) {
+      heldBarrierError = error;
+      return false;
+    }
+  };
+  /**
+   * The held-terminal RECOVERY path (the strategy held its terminal, then
+   * threw): for an ordinary run the cancellation decision is frozen NOW,
+   * before its barrier, exactly as on the normal return — the verdict was
+   * reached before any abort that lands during settlement. Delegate parents
+   * keep the live signal through their child drain (the drain is their work).
+   */
+  const heldVerdictBarrier = async (context: AnnouncedRunContext): Promise<boolean> => {
+    if (!ownsDelegateDrain(context)) abortedAtStrategyEnd = signal?.aborted === true;
+    return barrierHeld(context);
   };
   try {
     let result: OrchestratorResult;
@@ -252,9 +127,10 @@ export async function guardAnnouncedRun(
               // Cancellation wins only until the synchronous terminal commit
               // starts. A later abort cannot rewrite an already-durable success.
               const payloadOutcome = terminalOutcomeFromPayload(payload);
-              const terminalOutcome = signal?.aborted
-                ? cancellationFacts(signal, payloadOutcome)
-                : payloadOutcome;
+              const terminalOutcome =
+                cancellationDecided() && signal
+                  ? cancellationFacts(signal, payloadOutcome)
+                  : payloadOutcome;
               const prepared = prepareRunFactsReceipt(a, terminalOutcome);
               canonicalOutcome = prepared.facts.outcome;
               return {
@@ -344,18 +220,23 @@ export async function guardAnnouncedRun(
           (_type, payload) =>
             publishRetainedOutput(
               a,
-              !signal?.aborted &&
+              !cancellationDecided() &&
                 (RunOutcomeFacts.safeParse(payload["facts"]).data?.lifecycle ??
                   payload["lifecycle"]) === "succeeded",
             ),
         );
       });
       preparedResult = result;
+      abortedAtStrategyEnd = signal?.aborted === true;
       const context = announced as AnnouncedRunContext | null;
       if (context) {
         await runBarrier(context);
         const budget = settledBudgetSnapshot(context);
         const delegateBarrierArmed = ownsDelegateDrain(context);
+        // Delegate parents keep their explicit cancel branch on the LIVE
+        // signal: a cancel that arrives while the child drain is still running
+        // wins there (the drain is part of their work). The frozen decision
+        // applies only to an ordinary run's held terminal.
         if (delegateBarrierArmed && signal?.aborted) {
           context.log.clearDeferredTerminal();
           const cancelFacts = terminalOutcomeFacts(
@@ -435,9 +316,34 @@ export async function guardAnnouncedRun(
               ...(spendUsd !== null ? { spendUsd } : {}),
             }
           : committedResult(a, outcome, spendUsd);
+      } else if (
+        a.log.deferredTerminalPending() &&
+        !signal?.aborted &&
+        !barrierFailed &&
+        (await heldVerdictBarrier(a))
+      ) {
+        // The strategy already produced its terminal — held for the barrier
+        // (INV-144: custody settles before the terminal is published) — and
+        // then threw. Exactly like a committed terminal, its verdict stands
+        // once the barrier itself succeeded: publish the held terminal and
+        // keep its outcome. A FAILED barrier (a child drain that timed out)
+        // falls through to the typed failure below, as before.
+        const pending = a.log.deferredTerminalPending()!;
+        await flushContinuationTerminal(a, terminalOutcomeFromPayload(pending.payload));
+        const outcome = canonicalOutcome ?? committedOutcome(a);
+        if (!outcome) throw err;
+        const spendUsd = settledSpend(a);
+        result = preparedResult
+          ? {
+              ...preparedResult,
+              lifecycle: outcome.lifecycle,
+              facts: outcome,
+              ...(spendUsd !== null ? { spendUsd } : {}),
+            }
+          : committedResult(a, outcome, spendUsd);
       } else {
         a.log.clearDeferredTerminal();
-        let terminalError = err;
+        let terminalError = heldBarrierError ?? err;
         try {
           await runBarrier(a);
         } catch (barrierError) {

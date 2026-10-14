@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import { registerChildProcess, unregisterChildProcess } from "./process-registry.js";
 import { readProcessLines, type ProcessStreamLimits } from "./process-lines.js";
 import { composeSpawnEnv } from "./env-scope.js";
+import { postExitDrain } from "./process-drain.js";
+import { runScopeMarkerOf } from "./process-scope.js";
 import { prepareHarnessCommand } from "./runtime-env.js";
 import {
   killWindowsProcessTree,
@@ -45,6 +47,18 @@ export interface SpawnOptions {
    * Defaults to `cancelKillDelayMs + 4000`.
    */
   cancelDeadlineMs?: number;
+  /**
+   * Bounded post-exit output drain (ms, `process-drain.ts`): once no output has
+   * arrived for this long AFTER the direct child exited (a descendant kept the
+   * pipe open), the parent-side streams are force-closed so capture completes
+   * (exit event `drain: "truncated"`). 0 disables (wait for a real `close`). Default 2000.
+   */
+  exitDrainMs?: number;
+  /**
+   * Absolute bound (ms) on the post-exit drain that ongoing descendant writes
+   * cannot renew. Default `max(10 * exitDrainMs, 30000)`.
+   */
+  exitDrainMaxMs?: number;
   /**
    * Fail-closed disclosure (QA-027) for a consumer that broke the stream EARLY
    * (it is no longer iterating, so the typed `termination_unconfirmed` event
@@ -101,7 +115,12 @@ export type ProcEvent =
   | { type: "launch_advisory"; detail: string }
   | { type: "stdout"; line: string; wire?: string }
   | { type: "stderr"; line: string }
-  | { type: "exit"; code: number | null; signal: NodeJS.Signals | null }
+  /**
+   * `drain: "truncated"`: the direct child exited but a descendant kept its
+   * stdout/stderr open, and the bounded post-exit drain force-closed them so the
+   * run reaches its terminal barrier. The output captured up to then is complete.
+   */
+  | { type: "exit"; code: number | null; signal: NodeJS.Signals | null; drain?: "truncated" }
   /**
    * QA-027 fail-closed death-proof disclosure: the process was cancelled and the
    * whole-tree reap could NOT confirm death — a descendant group is proven-alive
@@ -140,8 +159,19 @@ export async function* spawnProcess(
     // keep writing to the worktree, or hang the run forever.
     detached: true,
   });
-  if (typeof child.pid === "number") registerChildProcess(child.pid, cmd);
-  child.once("exit", (code, signal) => opts.onExit?.(code, signal));
+  if (typeof child.pid === "number") registerChildProcess(child.pid, cmd, runScopeMarkerOf(env));
+  // Bounded post-exit output drain (#449 item 2): see `process-drain.ts`.
+  // The reader is told to stop (never to discard) before the pipes are ended.
+  const drain = postExitDrain(child, {
+    exitDrainMs: opts.exitDrainMs ?? 2_000,
+    exitDrainMaxMs: opts.exitDrainMaxMs ?? Math.max(10 * (opts.exitDrainMs ?? 2_000), 30_000),
+    readerBlocked: () => capacity !== undefined,
+    stopReader: () => lines.stop(),
+  });
+  child.once("exit", (code, signal) => {
+    opts.onExit?.(code, signal);
+    drain.arm();
+  });
 
   let resolveClosed!: () => void;
   const closed = new Promise<void>((resolve) => {
@@ -243,6 +273,7 @@ export async function* spawnProcess(
 
   child.on("error", (err) => {
     if (typeof child.pid === "number") unregisterChildProcess(child.pid);
+    drain.clear();
     spawnError = err;
     finished = true;
     if (wake) {
@@ -252,8 +283,14 @@ export async function* spawnProcess(
   });
   child.on("close", async (code, signal) => {
     if (typeof child.pid === "number") unregisterChildProcess(child.pid);
+    drain.clear();
     await lines.drained;
-    push({ type: "exit", code, signal });
+    push({
+      type: "exit",
+      code,
+      signal,
+      ...(drain.truncated ? { drain: "truncated" as const } : {}),
+    });
     finished = true;
     if (wake) {
       wake();
@@ -378,6 +415,7 @@ export async function* spawnProcess(
     lines.close();
     capacity?.();
     if (timer) clearTimeout(timer);
+    drain.clear();
     abortSignal?.removeEventListener("abort", onAbort);
     if (!finished) {
       // Consumer broke early (no abort/timeout): cancel and reap the tree.
@@ -407,37 +445,11 @@ export interface CaptureResult {
   signal: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
+  /** The exit event's forced post-exit drain (`runCapture` only): later output was not read. */
+  drain?: "truncated";
 }
 
-/**
- * Label which stream said what in a compact one-line detail (truncated probe
- * errors must stay attributable to stderr vs stdout). Null when both are empty.
- *
- * `transform` (e.g. a secret redactor) runs on each FULL stream BEFORE
- * truncation — truncating first could split a token and leave a partial
- * secret the redactor no longer recognizes. Each present stream then gets an
- * equal code-point budget (never splitting a surrogate pair), so one noisy
- * stream cannot evict the other from the detail.
- */
-export function labelStreams(
-  stderr: string,
-  stdout: string,
-  opts: { maxLen?: number; transform?: (s: string) => string } = {},
-): string | null {
-  const maxLen = opts.maxLen ?? 300;
-  const transform = opts.transform ?? ((s: string): string => s);
-  const streams: Array<[string, string]> = [
-    ["stderr", stderr],
-    ["stdout", stdout],
-  ].filter((entry): entry is [string, string] => entry[1].trim() !== "");
-  if (streams.length === 0) return null;
-  const budget = Math.max(1, Math.floor(maxLen / streams.length));
-  const parts = streams.map(([label, raw]) => {
-    const clean = [...transform(raw.trim())].slice(0, budget).join("");
-    return `${label}: ${clean}`;
-  });
-  return parts.join(" | ");
-}
+export { labelStreams } from "./process-output.js";
 
 /** Run a process to completion, capturing stdout/stderr. Throws on spawn error. */
 export async function runCapture(
@@ -447,19 +459,16 @@ export async function runCapture(
 ): Promise<CaptureResult> {
   let stdout = "";
   let stderr = "";
-  let code: number | null = null;
-  let signal: NodeJS.Signals | null = null;
+  let exit: Pick<CaptureResult, "code" | "signal" | "drain"> = { code: null, signal: null };
   for await (const ev of spawnProcess(cmd, args, opts)) {
     if (ev.type === "stdout") stdout += ev.line + "\n";
     else if (ev.type === "stderr") stderr += ev.line + "\n";
-    else if (ev.type === "exit") {
-      code = ev.code;
-      signal = ev.signal;
-    }
+    else if (ev.type === "exit") exit = ev;
     // termination_unconfirmed is a disclosure-only event; runCapture callers do
     // not carry cancellation death-proof state (they run to completion).
   }
-  return { code, signal, stdout, stderr };
+  const { code, signal, drain } = exit;
+  return { code, signal, stdout, stderr, ...(drain ? { drain } : {}) };
 }
 
 /**
@@ -484,7 +493,7 @@ export async function runCaptureRaw(
     windowsHide: true,
     detached: true,
   });
-  if (typeof child.pid === "number") registerChildProcess(child.pid, cmd);
+  if (typeof child.pid === "number") registerChildProcess(child.pid, cmd, runScopeMarkerOf(env));
   child.once("exit", (code, signal) => opts.onExit?.(code, signal));
   let captureChildClosed = false;
   child.once("close", () => {

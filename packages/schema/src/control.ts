@@ -33,6 +33,7 @@ import { RequestRequirementResolution } from "./request-requirements.js";
 import { ProtectedPathApproval, TestCommandInvocation } from "./task.js";
 import { RunScope } from "./control-run-scope.js";
 import { RunFailure } from "./control-run-failure.js";
+import { ControlRunSummaryProcessScope } from "./control-process-scope.js";
 import { RunExecution } from "./control-run-execution.js";
 import { WorkspaceScopePath } from "./files-manifest.js";
 import { makeControlRunRetrySchemas } from "./control-run-retry.js";
@@ -791,6 +792,8 @@ export const ControlRunSummary = z
       .describe(
         "True while at least one interactive question awaits answer, timeout, run-terminal, or interruption release.",
       ),
+    /** Compact process-scope outcome (INV-144); null while live or unknown — never clean. */
+    processScope: ControlRunSummaryProcessScope,
     /** Route evidence from telemetry; null when no telemetry exists (legacy). */
     route: ControlRouteInfo.nullable()
       .default(null)

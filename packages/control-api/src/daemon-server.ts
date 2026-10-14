@@ -1,4 +1,5 @@
 import { handleAccountResourceRoute } from "./account-resource-routes.js";
+import { projectProcessScope } from "./run-detail-scope.js";
 import { ControlAccountResetRequest } from "@claudexor/schema";
 import { readThreadCommands } from "./command-reads.js";
 import { recoverInterruptedOutput } from "./retained-output.js";
@@ -2676,6 +2677,7 @@ function detailFor(
       ...summary,
       outcomeFacts,
       waitingOnUser: pendingInteractions.length > 0,
+      processScope: projectProcessScope(rec, summary.state),
     },
     children,
     runFacts,

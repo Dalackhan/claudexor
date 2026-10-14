@@ -186,7 +186,14 @@ export function acpRunner(entry: AcpEntry) {
                 }),
               );
             }
-            await queue.push(events.event("completed", { payload: { aborted: cancelled } }));
+            await queue.push(
+              events.event("completed", {
+                payload: {
+                  aborted: cancelled,
+                  ...(transport?.outputDrainTruncated() ? { output_drain: "truncated" } : {}),
+                },
+              }),
+            );
             queue.close();
           }
         }

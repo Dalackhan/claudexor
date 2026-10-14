@@ -21,7 +21,7 @@ import {
 } from "@claudexor/daemon";
 import { DaemonControlApiServer, type DaemonControlApiOptions } from "@claudexor/control-api";
 import { createDaemonQuotaPoller, openStartupDiagnostics } from "./daemon-admission-runtime.js";
-import { armDaemonLifecycle, runStartupCrashGc } from "./daemon-lifecycle.js";
+import { armDaemonLifecycle, daemonRunScopeIndex, runStartupCrashGc } from "./daemon-lifecycle.js";
 import {
   bindRecoveryTransport,
   DaemonStartupAdmission,
@@ -304,6 +304,7 @@ export async function main(): Promise<void> {
       logPath: logPath(),
       ...(diagnostics.diagnostics ? { diagnostics: diagnostics.diagnostics } : {}),
       beginShutdown: (reason) => shutdown!.beginShutdown(reason),
+      scopeCapture: daemonRunScopeIndex(),
     });
     address = await bindRecoveryTransport({
       server,
@@ -339,6 +340,7 @@ export async function main(): Promise<void> {
             logPath: logPath(),
             knownProjectRoots: roots.projects,
             knownExecutionRoots: roots.execution,
+            runScopes: daemonRunScopeIndex(),
             ...(diagnostics.diagnostics ? { diagnostics: diagnostics.diagnostics } : {}),
           });
           if (shutdown!.requested()) return;

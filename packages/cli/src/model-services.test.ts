@@ -209,10 +209,14 @@ async function fixture(
       ),
     );
     const started = await services.routes.createModelOperation(ref, randomUUID());
-    await vi.waitFor(async () =>
-      expect(["queued", "running"]).not.toContain(
-        (await services.routes.getModelOperation(started.id)).state,
-      ),
+    // Dispatch waits on the store's durable barrier (one flusher pass, 200 ms cadence);
+    // vitest's 1 s default is too tight for that on a contended host.
+    await vi.waitFor(
+      async () =>
+        expect(["queued", "running"]).not.toContain(
+          (await services.routes.getModelOperation(started.id)).state,
+        ),
+      { timeout: 10_000 },
     );
     return services.routes.getModelOperation(started.id);
   };
@@ -421,8 +425,10 @@ describe("production model service composition", () => {
       undefined,
       true,
     );
-    await vi.waitFor(async () =>
-      expect((await f.services.routes.getModelOperation(started.id)).state).toBe("succeeded"),
+    await vi.waitFor(
+      async () =>
+        expect((await f.services.routes.getModelOperation(started.id)).state).toBe("succeeded"),
+      { timeout: 10_000 },
     );
     const result = ModelCallResult.parse(
       JSON.parse((await f.services.routes.readModelResult(started.id)).bytes.toString()),

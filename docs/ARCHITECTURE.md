@@ -782,6 +782,18 @@ completed root answer with settled lifecycle and no other failure survives the
 Windows-only whole-tree proof limitation. Its unchanged `termination_unconfirmed`
 payload records uncertainty separately from answer text; empty survivors prove no
 death. Other unresolved reasons, observed survivors and cancellation remain errors.
+After stopping the process, drained root system errors, failed or interrupted
+completions and new root turns invalidate the candidate answer even when POSIX
+cleanup confirmed death. Child-thread lifecycle frames never invalidate it.
+An inherited pipe has a bounded post-exit drain: complete frames already read
+are delivered, while forced closure is disclosed as `payload.output_drain:
+"truncated"` on the terminal event of Codex, the shared CLI loop and ACP (a
+gate marks its stored output `output_truncated`); output written after the
+closure is never read. The bounded reader then suppresses only that closure
+(`ERR_STREAM_PREMATURE_CLOSE`): a frame that breaks its size or UTF-8 limits,
+any other stream error and a callback failure stay failures. Pipe closure
+proves no descendant death; whole-run scope settlement and its separate
+receipt still follow.
 Native in-turn retry notices use the existing nonterminal `api_retry` status;
 their wire mapping is documented in INTEGRATIONS' Harness Stream Reference.
 Adapters without a verified prompt transport retain their vendor-specific path.
@@ -3077,7 +3089,90 @@ terminalized as `interrupted` (`resumable.cause: host_restart`, with its
 that workspace keeps it and reconciles quiescence itself before refreshing or
 reusing it. An in-run cancel reaps its own process tree and discloses any
 unconfirmed death as `termination_unconfirmed` on the harness's completion
-event. The sweep covers orphaned envelopes (with their
+event. Independently of that cancel ladder, every run owns a process SCOPE
+(INV-144): `run()` mints a `CLAUDEXOR_RUN_SCOPE_<id>=1` marker and records it in
+`daemon/run-scopes.json` before the first launch; every harness spec env of the
+run carries it, as does every deterministic gate the run launches — candidate
+gates, its final verification and adoption (`gateSpecsFromContract` binds it;
+nothing is ended per command); a `clean` env also forwards an enclosing host's
+grammar-shaped markers; the same pids tick takes one asynchronous process-table snapshot and
+records each live harness root's descendants (pid, group, birth) into the run's
+entry, after the root's own group (pgid and the leader's measured identity)
+was recorded synchronously the moment it was registered — its `lstart` birth
+is added once a table read confirms the same leader before and after the
+read, and the scope floor is `opened_at` until a birth is known. Every announced run holds its terminal event (the
+deferred-terminal mechanism) until the whole-run barrier has ended the scope's
+members by measured identity — environment-marker members (`ps -E` on macOS,
+read only for processes no older than the scope after a cheap `pid,etime`
+listing — elapsed time rather than a start timestamp, so both sides come from
+the same clock at the same moment and zones or DST cannot hide a member; a
+minute of slack absorbs small backward wall-clock steps, and a larger one
+during the run can hide a marker-only member (recorded groups and captured
+descendants do not use the filter); a failed listing falls back to the full
+read, and `ps -p` exiting 1 counts as "every selected pid vanished" only with
+nothing on stderr —
+`/proc/<pid>/environ` on Linux), members of recorded process groups under the
+pgid-reuse rule and recorded descendants, TERM then a bounded KILL, each signal
+after a fresh birth read (a member is the same process by its kernel birth even
+after it moved to another process group; signalling a whole group still requires
+its recorded leader in that group) — and attempted to write `final/process_scope.yaml` (what was
+ended, what survived, what was unreadable, which recorded groups were skipped
+as reused, `completeness`, and `incomplete` when the single settlement
+deadline expired first — one absolute budget that starts when the daemon's
+custodian enters settlement for the run, also bounds the run's own pending
+seed refinement and never waits for another run's seeds; scanning and
+signalling stop at that moment — no read starts after it, never a late signal); only then is the terminal published — also on the path where a
+delegated child drain failed (the record step is the barrier's `finally`) — so a
+host that sees the terminal in the SQL command state or on the SSE stream already
+finds the settlement done and, when the write succeeded, the record on disk. The
+write is best-effort evidence, not a gate: a write failure, or an outcome that
+fails its schema, is swallowed, the verdict is published unchanged, and that run
+has no record. Recording is attempted once, without a second write or retry.
+`GET /v2/runs/:id` projects the record compactly as `summary.processScope`,
+which an engine that has the field always sends: the compact object for a
+terminal run whose record is readable and valid, otherwise an explicit `null`
+that means unknown, never clean — the run is not terminal yet (even when the
+artifact already exists), the record is absent (a run that predates it, or whose
+write failed), or it is unreadable or invalid. The run list leaves it a constant
+`null`; read the detail. Engines that predate the field omit the key, which is
+equally unknown; the generated JSON Schema lists the property as optional (it
+declares a default of `null`), although this engine always sends it. The reap
+never changes the verdict. The next start settles or discloses entries whose owning daemon is no
+longer live BEFORE this sweep and never touches a marker absent from the index.
+Limits are disclosed, never failures: Windows has no environment census
+(`tree_only`, and such entries are retired after disclosure); on macOS SIP
+hides Apple platform-binary environments, so a system binary started in the
+background by a shell that exited before any capture cannot be ruled out —
+`completeness` is `not_provable` there even when settled, and `complete` only
+on Linux when every census source succeeded and every same-uid process
+environment was readable (another uid cannot inherit our environment through
+ordinary spawn and is not counted; a setuid binary is a disclosed residual).
+An unreadable same-uid or unknown-uid discovery candidate is not a known scope
+member and receives no signal. Once known members settle, that discovery
+uncertainty limits completeness without forcing `settled` false; a host may
+release its copy under the known-member settlement policy while disclosing
+`not_provable`. Unsupported or failed census, surviving known members and
+unknown receipts do not certify that release.
+A host cancel that arrives during the settlement barrier does not rewrite a
+completed run as cancelled: the cancellation decision is frozen when the
+strategy's terminal is held.
+`daemon/run-scopes.json` is a stable contract a host may read directly when
+the daemon is dead. Its compact schema, in the field names the daemon writes:
+`{ "schema_version": 1, "entries": [ ... ] }`; per entry `run_id`, `marker`,
+`state` (`open` | `unresolved`), `opened_at` (ISO time: the floor the daemon
+uses while no `lstart` birth exists), `scope_start` (`lstart` text or null),
+`root_groups[{pgid, leader_pid, leader_birth | null, leader_identity?}]`
+(`leader_identity` is the daemon's opaque kernel birth token, comparable only
+by the daemon's own identity helper; `leader_birth` is filled once a table
+read confirmed the same leader) and `captured[{pid, pgid, birth}]`; every
+birth is `ps -o lstart=` text under the C locale in local time
+(`Mon Oct 12 14:08:47 2026`, 1 s resolution) and is only ever compared with
+another `lstart` reading, never with the identity token. A host without the
+identity helper follows this rule when `leader_birth` is null: a live process
+with `pid == pgid` cannot be verified as the recorded leader, so the host
+skips that group; when no process with `pid == pgid` is alive, the group's
+remaining members born at or after the floor belong to the scope (the kernel
+does not hand out a pid that is still a live process-group id). The sweep covers orphaned envelopes (with their
 seeded-credential homes), dead per-attempt `claudexor/<task>/<attempt>`
 branches, leaked `claudexor/verify-*` branches, and stale
 `claudexor-ro-*`/`claudexor-verify-*` tmp dirs. Envelopes whose creating

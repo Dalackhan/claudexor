@@ -14,7 +14,8 @@ if (process.argv.includes("--wrapper")) {
 } else {
   const slow = process.argv.includes("--wait-for-cancel");
   const lateError = process.argv.includes("--late-system-error");
-  if (lateError) {
+  const drainPlan = process.env.CX_FIXTURE_DRAIN_PLAN;
+  if (lateError || drainPlan) {
     process.on("SIGINT", () => {});
     process.on("SIGTERM", () => {});
   }
@@ -55,7 +56,16 @@ if (process.argv.includes("--wrapper")) {
     }
   });
   lines.on("close", () => {
-    if (lateError)
+    if (drainPlan) {
+      // Only the joined drain fixture: a descendant inherits the real pipes,
+      // acknowledges readiness, and emits its frames AFTER this root exits.
+      const holder = spawn(
+        process.execPath,
+        [fileURLToPath(new URL("./drain-holder.mjs", import.meta.url)), drainPlan],
+        { stdio: ["ignore", "inherit", "inherit", "ipc"] },
+      );
+      holder.once("message", () => process.exit(0));
+    } else if (lateError)
       process.stdout.write(
         JSON.stringify({
           method: "thread/status/changed",

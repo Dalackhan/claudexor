@@ -1768,6 +1768,68 @@
                 "default": false,
                 "description": "True while at least one interactive question awaits answer, timeout, run-terminal, or interruption release."
               },
+              "processScope": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "settled": {
+                        "type": "boolean",
+                        "description": "Every census source succeeded and no known member survived or stayed unreadable. Unreadable discovery candidates are not members; they limit completeness separately."
+                      },
+                      "coverage": {
+                        "type": "string",
+                        "enum": [
+                          "marker+capture",
+                          "marker",
+                          "tree_only"
+                        ]
+                      },
+                      "completeness": {
+                        "type": "string",
+                        "enum": [
+                          "complete",
+                          "not_provable"
+                        ],
+                        "description": "Whether a settled reap proves the scope empty (not on macOS for background system binaries, not on Windows, not after a census failure, not when the single settlement deadline expired — then settled is false and the run's final/process_scope.yaml carries incomplete=true with completeness_reason naming the deadline)."
+                      },
+                      "census": {
+                        "type": "string",
+                        "enum": [
+                          "ok",
+                          "failed",
+                          "unsupported"
+                        ]
+                      },
+                      "survivors": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Members still alive when the bounded ladder ended."
+                      },
+                      "unreadable": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Known members whose identity or membership could not be read."
+                      }
+                    },
+                    "required": [
+                      "settled",
+                      "coverage",
+                      "completeness",
+                      "census",
+                      "survivors",
+                      "unreadable"
+                    ],
+                    "additionalProperties": false,
+                    "description": "Compact process-scope outcome of a terminal run (full artifact: final/process_scope.yaml)."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Compact process-scope outcome from final/process_scope.yaml (settled, coverage, completeness, survivors, unreadable, census). Always present in this engine's responses: null means unknown (the run is live, or the record is missing, unreadable or invalid), never clean. Engines that predate the field omit the key, which is equally unknown.",
+                "default": null
+              },
               "route": {
                 "anyOf": [
                   {

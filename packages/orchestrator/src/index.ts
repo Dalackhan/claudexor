@@ -19,3 +19,4 @@ export { resolveAccountForRun } from "./account-resolution.js";
 export * from "./credential-execution.js";
 export * from "./account-evidence.js";
 export { profileQuotaBlock } from "./credential-cooldown.js";
+export { type RunScopeCustodian } from "./runScope.js";

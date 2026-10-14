@@ -15,6 +15,8 @@ export interface GateSpec {
   args: string[];
   cwd?: string;
   envAllowlist?: string[];
+  /** Fixed entries every run of this gate gets, e.g. the owning run's scope marker. */
+  env?: Record<string, string>;
   trustRequired?: boolean;
   trustGrant?: TestCommandGrant | null;
   projectRoot?: string;
@@ -38,10 +40,12 @@ export async function runGate(spec: GateSpec, opts: RunGatesOptions): Promise<Ga
   let timedOut = false;
   let stdout = "";
   let stderr = "";
+  // A leftover kept the gate's pipe open: the capture was force-closed after exit.
+  let captureCut = false;
   const command = JSON.stringify([spec.program, ...spec.args]);
   try {
     const cwd = commandCwd(opts.cwd, spec.cwd);
-    const env = commandEnv(spec.envAllowlist ?? [], opts.env);
+    const env = commandEnv(spec.envAllowlist ?? [], { ...opts.env, ...spec.env });
     if (spec.trustRequired) verifyExternalGrant(spec, cwd, env);
     const r = await runCapture(spec.program, spec.args, {
       cwd,
@@ -53,6 +57,7 @@ export async function runGate(spec: GateSpec, opts: RunGatesOptions): Promise<Ga
     code = r.code;
     stdout = r.stdout;
     stderr = r.stderr;
+    captureCut = r.drain === "truncated";
     if (r.signal === "SIGKILL") timedOut = true;
   } catch (err) {
     // A gate whose SPAWN itself throws is still an honest `failed`, but the
@@ -74,7 +79,8 @@ export async function runGate(spec: GateSpec, opts: RunGatesOptions): Promise<Ga
     required: spec.required ?? true,
     stdout_tail: stdoutEvidence.tail,
     stderr_tail: stderrEvidence.tail,
-    output_truncated: stdoutEvidence.truncated || stderrEvidence.truncated,
+    output_truncated:
+      stdoutEvidence.truncated || stderrEvidence.truncated || (includeOutput && captureCut),
   });
 }
 

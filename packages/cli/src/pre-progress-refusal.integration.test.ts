@@ -29,9 +29,10 @@ function reapMk(prefix: string): string {
   reapDirs.push(dir);
   return dir;
 }
+// Bulk fixture deletion uses the same bounded allowance as the integration cases.
 afterAll(() => {
   for (const dir of reapDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
+}, 30_000);
 
 async function initRepo(): Promise<string> {
   const repo = reapMk("claudexor-363-repo-");

@@ -29,6 +29,7 @@ export function connectAcp(input: {
     receive = resolve;
   });
   let termination: string | undefined;
+  let outputDrainTruncated = false;
   let closing = false;
   let replyId: acp.JsonRpcId | undefined;
   let replyReady: Promise<void> | undefined;
@@ -83,6 +84,8 @@ export function connectAcp(input: {
               const event = next.value;
               if (event.type === "termination_unconfirmed") {
                 termination = "ACP process tree death could not be confirmed";
+              } else if (event.type === "exit") {
+                outputDrainTruncated = event.drain === "truncated";
               } else if (event.type === "stderr") {
                 await emit(events.event("status", { payload: { stderr: event.line } }));
               } else if (event.type === "stdout") {
@@ -142,6 +145,8 @@ export function connectAcp(input: {
   let cleanup: Promise<void> | undefined;
   return {
     connection,
+    /** The agent exited while a descendant held its pipe; the bounded drain force-closed it. */
+    outputDrainTruncated: () => outputDrainTruncated,
     async cancel() {
       // Queue the protocol notification before abort; don't wait on a blocked stream writer.
       if (observation.session && !closing) {

@@ -15,6 +15,12 @@ import type { ChildProcess } from "node:child_process";
  * crash-GC reaper uses. No new raw killer: a recycled/stale pgid is never
  * signalled, and terminal is reported only after every owned group is proven
  * empty (fail-closed to `unconfirmed`, never a silent success).
+ *
+ * This ladder is the CANCEL fast path while the tree is intact. A descendant
+ * that already lost its parent chain (reparented to pid 1 after its shell
+ * died) and a run that completed naturally are the run-scope custodian's duty
+ * (`process-scope-census.ts`, INV-144): marker census plus the groups and
+ * descendants the daemon recorded while the run was live.
  */
 import { spawnSync } from "node:child_process";
 import {

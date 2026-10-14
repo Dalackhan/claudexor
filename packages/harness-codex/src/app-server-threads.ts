@@ -4,6 +4,21 @@ import { nowIso } from "@claudexor/util";
 import { asObject, codexAppServerEvents, type JsonObject } from "./app-server-protocol.js";
 import { parseCodexEvent, type CodexParseState } from "./parse.js";
 
+/** The shared completed-event shape for normal, cancelled and failed teardown. */
+export function codexCompletedEvent(
+  sessionId: string,
+  payload: JsonObject,
+  aborted: boolean,
+): HarnessEvent {
+  return {
+    type: "completed",
+    session_id: sessionId,
+    ts: nowIso(),
+    ...(aborted ? { aborted: true } : {}),
+    payload,
+  };
+}
+
 /** This producer reason limits observation; it never proves whole-tree death. */
 export function codexCleanupIsProofLimitation(
   event: Extract<ProcEvent, { type: "termination_unconfirmed" }>,

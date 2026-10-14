@@ -1,4 +1,5 @@
 import { harnessRuntimeEnv } from "./runtime-env.js";
+import { inheritedScopeMarkers } from "./process-scope.js";
 
 /**
  * Declarative env-scrub SSOT for harness children.
@@ -187,8 +188,13 @@ export function pickAllowlistedEnv(
 /**
  * Build the base child env for a given inheritance mode. `mirror_native` copies
  * the parent env (the native CLIs' default); `clean` copies only the minimal
- * allowlist (agent isolation). The adapter's `spec.env` overrides + the
- * providerScrubEnv patch are applied ON TOP of this by the spawn layer.
+ * allowlist (agent isolation) PLUS every inherited scope marker: custody is not
+ * a secret and not a preference — an enclosing custodian (the host that started
+ * this daemon) must be able to end what it owns however the child env is
+ * composed, so names matching the shared marker grammar (`process-scope.ts`)
+ * with value `1` are forwarded in both modes. The adapter's `spec.env`
+ * overrides + the providerScrubEnv patch are applied ON TOP of this by the
+ * spawn layer.
  */
 export function composeBaseEnv(
   inheritance: "mirror_native" | "clean",
@@ -198,7 +204,10 @@ export function composeBaseEnv(
 ): NodeJS.ProcessEnv {
   const normalizedSource = harnessRuntimeEnv(source, execPath, platform);
   if (inheritance !== "clean") return normalizedSource;
-  return pickAllowlistedEnv(normalizedSource, CLEAN_ENV_ALLOWLIST, platform);
+  return {
+    ...pickAllowlistedEnv(normalizedSource, CLEAN_ENV_ALLOWLIST, platform),
+    ...inheritedScopeMarkers(normalizedSource),
+  };
 }
 
 /** Apply the run patch once, after baseline PATH/OS identity preparation. */

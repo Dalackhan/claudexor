@@ -846,6 +846,41 @@ invariant or operator decision before proceeding.
   `[INV-116:work-state-veto]`, `[INV-116:work-report-contract]`,
   `[INV-116:context-interrupted]`, `[INV-116:continuation]`; the
   whole-strategy terminal net and interrupt-stamping tests.
+- **INV-144** A finished run ends every OS process it left. Every harness
+  child the engine spawns for a run inherits the run's scope marker
+  (`CLAUDEXOR_RUN_SCOPE_<id>=1`, minted and durably recorded before the first
+  launch; the diff-review CLI has no run and is the one disclosed exception),
+  the root's own process group and leader identity are recorded synchronously
+  the moment it is registered (a shell that exits within milliseconds still
+  leaves its group on record; a binary that left that group before any
+  capture is the disclosed residual), and
+  while the run is live the daemon records the run's descendants (pid,
+  process group, birth) from kernel state. On every terminal — success,
+  failure, cancel and timeout alike — the scope's members (marker members,
+  members of recorded groups under the pgid-reuse rule, recorded
+  descendants) are ended by measured identity, never by command line and
+  never by a bare group id, and the run's terminal event is published only
+  after that settlement and one attempt to write its record (the final
+  process_scope.yaml artifact, projected into the run detail). A failed write
+  is not retried and never changes the verdict; the detail still sends
+  processScope as explicit null, meaning unknown, never clean. The next daemon start does the
+  same for a crashed generation. What could not be ended or read is recorded
+  instead of declared clean, and the record states its completeness honestly:
+  provable only where the census read every same-uid environment (Linux),
+  never on macOS for a system binary started in the background by a shell
+  that exited before capture, never on Windows, never after a settlement
+  that outran its single absolute budget — one deadline that starts when the
+  daemon's custodian enters settlement for that run and bounds that run's own
+  pending seed refinement together with every census, identity and table read
+  and every signal, never waiting for another run's seeds (disclosed as
+  incomplete, never a late signal, never a verdict). The outcome is a disclosure, not a
+  verdict axis: it never turns a delivered answer into a failure. Work meant
+  to outlive a run belongs to a longer-lived custodian, never to pid 1.
+  verify: core scope census/reap tests (fake kernel and real orphan
+  fixtures incl. a platform-binary child ended through its recorded group),
+  the orchestrator run-scope barrier tests (terminal after settlement), the
+  cli run-scope index spawn-seed and start/settle tests, the control-api
+  run-detail projection test and CLI joined Codex drain/detail integration test.
 
 ## 12. Keep The Codebase Small And Direct
 

@@ -25,6 +25,9 @@ import type { ProcessTreeTerminationOutcome, ReapProcessTreeOptions } from "./pr
  *   COUNTED and reported on the terminal `completed` event payload
  *   (`dropped_unparsed_lines` / `dropped_unrecognized_events`), never silently
  *   discarded;
+ * - a pipe that the bounded post-exit drain had to force closed is disclosed on
+ *   that payload as `output_drain: "truncated"` (the same key as Codex), never
+ *   as a failure;
  * - a terminal `completed` event is guaranteed exactly once on every path
  *   (clean exit, nonzero exit, spawn failure, abort);
  * - abort is honored via the duck-typed AbortSignal smuggled in `spec.extra`
@@ -128,6 +131,9 @@ export async function* runCliHarness(opts: CliRunLoopOptions): AsyncGenerator<Ha
   };
   let exitCode: number | null = null;
   let exitSignal: NodeJS.Signals | null = null;
+  // The post-exit drain force-closed a pipe a descendant kept open: what was
+  // read is complete, later output was not read. Disclosed, never a failure.
+  let outputDrainTruncated = false;
   // QA-027: a cancellation whose whole-tree death proof could not confirm death
   // (a proven-alive survivor group or an unreadable-identity group). Never silent.
   let terminationUnconfirmed: {
@@ -184,6 +190,7 @@ export async function* runCliHarness(opts: CliRunLoopOptions): AsyncGenerator<Ha
       if (ev.type === "exit") {
         exitCode = ev.code;
         exitSignal = ev.signal;
+        outputDrainTruncated = ev.drain === "truncated";
         continue;
       }
       if (ev.type === "termination_unconfirmed") {
@@ -291,6 +298,7 @@ export async function* runCliHarness(opts: CliRunLoopOptions): AsyncGenerator<Ha
     payload["dropped_unrecognized_events"] = droppedUnrecognizedEvents;
   if (aborted) payload["aborted"] = true;
   if (exitCode !== null) payload["exit_code"] = exitCode;
+  if (outputDrainTruncated) payload["output_drain"] = "truncated";
   // Typed unconfirmed-death terminal fact (QA-027): the run cannot read as a clean
   // cancel/success while a proven survivor lives — the disclosure rides the
   // terminal completed event (and the error above), never a silent drop.

@@ -4,6 +4,12 @@ import {
   threadContextPointer,
 } from "./prompt-framing.js";
 import { requestRefusalFailure } from "./runTerminalResults.js";
+import {
+  openRunScopeCustody,
+  scopedRouteContext,
+  scopedSpecEnv,
+  type RunScopeCustodian,
+} from "./runScope.js";
 import { delegationBeltFor } from "./delegationBelt.js";
 import {
   bindProcessingAdmission,
@@ -18,7 +24,6 @@ import {
   failedCandidatesResult,
   failAfterCandidates,
 } from "./candidateTerminals.js";
-import { existsSync } from "node:fs";
 import {
   effectiveAuthPreference,
   observeNativeSessionEvent,
@@ -297,16 +302,12 @@ import {
 } from "./continuation.js";
 import { interactionChannelFor } from "./interaction.js";
 import { liveAttempt, type LiveAttemptContext, type LiveAttemptHook } from "./live-input.js";
-import { gateSpecsFromContract, renderTestsEvidence } from "./contract-gates.js";
+import { finalVerifyRun, gateSpecsFromContract, renderTestsEvidence } from "./contract-gates.js";
 import { buildTaskContract } from "./task-contract-builder.js";
+import { prepareReviewEvidenceDir, recordReviewEvidenceCleanup } from "./reviewEvidence.js";
 import { ArtifactStore, type RunPaths } from "@claudexor/artifact-store";
 import type { EventLog, TerminalPersistenceHook } from "@claudexor/event-log";
-import {
-  buildContextPack,
-  rawContextForEnvelope,
-  preflightEvidence,
-  writeEvidencePacket,
-} from "@claudexor/context";
+import { buildContextPack, rawContextForEnvelope, writeEvidencePacket } from "@claudexor/context";
 import {
   WorkspaceManager,
   captureRawPatchEnvelope,
@@ -319,8 +320,6 @@ import {
 import {
   blockedDecisionOverride,
   finalVerifyBlocks,
-  finalVerifyPatch,
-  finalVerifyFiles,
   verifyAndDeliverFiles,
   verifyAndDeliver,
 } from "@claudexor/delivery";
@@ -401,6 +400,12 @@ export interface OrchestratorDeps {
   reviewerEfforts?: Partial<Record<ProviderFamily, EffortHint>>;
   /** Startup-frozen regular/strategy concurrency caps from the daemon owner. */
   runtimeConcurrencyCaps?: RuntimeConcurrencyCaps;
+  /**
+   * Durable per-run process custody (the daemon's scope index). Absent: in-process
+   * custody only — minted, carried and reaped at the barrier, nothing survives a
+   * daemon crash (`runScope.ts`).
+   */
+  runScopes?: RunScopeCustodian;
 }
 
 /**
@@ -623,6 +628,9 @@ export interface RunInput {
    * ignored knob instead of silently dropping it.
    */
   maxTurns?: number | null;
+  /** Internal provenance: the run's process-scope marker, minted by `run()` before the
+   * first launch and carried in every harness `spec.env`. Never set by a caller. */
+  runScopeMarker?: string;
 }
 
 /** Context handed to RunInput.onInteraction for one pending question. */
@@ -831,40 +839,55 @@ export class Orchestrator {
       this.routingRationaleByRun.delete(settledRunId);
       this.deps.delegationBudgetAuthority?.releaseRun(settledRunId);
     };
+    // Process custody (owner 1A, #449; `runScope.ts`): the marker is minted and
+    // recorded BEFORE the first launch, rides every spec env (`scopedSpecEnv`),
+    // and every announced run HOLDS its terminal until the barrier has ended
+    // what still carries it. The reap never changes the verdict.
+    const custody = await openRunScopeCustody(this.deps.runScopes, runId);
+    resolved = { ...resolved, runScopeMarker: custody.marker };
     try {
       return await guardAnnouncedRun(
         resolved.signal,
         (announce) => {
+          const announced = custody.announced(announce);
           switch (mode) {
             case "ask":
               // `--deep-scan` widens the answer into the bounded multi-scout
               // research sweep with synthesis (the old `audit --swarm`/`explore`).
               return resolved.deepScan
-                ? this.runDeepScan(resolved, announce)
-                : this.runAsk(resolved, announce);
+                ? this.runDeepScan(resolved, announced)
+                : this.runAsk(resolved, announced);
             case "agent":
               // Engine strategies are FLAGS on agent (v0.9 collapse): `--until-clean`
               // and `--attempts` select the convergence loop; `--n` selects the race
               // width; `--create` switches the candidate intent to create_from_scratch.
-              if (resolved.untilClean) return this.runConvergence(resolved, mode, null, announce);
+              if (resolved.untilClean) return this.runConvergence(resolved, mode, null, announced);
               if (resolved.attempts !== undefined && resolved.attempts !== null) {
-                return this.runConvergence(resolved, mode, resolved.attempts, announce);
+                return this.runConvergence(resolved, mode, resolved.attempts, announced);
               }
-              return this.runRace({ ...resolved, n: resolved.n ?? 1 }, mode, announce);
+              return this.runRace({ ...resolved, n: resolved.n ?? 1 }, mode, announced);
             case "plan":
-              return this.runPlan(resolved, announce);
+              return this.runPlan(resolved, announced);
           }
         },
-        async ({ runId }) => {
-          const authority = this.deps.delegationBudgetAuthority;
-          if (!authority?.hasParent(runId)) return;
-          authority.beginParentClose(runId);
-          await authority.waitForChildren(runId);
+        // The whole-run barrier: drain delegated children, then end the run's
+        // process scope and record its outcome before ANY terminal is flushed
+        // (a child-drain rejection keeps its error). Bounded by the reap deadline.
+        ({ runId }) =>
+          custody.barrier(async () => {
+            const authority = this.deps.delegationBudgetAuthority;
+            if (!authority?.hasParent(runId)) return;
+            authority.beginParentClose(runId);
+            await authority.waitForChildren(runId);
+          }),
+        // Single per-run terminalization hook: the custody fallback for a path
+        // that never reached the barrier, then release per-run engine state
+        // (the delegated-child drain authority is released only AFTER
+        // settlement) on EVERY terminal.
+        async (settledRunId) => {
+          await custody.record();
+          releaseRunState(settledRunId);
         },
-        // Single per-run terminalization hook: release the routing-rationale map
-        // entry on EVERY terminal (incl. a run that died before its telemetry
-        // writer ran, which is the leak this closes).
-        releaseRunState,
       );
     } catch (error) {
       // A durable startup sink may refuse `run.created` before the strategy can
@@ -875,6 +898,8 @@ export class Orchestrator {
         this.deps.delegationBudgetAuthority?.releaseRun(runId);
       }
       throw error;
+    } finally {
+      await custody.settleUnannounced();
     }
   }
 
@@ -2203,7 +2228,11 @@ export class Orchestrator {
         adapter: this.deps.registry.get(harnessId),
         credentialProfile: sessionFields.credential_profile,
         authPreference: sessionFields.auth_preference ?? "auto",
-        laneEnv: this.laneHomeEnvFor(runInput, harnessId, profileId) ?? {},
+        laneEnv:
+          scopedSpecEnv(
+            runInput.runScopeMarker,
+            this.laneHomeEnvFor(runInput, harnessId, profileId) ?? {},
+          ) ?? {},
         envInheritance: envInheritance(this.config(runInput.repoRoot)),
         signal: runInput.signal,
         processing,
@@ -2383,6 +2412,9 @@ export class Orchestrator {
     if (routed.browserRequirement.effective && artifactRelativeDir === null) {
       throw new Error("browser artifact ownership marker was not persisted");
     }
+    // The run's scope marker rides every spec env (plus the host facts when the
+    // HOME is scoped), added AFTER the lane/profile home so that patch is kept.
+    const scopedEnv = scopedSpecEnv(runInput?.runScopeMarker, harnessHome.env);
     let spec = HarnessRunSpec.parse({
       session_id: newId("ses"),
       intent,
@@ -2421,7 +2453,7 @@ export class Orchestrator {
       ...(inPlaceEnvelope && sessionFields?.resume_session_id
         ? { resume_session_id: sessionFields.resume_session_id }
         : {}),
-      ...(harnessHome.env ? { env: harnessHome.env } : {}),
+      ...(scopedEnv ? { env: scopedEnv } : {}),
       raw_context_packet: rawContextPacket,
       stream_deltas: streamDeltas,
     });
@@ -2752,7 +2784,7 @@ export class Orchestrator {
     }
     const gates = gateSignalAborted
       ? []
-      : await runGates(gateSpecsFromContract(contract), {
+      : await runGates(gateSpecsFromContract(contract, runInput?.runScopeMarker), {
           cwd: envelope.worktree_path,
           env: wsm.envFor(envelope),
           signal,
@@ -3778,6 +3810,8 @@ export class Orchestrator {
         taskId,
         input.signal,
         this.reservationEstimateUsd(input),
+        false,
+        input.runScopeMarker,
       );
     } catch (err) {
       // Review preflight/evidence failures end TERMINALLY with artifacts —
@@ -3923,6 +3957,8 @@ export class Orchestrator {
                 taskId,
                 input.signal,
                 this.reservationEstimateUsd(input),
+                false,
+                input.runScopeMarker,
               );
               evidences.push(...synthEvidence);
               workingRuns.push(run);
@@ -4054,9 +4090,7 @@ export class Orchestrator {
       facts.review !== "blocked" &&
       !input.signal?.aborted
     ) {
-      finalVerify = winnerRun.files
-        ? await finalVerifyFiles(winnerRun.files, undefined, gateSpecsFromContract(contract), log)
-        : await finalVerifyPatch(execRoot, winnerRun, gateSpecsFromContract(contract), log);
+      finalVerify = await finalVerifyRun(execRoot, winnerRun, contract, log, input);
       finalVerifyFailed = finalVerifyBlocks(finalVerify);
       if (finalVerifyFailed) facts = { ...facts, checks: "failed", reason: "checks_failed" };
     }
@@ -4106,7 +4140,7 @@ export class Orchestrator {
             execRoot,
             winnerRun.files,
             {},
-            gateSpecsFromContract(contract),
+            gateSpecsFromContract(contract, input.runScopeMarker),
             (freshVerify) =>
               finalVerifyBlocks(freshVerify)
                 ? (freshVerify.reason ?? "final verify failed before directory race adoption")
@@ -4176,7 +4210,7 @@ export class Orchestrator {
               execRoot,
               winnerRun.diff,
               { mode: "apply", protectedApply: true },
-              gateSpecsFromContract(contract),
+              gateSpecsFromContract(contract, input.runScopeMarker),
               (freshVerify) => {
                 finalVerify = freshVerify;
                 return finalVerifyBlocks(freshVerify)
@@ -4484,7 +4518,7 @@ export class Orchestrator {
    * panel settles (resolve OR reject).
    */
   private reviewScoped(
-    input: Omit<Parameters<typeof reviewCandidate>[0], "env">,
+    input: Parameters<typeof reviewCandidate>[0],
   ): ReturnType<typeof reviewCandidate> {
     return reviewCandidate({
       ...input,
@@ -4510,6 +4544,7 @@ export class Orchestrator {
     signal?: AbortSignal,
     reservationEstimateUsd?: number,
     reviewUnchanged = false,
+    runScopeMarker?: string,
   ): Promise<CandidateEvidence[]> {
     return reviewCandidateRuns(
       {
@@ -4527,64 +4562,20 @@ export class Orchestrator {
         signal,
         reservationEstimateUsd,
         reviewUnchanged,
+        runScopeMarker,
       },
       {
         prepareReviewEvidenceDir: this.prepareReviewEvidenceDir.bind(this),
-        recordReviewEvidenceCleanup: this.recordReviewEvidenceCleanup.bind(this),
+        recordReviewEvidenceCleanup,
         reviewScoped: this.reviewScoped.bind(this),
         config: this.config.bind(this),
       },
     );
   }
 
-  private prepareReviewEvidenceDir(sourceDir: string, _candidateCwd: string): string {
-    // Evidence is an external runtime artifact. ReviewEngine builds a separate
-    // reviewer workspace and copies the packet there; writing/copying it into
-    // the candidate tree would contaminate the Git diff and, worse, overwrite a
-    // user-owned path with the same name.
-    if (!existsSync(sourceDir)) {
-      throw new Error(`review evidence preflight failed for ${sourceDir}: source packet missing`);
-    }
-    return this.requireReviewEvidence(sourceDir);
-  }
-
-  private requireReviewEvidence(dir: string): string {
-    const result = preflightEvidence(dir);
-    if (result.ok) return dir;
-    const missing = result.missing.length ? `missing=${result.missing.join(",")}` : "";
-    const empty = result.empty.length ? `empty=${result.empty.join(",")}` : "";
-    throw new Error(
-      `review evidence preflight failed for ${dir}: ${[missing, empty].filter(Boolean).join(" ")}`,
-    );
-  }
-
-  private cleanupReviewEvidenceDir(
-    _candidateEvidenceDir: string,
-    _candidateCwd: string,
-  ): Record<string, string> | null {
-    // No candidate-tree packet exists in v2; external runtime retention is
-    // governed by the artifact/journal lifecycle rather than best-effort rm.
-    return null;
-  }
-
-  private recordReviewEvidenceCleanup(
-    store: ArtifactStore,
-    metadataPath: string,
-    attemptId: string,
-    candidateEvidenceDir: string,
-    candidateCwd: string,
-  ): void {
-    const cleanupMetadata = this.cleanupReviewEvidenceDir(candidateEvidenceDir, candidateCwd);
-    if (!cleanupMetadata) return;
-    try {
-      store.writeYaml(metadataPath, {
-        ...cleanupMetadata,
-        attempt_id: attemptId,
-      });
-    } catch {
-      // Cleanup telemetry must not mask the review/revalidation failure that
-      // triggered best-effort cleanup.
-    }
+  /** The instance method is the seam tests stub to make evidence setup fail. */
+  private prepareReviewEvidenceDir(sourceDir: string, candidateCwd: string): string {
+    return prepareReviewEvidenceDir(sourceDir, candidateCwd);
   }
 
   private async runConvergence(
@@ -5146,6 +5137,7 @@ export class Orchestrator {
               input.signal,
               this.reservationEstimateUsd(input),
               true,
+              input.runScopeMarker,
             );
             if (!evidence) throw new Error("Convergence review produced no evidence");
             lastFindings = evidence.findings;
@@ -5360,9 +5352,7 @@ export class Orchestrator {
       facts.review !== "blocked" &&
       !input.signal?.aborted
     ) {
-      convFinalVerify = lastRun.files
-        ? await finalVerifyFiles(lastRun.files, undefined, gateSpecsFromContract(contract), log)
-        : await finalVerifyPatch(execRoot, lastRun, gateSpecsFromContract(contract), log);
+      convFinalVerify = await finalVerifyRun(execRoot, lastRun, contract, log, input);
       if (finalVerifyBlocks(convFinalVerify))
         facts = { ...facts, checks: "failed", reason: "checks_failed" };
     }
@@ -5668,7 +5658,8 @@ export class Orchestrator {
           ...sessionFields,
           ...this.harnessSpecKnobs(contract, knobs, args.intent),
           env_inheritance: envInheritance(this.config(input.repoRoot)),
-          env:
+          env: scopedSpecEnv(
+            input.runScopeMarker,
             (args.laneRun
               ? this.laneHomeEnvFor(
                   input,
@@ -5676,6 +5667,7 @@ export class Orchestrator {
                   sessionFields.credential_profile?.profile_id ?? input.credentialProfileId ?? null,
                 )
               : null) ?? args.fallbackHome,
+          ),
         });
         this.credentials.stampProfileSelection(spec, input, adapter.id);
         const plannerAbort = new AbortController();
@@ -5746,11 +5738,14 @@ export class Orchestrator {
     // harnesses run sequentially. Doctor, model inventory, and spawn share each
     // lane's durable HOME; the disposable context remains the non-thread fallback.
     const laneRun = Boolean(input.threadId);
-    const roHome = resolveReadOnlyRouteContext(
-      this.execRootOf(input),
-      laneRun
-        ? (id) => this.laneHomeEnvFor(input, id, input.credentialProfileId ?? null)
-        : undefined,
+    const roHome = scopedRouteContext(
+      resolveReadOnlyRouteContext(
+        this.execRootOf(input),
+        laneRun
+          ? (id) => this.laneHomeEnvFor(input, id, input.credentialProfileId ?? null)
+          : undefined,
+      ),
+      input.runScopeMarker,
     );
     let adapters: RoutedAdapter[];
     try {
@@ -6144,7 +6139,11 @@ export class Orchestrator {
     log: EventLog,
   ): DeepScanReducerDeps {
     return {
-      newReadOnlyHome: () => resolveReadOnlyRouteContext(this.execRootOf(input)),
+      newReadOnlyHome: () =>
+        scopedRouteContext(
+          resolveReadOnlyRouteContext(this.execRootOf(input)),
+          input.runScopeMarker,
+        ),
       costEvidence: (harnessId, attemptId, routed) =>
         // The reducer admits under a finite estimate floor (mirror of the n>1
         // scout reserve) so a subscription route is not refused for lacking a
@@ -6180,7 +6179,7 @@ export class Orchestrator {
           resume_session_id: null,
           ...this.harnessSpecKnobs(contract, knobs, "synthesize"),
           env_inheritance: envInheritance(this.config(input.repoRoot)),
-          env: homeEnv,
+          env: scopedSpecEnv(input.runScopeMarker, homeEnv),
         });
         this.credentials.stampProfileSelection(spec, input, routed.adapter.id);
         // D-16: compile the WorkReport transport onto the reducer spec (the
@@ -6257,11 +6256,14 @@ export class Orchestrator {
     // and the next lane turn resumes it (INV-034). Its doctor/model/spawn path
     // shares that lane HOME; deep-scan and one-shot asks keep the disposable one.
     const laneRun = Boolean(input.threadId) && opts.mode === "ask" && !opts.deepScan;
-    const roHome = resolveReadOnlyRouteContext(
-      this.execRootOf(input),
-      laneRun
-        ? (id) => this.laneHomeEnvFor(input, id, input.credentialProfileId ?? null)
-        : undefined,
+    const roHome = scopedRouteContext(
+      resolveReadOnlyRouteContext(
+        this.execRootOf(input),
+        laneRun
+          ? (id) => this.laneHomeEnvFor(input, id, input.credentialProfileId ?? null)
+          : undefined,
+      ),
+      input.runScopeMarker,
     );
     let adapters: RoutedAdapter[], width: number;
     try {
@@ -6525,7 +6527,8 @@ export class Orchestrator {
           // A thread lane turn spawns in its DURABLE per-lane home so the native
           // session it records is reachable for resume next turn; everything else
           // uses the disposable route-context home.
-          env:
+          env: scopedSpecEnv(
+            input.runScopeMarker,
             (laneRun
               ? this.laneHomeEnvFor(
                   input,
@@ -6533,6 +6536,7 @@ export class Orchestrator {
                   sessionFields.credential_profile?.profile_id ?? input.credentialProfileId ?? null,
                 )
               : null) ?? roHome.env,
+          ),
         });
         this.credentials.stampProfileSelection(spec, input, adapter.id);
         const reportInteraction = interactionChannelFor(

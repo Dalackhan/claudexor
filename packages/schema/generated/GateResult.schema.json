@@ -63,7 +63,7 @@
         "output_truncated": {
           "type": "boolean",
           "default": false,
-          "description": "True when the stored output tails were truncated."
+          "description": "True when the stored output tails are incomplete: sliced to the tail limit, or cut because the post-exit drain force-closed a pipe that a leftover process kept open."
         }
       },
       "required": [

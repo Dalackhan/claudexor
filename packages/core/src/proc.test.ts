@@ -34,6 +34,297 @@ describe("spawnProcess", () => {
     await expect(closed).resolves.toBeUndefined();
   });
 
+  it("reaches exit when a leftover inherits the stdout pipe (bounded post-exit drain)", async () => {
+    // The parent writes a line, spawns a child that INHERITS stdout and lives
+    // on, then exits. Without the drain, `close` never fires (the child holds
+    // the pipe) and the generator hangs; the bounded drain force-closes our
+    // side so the exit event arrives, marked truncated.
+    const script = [
+      "const {spawn}=require('node:child_process')",
+      "console.log('parent-line')",
+      // Child keeps stdout (fd 1) open and never writes, so no output resets
+      // the drain clock; it outlives the parent.
+      "const c=spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:['ignore',1,'ignore']})",
+      "setTimeout(()=>process.exit(0),50)",
+    ].join(";");
+
+    const events: string[] = [];
+    let exitDrain: string | undefined;
+    const started = Date.now();
+    let childPid = 0;
+    for await (const ev of spawnProcess(process.execPath, ["-e", script], {
+      exitDrainMs: 500,
+      onExit: () => {},
+    })) {
+      if (ev.type === "stdout") events.push(ev.line);
+      if (ev.type === "exit") exitDrain = ev.drain;
+    }
+    expect(events).toContain("parent-line");
+    expect(exitDrain).toBe("truncated");
+    // It ended via the bounded drain, not by hanging to a timeout.
+    expect(Date.now() - started).toBeLessThan(4000);
+    // The inheriting child is still ours to reap at the barrier, not killed here.
+    void childPid;
+  }, 15_000);
+
+  it("delivers every frame to a slow (backpressured) bounded consumer after exit, untruncated", async () => {
+    // 24 valid ~1 KB frames, then exit. The consumer accepts one frame at a
+    // time and pauses 700 ms after the first; the reader is blocked on
+    // capacity, which must never count as idle, and raw bytes already in the
+    // pipe are progress. Every frame arrives; the exit is not truncated.
+    const script = [
+      "for (let i = 0; i < 24; i++) console.log(JSON.stringify({ i, pad: 'x'.repeat(1000) }))",
+      "process.exit(0)",
+    ].join(";");
+    const frames: number[] = [];
+    let exitDrain: string | undefined = "unset";
+    let paused = false;
+    for await (const ev of spawnProcess(process.execPath, ["-e", script], {
+      exitDrainMs: 150,
+      streamLimits: { stdoutFrameBytes: 65_536, queuedFrames: 1, stderrBytes: 4096 },
+    })) {
+      if (ev.type === "stdout") {
+        frames.push((JSON.parse(ev.line) as { i: number }).i);
+        if (!paused) {
+          paused = true;
+          await new Promise((resolve) => setTimeout(resolve, 700));
+        }
+      }
+      if (ev.type === "exit") exitDrain = ev.drain;
+    }
+    expect(frames).toEqual(Array.from({ length: 24 }, (_, i) => i));
+    expect(exitDrain).toBeUndefined();
+  }, 15_000);
+
+  it("bounds the drain absolutely when a leftover keeps writing to the inherited pipe", async () => {
+    // The descendant writes every 25 ms for 10 s; the quiet window never
+    // elapses, so only the absolute post-exit bound can end the drain.
+    const script = [
+      "const {spawn}=require('node:child_process')",
+      "console.log('parent-line')",
+      "spawn(process.execPath,['-e','setInterval(()=>console.log(\"tick\"),25);setTimeout(()=>{},10000)'],{stdio:['ignore',1,'ignore']})",
+      "setTimeout(()=>process.exit(0),100)",
+    ].join(";");
+    const started = Date.now();
+    let ticks = 0;
+    let exitDrain: string | undefined;
+    let threw: unknown = null;
+    try {
+      for await (const ev of spawnProcess(process.execPath, ["-e", script], {
+        exitDrainMs: 200,
+        exitDrainMaxMs: 1_000,
+      })) {
+        if (ev.type === "stdout" && ev.line === "tick") ticks += 1;
+        if (ev.type === "exit") exitDrain = ev.drain;
+      }
+    } catch (error) {
+      threw = error;
+    }
+    expect(threw).toBeNull();
+    expect(ticks).toBeGreaterThan(0);
+    expect(exitDrain).toBe("truncated");
+    expect(Date.now() - started).toBeLessThan(4_000);
+  }, 15_000);
+
+  it("a forced closure on the bounded (ACP) reader path is never a read failure or an unconfirmed death", async () => {
+    const script = [
+      "const {spawn}=require('node:child_process')",
+      "console.log(JSON.stringify({hello:1}))",
+      "spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:['ignore',1,'ignore']})",
+      "setTimeout(()=>process.exit(0),50)",
+    ].join(";");
+    const lines: string[] = [];
+    let exitDrain: string | undefined;
+    let unconfirmed = false;
+    let threw: unknown = null;
+    const started = Date.now();
+    try {
+      for await (const ev of spawnProcess(process.execPath, ["-e", script], {
+        exitDrainMs: 300,
+        streamLimits: { stdoutFrameBytes: 65_536, queuedFrames: 8, stderrBytes: 4096 },
+        onTerminationUnconfirmed: () => {
+          unconfirmed = true;
+        },
+      })) {
+        if (ev.type === "stdout") lines.push(ev.line);
+        if (ev.type === "exit") exitDrain = ev.drain;
+        if (ev.type === "termination_unconfirmed") unconfirmed = true;
+      }
+    } catch (error) {
+      threw = error;
+    }
+    expect(threw).toBeNull();
+    expect(unconfirmed).toBe(false);
+    expect(lines).toEqual([JSON.stringify({ hello: 1 })]);
+    expect(exitDrain).toBe("truncated");
+    expect(Date.now() - started).toBeLessThan(4_000);
+  }, 15_000);
+
+  it("forced closure delivers every frame already read: paused bounded consumer + held pipe + absolute cap (24/24)", async () => {
+    // 24 frames in one batch, a silent descendant holding stdout, a consumer
+    // that pauses 700 ms after the first frame, and a drain that is forced by
+    // the ABSOLUTE cap (300 ms) long before the consumer resumes: every frame
+    // already read from the pipe must still arrive; the exit says truncated.
+    const script = [
+      "const {spawn}=require('node:child_process')",
+      "let out='';for (let i = 0; i < 24; i++) out += JSON.stringify({ i, pad: 'x'.repeat(1000) }) + '\\n'",
+      "process.stdout.write(out)",
+      "spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:['ignore',1,'ignore']})",
+      "setTimeout(()=>process.exit(0),50)",
+    ].join(";");
+    const frames: number[] = [];
+    let exitDrain: string | undefined = "unset";
+    let paused = false;
+    let threw: unknown = null;
+    try {
+      for await (const ev of spawnProcess(process.execPath, ["-e", script], {
+        exitDrainMs: 100,
+        exitDrainMaxMs: 300,
+        streamLimits: { stdoutFrameBytes: 65_536, queuedFrames: 1, stderrBytes: 4096 },
+      })) {
+        if (ev.type === "stdout") {
+          frames.push((JSON.parse(ev.line) as { i: number }).i);
+          if (!paused) {
+            paused = true;
+            await new Promise((resolve) => setTimeout(resolve, 700));
+          }
+        }
+        if (ev.type === "exit") exitDrain = ev.drain;
+      }
+    } catch (error) {
+      threw = error;
+    }
+    expect(threw).toBeNull();
+    expect(frames).toEqual(Array.from({ length: 24 }, (_, i) => i));
+    expect(exitDrain).toBe("truncated");
+  }, 20_000);
+
+  it.each([
+    { cap: 300, when: "fires mid-stall" },
+    { cap: 30_000, when: "never fires (control)" },
+  ])(
+    "forced closure keeps every frame already acquired beyond one native read chunk: 96 frames, both pipes held, cap $when (96/96)",
+    async ({ cap }) => {
+      // Astra's R2 fixture: 96 ~1 KB frames in ONE batch (~98 KB: several
+      // native pipe reads), queue bound 1, the root exits after 100 ms while
+      // a silent descendant holds BOTH pipes, the consumer pauses 700 ms
+      // after the first frame. With the 300 ms absolute cap firing during the
+      // stall, every complete frame already read from the OS — in the parser's
+      // chunk and in the Readable's buffer — must still arrive; the 30 s
+      // control (the consumer resumes first) is the same 96/96.
+      const script = [
+        "const {spawn}=require('node:child_process')",
+        "let out='';for (let i = 0; i < 96; i++) out += JSON.stringify({ i, pad: 'x'.repeat(1000) }) + '\\n'",
+        "process.stdout.write(out)",
+        "process.stderr.write('diagnostic kept\\n')",
+        "spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:['ignore',1,2]})",
+        "setTimeout(()=>process.exit(0),100)",
+      ].join(";");
+      const frames: number[] = [];
+      const stderr: string[] = [];
+      let exitDrain: string | undefined = "unset";
+      let paused = false;
+      let threw: unknown = null;
+      try {
+        for await (const ev of spawnProcess(process.execPath, ["-e", script], {
+          exitDrainMs: 100,
+          exitDrainMaxMs: cap,
+          streamLimits: { stdoutFrameBytes: 65_536, queuedFrames: 1, stderrBytes: 4096 },
+        })) {
+          if (ev.type === "stdout") {
+            frames.push((JSON.parse(ev.line) as { i: number }).i);
+            if (!paused) {
+              paused = true;
+              await new Promise((resolve) => setTimeout(resolve, 700));
+            }
+          }
+          if (ev.type === "stderr") stderr.push(ev.line);
+          if (ev.type === "exit") exitDrain = ev.drain;
+        }
+      } catch (error) {
+        threw = error;
+      }
+      expect(threw).toBeNull();
+      expect(frames).toEqual(Array.from({ length: 96 }, (_, i) => i));
+      expect(stderr.join("\n")).toContain("diagnostic kept");
+      expect(exitDrain).toBe("truncated");
+    },
+    20_000,
+  );
+
+  it("forced closure delivers frames that arrived as separate pipe chunks: paused consumer, cap mid-stall (24/24)", async () => {
+    // Same shape, but the 24 frames are written one per 10 ms so they arrive
+    // as many pipe chunks. While the bounded consumer is paused the reader
+    // sits on ONE chunk; the rest are read from the OS into the Readable's
+    // buffer and must survive the forced closure (they are handed to the
+    // parser before the stream is ended, never destroyed with it).
+    const script = [
+      "const {spawn}=require('node:child_process')",
+      "let i=0",
+      "const t=setInterval(()=>{process.stdout.write(JSON.stringify({ i, pad: 'x'.repeat(1000) })+'\\n');if(++i===24){clearInterval(t);spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:['ignore',1,'ignore']});setTimeout(()=>process.exit(0),50)}},10)",
+    ].join(";");
+    const frames: number[] = [];
+    let exitDrain: string | undefined = "unset";
+    let paused = false;
+    let threw: unknown = null;
+    try {
+      for await (const ev of spawnProcess(process.execPath, ["-e", script], {
+        exitDrainMs: 100,
+        exitDrainMaxMs: 300,
+        streamLimits: { stdoutFrameBytes: 65_536, queuedFrames: 1, stderrBytes: 4096 },
+      })) {
+        if (ev.type === "stdout") {
+          frames.push((JSON.parse(ev.line) as { i: number }).i);
+          if (!paused) {
+            paused = true;
+            await new Promise((resolve) => setTimeout(resolve, 1_500));
+          }
+        }
+        if (ev.type === "exit") exitDrain = ev.drain;
+      }
+    } catch (error) {
+      threw = error;
+    }
+    expect(threw).toBeNull();
+    expect(frames).toEqual(Array.from({ length: 24 }, (_, i) => i));
+    expect(exitDrain).toBe("truncated");
+  }, 20_000);
+
+  it("forced closure keeps a diagnostic already written to stderr while a descendant holds stderr", async () => {
+    const script = [
+      "const {spawn}=require('node:child_process')",
+      "process.stderr.write('diag: something went wrong\\n')",
+      "spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:['ignore','ignore',2]})",
+      "setTimeout(()=>process.exit(3),50)",
+    ].join(";");
+    const stderr: string[] = [];
+    let exitDrain: string | undefined;
+    let code: number | null = null;
+    for await (const ev of spawnProcess(process.execPath, ["-e", script], {
+      exitDrainMs: 200,
+      streamLimits: { stdoutFrameBytes: 65_536, queuedFrames: 8, stderrBytes: 4096 },
+    })) {
+      if (ev.type === "stderr") stderr.push(ev.line);
+      if (ev.type === "exit") {
+        exitDrain = ev.drain;
+        code = ev.code;
+      }
+    }
+    expect(stderr.join("\n")).toContain("diag: something went wrong");
+    expect(exitDrain).toBe("truncated");
+    expect(code).toBe(3);
+  }, 15_000);
+
+  it("does not truncate a clean exit whose pipe closes normally", async () => {
+    let exitDrain: string | undefined = "unset";
+    for await (const ev of spawnProcess(process.execPath, ["-e", "console.log('hi')"], {
+      exitDrainMs: 500,
+    })) {
+      if (ev.type === "exit") exitDrain = ev.drain;
+    }
+    expect(exitDrain).toBeUndefined();
+  });
+
   it("kills the child when the consumer closes the stream early", async () => {
     const dir = tempDir();
     const marker = join(dir, "survived.txt");

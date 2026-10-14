@@ -91,6 +91,8 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
   private readonly deadlineMs: number;
   /** In-flight seed refinements per marker (a settle waits only for its own run's). */
   private readonly seeding = new Map<string, Set<Promise<void>>>();
+  /** Markers whose settlement stopped waiting while refinements were still pending. */
+  private readonly expiredSeeds = new Set<string>();
   private unsubscribe: (() => void) | null = null;
   /** Set when the index file had to be preserved aside; surfaced as a startup action. */
   private unreadableNotice: string | null = null;
@@ -154,11 +156,15 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
         }
         if (!this.table) return;
         // Refinement: the leader's lstart, read only while it is still the
-        // spawn-time leader BEFORE and AFTER the table read (item 8).
-        if (!(await this.rootStillSame(child))) return;
+        // spawn-time leader BEFORE and AFTER the table read (item 8), and only
+        // while this run's settlement still waits for it: past that point no
+        // read starts and nothing more is recorded (the group above stands).
+        const marker = child.scopeMarker;
+        const waited = (): boolean => !this.expiredSeeds.has(marker);
+        if (!waited() || !(await this.rootStillSame(child)) || !waited()) return;
         const row = await this.table.row(child.pid);
         if (row === null || row === "unreadable") return; // exited already, or unreadable
-        if (!(await this.rootStillSame(child))) return;
+        if (!waited() || !(await this.rootStillSame(child)) || !waited()) return;
         group.leader_birth = row.birth;
         if (!entry.captured.some((c) => c.pid === row.pid && c.birth === row.birth))
           entry.captured.push({ pid: row.pid, pgid: row.pgid, birth: row.birth });
@@ -179,7 +185,10 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
       this.seeding.set(marker, jobs);
       void job.finally(() => {
         jobs.delete(job);
-        if (jobs.size === 0 && this.seeding.get(marker) === jobs) this.seeding.delete(marker);
+        if (jobs.size === 0 && this.seeding.get(marker) === jobs) {
+          this.seeding.delete(marker);
+          this.expiredSeeds.delete(marker);
+        }
       });
     }
     return job;
@@ -202,7 +211,8 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
    * birth/identity read that follows the synchronous group record) is never
    * raced by the reap — for at most the budget remainder: a refinement hung
    * on a `ps -p` or identity read (bounded by their own longer timeouts) must
-   * not extend the cancel path, and the reap then runs on what is recorded.
+   * not extend the cancel path, and the reap then runs on what is recorded;
+   * a refinement still pending then starts no read and records nothing more.
    * Another run's seeds are never awaited (Astra R3).
    */
   private async seedsSettled(marker: string, deadlineMs: number): Promise<void> {
@@ -218,6 +228,9 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
     } finally {
       if (timer) clearTimeout(timer);
     }
+    // Settlement waits no longer: what of this run still refines is cut off
+    // (`seeding` keeps a marker only while one of its refinements is pending).
+    if (this.seeding.has(marker)) this.expiredSeeds.add(marker);
   }
 
   /** The registry handle's measured leader identity still owns the pid. */
@@ -275,8 +288,7 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
       ...(this.table ? { table: this.table } : {}),
     });
     if (entry) {
-      this.log(describe(entry, outcome));
-      this.retireOrKeep(entry, outcome);
+      this.log(this.retireOrKeep(entry, outcome));
       try {
         await this.persist();
       } catch (error) {
@@ -390,8 +402,7 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
         );
         continue;
       }
-      actions.push(describe(entry, outcome));
-      this.retireOrKeep(entry, outcome);
+      actions.push(this.retireOrKeep(entry, outcome));
     }
     try {
       await this.persist();
@@ -409,7 +420,8 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
     return compareProcessIdentity(entry.owner, observed) === "same";
   }
 
-  private retireOrKeep(entry: RunScopeEntry, outcome: ScopeReapOutcome): void {
+  /** Retire or keep the entry; returns the disclosure, which names a retirement without proof. */
+  private retireOrKeep(entry: RunScopeEntry, outcome: ScopeReapOutcome): string {
     const entries = this.load();
     // A host with no census at all (`unsupported`, Windows) can never settle
     // an entry: keeping it would re-reap it at every start and grow the file
@@ -417,11 +429,14 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
     if (outcome.settled || outcome.census === "unsupported") {
       const at = entries.indexOf(entry);
       if (at >= 0) entries.splice(at, 1);
-      return;
+      return outcome.settled
+        ? describe(entry, outcome)
+        : `${describe(entry, outcome)}; retired without proof (no environment census on this platform)`;
     }
     entry.state = "unresolved";
     entry.settled_at = this.now();
     entry.outcome = summarize(outcome);
+    return describe(entry, outcome);
   }
 
   private owner(): Promise<KnownProcessIdentity | null> {

@@ -36,9 +36,14 @@ export function readProcessLines(
   // that the loop had not pulled yet: `stop()` takes them synchronously before
   // the caller ends the stream, so a frame that arrived in several pipe chunks
   // is still assembled) and the retained stderr tail, then finish; the
-  // premature-close rejection that follows is the expected end of input.
+  // premature-close rejection that follows is the expected end of input and
+  // the ONLY error a stopped reader suppresses: a frame that breaks the bounded
+  // protocol (size, UTF-8), any other stream error and a callback failure stay
+  // failures.
   let closed = false;
   let stopped = false;
+  const expectedEnd = (error: unknown): boolean =>
+    stopped && (error as NodeJS.ErrnoException | null)?.code === "ERR_STREAM_PREMATURE_CLOSE";
   let stdoutTail: Buffer[] = [];
   let stderrTail: Buffer[] = [];
   const stdout = async () => {
@@ -72,7 +77,7 @@ export function readProcessLines(
         if (closed) return;
       }
     } catch (error) {
-      if (!stopped) throw error;
+      if (!expectedEnd(error)) throw error;
     }
     // Forced end of input: what the stop took from the Readable's buffer.
     for (const chunk of stdoutTail) {
@@ -94,7 +99,7 @@ export function readProcessLines(
         keep(chunk as Buffer);
       }
     } catch (error) {
-      if (!stopped) throw error;
+      if (!expectedEnd(error)) throw error;
     }
     for (const chunk of stderrTail) keep(chunk);
     if (tail.length && !closed) publish({ type: "stderr", line: tail.toString("utf8") });
@@ -111,7 +116,8 @@ export function readProcessLines(
   };
   const guarded = (read: () => Promise<void>) =>
     read().catch((error: unknown) => {
-      if (!closed && !stopped) fail(error instanceof Error ? error : new Error(String(error)));
+      if (!closed && !expectedEnd(error))
+        fail(error instanceof Error ? error : new Error(String(error)));
     });
   const drained = Promise.all([guarded(stdout), guarded(stderr)]).then(() => {});
   return {

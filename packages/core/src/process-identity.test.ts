@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ProcessIdentityService,
+  compareProcessBirth,
   compareProcessIdentity,
   createProcessObservationReader,
   observeProcess,
@@ -242,6 +243,22 @@ describe("locale-independent process identity", () => {
     });
   });
 
+  it("one process is its birth; group authority is that birth in the recorded group", () => {
+    const expected = knownLinux(90, 90, "linux:100");
+    const regrouped = knownLinux(90, 91, "linux:100"); // the same process after setsid/setpgid
+    const reborn = knownLinux(90, 90, "linux:101"); // the pid reused by another process
+    expect(compareProcessBirth(expected, regrouped)).toBe("same");
+    expect(compareProcessIdentity(expected, regrouped)).toBe("different");
+    for (const compare of [compareProcessBirth, compareProcessIdentity]) {
+      expect(compare(expected, expected)).toBe("same");
+      expect(compare(expected, reborn)).toBe("different");
+      expect(compare(expected, { status: "missing", pid: 90, platform: "linux" })).toBe("missing");
+      expect(
+        compare(expected, { status: "unknown", pid: 90, platform: "linux", reason: "io_error" }),
+      ).toBe("unknown");
+    }
+  });
+
   it("preserves missing/unknown and compares exact identity including PGID", () => {
     const expected = knownLinux(90, 90, "linux:100");
     expect(compareProcessIdentity(expected, expected)).toBe("same");
@@ -328,6 +345,30 @@ describe("process group handles", () => {
       status: "unknown",
       reason: "not_process_group_leader",
     });
+  });
+
+  it("refuses to signal a group whose recorded leader has left it, even with the same birth", () => {
+    let pgid = 55;
+    const identity = {
+      read: () => knownLinux(55, pgid, "linux:1"),
+      self: () => knownLinux(1, 1, "linux:0"),
+    };
+    const signalled: number[] = [];
+    const service = new ProcessGroupService({
+      platform: "linux",
+      identity,
+      signalProcessGroup: (negativePgid) => {
+        signalled.push(negativePgid);
+      },
+    });
+    const captured = service.captureLeader(55);
+    if (captured.status !== "known") throw new Error("expected known group");
+    pgid = 77;
+    expect(service.signal(captured.handle, "SIGTERM")).toMatchObject({
+      status: "unknown",
+      reason: "stale_leader",
+    });
+    expect(signalled).toEqual([]);
   });
 
   it("treats only ESRCH as proof that every process in the group is gone", () => {

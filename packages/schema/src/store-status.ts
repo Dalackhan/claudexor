@@ -48,6 +48,14 @@ export const StoreFlusherFacts = z.object({
   }),
 });
 
+/** One summary for the store's whole lifetime, not a rolling window. */
+const StoreCommitFacts = z.object({
+  attempts: count.describe("COMMIT calls entered, failed ones included."),
+  failures: count.describe("COMMIT calls that threw."),
+  last_ms: ms.nullable().describe("Duration of the latest COMMIT call; null before the first."),
+  max_ms: ms.nullable().describe("Longest COMMIT call; null before the first."),
+});
+
 /** Missing on old engines; null metrics mean the SQL runtime is not open yet. */
 export const DaemonStoreFacts = z.object({
   flusher: StoreFlusherFacts.nullable(),
@@ -56,6 +64,11 @@ export const DaemonStoreFacts = z.object({
   interval_ms: ms.nullable(),
   wal_bytes: count.nullable(),
   busy_waits: count.nullable(),
+  commit: StoreCommitFacts.nullable()
+    .optional()
+    .describe(
+      "Request-thread transaction COMMIT calls since this engine store opened, timed around the native call only: a WAL header sync or automatic checkpoint SQLite runs inside it is included; BEGIN, the transaction body and ROLLBACK are not. A long call is a measurement, not proof of a disk cause. Null while the store is not open; older engines omit it.",
+    ),
   obligations_open: count.nullable(),
   integrity: z.enum(["pending", "ok", "failed"]).nullable(),
   migration: StoreMigrationProgress.nullable(),

@@ -445,6 +445,8 @@ export interface CaptureResult {
   signal: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
+  /** The exit event's forced post-exit drain (`runCapture` only): later output was not read. */
+  drain?: "truncated";
 }
 
 export { labelStreams } from "./process-output.js";
@@ -457,19 +459,16 @@ export async function runCapture(
 ): Promise<CaptureResult> {
   let stdout = "";
   let stderr = "";
-  let code: number | null = null;
-  let signal: NodeJS.Signals | null = null;
+  let exit: Pick<CaptureResult, "code" | "signal" | "drain"> = { code: null, signal: null };
   for await (const ev of spawnProcess(cmd, args, opts)) {
     if (ev.type === "stdout") stdout += ev.line + "\n";
     else if (ev.type === "stderr") stderr += ev.line + "\n";
-    else if (ev.type === "exit") {
-      code = ev.code;
-      signal = ev.signal;
-    }
+    else if (ev.type === "exit") exit = ev;
     // termination_unconfirmed is a disclosure-only event; runCapture callers do
     // not carry cancellation death-proof state (they run to completion).
   }
-  return { code, signal, stdout, stderr };
+  const { code, signal, drain } = exit;
+  return { code, signal, stdout, stderr, ...(drain ? { drain } : {}) };
 }
 
 /**

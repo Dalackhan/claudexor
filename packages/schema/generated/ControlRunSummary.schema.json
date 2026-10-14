@@ -1770,7 +1770,7 @@
               "properties": {
                 "settled": {
                   "type": "boolean",
-                  "description": "Every census source succeeded and nothing survived or stayed unreadable."
+                  "description": "Every census source succeeded and no known member survived or stayed unreadable. Unreadable discovery candidates are not members; they limit completeness separately."
                 },
                 "coverage": {
                   "type": "string",
@@ -1822,7 +1822,7 @@
               "type": "null"
             }
           ],
-          "description": "Compact process-scope outcome from final/process_scope.yaml (settled, coverage, completeness, survivors, unreadable, census); null while live or when unknown.",
+          "description": "Compact process-scope outcome from final/process_scope.yaml (settled, coverage, completeness, survivors, unreadable, census). Always present in this engine's responses: null means unknown (the run is live, or the record is missing, unreadable or invalid), never clean. Engines that predate the field omit the key, which is equally unknown.",
           "default": null
         },
         "route": {

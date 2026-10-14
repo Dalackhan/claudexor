@@ -777,7 +777,23 @@ becoming finality; the terminal discloses `subagent_threads`. After the root
 turn completed, "thread settled" is re-checked on any notification and, in
 silence, after the poll interval. A sub-agent's failed command therefore stays
 tool-warning evidence beside the root's delivered final instead of escalating
-through the deliverable-less tool-error exception.
+through the deliverable-less tool-error exception. On normal shutdown, an explicit
+completed root answer with settled lifecycle and no other failure survives the
+Windows-only whole-tree proof limitation. Its unchanged `termination_unconfirmed`
+payload records uncertainty separately from answer text; empty survivors prove no
+death. Other unresolved reasons, observed survivors and cancellation remain errors.
+After stopping the process, drained root system errors, failed or interrupted
+completions and new root turns invalidate the candidate answer even when POSIX
+cleanup confirmed death. Child-thread lifecycle frames never invalidate it.
+An inherited pipe has a bounded post-exit drain: complete frames already read
+are delivered, while forced closure is disclosed as `payload.output_drain:
+"truncated"` on the terminal event of Codex, the shared CLI loop and ACP (a
+gate marks its stored output `output_truncated`); output written after the
+closure is never read. The bounded reader then suppresses only that closure
+(`ERR_STREAM_PREMATURE_CLOSE`): a frame that breaks its size or UTF-8 limits,
+any other stream error and a callback failure stay failures. Pipe closure
+proves no descendant death; whole-run scope settlement and its separate
+receipt still follow.
 Native in-turn retry notices use the existing nonterminal `api_retry` status;
 their wire mapping is documented in INTEGRATIONS' Harness Stream Reference.
 Adapters without a verified prompt transport retain their vendor-specific path.
@@ -2195,8 +2211,10 @@ late, so `windowMs` grows with the stall. `claudexor daemon status` prints the
 same window as one line. The status route reaches the daemon in process, so it
 answers while the loop is merely slow. The protocol handshake remains unchanged.
 The `store` facts report flusher state, interval, last barrier and lag, WAL bytes,
-open obligations, busy waits, integrity and current import progress. A field is
-null when its owner cannot observe it; pending integrity is not a successful check.
+open obligations, busy waits, request-thread COMMIT timing since the store opened
+([SQLite engine store](#sqlite-engine-store)), integrity and current import
+progress. A field is null when its owner cannot observe it; pending integrity is
+not a successful check.
 No memory, loop or store measurements impose automatic admission thresholds.
 
 <!-- BEGIN GENERATED ENDPOINTS (node scripts/gen-endpoints-doc.mjs; do not edit by hand) -->
@@ -3074,8 +3092,10 @@ unconfirmed death as `termination_unconfirmed` on the harness's completion
 event. Independently of that cancel ladder, every run owns a process SCOPE
 (INV-144): `run()` mints a `CLAUDEXOR_RUN_SCOPE_<id>=1` marker and records it in
 `daemon/run-scopes.json` before the first launch; every harness spec env of the
-run carries it (a `clean` env also forwards an enclosing host's grammar-shaped
-markers); the same pids tick takes one asynchronous process-table snapshot and
+run carries it, as does every deterministic gate the run launches — candidate
+gates, its final verification and adoption (`gateSpecsFromContract` binds it;
+nothing is ended per command); a `clean` env also forwards an enclosing host's
+grammar-shaped markers; the same pids tick takes one asynchronous process-table snapshot and
 records each live harness root's descendants (pid, group, birth) into the run's
 entry, after the root's own group (pgid and the leader's measured identity)
 was recorded synchronously the moment it was registered — its `lstart` birth
@@ -3093,19 +3113,31 @@ read, and `ps -p` exiting 1 counts as "every selected pid vanished" only with
 nothing on stderr —
 `/proc/<pid>/environ` on Linux), members of recorded process groups under the
 pgid-reuse rule and recorded descendants, TERM then a bounded KILL, each signal
-after a fresh birth read — and written `final/process_scope.yaml` (what was
+after a fresh birth read (a member is the same process by its kernel birth even
+after it moved to another process group; signalling a whole group still requires
+its recorded leader in that group) — and attempted to write `final/process_scope.yaml` (what was
 ended, what survived, what was unreadable, which recorded groups were skipped
 as reused, `completeness`, and `incomplete` when the single settlement
 deadline expired first — one absolute budget that starts when the daemon's
 custodian enters settlement for the run, also bounds the run's own pending
 seed refinement and never waits for another run's seeds; scanning and
-signalling stop at that moment, never a late signal); only then is the terminal published — also on the path where a
-delegated child drain failed (the record step is the barrier's `finally`) — so the
-SQL command state and the SSE stream a host observes already carry the outcome,
-which `GET /v2/runs/:id` projects compactly as `summary.processScope` (null
-until the run is terminal — even when the artifact already exists — and null
-for runs without it: unknown, never clean). The reap never changes the
-verdict. The next start settles or discloses entries whose owning daemon is no
+signalling stop at that moment — no read starts after it, never a late signal); only then is the terminal published — also on the path where a
+delegated child drain failed (the record step is the barrier's `finally`) — so a
+host that sees the terminal in the SQL command state or on the SSE stream already
+finds the settlement done and, when the write succeeded, the record on disk. The
+write is best-effort evidence, not a gate: a write failure, or an outcome that
+fails its schema, is swallowed, the verdict is published unchanged, and that run
+has no record. Recording is attempted once, without a second write or retry.
+`GET /v2/runs/:id` projects the record compactly as `summary.processScope`,
+which an engine that has the field always sends: the compact object for a
+terminal run whose record is readable and valid, otherwise an explicit `null`
+that means unknown, never clean — the run is not terminal yet (even when the
+artifact already exists), the record is absent (a run that predates it, or whose
+write failed), or it is unreadable or invalid. The run list leaves it a constant
+`null`; read the detail. Engines that predate the field omit the key, which is
+equally unknown; the generated JSON Schema lists the property as optional (it
+declares a default of `null`), although this engine always sends it. The reap
+never changes the verdict. The next start settles or discloses entries whose owning daemon is no
 longer live BEFORE this sweep and never touches a marker absent from the index.
 Limits are disclosed, never failures: Windows has no environment census
 (`tree_only`, and such entries are retired after disclosure); on macOS SIP
@@ -3115,6 +3147,12 @@ background by a shell that exited before any capture cannot be ruled out —
 on Linux when every census source succeeded and every same-uid process
 environment was readable (another uid cannot inherit our environment through
 ordinary spawn and is not counted; a setuid binary is a disclosed residual).
+An unreadable same-uid or unknown-uid discovery candidate is not a known scope
+member and receives no signal. Once known members settle, that discovery
+uncertainty limits completeness without forcing `settled` false; a host may
+release its copy under the known-member settlement policy while disclosing
+`not_provable`. Unsupported or failed census, surviving known members and
+unknown receipts do not certify that release.
 A host cancel that arrives during the settlement barrier does not rewrite a
 completed run as cancelled: the cancellation decision is frozen when the
 strategy's terminal is held.
@@ -3206,7 +3244,11 @@ kept only for cold import and an independent frozen copy kept for tests.
   large transaction the WAL keeps growing and resets once the reader
   releases, after which `journal_size_limit` truncates the file; the first
   such checkpoint after a long pinned read copies the accumulated backlog in
-  one longer stop on the request thread. The request thread itself calls no
+  one longer stop on the request thread. The writer's automatic checkpoint
+  runs inside a COMMIT call once the WAL reaches the threshold, and a COMMIT
+  that restarts the WAL syncs the new WAL header, so `synchronous=NORMAL`
+  removes the per-commit WAL sync, not every native sync on the request thread.
+  The request thread itself calls no
   Node storage-sync primitive: external files use `O_DSYNC` on POSIX and
   libuv's write-through open flag on Windows, where Node does not export the
   POSIX constant. The temp is renamed and its directory goes to the flusher via
@@ -3262,10 +3304,21 @@ kept only for cold import and an independent frozen copy kept for tests.
   `journal_cursor_invalid` and `resnapshot` as today.
 - Facts for the daemon status (measurements, never verdicts): `flush_lag_ms`,
   the last barrier time, `wal_bytes`, flusher state and counters,
-  `busy_waits`, `obligations_open`, the integrity verdict, and the importer's
-  phase/current partition/partition and byte progress. CLI daemon status consumes
-  that progress; unavailable facts stay null and a pending integrity check is
-  not reported as passed.
+  `busy_waits`, `commit`, `obligations_open`, the integrity verdict, and the
+  importer's phase/current partition/partition and byte progress. CLI daemon
+  status consumes that progress and the COMMIT summary; unavailable facts stay
+  null and a pending integrity check is not reported as passed.
+  `commit` covers the request thread's `transaction()` COMMIT calls since this
+  store opened (a new store, including an in-process replacement, starts
+  again): attempts, failures, and the last and longest duration on a monotonic
+  clock at microsecond resolution. Only the native COMMIT call is timed, so a
+  WAL header sync or checkpoint SQLite runs inside it is included, while BEGIN,
+  the body, error mapping, ROLLBACK, open-time schema setup and the flusher's
+  later barrier are not. It is one lifetime summary, not aligned with the
+  event-loop window; a long COMMIT is evidence of where the request thread
+  waited, not proof of a disk cause. Before any COMMIT the counts are 0 and
+  the durations null; a store that is not open reports null, and older
+  engines omit the field.
 
 Typed refusals of the core: `engine_runtime_unsupported`,
 `store_schema_unsupported`, `store_flush_unavailable`, `store_full` (ENOSPC

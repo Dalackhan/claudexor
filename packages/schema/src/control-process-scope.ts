@@ -5,7 +5,9 @@ export const ControlProcessScope = z
   .object({
     settled: z
       .boolean()
-      .describe("Every census source succeeded and nothing survived or stayed unreadable."),
+      .describe(
+        "Every census source succeeded and no known member survived or stayed unreadable. Unreadable discovery candidates are not members; they limit completeness separately.",
+      ),
     coverage: z.enum(["marker+capture", "marker", "tree_only"]),
     completeness: z
       .enum(["complete", "not_provable"])
@@ -32,11 +34,16 @@ export type ControlProcessScope = z.infer<typeof ControlProcessScope>;
 
 /**
  * `ControlRunSummary.processScope`: projected from the run's
- * final/process_scope.yaml; null while the run is live and for historical runs
- * without the artifact (absent = unknown, never clean).
+ * final/process_scope.yaml. An engine that has the field always sends the
+ * property: the compact outcome for a terminal run whose record is readable and
+ * valid, otherwise an explicit null — UNKNOWN, never clean (the run is live, its
+ * record was never written or could not be, or it is unreadable or invalid).
+ * `.default(null)` only fills a missing input, so the generated JSON Schema
+ * lists the property as optional; engines that predate the field omit the key,
+ * which is equally unknown.
  */
 export const ControlRunSummaryProcessScope = ControlProcessScope.nullable()
   .default(null)
   .describe(
-    "Compact process-scope outcome from final/process_scope.yaml (settled, coverage, completeness, survivors, unreadable, census); null while live or when unknown.",
+    "Compact process-scope outcome from final/process_scope.yaml (settled, coverage, completeness, survivors, unreadable, census). Always present in this engine's responses: null means unknown (the run is live, or the record is missing, unreadable or invalid), never clean. Engines that predate the field omit the key, which is equally unknown.",
   );

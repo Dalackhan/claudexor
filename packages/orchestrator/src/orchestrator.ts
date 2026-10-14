@@ -302,7 +302,7 @@ import {
 } from "./continuation.js";
 import { interactionChannelFor } from "./interaction.js";
 import { liveAttempt, type LiveAttemptContext, type LiveAttemptHook } from "./live-input.js";
-import { gateSpecsFromContract, renderTestsEvidence } from "./contract-gates.js";
+import { finalVerifyRun, gateSpecsFromContract, renderTestsEvidence } from "./contract-gates.js";
 import { buildTaskContract } from "./task-contract-builder.js";
 import { prepareReviewEvidenceDir, recordReviewEvidenceCleanup } from "./reviewEvidence.js";
 import { ArtifactStore, type RunPaths } from "@claudexor/artifact-store";
@@ -320,8 +320,6 @@ import {
 import {
   blockedDecisionOverride,
   finalVerifyBlocks,
-  finalVerifyPatch,
-  finalVerifyFiles,
   verifyAndDeliverFiles,
   verifyAndDeliver,
 } from "@claudexor/delivery";
@@ -2786,7 +2784,7 @@ export class Orchestrator {
     }
     const gates = gateSignalAborted
       ? []
-      : await runGates(gateSpecsFromContract(contract), {
+      : await runGates(gateSpecsFromContract(contract, runInput?.runScopeMarker), {
           cwd: envelope.worktree_path,
           env: wsm.envFor(envelope),
           signal,
@@ -4092,9 +4090,7 @@ export class Orchestrator {
       facts.review !== "blocked" &&
       !input.signal?.aborted
     ) {
-      finalVerify = winnerRun.files
-        ? await finalVerifyFiles(winnerRun.files, undefined, gateSpecsFromContract(contract), log)
-        : await finalVerifyPatch(execRoot, winnerRun, gateSpecsFromContract(contract), log);
+      finalVerify = await finalVerifyRun(execRoot, winnerRun, contract, log, input);
       finalVerifyFailed = finalVerifyBlocks(finalVerify);
       if (finalVerifyFailed) facts = { ...facts, checks: "failed", reason: "checks_failed" };
     }
@@ -4144,7 +4140,7 @@ export class Orchestrator {
             execRoot,
             winnerRun.files,
             {},
-            gateSpecsFromContract(contract),
+            gateSpecsFromContract(contract, input.runScopeMarker),
             (freshVerify) =>
               finalVerifyBlocks(freshVerify)
                 ? (freshVerify.reason ?? "final verify failed before directory race adoption")
@@ -4214,7 +4210,7 @@ export class Orchestrator {
               execRoot,
               winnerRun.diff,
               { mode: "apply", protectedApply: true },
-              gateSpecsFromContract(contract),
+              gateSpecsFromContract(contract, input.runScopeMarker),
               (freshVerify) => {
                 finalVerify = freshVerify;
                 return finalVerifyBlocks(freshVerify)
@@ -5356,9 +5352,7 @@ export class Orchestrator {
       facts.review !== "blocked" &&
       !input.signal?.aborted
     ) {
-      convFinalVerify = lastRun.files
-        ? await finalVerifyFiles(lastRun.files, undefined, gateSpecsFromContract(contract), log)
-        : await finalVerifyPatch(execRoot, lastRun, gateSpecsFromContract(contract), log);
+      convFinalVerify = await finalVerifyRun(execRoot, lastRun, contract, log, input);
       if (finalVerifyBlocks(convFinalVerify))
         facts = { ...facts, checks: "failed", reason: "checks_failed" };
     }

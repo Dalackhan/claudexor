@@ -464,6 +464,58 @@
                 }
               ]
             },
+            "commit": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "attempts": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "COMMIT calls entered, failed ones included."
+                    },
+                    "failures": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "COMMIT calls that threw."
+                    },
+                    "last_ms": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/definitions/ControlDaemonStatus/properties/store/properties/flusher/anyOf/0/properties/interval_ms"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Duration of the latest COMMIT call; null before the first."
+                    },
+                    "max_ms": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/definitions/ControlDaemonStatus/properties/store/properties/flusher/anyOf/0/properties/interval_ms"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Longest COMMIT call; null before the first."
+                    }
+                  },
+                  "required": [
+                    "attempts",
+                    "failures",
+                    "last_ms",
+                    "max_ms"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Request-thread transaction COMMIT calls since this engine store opened, timed around the native call only: a WAL header sync or automatic checkpoint SQLite runs inside it is included; BEGIN, the transaction body and ROLLBACK are not. A long call is a measurement, not proof of a disk cause. Null while the store is not open; older engines omit it."
+            },
             "obligations_open": {
               "anyOf": [
                 {

@@ -131,6 +131,40 @@ describe("ACP adapter over stdio", () => {
     },
   );
 
+  it.each([
+    ["held-exit", "truncated"],
+    ["disconnect", undefined],
+  ])(
+    "discloses a forced post-exit drain on the completed event: %s",
+    async (mode, drain) => {
+      const events = await collect(adapter(mode).adapter.run(spec()));
+      expect(events.find((e) => e.type === "error")).toMatchObject({
+        payload: { prompt_delivery: "possibly_delivered", retryable: false },
+      });
+      const completed = events.at(-1);
+      expect(completed?.type).toBe("completed");
+      expect(completed?.payload?.["output_drain"]).toBe(drain);
+    },
+    20_000,
+  );
+
+  // The client stops reading at the prompt result and only then ends the agent,
+  // so a pipe a descendant keeps afterwards cuts nothing that was being read.
+  it("claims no forced drain after a successful answer while a descendant still holds stdout", async () => {
+    const peer = adapter("reply-held");
+    const events = await collect(peer.adapter.run(spec()));
+    const holder = Number(readFileSync(`${peer.log}.holder`, "utf8"));
+    try {
+      expect(() => process.kill(holder, 0)).not.toThrow(); // closing our side is not its death
+      expect(validateTypedStream(events)).toMatchObject({ started: 1, completed: 1, errors: 0 });
+      expect(events.filter((e) => e.final)).toHaveLength(1);
+      expect(events.at(-1)?.payload).toEqual({ aborted: false });
+    } finally {
+      writeFileSync(`${peer.log}.stop`, "stop only this fixture\n");
+      await vi.waitFor(() => expect(() => process.kill(holder, 0)).toThrow(), { timeout: 5_000 });
+    }
+  }, 20_000);
+
   it("sends cancel and proves the child and grandchild dead before returning", async () => {
     const peer = adapter("hang");
     const request = spec();

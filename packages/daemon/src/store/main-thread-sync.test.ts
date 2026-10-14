@@ -77,7 +77,9 @@ describeStore("zero Node storage-sync calls on the request thread", () => {
     // Direction 1: the worker proved barriers and synced the directory.
     expect(facts.flusher.counters.barriers).toBeGreaterThanOrEqual(1);
     expect(facts.flusher.counters.dirSyncs).toBe(1);
-    // Direction 2: not one storage-sync primitive ran on this thread.
+    // Direction 2: not one storage-sync primitive ran on this thread, including
+    // while every COMMIT was being timed.
+    expect(facts.commit).toMatchObject({ attempts: 25, failures: 0 });
     expect(syncSpies.fsyncSync).not.toHaveBeenCalled();
     expect(syncSpies.fdatasyncSync).not.toHaveBeenCalled();
     expect(syncSpies.fsync).not.toHaveBeenCalled();

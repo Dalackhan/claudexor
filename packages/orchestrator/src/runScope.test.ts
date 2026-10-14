@@ -305,6 +305,76 @@ describe("Orchestrator run scope (item 1-2)", () => {
   );
 });
 
+describe("Orchestrator run scope: deterministic gates", () => {
+  it.runIf(process.platform !== "win32")(
+    "ends what candidate gates and the winner's final verification leave running, at the whole-run barrier",
+    async () => {
+      const repo = await initRepo();
+      const dir = mkdtempSync(join(tmpdir(), "claudexor-gate-leftover-"));
+      reapDirs.push(dir);
+      const ledger = join(dir, "leftovers.txt");
+      // An ordinary configured gate that starts a background server and passes.
+      const gate =
+        "const {spawn}=require('node:child_process');" +
+        "const c=spawn(process.execPath,['-e','setTimeout(()=>{},600000)'],{detached:true,stdio:'ignore',env:process.env});" +
+        "c.unref();require('node:fs').appendFileSync(process.argv[1],c.pid+' '+process.cwd()+'\\n');";
+      const outcomes: ScopeReapOutcome[] = [];
+      const custodian: RunScopeCustodian = {
+        open: (runId) => inProcessRunScopeCustodian.open(runId),
+        async settle(runId, marker) {
+          const outcome = await inProcessRunScopeCustodian.settle(runId, marker);
+          outcomes.push(outcome);
+          return outcome;
+        },
+      };
+      const leftovers = (): Array<{ pid: number; cwd: string }> =>
+        existsSync(ledger)
+          ? readFileSync(ledger, "utf8")
+              .trim()
+              .split("\n")
+              .map((line) => {
+                const [pid, ...cwd] = line.split(" ");
+                return { pid: Number(pid), cwd: cwd.join(" ") };
+              })
+          : [];
+      try {
+        const res = await new Orchestrator({
+          registry: new Map([["impl", recordingImplementer("impl", [])]]),
+          runScopes: custodian,
+          reviewers: [recordingReviewer("rev-a", "openai", [])],
+        }).run({
+          repoRoot: repo,
+          prompt: "do it",
+          mode: "agent",
+          harnesses: ["impl"],
+          n: 2,
+          tests: [{ program: process.execPath, args: ["-e", gate, ledger], envAllowlist: [] }],
+        });
+        expect(res.lifecycle).toBe("succeeded");
+        expect(res.facts.checks).toBe("passed");
+        const left = leftovers();
+        // Two candidate envelopes plus the winner's fresh verify tree.
+        expect(left.length).toBeGreaterThanOrEqual(3);
+        expect(left.some((entry) => entry.cwd.includes("claudexor-verify-"))).toBe(true);
+        expect(outcomes).toHaveLength(1);
+        for (const { pid } of left) {
+          expect(alive(pid)).toBe(false);
+          expect(outcomes[0]!.ended.map((m) => m.pid)).toContain(pid);
+        }
+      } finally {
+        for (const { pid } of leftovers()) {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {
+            /* already gone */
+          }
+        }
+      }
+    },
+    60_000,
+  );
+});
+
 describe("Orchestrator run scope: cancel, Windows coverage, concurrency (item 8)", () => {
   it("settles the scope exactly once when the run is cancelled mid-flight", async () => {
     const repo = await initRepo();

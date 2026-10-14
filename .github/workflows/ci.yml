@@ -350,6 +350,43 @@ jobs:
           packages/daemon/src/command-retention.test.ts
           packages/control-api/src/model-routes.test.ts
 
+      - name: Reproduce Codex cleanup control loss on the known broken control (Windows, no credentials)
+        if: github.event_name == 'pull_request' && github.head_ref == 'fix/windows-codex-verdict-1755'
+        shell: pwsh
+        env:
+          CLEANUP_BASE_SHA: 211a8f52acbde19803e9104960639c903c54f752
+        run: |
+          $ErrorActionPreference = "Stop"
+          $source = (Get-Location).Path
+          $baseline = Join-Path $env:RUNNER_TEMP "codex-cleanup-base"
+          git fetch --no-tags origin $env:CLEANUP_BASE_SHA
+          if ($LASTEXITCODE -ne 0) { throw "base fetch failed" }
+          git worktree add --detach $baseline $env:CLEANUP_BASE_SHA
+          if ($LASTEXITCODE -ne 0) { throw "base checkout failed" }
+          foreach ($file in @("packages/harness-codex/src/app-server-cleanup-native.test.ts", "packages/harness-codex/fixtures/app-server/cleanup-peer.mjs")) {
+            Copy-Item -LiteralPath (Join-Path $source $file) -Destination (Join-Path $baseline $file)
+          }
+          Push-Location $baseline
+          try {
+            pnpm install --frozen-lockfile --offline
+            if ($LASTEXITCODE -ne 0) { throw "base dependency setup failed" }
+            pnpm build
+            if ($LASTEXITCODE -ne 0) { throw "base build failed" }
+            $env:CX_CLEANUP_BASELINE = "1"
+            Write-Output "Native baseline subject: $env:CLEANUP_BASE_SHA; expected control loss, not repaired behavior"
+            pnpm vitest run packages/harness-codex/src/app-server-cleanup-native.test.ts
+            if ($LASTEXITCODE -ne 0) { throw "expected baseline failure signature not reproduced" }
+          } finally {
+            Remove-Item Env:CX_CLEANUP_BASELINE -ErrorAction SilentlyContinue
+            Pop-Location
+          }
+
+      - name: Codex completed-answer and cleanup boundary (credential-free native processes)
+        run: >
+          pnpm vitest run packages/harness-codex/src/app-server-cleanup.test.ts
+          packages/harness-codex/src/app-server-cleanup-native.test.ts
+          packages/orchestrator/src/codex-cleanup-review.test.ts
+
       - name: Exercise SQLite writers, flush barriers and maintenance together
         shell: pwsh
         env:

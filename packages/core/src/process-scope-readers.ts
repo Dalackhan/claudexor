@@ -25,9 +25,16 @@ export interface ScopeCensusReader {
    * caller knows it, is the scope's age: a process older than that was
    * created before the marker was minted and cannot carry it, so a reader may
    * skip its environment (darwin does; a failed age listing falls back to the
-   * full read). Omitted = the full census.
+   * full read). Omitted = the full census. `expired`, when the caller has a
+   * deadline, turns true once it passed: no further read starts for that
+   * caller (a scan it shares with a caller still in time goes on), and a scan
+   * left without such a caller never substitutes a partial or fabricated empty `ok`.
    */
-  census(markers: readonly string[], maxAgeSeconds?: number): Promise<ScopeCensusResult>;
+  census(
+    markers: readonly string[],
+    maxAgeSeconds?: number,
+    expired?: () => boolean,
+  ): Promise<ScopeCensusResult>;
   /**
    * Affirmative membership of ONE pid immediately before it is signalled:
    * true = the exact entry is present now, false = absent (vanished or
@@ -111,45 +118,69 @@ export function environCarriesMarker(environ: string, marker: string): boolean {
   return false;
 }
 
+/** The answer of a scan whose every caller's deadline passed first: unknown, never empty. */
+const EXPIRED: ScopeCensusResult = {
+  status: "failed",
+  reason: "settlement deadline expired before the census was read",
+};
+
+interface CensusRequest {
+  markers: readonly string[];
+  maxAgeSeconds: number | undefined;
+  expired: (() => boolean) | undefined;
+  settle: (r: ScopeCensusResult) => void;
+}
+
 /**
  * Serialize scans so concurrent reaps share ONE process-table read: a request
  * arriving while a scan runs joins the NEXT scan (which covers the union of
  * the markers requested meanwhile, under the LARGEST age limit — a superset —
  * or the full census when any of them has no limit), never a third concurrent
- * read.
+ * read. A request whose deadline passed while it waited starts no scan; a scan
+ * asks `live` before each further read whether any of its callers is in time.
  */
 class CoalescingCensus {
-  private running: Promise<void> | null = null;
-  private waiting: Array<{
-    markers: readonly string[];
-    maxAgeSeconds: number | undefined;
-    settle: (r: ScopeCensusResult) => void;
-  }> = [];
+  private draining = false;
+  private waiting: CensusRequest[] = [];
 
   constructor(
     private readonly scan: (
       markers: readonly string[],
       maxAgeSeconds: number | undefined,
+      live: () => boolean,
     ) => Promise<ScopeCensusResult>,
   ) {}
 
-  census(markers: readonly string[], maxAgeSeconds?: number): Promise<ScopeCensusResult> {
+  census(
+    markers: readonly string[],
+    maxAgeSeconds?: number,
+    expired?: () => boolean,
+  ): Promise<ScopeCensusResult> {
     return new Promise<ScopeCensusResult>((settle) => {
-      this.waiting.push({ markers, maxAgeSeconds, settle });
-      if (!this.running) this.running = this.drain();
+      this.waiting.push({ markers, maxAgeSeconds, expired, settle });
+      if (!this.draining) void this.drain();
     });
   }
 
   private async drain(): Promise<void> {
+    // Raised and lowered by the drain itself: one that only met expired
+    // requests ends without awaiting, and nothing may mark it running after.
+    this.draining = true;
     while (this.waiting.length > 0) {
-      const batch = this.waiting.splice(0);
+      const batch: CensusRequest[] = [];
+      for (const item of this.waiting.splice(0)) {
+        if (item.expired?.()) item.settle(EXPIRED);
+        else batch.push(item);
+      }
+      if (batch.length === 0) continue;
+      const live = (): boolean => batch.some((item) => !item.expired?.());
       const union = [...new Set(batch.flatMap((item) => item.markers))];
       const limit = batch.some((item) => item.maxAgeSeconds === undefined)
         ? undefined
         : Math.max(...batch.map((item) => item.maxAgeSeconds!));
       let result: ScopeCensusResult;
       try {
-        result = await this.scan(union, limit);
+        result = await this.scan(union, limit, live);
       } catch (error) {
         result = {
           status: "failed",
@@ -166,7 +197,7 @@ class CoalescingCensus {
         item.settle({ status: "ok", members, unreadable: result.unreadable });
       }
     }
-    this.running = null;
+    this.draining = false;
   }
 }
 
@@ -287,7 +318,7 @@ export function createDarwinScopeCensusReader(deps: { ps?: PsRunner } = {}): Sco
     });
     return failure ?? pids;
   };
-  const coalescing = new CoalescingCensus(async (markers, maxAgeSeconds) => {
+  const coalescing = new CoalescingCensus(async (markers, maxAgeSeconds, live) => {
     const members = new Map<string, number[]>(markers.map((marker) => [marker, []]));
     let args = ["-E", "-ww", "-A", "-o", "pid=,command="];
     let listed = false;
@@ -299,6 +330,8 @@ export function createDarwinScopeCensusReader(deps: { ps?: PsRunner } = {}): Sco
         listed = true;
       }
     }
+    // The listing (or its failure) came after every caller's deadline.
+    if (!live()) return EXPIRED;
     let sawRow = false;
     const failure = await ps(args, (line) => {
       const pid = parseDarwinCensusLine(line, markers);
@@ -315,7 +348,7 @@ export function createDarwinScopeCensusReader(deps: { ps?: PsRunner } = {}): Sco
     return failure ?? { status: "ok", members, unreadable: 0 };
   });
   return {
-    census: (markers, maxAgeSeconds) => coalescing.census(markers, maxAgeSeconds),
+    census: (markers, maxAgeSeconds, expired) => coalescing.census(markers, maxAgeSeconds, expired),
     async confirm(pid, marker) {
       let carries = false;
       let sawRow = false;
@@ -382,7 +415,7 @@ export function createLinuxScopeCensusReader(
       return null;
     }
   };
-  const coalescing = new CoalescingCensus(async (markers) => {
+  const coalescing = new CoalescingCensus(async (markers, _maxAgeSeconds, live) => {
     let names: string[];
     try {
       names = await listProc();
@@ -392,10 +425,19 @@ export function createLinuxScopeCensusReader(
     const pids = names.filter((name) => /^[1-9][0-9]*$/.test(name)).map(Number);
     const members = new Map<string, number[]>(markers.map((marker) => [marker, []]));
     let unreadable = 0;
+    // Past every caller's deadline no further /proc read starts, and what was
+    // read is not passed off as the whole table.
+    let cut = false;
+    const inTime = (): boolean => {
+      if (!cut && !live()) cut = true;
+      return !cut;
+    };
     await mapBounded(pids, LINUX_CONCURRENCY, async (pid) => {
+      if (!inTime()) return;
       const environ = await readEnviron(pid);
       if (environ === "vanished") return;
       if (environ === null) {
+        if (!inTime()) return;
         // Only a process of OUR uid could carry our marker through ordinary
         // spawn (another uid cannot inherit our environment; a setuid binary
         // is part of the disclosed residual), so only a same-uid unreadable
@@ -408,10 +450,10 @@ export function createLinuxScopeCensusReader(
         if (environCarriesMarker(environ, marker)) members.get(marker)!.push(pid);
       }
     });
-    return { status: "ok", members, unreadable };
+    return cut ? EXPIRED : { status: "ok", members, unreadable };
   });
   return {
-    census: (markers) => coalescing.census(markers),
+    census: (markers, _maxAgeSeconds, expired) => coalescing.census(markers, undefined, expired),
     async confirm(pid, marker) {
       const environ = await readEnviron(pid);
       if (environ === "vanished") return false;

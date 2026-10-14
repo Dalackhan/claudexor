@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mintRunScopeMarker } from "./process-scope.js";
-import { reapScopeMembers } from "./process-scope-census.js";
+import { ScopeReaper, reapScopeMembers } from "./process-scope-census.js";
 import {
   createDarwinScopeCensusReader,
+  createLinuxScopeCensusReader,
   parseEtime,
   psSelectionVanished,
   runPs,
@@ -228,6 +229,186 @@ describe("darwin census with a known scope age", () => {
       unreadable: 0,
     });
     expect(fake.calls.at(-1)).toEqual(["-E", "-ww", "-A", "-o", "pid=,command="]);
+  });
+});
+
+/**
+ * `ps` whose age listings wait for the test (one hold per listing, oldest
+ * answered first); environment reads find no row.
+ */
+function heldPs(listing: string[] | PsRunFailure) {
+  const calls: string[] = [];
+  const held: Array<() => void> = [];
+  let open = false;
+  const ps: PsRunner = async (args, onLine) => {
+    if (args.includes("pid=,etime=")) {
+      calls.push("ages");
+      if (!open) await new Promise<void>((resolve) => held.push(resolve));
+      if (!Array.isArray(listing)) return listing;
+      for (const row of listing) onLine(row);
+      return null;
+    }
+    calls.push(args.includes("-p") ? "environments" : "every environment");
+    return null;
+  };
+  return {
+    ps,
+    calls,
+    held: () => held.length,
+    release: () => held.shift()!(),
+    /** Answer every held listing, and every later one at once. */
+    open: () => {
+      open = true;
+      for (const resume of held.splice(0)) resume();
+    },
+  };
+}
+
+/** One reap through `census` whose settlement deadline passes only when the test fires it. */
+function reapUntilFired(marker: string, census: ScopeCensusReader) {
+  let fire!: () => void;
+  const outcome = new ScopeReaper().reap({
+    marker,
+    census,
+    scopeStartAt: new Date(Date.now() - 1_000).toISOString(),
+    deadlineTimer: () => new Promise<void>((resolve) => (fire = resolve)),
+    deadlineMs: 60_000,
+    graceMs: 10,
+    probeIntervalMs: 5,
+    platform: "darwin",
+    signal: () => {
+      throw new Error("this scope has no member to signal");
+    },
+  });
+  return { outcome, fire: () => fire() };
+}
+
+describe("a settlement deadline that passes during a census scan", () => {
+  it.each<[string, string[] | PsRunFailure, string]>([
+    ["rows", ["  4242 00:01"], "environments"],
+    ["a failure", { status: "failed", reason: "ps exceeded 10000ms" }, "every environment"],
+  ])(
+    "an age listing answering with %s after the deadline starts no environment read; in time it does (both directions)",
+    async (_, listing, read) => {
+      const fake = heldPs(listing);
+      const reader = createDarwinScopeCensusReader({ ps: fake.ps });
+      const expired = reapUntilFired(M, reader);
+      expect(fake.calls).toEqual(["ages"]); // in flight when the deadline passes
+      expired.fire();
+      expect(await expired.outcome).toMatchObject({ incomplete: true, settled: false });
+      fake.open();
+      // A live caller queued behind that scan is served only once it finished.
+      expect((await reader.census([M], 1)).status).toBe("ok");
+      expect(fake.calls).toEqual(["ages", "ages", read]);
+      // Asked directly with an expiry, the scan's answer is unknown, never `ok`.
+      const direct = heldPs(listing);
+      let gone = false;
+      const answer = createDarwinScopeCensusReader({ ps: direct.ps }).census([M], 1, () => gone);
+      gone = true;
+      direct.open();
+      expect(await answer).toMatchObject({ status: "failed" });
+      expect(direct.calls).toEqual(["ages"]);
+      // Nothing expired: the same listing leads to the environment read.
+      const timely = heldPs(listing);
+      const live = reapUntilFired(M, createDarwinScopeCensusReader({ ps: timely.ps }));
+      timely.open();
+      expect(await live.outcome).toMatchObject({ incomplete: false, settled: true });
+      expect(timely.calls).toEqual(["ages", read]);
+    },
+  );
+
+  it("a request already past its deadline on arrival answers unknown and leaves the scanner free: the next live request scans at once (both directions)", async () => {
+    // Through the reaper: its clock crosses the deadline between the lazy gate
+    // and the scanner, so the request arrives expired.
+    let t = 0;
+    const fake = heldPs(["  4242 00:01"]);
+    fake.open();
+    const reader = createDarwinScopeCensusReader({ ps: fake.ps });
+    const crossed = await new ScopeReaper().reap({
+      marker: M,
+      census: reader,
+      scopeStartAt: new Date(Date.now() - 1_000).toISOString(),
+      now: () => t++,
+      deadlineMs: 2,
+      deadlineTimer: () => new Promise<void>(() => {}),
+      platform: "darwin",
+      signal: () => {
+        throw new Error("this scope has no member to signal");
+      },
+    });
+    // A deadline cut stays `incomplete`, never a failed census.
+    expect(crossed).toMatchObject({ census: "ok", censusFailure: null, incomplete: true });
+    expect(fake.calls).toEqual([]);
+    const next = reader.census([M], 1);
+    expect(fake.calls).toEqual(["ages"]); // started at once, not parked behind the expired one
+    expect(await next).toMatchObject({ status: "ok" });
+    // Asked directly, on both readers.
+    const direct = heldPs(["  4242 00:01"]);
+    direct.open();
+    const darwin = createDarwinScopeCensusReader({ ps: direct.ps });
+    expect(await darwin.census([M], 1, () => true)).toMatchObject({ status: "failed" });
+    const later = darwin.census([M], 1);
+    expect(direct.calls).toEqual(["ages"]);
+    expect(await later).toMatchObject({ status: "ok" });
+    let listings = 0;
+    const linux = createLinuxScopeCensusReader({
+      listProc: async () => {
+        listings += 1;
+        return ["100"];
+      },
+      readTextFile: async () => "PATH=/x\0",
+      statUid: async () => 501,
+      selfUid: 501,
+    });
+    expect(await linux.census([M], undefined, () => true)).toMatchObject({ status: "failed" });
+    expect(listings).toBe(0);
+    const after = linux.census([M]);
+    expect(listings).toBe(1);
+    expect(await after).toMatchObject({ status: "ok" });
+  });
+
+  it("a caller whose deadline passed while it queued starts no scan; a live caller sharing the batch keeps it, also when the other expires mid-scan (both directions)", async () => {
+    const other = mintRunScopeMarker();
+    const third = mintRunScopeMarker();
+    const fake = heldPs(["  4242 00:01"]);
+    const reader = createDarwinScopeCensusReader({ ps: fake.ps });
+    const first = reapUntilFired(M, reader); // its scan is in flight
+    const queued = reapUntilFired(other, reader); // waits for the next scan
+    queued.fire();
+    expect(await queued.outcome).toMatchObject({ incomplete: true, settled: false });
+    fake.release();
+    expect(await first.outcome).toMatchObject({ incomplete: false, settled: true });
+    fake.open();
+    expect((await reader.census([M], 1)).status).toBe("ok"); // served after anything still queued
+    expect(fake.calls).toEqual(["ages", "environments", "ages", "environments"]);
+
+    // Expired before the shared scan starts: the live caller's scan still runs.
+    const before = heldPs(["  4242 00:01"]);
+    const shared = createDarwinScopeCensusReader({ ps: before.ps });
+    const leading = reapUntilFired(M, shared);
+    const gone = reapUntilFired(other, shared);
+    const live = reapUntilFired(third, shared);
+    gone.fire();
+    await gone.outcome;
+    before.open();
+    expect(await leading.outcome).toMatchObject({ settled: true });
+    expect(await live.outcome).toMatchObject({ incomplete: false, settled: true });
+    expect(before.calls).toEqual(["ages", "environments", "ages", "environments"]);
+
+    // Expired while the shared scan lists ages: the environment read still starts.
+    const during = heldPs(["  4242 00:01"]);
+    const mixed = createDarwinScopeCensusReader({ ps: during.ps });
+    const head = reapUntilFired(M, mixed);
+    const leaving = reapUntilFired(other, mixed);
+    const staying = reapUntilFired(third, mixed);
+    during.release();
+    await head.outcome;
+    await vi.waitFor(() => expect(during.held()).toBe(1)); // the shared scan's listing
+    leaving.fire();
+    expect(await leaving.outcome).toMatchObject({ incomplete: true });
+    during.open();
+    expect(await staying.outcome).toMatchObject({ incomplete: false, settled: true });
+    expect(during.calls).toEqual(["ages", "environments", "ages", "environments"]);
   });
 });
 

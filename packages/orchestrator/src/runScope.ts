@@ -89,6 +89,16 @@ export function scopedSpecEnv(
   };
 }
 
+/**
+ * The env patch for a deterministic command the run itself launches (its
+ * candidate gates, final verification and adoption): the scope marker alone, so
+ * whatever the command leaves running is ended at the whole-run barrier. The
+ * gate keeps its own HOME and allowlist; nothing is cleaned up per command.
+ */
+export function runScopeGateEnv(marker: string | undefined): Record<string, string> | undefined {
+  return marker ? scopeMarkerEnv(marker) : undefined;
+}
+
 function toFacts(marker: string, outcome: ScopeReapOutcome): RunProcessScopeOutcomeType {
   return RunProcessScopeOutcome.parse({
     marker,

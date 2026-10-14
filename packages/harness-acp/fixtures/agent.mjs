@@ -1,6 +1,6 @@
 // Offline protocol peer. None of these scenarios contacts Copilot or spends credits.
 import { createInterface } from "node:readline";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import * as acp from "@agentclientprotocol/sdk";
 import { AcpServer } from "@claudexor/acp-server";
@@ -110,6 +110,33 @@ if (mode === "server") {
       );
     } else if (message.method === "session/prompt") {
       if (mode === "disconnect") return process.exit(7);
+      if (mode === "held-exit") {
+        // Exit mid-prompt while a short-lived descendant keeps our stdout open.
+        spawn(process.execPath, ["-e", "setTimeout(()=>{},8000)"], {
+          stdio: ["ignore", "inherit", "ignore"],
+        });
+        return setTimeout(() => process.exit(7), 50);
+      }
+      if (mode === "reply-held") {
+        // Answer normally, but first hand our stdout to a silent descendant that
+        // left our process tree (its parent exits at once: reparented, own
+        // session), so closing us cannot reach it. Only its stop file (or a hard
+        // lifetime) ends it; `<log>.holder` names its pid.
+        const holder = `const fs=require("node:fs");const [ready,stop]=process.argv.slice(1);fs.writeFileSync(ready+".tmp",String(process.pid));fs.renameSync(ready+".tmp",ready);const end=Date.now()+20000;setInterval(()=>{if(fs.existsSync(stop)||Date.now()>end)process.exit(0)},20);`;
+        const middle = spawn(
+          process.execPath,
+          [
+            "-e",
+            `require("node:child_process").spawn(process.execPath,["-e",${JSON.stringify(holder)},...process.argv.slice(1)],{detached:true,stdio:["ignore","inherit","ignore"]}).unref()`,
+            `${log}.holder`,
+            `${log}.stop`,
+          ],
+          { stdio: ["ignore", "inherit", "ignore"] },
+        );
+        await new Promise((resolve) => middle.once("exit", resolve));
+        while (!existsSync(`${log}.holder`))
+          await new Promise((resolve) => setTimeout(resolve, 10));
+      }
       if (mode === "oversize") return process.stdout.write("x".repeat(8 * 1024 * 1024 + 1));
       if (mode === "malformed") return process.stdout.write("{broken}\n");
       if (mode === "hang") {

@@ -3,12 +3,30 @@ import { describe, expect, it } from "vitest";
 import { spawnProcess } from "./proc.js";
 import {
   liveChildProcesses,
+  onChildProcessRegistered,
   registerChildProcess,
   unregisterChildProcess,
 } from "./process-registry.js";
 import { mintRunScopeMarker } from "./process-scope.js";
 
 describe("process registry scope marker", () => {
+  it("never registers or announces a child whose leader identity was not measured", () => {
+    // Today's default no-known-root fact, portably: registration needs a known
+    // leader identity. On win32 the default identity service has none (see
+    // process-identity.test.ts), so no Windows root is ever seeded with one.
+    // This is a portable pin, not native Windows evidence.
+    const announced: number[] = [];
+    const off = onChildProcessRegistered((child) => announced.push(child.pid));
+    const gone = 2 ** 22 + 12_345; // above every default pid_max: never a live process
+    try {
+      registerChildProcess(gone, "harness", mintRunScopeMarker());
+      expect(liveChildProcesses().some((c) => c.pid === gone)).toBe(false);
+      expect(announced).toEqual([]);
+    } finally {
+      off();
+    }
+  });
+
   it.runIf(process.platform !== "win32")(
     "records the marker NAME a group-leader child was registered under, and nothing without one",
     async () => {

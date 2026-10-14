@@ -436,6 +436,73 @@ describe("DaemonRunScopeIndex", () => {
     expect(fast.calls[0]?.deadlineMs).toBeLessThanOrEqual(5_000);
   }, 15_000);
 
+  it("a seed refinement still pending when settlement stops waiting for it starts no read and records nothing afterwards; the spawn-time group and the kept entry stand (both directions)", async () => {
+    const run = async (late: boolean) => {
+      const root = tempRoot();
+      const path = join(root, RUN_SCOPE_INDEX_FILE);
+      const reads: string[] = [];
+      let answer!: () => void;
+      const tableAnswer = new Promise<void>((resolve) => (answer = resolve));
+      const calls: ScopeReapOptions[] = [];
+      const index = new DaemonRunScopeIndex({
+        path,
+        owner: async () => known(process.pid, "self"),
+        reap: async (opts) => {
+          calls.push(opts);
+          // What the real reap reports when the seed wait left it no budget.
+          return late
+            ? settledOutcome({
+                settled: false,
+                incomplete: true,
+                completeness: "not_provable",
+                completenessReason: "settlement deadline expired before every source was read",
+              })
+            : settledOutcome();
+        },
+        identity: {
+          async read(pid: number): Promise<ProcessIdentity> {
+            reads.push(`identity ${pid}`);
+            return known(100, "100");
+          },
+        },
+        table: {
+          snapshot: async () => [],
+          async row(pid) {
+            reads.push(`row ${pid}`);
+            await tableAnswer;
+            return { pid: 100, ppid: process.pid, pgid: 100, birth: T0 };
+          },
+        },
+        roots: () => [],
+        deadlineMs: late ? 100 : 5_000,
+      });
+      const { marker } = await index.open("run-seed");
+      const seeding = index.seedRoot(fakeRoot(100, marker));
+      await vi.waitFor(() => expect(reads).toEqual(["identity 100", "row 100"]));
+      if (!late) answer(); // the table answers while the settlement still waits
+      await index.settle("run-seed", marker);
+      const recorded = readFileSync(path, "utf8");
+      if (late) answer(); // ...or only after the settlement stopped waiting
+      await seeding;
+      return { reads, calls, recorded, after: readFileSync(path, "utf8"), entries: index.list() };
+    };
+    const late = await run(true);
+    // The group recorded at spawn was handed to the reap, and the entry keeps its obligation.
+    expect(late.calls[0]?.rootGroups).toEqual([
+      { pgid: 100, leaderPid: 100, leaderBirth: null, leaderIdentity: known(100, "100") },
+    ]);
+    expect(late.entries).toMatchObject([
+      { state: "unresolved", root_groups: [{ pgid: 100, leader_birth: null }], captured: [] },
+    ]);
+    // The late answer started no second identity read and refined nothing.
+    expect(late.reads).toEqual(["identity 100", "row 100"]);
+    expect(late.after).toBe(late.recorded);
+    // In time, the same answer refines the group before the reap.
+    const timely = await run(false);
+    expect(timely.reads).toEqual(["identity 100", "row 100", "identity 100"]);
+    expect(timely.calls[0]?.rootGroups?.[0]?.leaderBirth).toBe(T0);
+  }, 15_000);
+
   it("settlement never waits for ANOTHER run's seed: a slow refinement elsewhere leaves this run its whole budget, which starts at settlement entry (round 4, Astra R3)", async () => {
     const root = mkdtempSync(join(tmpdir(), "cx-scope-"));
     const never = new Promise<never>(() => {});
@@ -493,6 +560,36 @@ describe("DaemonRunScopeIndex", () => {
     });
     const outcome = await retiring.settle("run-win", marker);
     expect(outcome.settled).toBe(false);
+    expect(readIndex(root).entries).toEqual([]);
+  });
+
+  it("start: retiring a census-less (Windows) entry says so: unresolved, retired without proof", async () => {
+    const root = tempRoot();
+    const path = join(root, RUN_SCOPE_INDEX_FILE);
+    const dead = new DaemonRunScopeIndex({
+      path,
+      owner: async () => known(4_000_000, "7"),
+      reap: fakeReaper().reap,
+      table: fakeTable([]),
+      roots: () => [],
+    });
+    const { marker } = await dead.open("run-win-crash");
+    const unsupported = settledOutcome({
+      coverage: "tree_only",
+      census: "unsupported",
+      settled: false,
+    });
+    const next = new DaemonRunScopeIndex({
+      path,
+      owner: async () => known(process.pid, "8"),
+      identity: fakeIdentity({}),
+      reap: fakeReaper({ [marker]: unsupported }).reap,
+      table: fakeTable([]),
+      roots: () => [],
+    });
+    const [action] = await next.settleDeadOwners();
+    expect(action).toMatch(/UNRESOLVED \(tree_only, census unsupported/);
+    expect(action).toMatch(/retired without proof/);
     expect(readIndex(root).entries).toEqual([]);
   });
 
@@ -714,15 +811,31 @@ function alive(pid: number): boolean {
 
 /** Spawn a marked /bin/sh root through the engine's own spawn path; it starts a
  * background /bin/sleep (platform binary: env invisible on darwin) in ITS OWN
- * group and exits within ~100 ms — before any 2 s capture tick could run. */
-async function shortRootLeavingSleep(marker: string): Promise<{ sleepPid: number }> {
+ * group and exits within ~100 ms — before any 2 s capture tick could run. With
+ * `holdUntil` it instead waits on its stdin, closed once that resolves (which is
+ * handed the sleep's pid first, so the caller's teardown has it either way). */
+async function shortRootLeavingSleep(
+  marker: string,
+  holdUntil?: (sleepPid: number) => Promise<unknown>,
+): Promise<{ sleepPid: number }> {
   let sleepPid = 0;
+  let release = (): void => {};
+  const tail = holdUntil ? "read line" : "/bin/sleep 0.1";
   for await (const ev of spawnProcess(
     "/bin/sh",
-    ["-c", "/bin/sleep 600 & echo sleep:$!; /bin/sleep 0.1"],
-    { env: { [marker]: "1" } },
+    ["-c", `/bin/sleep 600 & echo sleep:$!; ${tail}`],
+    {
+      env: { [marker]: "1" },
+      keepStdinOpen: Boolean(holdUntil),
+      onSpawn: (io) => (release = () => io.end()),
+    },
   )) {
-    if (ev.type === "stdout" && ev.line.startsWith("sleep:")) sleepPid = Number(ev.line.slice(6));
+    if (ev.type !== "stdout" || !ev.line.startsWith("sleep:")) continue;
+    sleepPid = Number(ev.line.slice(6));
+    if (holdUntil) {
+      await holdUntil(sleepPid);
+      release();
+    }
   }
   return { sleepPid };
 }
@@ -793,9 +906,16 @@ describe.runIf(process.platform !== "win32")(
       let sleepPid = 0;
       try {
         const { marker } = await dying.open("run-crashed");
-        ({ sleepPid } = await shortRootLeavingSleep(marker));
-        // Let the spawn-time seed land on disk, then "crash" (no settle).
-        await new Promise((resolve) => setTimeout(resolve, 300));
+        // The root lives until its spawn-time seed is on disk WITH the leader's
+        // birth (only a live leader's birth can be read), then exits; the
+        // daemon then "crashes" (no tick, no settle).
+        ({ sleepPid } = await shortRootLeavingSleep(marker, (pid) => {
+          sleepPid = pid; // the teardown below has it even if this wait fails
+          return vi.waitFor(
+            () => expect(readIndex(root).entries[0]?.["scope_start"]).toBeTruthy(),
+            { timeout: 10_000 },
+          );
+        }));
         dying.dispose();
         const persisted = readIndex(root).entries[0]!;
         expect((persisted["root_groups"] as unknown[]).length).toBe(1);

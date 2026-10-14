@@ -949,6 +949,40 @@ describe("gates", () => {
     expect(failed.output_truncated).toBe(false);
   });
 
+  it("runs a gate with its fixed env entries on top of the caller's env", async () => {
+    const cwd = reapMk(join(tmpdir(), "claudexor-gate-env-"));
+    const check =
+      "process.exit(process.env.CX_GATE_FIXED === '1' && process.env.CX_GATE_CALLER === 'kept' ? 0 : 4)";
+    const gate = await runGate(
+      { id: "env", program: process.execPath, args: ["-e", check], env: { CX_GATE_FIXED: "1" } },
+      { cwd, env: { CX_GATE_CALLER: "kept" } },
+    );
+    expect(gate).toMatchObject({ status: "passed", exit_code: 0 });
+  });
+
+  it("marks stored output truncated when a leftover kept the gate's pipe open past the drain", async () => {
+    // The verdict is still the exit code; only the stored evidence is qualified.
+    const cwd = reapMk(join(tmpdir(), "claudexor-gate-drain-"));
+    const held = (code: number) =>
+      [
+        "const {spawn}=require('node:child_process')",
+        "process.stdout.write('partial\\n')",
+        "spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:['ignore',1,'ignore']})",
+        `setTimeout(()=>process.exit(${code}),50)`,
+      ].join(";");
+    const failed = await runGate(
+      { id: "held", program: process.execPath, args: ["-e", held(3)] },
+      { cwd },
+    );
+    expect(failed).toMatchObject({ status: "failed", exit_code: 3, stdout_tail: "partial" });
+    expect(failed.output_truncated).toBe(true);
+    const passed = await runGate(
+      { id: "held-ok", program: process.execPath, args: ["-e", held(0)] },
+      { cwd },
+    );
+    expect(passed).toMatchObject({ status: "passed", stdout_tail: null, output_truncated: false });
+  }, 20_000);
+
   it("requires an exact external grant for versioned project commands", async () => {
     const cwd = reapMk(join(tmpdir(), "claudexor-gate-trust-"));
     writeFileSync(join(cwd, "gate.js"), "require('node:fs').writeFileSync('ran.txt', 'yes')\n");

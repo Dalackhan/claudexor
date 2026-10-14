@@ -40,6 +40,7 @@
  * disclosed, never turned into a failure.
  */
 import {
+  compareProcessBirth,
   compareProcessIdentity,
   defaultAsyncProcessIdentityReader,
   type AsyncProcessIdentityReader,
@@ -350,11 +351,12 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
     expired = true;
   });
   void expiry.catch(() => {});
-  const bounded = <T>(work: Promise<T>): Promise<T | typeof DEADLINE> =>
-    expired
-      ? Promise.resolve<T | typeof DEADLINE>(DEADLINE)
-      : Promise.race<T | typeof DEADLINE>([work, expiry.then(() => DEADLINE)]);
   const pastDeadline = (): boolean => expired || now() - start >= deadlineMs;
+  // Lazy: no read (on macOS a helper or `ps` process) STARTS past the deadline.
+  const bounded = <T>(work: () => Promise<T>): Promise<T | typeof DEADLINE> =>
+    pastDeadline()
+      ? Promise.resolve<T | typeof DEADLINE>(DEADLINE)
+      : Promise.race<T | typeof DEADLINE>([work(), expiry.then(() => DEADLINE)]);
   let censusUnreadable = 0;
 
   const live = new Map<number, LiveMember>();
@@ -383,26 +385,25 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
     // accepted only for the ONE process that was alive under the same birth
     // before and after `confirm`, so a pid that was freed and reused between
     // the census and the signal can never enrol a stranger (item 7).
-    if (pastDeadline()) return;
-    const before = await bounded(identity.read(pid));
+    const before = await bounded(() => identity.read(pid));
     if (before === DEADLINE || before.status === "missing") return;
     if (before.status === "unknown") {
       unreadable.set(pid, `identity_${before.reason}`);
       return;
     }
-    const member = await bounded(census.confirm(pid, opts.marker));
+    const member = await bounded(() => census.confirm(pid, opts.marker));
     if (member === DEADLINE || member === false) return; // vanished (or reused): not ours any more
     if (member === null) {
       unreadable.set(pid, "membership_unreadable");
       return;
     }
-    const observed = await bounded(identity.read(pid));
+    const observed = await bounded(() => identity.read(pid));
     if (observed === DEADLINE || observed.status === "missing") return; // gone between confirm and read
     if (observed.status === "unknown") {
       unreadable.set(pid, `identity_${observed.reason}`);
       return;
     }
-    if (compareProcessIdentity(before, observed) !== "same") return; // reused across the bracket
+    if (compareProcessBirth(before, observed) !== "same") return; // reused across the bracket
     const entry: LiveMember = {
       pid,
       birth: { kind: "identity", identity: observed },
@@ -421,7 +422,7 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
   ): Promise<void> => {
     if (!table || excluded.has(pid) || seen.has(pid) || pastDeadline()) return;
     seen.add(pid);
-    const row = await bounded(table.row(pid));
+    const row = await bounded(() => table.row(pid));
     if (row === DEADLINE || row === null) return; // gone (or out of time)
     if (row === "unreadable") {
       unreadable.set(pid, "birth_unreadable");
@@ -439,9 +440,9 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
   };
 
   const scanMarker = async (signal: NodeJS.Signals): Promise<string | null> => {
-    if (pastDeadline()) return null;
-    const result = await bounded(census.census([opts.marker], scopeAgeSeconds(opts.scopeStartAt)));
-    if (result === DEADLINE) return null; // disclosed as incomplete, not as a failed census
+    const ageSeconds = scopeAgeSeconds(opts.scopeStartAt);
+    const result = await bounded(() => census.census([opts.marker], ageSeconds, pastDeadline));
+    if (result === DEADLINE || pastDeadline()) return null; // incomplete, never a failed census
     if (result.status !== "ok") return result.reason;
     censusUnreadable = Math.max(censusUnreadable, result.unreadable);
     const pids = result.members.get(opts.marker) ?? [];
@@ -451,7 +452,7 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
 
   const scanCaptured = async (signal: NodeJS.Signals): Promise<string | null> => {
     if ((!captured && !opts.rootGroups) || !table || pastDeadline()) return null;
-    const rows = await bounded(table.snapshot());
+    const rows = await bounded(() => table.snapshot());
     if (rows === DEADLINE) return null;
     if (rows === null) return "process table unreadable";
     // A root group known only by its leader's identity (no lstart yet): if a
@@ -460,7 +461,7 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
     for (const root of opts.rootGroups ?? []) {
       if (root.leaderBirth !== null || !root.leaderIdentity) continue;
       if (!rows.some((row) => row.pid === root.pgid)) continue;
-      const observed = await bounded(identity.read(root.pgid));
+      const observed = await bounded(() => identity.read(root.pgid));
       if (observed === DEADLINE) return null;
       leaderVerdict.set(
         root.pgid,
@@ -485,18 +486,18 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
     return markerFailure ?? capturedFailure;
   };
 
-  /** Is the member still the process we signalled? */
+  /** Is the member still the process we signalled? Its birth decides, not its current group. */
   const stillSame = async (member: LiveMember): Promise<"same" | "gone" | "unreadable"> => {
     if (member.birth.kind === "identity") {
-      const observed = await bounded(identity.read(member.pid));
+      const observed = await bounded(() => identity.read(member.pid));
       if (observed === DEADLINE) return "same"; // out of time: still a survivor, never a false "gone"
-      const comparison = compareProcessIdentity(member.birth.identity, observed);
+      const comparison = compareProcessBirth(member.birth.identity, observed);
       if (comparison === "same") return "same";
       if (comparison === "unknown") return "unreadable";
       return "gone"; // missing, or a different process now owns the pid
     }
     if (!table) return "unreadable";
-    const row = await bounded(table.row(member.pid));
+    const row = await bounded(() => table.row(member.pid));
     if (row === DEADLINE) return "same";
     if (row === null) return "gone";
     if (row === "unreadable") return "unreadable";
@@ -541,6 +542,7 @@ async function reapOnce(opts: ScopeReapOptions): Promise<ScopeReapOutcome> {
   for (;;) {
     if (pastDeadline()) return outcome(censusFailure);
     await sleep(probeIntervalMs);
+    if (pastDeadline()) return outcome(censusFailure); // members stay survivors; no probe starts
     await probe();
     if (pastDeadline()) return outcome(censusFailure);
     const elapsed = now() - start;

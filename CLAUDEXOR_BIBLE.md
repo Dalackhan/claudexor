@@ -860,8 +860,10 @@ invariant or operator decision before proceeding.
   members of recorded groups under the pgid-reuse rule, recorded
   descendants) are ended by measured identity, never by command line and
   never by a bare group id, and the run's terminal event is published only
-  after that settlement and its record (the final process_scope.yaml
-  artifact, projected into the run detail); the next daemon start does the
+  after that settlement and one attempt to write its record (the final
+  process_scope.yaml artifact, projected into the run detail). A failed write
+  is not retried and never changes the verdict; the detail still sends
+  processScope as explicit null, meaning unknown, never clean. The next daemon start does the
   same for a crashed generation. What could not be ended or read is recorded
   instead of declared clean, and the record states its completeness honestly:
   provable only where the census read every same-uid environment (Linux),
@@ -878,7 +880,7 @@ invariant or operator decision before proceeding.
   fixtures incl. a platform-binary child ended through its recorded group),
   the orchestrator run-scope barrier tests (terminal after settlement), the
   cli run-scope index spawn-seed and start/settle tests, the control-api
-  run-detail projection test.
+  run-detail projection test and CLI joined Codex drain/detail integration test.
 
 ## 12. Keep The Codebase Small And Direct
 

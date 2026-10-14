@@ -77,7 +77,7 @@ export const RunProcessScopeOutcome = z
     settled: z
       .boolean()
       .describe(
-        "True only when every census source succeeded and nothing survived or stayed unreadable.",
+        "True only when every census source succeeded and no known member survived or stayed unreadable. Unreadable discovery candidates are not members; they limit completeness separately.",
       ),
     completeness: z
       .enum(["complete", "not_provable"])

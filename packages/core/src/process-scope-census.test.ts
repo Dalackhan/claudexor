@@ -1,7 +1,11 @@
 import { spawn } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import { ScopeReaper, capturedCandidates, reapScopeMembers } from "./process-scope-census.js";
 import {
+  LINUX_CONCURRENCY,
   createLinuxScopeCensusReader,
   createScopeCensusReader,
   darwinLineCarriesMarker,
@@ -41,13 +45,22 @@ function fakeWorld(opts: {
   censusFailure?: string;
   /** Processes born when the clock passes `at`. */
   forks?: Array<{ at: number; pid: number; marker: string }>;
+  /** Processes that move to a new process group (`setsid`) on TERM and survive it. */
+  regroupOnTerm?: number[];
+  /** Processes that move to a new process group while their membership is confirmed. */
+  regroupOnConfirm?: number[];
 }) {
   const alive = new Map(
-    opts.procs.map((p) => [p.pid, { marker: p.marker, token: `linux:${p.token ?? p.pid}` }]),
+    opts.procs.map((p) => [
+      p.pid,
+      { marker: p.marker, token: `linux:${p.token ?? p.pid}`, pgid: p.pid },
+    ]),
   );
   const immortal = new Set(opts.immortal ?? []);
   const identityUnreadable = new Set(opts.identityUnreadable ?? []);
   const membershipUnreadable = new Set(opts.membershipUnreadable ?? []);
+  const regroupOnTerm = new Set(opts.regroupOnTerm ?? []);
+  const regroupOnConfirm = new Set(opts.regroupOnConfirm ?? []);
   const forks = [...(opts.forks ?? [])];
   const signals: Array<{ pid: number; signal: string }> = [];
   let t = 0;
@@ -68,6 +81,7 @@ function fakeWorld(opts: {
     async confirm(pid, marker) {
       if (membershipUnreadable.has(pid)) return null;
       const proc = alive.get(pid);
+      if (proc && regroupOnConfirm.has(pid)) proc.pgid = pid + 90_000;
       return proc ? proc.marker === marker : false;
     },
   };
@@ -83,7 +97,7 @@ function fakeWorld(opts: {
         platform: "linux",
         source: "procfs_stat",
         startToken: proc.token,
-        processGroupId: pid,
+        processGroupId: proc.pgid,
       };
     },
   };
@@ -93,7 +107,9 @@ function fakeWorld(opts: {
     signals,
     signal: (pid: number, signal: NodeJS.Signals) => {
       signals.push({ pid, signal });
-      if (!alive.has(pid)) throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+      const proc = alive.get(pid);
+      if (!proc) throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+      if (signal === "SIGTERM" && regroupOnTerm.has(pid)) proc.pgid = pid + 90_000;
       const lethal = signal === "SIGKILL" || (opts.coopLethal && signal === "SIGTERM");
       if (lethal && !immortal.has(pid)) alive.delete(pid);
     },
@@ -101,7 +117,8 @@ function fakeWorld(opts: {
     sleep: async (ms: number) => {
       t += ms;
       for (const fork of forks.splice(0)) {
-        if (fork.at <= t) alive.set(fork.pid, { marker: fork.marker, token: `linux:${fork.pid}` });
+        if (fork.at <= t)
+          alive.set(fork.pid, { marker: fork.marker, token: `linux:${fork.pid}`, pgid: fork.pid });
         else forks.push(fork);
       }
     },
@@ -220,6 +237,42 @@ describe("reapScopeMembers (fake kernel)", () => {
     expect(outcome.survivors).toEqual([{ pid: 100, startToken: "linux:100" }]);
     expect(outcome.ended).toEqual([]);
     expect(outcome.durationMs).toBeGreaterThanOrEqual(3_000);
+  });
+
+  it("a member that leaves its process group on TERM stays the same process: KILL, then proven gone", async () => {
+    // setsid/setpgid changes the group, never the pid or its kernel birth.
+    const world = fakeWorld({ procs: [{ pid: 100, marker: A }], regroupOnTerm: [100] });
+    const outcome = await reapWith(world, A);
+    expect(world.signals.map((s) => s.signal)).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(world.isAlive(100)).toBe(false);
+    expect(outcome.ended).toEqual([{ pid: 100, startToken: "linux:100" }]);
+    expect(outcome.settled).toBe(true);
+  });
+
+  it("a regrouped member that survives every signal is a SURVIVOR, never ended or settled", async () => {
+    const world = fakeWorld({
+      procs: [{ pid: 100, marker: A }],
+      regroupOnTerm: [100],
+      immortal: [100],
+    });
+    const outcome = await reapWith(world, A);
+    expect(world.isAlive(100)).toBe(true);
+    expect(outcome.survivors).toEqual([{ pid: 100, startToken: "linux:100" }]);
+    expect(outcome.ended).toEqual([]);
+    expect(outcome.settled).toBe(false);
+  });
+
+  it("identity bracket: a member that changes group between its two birth reads is still admitted", async () => {
+    const world = fakeWorld({
+      procs: [{ pid: 100, marker: A }],
+      regroupOnConfirm: [100],
+      coopLethal: true,
+    });
+    const outcome = await reapWith(world, A);
+    expect(world.signals).toEqual([{ pid: 100, signal: "SIGTERM" }]);
+    expect(world.isAlive(100)).toBe(false);
+    expect(outcome.ended).toEqual([{ pid: 100, startToken: "linux:100" }]);
+    expect(outcome.settled).toBe(true);
   });
 
   it("never signals a member whose identity is unreadable and reports it separately", async () => {
@@ -747,6 +800,103 @@ describe("fix round 2: deadline, census readability, fork rescan", () => {
     expect(settled.settled).toBe(true);
   }, 10_000);
 
+  it("starts no identity, membership or table read once the deadline passed; known members stay survivors", async () => {
+    // A fake clock and the real deadline mechanism: the deadline fires when the
+    // clock crosses it, inside a sleep or inside a slow read.
+    const DEADLINE_MS = 300;
+    const world = (slowFirstRead: boolean) => {
+      let t = 0;
+      let fire: (() => void) | null = null;
+      const late: string[] = [];
+      const advance = (ms: number): void => {
+        t += ms;
+        if (t >= DEADLINE_MS) fire?.();
+      };
+      const started = (kind: string): void => {
+        if (t >= DEADLINE_MS) late.push(`${kind}@${t}`);
+      };
+      let reads = 0;
+      const census: ScopeCensusReader = {
+        async census(markers) {
+          started("census");
+          return { status: "ok", members: new Map(markers.map((m) => [m, [100]])), unreadable: 0 };
+        },
+        async confirm() {
+          started("confirm");
+          return true;
+        },
+      };
+      const identity: AsyncProcessIdentityReader = {
+        async read(pid) {
+          started("identity");
+          reads += 1;
+          if (slowFirstRead && reads === 1) advance(400); // the deadline passes during this read
+          return {
+            status: "known",
+            pid,
+            platform: "linux",
+            source: "procfs_stat",
+            startToken: "linux:1",
+            processGroupId: pid,
+          };
+        },
+      };
+      const table: ProcessTableReader = {
+        async snapshot() {
+          started("snapshot");
+          return [{ pid: 210, ppid: 1, pgid: 200, birth: T1 }];
+        },
+        async row(pid) {
+          started("row");
+          return pid === 210 ? { pid: 210, ppid: 1, pgid: 200, birth: T1 } : null;
+        },
+      };
+      const signals: string[] = [];
+      return {
+        late,
+        signals,
+        opts: {
+          marker: A,
+          census,
+          identity,
+          table,
+          captured: [{ pid: 210, pgid: 200, birth: T1 }],
+          scopeStart: T0,
+          signal: (pid: number, signal: NodeJS.Signals) => {
+            signals.push(`${pid}:${signal}@${t}`);
+          },
+          now: () => t,
+          sleep: async (ms: number) => advance(ms),
+          deadlineTimer: () =>
+            new Promise<void>((resolve) => {
+              fire = resolve;
+            }),
+          graceMs: 1_000,
+          deadlineMs: DEADLINE_MS,
+          probeIntervalMs: 250,
+          platform: "linux",
+        },
+      };
+    };
+    // The deadline passes during the probe sleep: both admitted members (one by
+    // marker, one by recorded group) are known and must stay survivors.
+    const sleeping = world(false);
+    const afterSleep = await new ScopeReaper().reap(sleeping.opts);
+    expect(sleeping.late).toEqual([]);
+    expect(afterSleep.incomplete).toBe(true);
+    expect(afterSleep.settled).toBe(false);
+    expect(afterSleep.survivors.map((m) => m.pid).sort()).toEqual([100, 210]);
+    expect(afterSleep.ended).toEqual([]);
+    expect(sleeping.signals).toEqual(["100:SIGTERM@0", "210:SIGTERM@0"]);
+    // The deadline passes during the first identity read: nothing more starts.
+    const reading = world(true);
+    const duringRead = await new ScopeReaper().reap(reading.opts);
+    expect(reading.late).toEqual([]);
+    expect(duringRead.incomplete).toBe(true);
+    expect(duringRead.settled).toBe(false);
+    expect(reading.signals).toEqual([]);
+  });
+
   it("a same-uid process with an unreadable environment makes completeness not provable; another uid's does not", async () => {
     const reader = (uidOf: Record<number, number>) =>
       createLinuxScopeCensusReader({
@@ -779,6 +929,75 @@ describe("fix round 2: deadline, census readability, fork rescan", () => {
     });
     expect(otherUid.completeness).toBe("complete");
     expect(otherUid.completenessReason).toBeNull();
+  });
+
+  it("linux: past the deadline the census starts no further /proc read and never passes off what it read as complete (both directions)", async () => {
+    const world = (holding: boolean) => {
+      const log: string[] = [];
+      const held: Array<() => void> = [];
+      const reader = createLinuxScopeCensusReader({
+        listProc: async () => {
+          log.push("list");
+          return Array.from({ length: 20 }, (_, i) => String(100 + i));
+        },
+        readTextFile: async (path) => {
+          log.push(path);
+          if (holding) await new Promise<void>((resolve) => held.push(resolve));
+          if (path === "/proc/100/environ")
+            throw Object.assign(new Error("denied"), { code: "EACCES" });
+          return "PATH=/x\0";
+        },
+        statUid: async (pid) => {
+          log.push(`uid ${pid}`);
+          return 501;
+        },
+        selfUid: 501,
+      });
+      const open = (): void => {
+        holding = false;
+        for (const resume of held.splice(0)) resume();
+      };
+      return { log, held, reader, open };
+    };
+    const late = world(true);
+    let fire!: () => void;
+    const outcome = new ScopeReaper().reap({
+      marker: A,
+      census: late.reader,
+      deadlineTimer: () => new Promise<void>((resolve) => (fire = resolve)),
+      deadlineMs: 60_000,
+      graceMs: 10,
+      probeIntervalMs: 5,
+      platform: "linux",
+    });
+    await vi.waitFor(() => expect(late.held).toHaveLength(LINUX_CONCURRENCY));
+    fire();
+    expect(await outcome).toMatchObject({ incomplete: true, settled: false });
+    late.open(); // the reads in flight answer after the deadline
+    // A live caller queued behind that scan is served only once it finished.
+    expect(await late.reader.census([A])).toMatchObject({ status: "ok", unreadable: 1 });
+    const expired = late.log.slice(0, late.log.indexOf("list", 1));
+    expect(expired).toEqual([
+      "list",
+      ...Array.from({ length: LINUX_CONCURRENCY }, (_, i) => `/proc/${100 + i}/environ`),
+    ]);
+    // Asked directly with an expiry, the scan's answer is unknown, never a partial `ok`.
+    const direct = world(true);
+    let gone = false;
+    const answer = direct.reader.census([A], undefined, () => gone);
+    await vi.waitFor(() => expect(direct.held).toHaveLength(LINUX_CONCURRENCY));
+    gone = true;
+    direct.open();
+    expect(await answer).toMatchObject({ status: "failed" });
+    expect(direct.log).toHaveLength(1 + LINUX_CONCURRENCY);
+    // Nothing expired: every environment is read, the unreadable one's owner too.
+    const timely = world(false);
+    expect(await timely.reader.census([A], undefined, () => false)).toMatchObject({
+      status: "ok",
+      unreadable: 1,
+    });
+    expect(timely.log.filter((entry) => entry.startsWith("/proc/"))).toHaveLength(20);
+    expect(timely.log).toContain("uid 100");
   });
 
   it("when the first pass ended members that were already gone, one more rescan catches a later fork", async () => {
@@ -907,6 +1126,69 @@ describe.runIf(posix)("reapScopeMembers on real processes", () => {
           /* already gone */
         }
       }
+    }
+  }, 20_000);
+
+  it("ends a marked orphan that setsid()s on TERM: a new group is the same process, not a death", async () => {
+    // A non-platform python3 (its environment is readable by the census on
+    // macOS and Linux) orphaned inside the leaderless group of an exited
+    // parent, which it may therefore leave. On TERM it calls setsid() and
+    // keeps running: same pid, same kernel birth, another process group.
+    const dir = mkdtempSync(join(tmpdir(), "claudexor-regroup-"));
+    const marker = mintRunScopeMarker();
+    const script = [
+      "import os, signal, sys, time",
+      "d = sys.argv[1]",
+      "def moved(*_):",
+      "    os.setsid()",
+      "    open(os.path.join(d, 'moved'), 'w').write('%d %d' % (os.getpid(), os.getpgrp()))",
+      "signal.signal(signal.SIGTERM, moved)",
+      "open(os.path.join(d, 'ready'), 'w').write('%d %d' % (os.getpid(), os.getpgrp()))",
+      "end = time.time() + 120",
+      "while time.time() < end:",
+      "    time.sleep(0.02)",
+    ].join("\n");
+    const orphan = await new Promise<number>((resolve, reject) => {
+      const parent = spawn(
+        process.execPath,
+        [
+          "-e",
+          "const {spawn}=require('node:child_process');" +
+            "const c=spawn('python3',['-c',process.argv[1],process.argv[2]],{stdio:'ignore',env:process.env});" +
+            "c.unref();process.stdout.write(String(c.pid));",
+          script,
+          dir,
+        ],
+        {
+          env: { ...process.env, [marker]: "1" },
+          detached: true,
+          stdio: ["ignore", "pipe", "ignore"],
+        },
+      );
+      let out = "";
+      parent.stdout.on("data", (chunk: Buffer) => (out += chunk.toString()));
+      parent.once("error", reject);
+      parent.once("close", () => resolve(Number(out.trim())));
+    });
+    try {
+      for (let i = 0; i < 200 && !existsSync(join(dir, "ready")); i += 1)
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      const [, groupBefore] = readFileSync(join(dir, "ready"), "utf8").split(" ").map(Number);
+      expect(groupBefore).not.toBe(orphan); // a group member, not a leader: setsid() is allowed
+      const outcome = await reapScopeMembers({ marker, graceMs: 500 });
+      const [, groupAfter] = readFileSync(join(dir, "moved"), "utf8").split(" ").map(Number);
+      expect(groupAfter).toBe(orphan); // the TERM really moved it to a new group
+      expect(alive(orphan)).toBe(false);
+      expect(outcome.ended.map((m) => m.pid)).toEqual([orphan]);
+      expect(outcome.survivors).toEqual([]);
+      expect(outcome.settled).toBe(true);
+    } finally {
+      try {
+        process.kill(orphan, "SIGKILL");
+      } catch {
+        /* already gone */
+      }
+      rmSync(dir, { recursive: true, force: true });
     }
   }, 20_000);
 

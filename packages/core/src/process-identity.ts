@@ -219,19 +219,28 @@ export function parseDarwinHelperOutput(raw: string, expectedPid: number): Proce
   };
 }
 
+/** One process: same pid and kernel birth, in any group (`setsid`/`setpgid` keep the process). */
+export function compareProcessBirth(
+  expected: KnownProcessIdentity,
+  observed: ProcessIdentity,
+): ProcessIdentityComparison {
+  if (observed.status !== "known") return observed.status;
+  return expected.pid === observed.pid &&
+    expected.platform === observed.platform &&
+    expected.source === observed.source &&
+    expected.startToken === observed.startToken
+    ? "same"
+    : "different";
+}
+
+/** The same process still in its recorded group: the authority to signal that group through it. */
 export function compareProcessIdentity(
   expected: KnownProcessIdentity,
   observed: ProcessIdentity,
 ): ProcessIdentityComparison {
-  if (observed.status === "missing") return "missing";
-  if (observed.status === "unknown") return "unknown";
-  return expected.pid === observed.pid &&
-    expected.platform === observed.platform &&
-    expected.source === observed.source &&
-    expected.startToken === observed.startToken &&
-    expected.processGroupId === observed.processGroupId
-    ? "same"
-    : "different";
+  const birth = compareProcessBirth(expected, observed);
+  if (birth !== "same" || observed.status !== "known") return birth;
+  return expected.processGroupId === observed.processGroupId ? "same" : "different";
 }
 
 export function isKnownProcessIdentity(value: unknown): value is KnownProcessIdentity {

@@ -429,6 +429,15 @@ it when Claudexor created it during this run AND its bytes still equal the
 bridge content exactly — any candidate edit, even one preserving the marker, is
 captured as real work rather than discarded.
 
+A completed run settles the processes it owns before publishing its terminal
+event, then exposes a best-effort process-scope receipt separately from the
+answer. Unavailable cleanup evidence remains unknown; it never becomes a clean
+receipt or rewrites a substantive review verdict. Native output is drained
+within a bound after process exit, with forced truncation disclosed. Codex
+rechecks late root lifecycle events before delivering a final answer, including
+after confirmed cleanup. A Windows limitation in proving tree death alone may
+preserve a completed answer; cancellation and observed survivors remain negative.
+
 ## The Immune System
 
 Claudexor's development is agent-driven, so the repository defends its own

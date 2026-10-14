@@ -1,9 +1,14 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { ScopeReaper, capturedCandidates, reapScopeMembers } from "./process-scope-census.js";
+import {
+  DARWIN_COMPLETENESS_LIMIT,
+  ScopeReaper,
+  capturedCandidates,
+  reapScopeMembers,
+} from "./process-scope-census.js";
 import {
   LINUX_CONCURRENCY,
   createLinuxScopeCensusReader,
@@ -1062,6 +1067,20 @@ function alive(pid: number): boolean {
 }
 
 /**
+ * Whether this host shows `entry` in the environment of `pid`, read without
+ * the census code: the raw `/proc/<pid>/environ` on Linux, the raw text of
+ * `/bin/ps -E` on macOS.
+ */
+function environmentShows(pid: number, entry: string): boolean {
+  if (process.platform === "linux")
+    return readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").includes(entry);
+  const args = ["-E", "-ww", "-o", "command=", "-p", String(pid)];
+  return execFileSync("/bin/ps", args, { encoding: "utf8", timeout: 5_000, killSignal: "SIGKILL" })
+    .split(/\s+/)
+    .includes(entry);
+}
+
+/**
  * Start a long-lived grandchild whose parent exits at once, so the grandchild
  * is reparented to pid 1 in a leaderless process group — the #449 orphan shape.
  * The grandchild is a managed-`node` process on purpose: its marker is readable
@@ -1208,12 +1227,15 @@ describe.runIf(posix)("reapScopeMembers on real processes", () => {
     }
   }, 20_000);
 
-  it("pins the macOS platform-binary census limit: hidden on darwin (SIP), visible on linux", async () => {
+  it("a platform-binary orphan: the census agrees with an independent read of its environment, never confirms a foreign marker, and darwin stays restricted and not provable even where it is shown", async () => {
     const marker = mintRunScopeMarker();
+    const foreign = mintRunScopeMarker();
     // An Apple *platform* binary (/bin/sleep) reparented to pid 1: the #449
-    // orphan shape. Its environment is withheld by SIP on darwin and readable
-    // via /proc on linux. Pinning both directions makes a future macOS change
-    // that exposes it fail here, prompting an honest coverage upgrade.
+    // orphan shape. Whether its environment can be read is a fact about the
+    // host, not the census: Linux /proc shows it; macOS can withhold it or
+    // expose it depending on the host. So this host is measured
+    // without the census code, the census is held to that measurement, and
+    // the darwin disclosure must not depend on it.
     const orphan = await new Promise<number>((resolve, reject) => {
       const child = spawn(
         process.execPath,
@@ -1232,13 +1254,52 @@ describe.runIf(posix)("reapScopeMembers on real processes", () => {
       let out = "";
       child.stdout.on("data", (c: Buffer) => (out += c.toString()));
       child.once("error", reject);
-      child.once("close", () => resolve(Number(out.trim())));
+      child.once("close", () => {
+        const pid = Number(out.trim());
+        Number.isSafeInteger(pid) && pid > 0 ? resolve(pid) : reject(new Error(`no pid: ${out}`));
+      });
     });
     try {
+      expect(alive(orphan)).toBe(true);
+      const identity = createAsyncProcessIdentityReader();
+      const born = await identity.read(orphan);
+      expect(born.status).toBe("known");
+      const birth = born.status === "known" ? born.startToken : null;
+      const shown = environmentShows(orphan, `${marker}=1`);
+      expect(environmentShows(orphan, `${foreign}=1`)).toBe(false);
+      if (process.platform === "linux") expect(shown).toBe(true);
       const census = createScopeCensusReader()!;
-      const confirmed = await census.confirm(orphan, marker);
-      if (process.platform === "linux") expect(confirmed).toBe(true);
-      else expect(confirmed).toBe(false); // darwin: hidden by SIP — disclosed residual
+      expect(await census.confirm(orphan, marker)).toBe(shown);
+      expect(await census.confirm(orphan, foreign)).toBe(false);
+      const outcome = await reapScopeMembers({ marker, graceMs: 1_000 });
+      expect(outcome).toMatchObject({
+        coverage: "marker",
+        census: "ok",
+        settled: true,
+        incomplete: false,
+        survivors: [],
+        unreadable: [],
+        restricted: process.platform === "darwin",
+      });
+      if (process.platform === "darwin") {
+        expect(outcome).toMatchObject({
+          completeness: "not_provable",
+          completenessReason: DARWIN_COMPLETENESS_LIMIT,
+        });
+      } else {
+        expect(outcome.completenessReason).not.toBe(DARWIN_COMPLETENESS_LIMIT);
+      }
+      if (shown) {
+        // Readable here: the marker census alone ends it, under its measured birth.
+        expect(outcome.ended).toEqual([{ pid: orphan, startToken: birth }]);
+        expect(alive(orphan)).toBe(false);
+      } else {
+        // Withheld here: the marker census cannot see it, so the reap settles
+        // while the same process lives on — the disclosed residual that keeps
+        // darwin not provable (the recorded-group test below reaches it).
+        expect(outcome.ended).toEqual([]);
+        expect(await identity.read(orphan)).toMatchObject({ status: "known", startToken: birth });
+      }
     } finally {
       try {
         process.kill(orphan, "SIGKILL");

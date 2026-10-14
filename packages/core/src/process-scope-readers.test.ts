@@ -232,6 +232,35 @@ describe("darwin census with a known scope age", () => {
   });
 });
 
+describe("darwin census membership is the exact entry ps shows", () => {
+  it("a platform binary whose environment is shown is a member; withheld (arguments only) or carrying another scope's marker it is absent: false, never unreadable (both directions)", async () => {
+    const other = mintRunScopeMarker();
+    const fake = fakePs({
+      etime: {},
+      env: {
+        10: `/bin/sleep 600 PATH=/usr/bin:/bin ${M}=1`, // a host that shows the environment
+        20: "/bin/sleep 600", // a host that withholds it (SIP): ps prints the arguments only
+        30: `/bin/sleep 600 ${other}=1 HOME=/x`, // another scope's marker
+      },
+    });
+    const reader = createDarwinScopeCensusReader({ ps: fake.ps });
+    expect(await reader.census([M, other])).toEqual({
+      status: "ok",
+      members: new Map([
+        [M, [10]],
+        [other, [30]],
+      ]),
+      unreadable: 0,
+    });
+    expect(await reader.confirm(10, M)).toBe(true);
+    // A withheld environment reads exactly like an absent entry: nothing tells
+    // them apart, which is why a settled darwin reap is never provably complete.
+    expect(await reader.confirm(20, M)).toBe(false);
+    expect(await reader.confirm(30, M)).toBe(false);
+    expect(await reader.confirm(30, other)).toBe(true);
+  });
+});
+
 /**
  * `ps` whose age listings wait for the test (one hold per listing, oldest
  * answered first); environment reads find no row.

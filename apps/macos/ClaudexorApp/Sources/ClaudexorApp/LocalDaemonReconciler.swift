@@ -5,6 +5,8 @@ enum LocalDaemonBootPolicy {
     /// A large recovered journal can keep the daemon below handshake readiness
     /// for more than 30 seconds even though startup is making healthy progress.
     @usableFromInline static let handshakeTimeout: TimeInterval = 90
+    /// Cadence of the bounded post-launch handshake poll.
+    @usableFromInline static let handshakePollInterval: TimeInterval = 0.5
 }
 
 enum LocalDaemonReconciliationDeferral: Sendable, Equatable {
@@ -122,7 +124,7 @@ actor LocalDaemonReconciler {
         targetClosure: @escaping @Sendable () -> LocalRuntimeClosureSelection? = {
             DaemonLauncher.resolvedRuntime()
         },
-        handshakePollInterval: TimeInterval = 0.5,
+        handshakePollInterval: TimeInterval = LocalDaemonBootPolicy.handshakePollInterval,
         handshakePollTimeout: TimeInterval = LocalDaemonBootPolicy.handshakeTimeout
     ) {
         self.daemon = daemon

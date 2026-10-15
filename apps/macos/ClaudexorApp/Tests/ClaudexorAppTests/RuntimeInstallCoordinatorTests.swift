@@ -100,6 +100,10 @@ private final class StubDaemon: RuntimeDaemonControl, @unchecked Sendable {
     /// restore (e.g. drop a permissions obstruction).
     var onStop: (@Sendable () -> Void)?
     var replacementStopResults: [StubReplacementStopResult] = []
+    /// Serving handshakes for which an exact identity (keyed by `key(_:)`)
+    /// still answers in recovery-only admission before normal admission
+    /// opens; `Int.max` keeps it recovering.
+    var recoveryOnlyPolls: [String: Int] = [:]
     var stops = 0
     var starts = 0
     private(set) var stoppedIdentities: [RuntimeClosureIdentity] = []
@@ -141,19 +145,34 @@ private final class StubDaemon: RuntimeDaemonControl, @unchecked Sendable {
         }
     }
     func handshakeIdentity() async -> RuntimeClosureIdentity? {
+        lock.withLock { nextHandshakeIdentityLocked() }
+    }
+    func servingHandshake() async -> RuntimeServingHandshake? {
         lock.withLock {
-            if handshakeUnavailableOnFirstStart && starts == 1 { return nil }
-            if var sequence = handshakeIdentitySequence, !sequence.isEmpty {
-                let next = sequence.removeFirst()
-                handshakeIdentitySequence = sequence
-                return next
-            }
-            if handshakeNilCount > 0 { handshakeNilCount -= 1; return nil }
-            guard let version = handshakeReturns else { return nil }
-            return RuntimeClosureIdentity(
-                version: version,
-                buildSha: handshakeBuildSha ?? Self.defaultBuildSha(for: version))
+            guard let identity = nextHandshakeIdentityLocked() else { return nil }
+            let key = Self.key(identity)
+            let remaining = recoveryOnlyPolls[key] ?? 0
+            if remaining > 0, remaining != Int.max { recoveryOnlyPolls[key] = remaining - 1 }
+            return RuntimeServingHandshake(identity: identity, recoveryOnly: remaining > 0)
         }
+    }
+
+    static func key(_ identity: RuntimeClosureIdentity) -> String {
+        "\(identity.version)@\(identity.buildSha)"
+    }
+
+    private func nextHandshakeIdentityLocked() -> RuntimeClosureIdentity? {
+        if handshakeUnavailableOnFirstStart && starts == 1 { return nil }
+        if var sequence = handshakeIdentitySequence, !sequence.isEmpty {
+            let next = sequence.removeFirst()
+            handshakeIdentitySequence = sequence
+            return next
+        }
+        if handshakeNilCount > 0 { handshakeNilCount -= 1; return nil }
+        guard let version = handshakeReturns else { return nil }
+        return RuntimeClosureIdentity(
+            version: version,
+            buildSha: handshakeBuildSha ?? Self.defaultBuildSha(for: version))
     }
 
     private static func defaultBuildSha(for version: String) -> String {
@@ -853,6 +872,221 @@ private final class StubDaemon: RuntimeDaemonControl, @unchecked Sendable {
         #expect(daemon.stops == 2)  // pre-swap stop + rollback stop
     }
 
+    // MARK: - Serving admission (identity alone is not readiness)
+
+    /// An exact candidate that only ever answers in recovery mode is neither
+    /// installed nor rolled back: it stays selected (the previous runtime may
+    /// not read state it already upgraded) and the phase says recovery only.
+    @Test func exactCandidateAnsweringOnlyInRecoveryIsNeitherInstalledNorRolledBack() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let installer = RuntimeInstaller(root: root)
+        try installer.writeCurrentAtomic(previousPointer())
+        let (bytes, sha) = try fixtureClosure()
+        let daemon = StubDaemon()
+        daemon.probeReturns = "3.4.0"
+        daemon.handshakeIdentitySequence = [
+            RuntimeClosureIdentity(version: "3.2.0", buildSha: previousBuildSha)
+        ]
+        daemon.handshakeReturns = "3.4.0"
+        let candidate = RuntimeClosureIdentity(version: "3.4.0", buildSha: candidateBuildSha)
+        daemon.recoveryOnlyPolls[StubDaemon.key(candidate)] = .max
+        let recorder = PhaseRecorder()
+        let coord = RuntimeInstallCoordinator(
+            installer: installer, transport: LocalTransport(bytes), daemon: daemon,
+            lifecycleOwner: testInstallLifecycleOwner,
+            handshakePollInterval: 0.002, handshakePollTimeout: 0.05,
+            onPhase: { recorder.record($0) })
+
+        let error = await captureError {
+            try await coord.install(
+                manifest: manifest(version: "3.4.0", sha: sha), assetURL: assetURL)
+        }
+
+        #expect(error as? RuntimeInstallError == .servingRecoveryOnly(candidate))
+        #expect(recorder.contains(.recoveryOnly(candidate)))
+        #expect(!recorder.contains(.done(version: "3.4.0")))
+        #expect(!recorder.phases.contains { if case .rolledBack = $0 { return true }; return false })
+        #expect(installer.readCurrent()?.version == "3.4.0")
+        #expect(installer.readLastKnownGood() == previousPointer())
+        #expect(daemon.stops == 1)
+        #expect(daemon.starts == 1)
+    }
+
+    /// Every startup passes through recovery-only admission; an exact candidate
+    /// that opens normal admission inside the boot window is a normal install.
+    @Test func exactCandidateThatLeavesRecoveryInsideTheBootWindowInstalls() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let installer = RuntimeInstaller(root: root)
+        let (bytes, sha) = try fixtureClosure()
+        let daemon = StubDaemon()
+        daemon.probeReturns = "3.4.0"
+        daemon.handshakeIdentitySequence = [
+            RuntimeClosureIdentity(version: "3.2.0", buildSha: previousBuildSha)
+        ]
+        daemon.handshakeReturns = "3.4.0"
+        let candidate = RuntimeClosureIdentity(version: "3.4.0", buildSha: candidateBuildSha)
+        daemon.recoveryOnlyPolls[StubDaemon.key(candidate)] = 3
+        let recorder = PhaseRecorder()
+        let coord = RuntimeInstallCoordinator(
+            installer: installer, transport: LocalTransport(bytes), daemon: daemon,
+            lifecycleOwner: testInstallLifecycleOwner,
+            rollbackSelection: { testBundledSelection },
+            handshakePollInterval: 0.002, handshakePollTimeout: 5,
+            onPhase: { recorder.record($0) })
+
+        let version = try await coord.install(
+            manifest: manifest(version: "3.4.0", sha: sha), assetURL: assetURL)
+
+        #expect(version == "3.4.0")
+        #expect(recorder.contains(.done(version: "3.4.0")))
+        #expect(!recorder.contains(.recoveryOnly(candidate)))
+        #expect(daemon.recoveryOnlyPolls[StubDaemon.key(candidate)] == 0)
+        #expect(daemon.stops == 1)
+        #expect(daemon.starts == 1)
+    }
+
+    /// The previous runtime relaunched by rollback answers with its exact
+    /// identity but only in recovery mode (the shape of an older engine over a
+    /// store a newer one already upgraded): never `.rolledBack`.
+    @Test func restoredPreviousAnsweringOnlyInRecoveryIsNotARollback() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let installer = RuntimeInstaller(root: root)
+        try installer.writeCurrentAtomic(previousPointer())
+        let (bytes, sha) = try fixtureClosure()
+        let daemon = StubDaemon()
+        daemon.probeReturns = "3.4.0"
+        daemon.handshakeReturns = "3.2.0"
+        daemon.handshakeUnavailableOnFirstStart = true  // candidate never serves
+        let previous = RuntimeClosureIdentity(version: "3.2.0", buildSha: previousBuildSha)
+        daemon.recoveryOnlyPolls[StubDaemon.key(previous)] = .max
+        let recorder = PhaseRecorder()
+        let coord = RuntimeInstallCoordinator(
+            installer: installer, transport: LocalTransport(bytes), daemon: daemon,
+            lifecycleOwner: testInstallLifecycleOwner,
+            handshakePollInterval: 0.002, handshakePollTimeout: 0.05,
+            onPhase: { recorder.record($0) })
+
+        let error = await captureError {
+            try await coord.install(
+                manifest: manifest(version: "3.4.0", sha: sha), assetURL: assetURL)
+        }
+
+        guard case let .recoveryFailed(step, remediation)? = error as? RuntimeInstallError else {
+            Issue.record("expected recoveryFailed, got \(String(describing: error))")
+            return
+        }
+        #expect(step.contains("recovery mode"))
+        #expect(remediation.contains("install the latest Claudexor app"))
+        #expect(!recorder.phases.contains { if case .rolledBack = $0 { return true }; return false })
+        #expect(recorder.phases.contains { if case .failed = $0 { return true }; return false })
+        #expect(installer.readCurrent() == previousPointer())
+        #expect(daemon.stops == 2)
+        #expect(daemon.starts == 2)
+    }
+
+    @Test func restoredPreviousThatLeavesRecoveryInsideTheBootWindowIsARollback() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let installer = RuntimeInstaller(root: root)
+        try installer.writeCurrentAtomic(previousPointer())
+        let (bytes, sha) = try fixtureClosure()
+        let daemon = StubDaemon()
+        daemon.probeReturns = "3.4.0"
+        daemon.handshakeReturns = "3.2.0"
+        daemon.handshakeUnavailableOnFirstStart = true
+        let previous = RuntimeClosureIdentity(version: "3.2.0", buildSha: previousBuildSha)
+        daemon.recoveryOnlyPolls[StubDaemon.key(previous)] = 2
+        let recorder = PhaseRecorder()
+        let coord = RuntimeInstallCoordinator(
+            installer: installer, transport: LocalTransport(bytes), daemon: daemon,
+            lifecycleOwner: testInstallLifecycleOwner,
+            handshakePollInterval: 0.002, handshakePollTimeout: 0.2,
+            onPhase: { recorder.record($0) })
+
+        let error = await captureError {
+            try await coord.install(
+                manifest: manifest(version: "3.4.0", sha: sha), assetURL: assetURL)
+        }
+
+        #expect(error as? RuntimeInstallError == .handshakeMismatch(
+            expected: RuntimeClosureIdentity(version: "3.4.0", buildSha: candidateBuildSha),
+            got: nil))
+        #expect(recorder.contains(.rolledBack(reason: "post-relaunch handshake timed out")))
+        #expect(daemon.recoveryOnlyPolls[StubDaemon.key(previous)] == 0)
+        #expect(installer.readCurrent() == previousPointer())
+    }
+
+    /// The identity verdict precedes admission: a wrong build answering in
+    /// recovery mode is a mismatch and rolls back as before.
+    @Test func wrongIdentityAnsweringInRecoveryIsStillAMismatch() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let installer = RuntimeInstaller(root: root)
+        try installer.writeCurrentAtomic(previousPointer())
+        let (bytes, sha) = try fixtureClosure()
+        let daemon = StubDaemon()
+        daemon.probeReturns = "3.4.0"
+        let wrongCandidate = RuntimeClosureIdentity(version: "3.4.0", buildSha: wrongBuildSha)
+        daemon.handshakeIdentitySequence = [
+            RuntimeClosureIdentity(version: "3.2.0", buildSha: previousBuildSha),
+            wrongCandidate,
+        ]
+        daemon.handshakeReturns = "3.2.0"
+        daemon.recoveryOnlyPolls[StubDaemon.key(wrongCandidate)] = .max
+        let recorder = PhaseRecorder()
+        let coord = RuntimeInstallCoordinator(
+            installer: installer, transport: LocalTransport(bytes), daemon: daemon,
+            lifecycleOwner: testInstallLifecycleOwner,
+            handshakePollInterval: 0.002, handshakePollTimeout: 0.05,
+            onPhase: { recorder.record($0) })
+
+        let error = await captureError {
+            try await coord.install(
+                manifest: manifest(version: "3.4.0", sha: sha), assetURL: assetURL)
+        }
+
+        #expect(error as? RuntimeInstallError == .handshakeMismatch(
+            expected: RuntimeClosureIdentity(version: "3.4.0", buildSha: candidateBuildSha),
+            got: wrongCandidate))
+        #expect(daemon.stoppedIdentities.last == wrongCandidate)
+        #expect(recorder.contains(.rolledBack(reason: "post-relaunch handshake mismatch")))
+        #expect(installer.readCurrent() == previousPointer())
+    }
+
+    /// A port that proves identity but not admission (the protocol default)
+    /// can never yield an installed or rolled-back verdict.
+    @Test func identityWithoutAdmissionEvidenceIsNeverSuccess() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let installer = RuntimeInstaller(root: root)
+        try installer.writeCurrentAtomic(previousPointer())
+        let (bytes, sha) = try fixtureClosure()
+        let daemon = IdentityOnlyDaemon(
+            candidate: RuntimeClosureIdentity(version: "3.4.0", buildSha: candidateBuildSha))
+        let recorder = PhaseRecorder()
+        let coord = RuntimeInstallCoordinator(
+            installer: installer, transport: LocalTransport(bytes), daemon: daemon,
+            lifecycleOwner: testInstallLifecycleOwner,
+            handshakePollInterval: 0.002, handshakePollTimeout: 0.05,
+            onPhase: { recorder.record($0) })
+
+        let error = await captureError {
+            try await coord.install(
+                manifest: manifest(version: "3.4.0", sha: sha), assetURL: assetURL)
+        }
+
+        guard case let .recoveryFailed(step, _)? = error as? RuntimeInstallError else {
+            Issue.record("expected recoveryFailed, got \(String(describing: error))")
+            return
+        }
+        #expect(step.contains("reach the engine"))
+        #expect(!recorder.contains(.done(version: "3.4.0")))
+        #expect(!recorder.phases.contains { if case .rolledBack = $0 { return true }; return false })
+    }
+
     // MARK: - Helpers
 
     private func previousPointer() -> RuntimeCurrent {
@@ -865,6 +1099,17 @@ private final class StubDaemon: RuntimeDaemonControl, @unchecked Sendable {
     private func captureError(_ body: () async throws -> Void) async -> Error? {
         do { try await body(); return nil } catch { return error }
     }
+}
+
+/// Relies on the protocol's default `servingHandshake()`: identity answers
+/// always name the exact candidate, but no admission is ever proven.
+private struct IdentityOnlyDaemon: RuntimeDaemonControl {
+    let candidate: RuntimeClosureIdentity
+    func isBusy() async -> Bool? { false }
+    func stopForRuntimeReplacement(expectedIdentity: RuntimeClosureIdentity) async throws {}
+    func start() throws {}
+    func probeIdentity(scriptURL: URL) async -> RuntimeClosureIdentity? { candidate }
+    func handshakeIdentity() async -> RuntimeClosureIdentity? { candidate }
 }
 
 private final class Counter: @unchecked Sendable {

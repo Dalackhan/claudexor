@@ -4256,7 +4256,7 @@ struct AppModelRefreshTests {
         // LocalDaemonReconcilerTests and must never probe/stop a host daemon.
         model.localDaemonReconciler = LocalDaemonReconciler(
             daemon: AppRuntimeDaemonControl(
-                isBusyProbe: { nil }, handshakeIdentityProbe: { nil }),
+                isBusyProbe: { nil }, handshakeProbe: { nil }),
             lifecycleOwner: model.localRuntimeLifecycleOwner,
             targetClosure: { nil })
         model.health = .connected

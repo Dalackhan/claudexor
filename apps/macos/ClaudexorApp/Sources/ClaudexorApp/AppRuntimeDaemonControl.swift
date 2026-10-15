@@ -11,27 +11,41 @@ import ClaudexorKit
 //    uses the daemon-owned identity/idle/admission fence plus identity-proven
 //    termination confirmation.
 //  - start: DaemonLauncher (relaunch against the ACTIVE pointer).
-//  - isBusy / handshakeIdentity: injected async closures over the app's
-//    GatewayClient (active-runs listing / protocol handshake), so this struct
-//    stays Sendable and testable.
+//  - isBusy / handshake: injected async closures over the app's GatewayClient
+//    (active-runs listing / protocol handshake), so this struct stays Sendable
+//    and testable.
 
 struct AppRuntimeDaemonControl: RuntimeDaemonControl {
     /// Active-runs probe: true = a run is queued/running (busy), false = idle,
     /// nil = the daemon could not be asked (coordinator treats nil as busy).
     let isBusyProbe: @Sendable () async -> Bool?
-    /// Live handshake exact identity, nil when unreachable or unstamped.
-    let handshakeIdentityProbe: @Sendable () async -> RuntimeClosureIdentity?
+    /// One live handshake: exact identity plus product admission, nil when
+    /// unreachable, incompatible or unstamped.
+    let handshakeProbe: @Sendable () async -> RuntimeServingHandshake?
 
     init(
         isBusyProbe: @escaping @Sendable () async -> Bool?,
-        handshakeIdentityProbe: @escaping @Sendable () async -> RuntimeClosureIdentity? = { nil }
+        handshakeProbe: @escaping @Sendable () async -> RuntimeServingHandshake? = { nil }
     ) {
         self.isBusyProbe = isBusyProbe
-        self.handshakeIdentityProbe = handshakeIdentityProbe
+        self.handshakeProbe = handshakeProbe
     }
 
     func isBusy() async -> Bool? { await isBusyProbe() }
-    func handshakeIdentity() async -> RuntimeClosureIdentity? { await handshakeIdentityProbe() }
+    func handshakeIdentity() async -> RuntimeClosureIdentity? { await handshakeProbe()?.identity }
+    func servingHandshake() async -> RuntimeServingHandshake? { await handshakeProbe() }
+
+    /// Reduce one live handshake to lifecycle facts. `ok` stays the Gateway's
+    /// connectivity/protocol verdict, so a recovery-only engine still yields
+    /// its exact identity; its admission travels beside it instead of being
+    /// dropped.
+    static func servingHandshake(using client: GatewayClient) async -> RuntimeServingHandshake? {
+        guard let outcome = try? await client.handshake(), outcome.ok,
+            let engine = outcome.engine,
+            let identity = runtimeIdentity(version: engine.version, buildSha: engine.sha)
+        else { return nil }
+        return RuntimeServingHandshake(identity: identity, recoveryOnly: outcome.recoveryOnly)
+    }
 
     func start() throws {
         guard DaemonLauncher.startIfNeeded() else {

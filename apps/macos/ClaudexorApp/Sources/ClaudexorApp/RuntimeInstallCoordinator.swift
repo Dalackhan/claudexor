@@ -9,9 +9,12 @@ import ClaudexorKit
 //   full unpack to versions/<v> → re-verify → strip quarantine → probe-start the
 //   unpacked daemon (exact `{version,buildSha}` probe) → idle-gate →
 //   identity-proven daemon stop → ATOMIC current.json swap (single rename inside
-//   a whole-critical-section lock) → relaunch → handshake-verify → rollback to
-//   last-known-good on ANY failure. The bundled runtime stays the final fallback
-//   (the launcher already falls back on an invalid/absent pointer).
+//   a whole-critical-section lock) → relaunch → handshake-verify exact identity
+//   AND normal admission → rollback to last-known-good when the engine is wrong
+//   or never answers. An exact engine observed in recovery mode stays selected;
+//   normal readiness was not confirmed, nor a successful update or rollback. The bundled
+//   runtime stays the final fallback (the launcher already falls back on an
+//   invalid/absent pointer).
 //
 // The daemon-lifecycle side effects (busy signal, identity-proven stop, relaunch,
 // probe, handshake) are injected through `RuntimeDaemonControl`, so the entire
@@ -38,6 +41,19 @@ public struct RuntimeClosureIdentity: Sendable, Equatable {
               })
         else { return nil }
         return Self(version: version, buildSha: buildSha)
+    }
+}
+
+/// One handshake's exact serving identity with its product admission. A
+/// recovery-only daemon is reachable and names its closure, but refuses normal
+/// work until its recovery completes.
+public struct RuntimeServingHandshake: Sendable, Equatable {
+    public let identity: RuntimeClosureIdentity
+    public let recoveryOnly: Bool
+
+    public init(identity: RuntimeClosureIdentity, recoveryOnly: Bool) {
+        self.identity = identity
+        self.recoveryOnly = recoveryOnly
     }
 }
 
@@ -132,8 +148,12 @@ public protocol RuntimeDaemonControl: Sendable {
     func start(scriptURL: URL) throws
     /// Side-effect-free exact closure identity from `--probe`.
     func probeIdentity(scriptURL: URL) async -> RuntimeClosureIdentity?
-    /// Exact identity of the currently serving daemon.
+    /// Exact identity of the currently serving daemon, whatever its admission:
+    /// stopping or reconciling a recovery-only daemon still needs its identity.
     func handshakeIdentity() async -> RuntimeClosureIdentity?
+    /// Exact identity plus product admission from one handshake. Install and
+    /// rollback success require normal admission, not identity alone.
+    func servingHandshake() async -> RuntimeServingHandshake?
 }
 
 public enum RuntimeReplacementStopError: Error, Sendable, Equatable {
@@ -149,6 +169,7 @@ public extension RuntimeDaemonControl {
     /// lifecycle owners treat nil as failure and never guess from a version.
     func probeIdentity(scriptURL: URL) async -> RuntimeClosureIdentity? { nil }
     func handshakeIdentity() async -> RuntimeClosureIdentity? { nil }
+    func servingHandshake() async -> RuntimeServingHandshake? { nil }
 }
 
 /// Progress states surfaced to the update chip (honest, per DESIGN_SYSTEM).
@@ -161,6 +182,9 @@ public enum RuntimeInstallPhase: Sendable, Equatable {
     case swapping
     case relaunching
     case done(version: String)
+    /// The exact new closure was selected and observed in recovery mode;
+    /// normal readiness was not confirmed. Neither a success nor a rollback.
+    case recoveryOnly(RuntimeClosureIdentity)
     case rolledBack(reason: String)
     case failed(reason: String)
 }
@@ -185,7 +209,7 @@ public actor RuntimeInstallCoordinator {
         daemon: RuntimeDaemonControl,
         lifecycleOwner: LocalRuntimeLifecycleOwner,
         rollbackSelection: @escaping @Sendable () -> LocalRuntimeClosureSelection? = { nil },
-        handshakePollInterval: TimeInterval = 0.5,
+        handshakePollInterval: TimeInterval = LocalDaemonBootPolicy.handshakePollInterval,
         handshakePollTimeout: TimeInterval = LocalDaemonBootPolicy.handshakeTimeout,
         onPhase: @escaping @Sendable (RuntimeInstallPhase) -> Void = { _ in }
     ) {
@@ -354,6 +378,12 @@ public actor RuntimeInstallCoordinator {
         case .matched:
             onPhase(.done(version: manifest.version))
             return manifest.version
+        case .recoveryOnly:
+            // The exact candidate answered in recovery mode without later normal
+            // readiness. Even if it stopped answering, it may hold state the
+            // previous runtime cannot read, so it stays selected without success.
+            onPhase(.recoveryOnly(expectedCandidate))
+            throw RuntimeInstallError.servingRecoveryOnly(expectedCandidate)
         case let .mismatch(got):
             throw await rollbackAndClassify(
                 to: previous, reason: "post-relaunch handshake mismatch",
@@ -373,6 +403,7 @@ public actor RuntimeInstallCoordinator {
 
     private enum HandshakeProbe: Sendable {
         case matched(RuntimeClosureIdentity)
+        case recoveryOnly
         case mismatch(RuntimeClosureIdentity)
         case unreachable
     }
@@ -381,14 +412,21 @@ public actor RuntimeInstallCoordinator {
     /// `handshakePollInterval` up to `handshakePollTimeout`, reloading discovery
     /// each try (the production probe re-reads ControlApiDiscovery per call). A
     /// `nil` handshake is "not serving YET" and keeps polling; a mismatch is
-    /// concluded only on a non-nil wrong exact identity or a timeout.
+    /// concluded only on a non-nil wrong exact identity or a timeout. The exact
+    /// identity in recovery-only admission is not ready yet either: every
+    /// startup passes through it, and an import can hold it for minutes. Only
+    /// exact identity with normal admission matches; once the exact closure has
+    /// answered in recovery mode, the deadline reports that, not unreachability.
     private func pollHandshake(expected: RuntimeClosureIdentity) async -> HandshakeProbe {
         let deadline = Date().addingTimeInterval(handshakePollTimeout)
+        var answeredInRecovery = false
         while true {
-            if let running = await daemon.handshakeIdentity() {
-                return running == expected ? .matched(running) : .mismatch(running)
+            if let serving = await daemon.servingHandshake() {
+                guard serving.identity == expected else { return .mismatch(serving.identity) }
+                guard serving.recoveryOnly else { return .matched(serving.identity) }
+                answeredInRecovery = true
             }
-            if Date() >= deadline { return .unreachable }
+            if Date() >= deadline { return answeredInRecovery ? .recoveryOnly : .unreachable }
             try? await Task.sleep(nanoseconds: UInt64(max(0, handshakePollInterval) * 1_000_000_000))
         }
     }
@@ -424,8 +462,8 @@ public actor RuntimeInstallCoordinator {
     /// Restore the previous pointer (or delete it so the launcher falls back to
     /// the bundled runtime), relaunch, and PROVE the recovery with the same
     /// bounded handshake poll — the restored pointer wrote, the daemon relaunched,
-    /// and it reports the exact expected prior identity. Only then is `.rolledBack`
-    /// emitted. If any step
+    /// and it reports the exact expected prior identity with normal admission.
+    /// Only then is `.rolledBack` emitted. If any step
     /// fails, `.failed` carries the exact step + remediation — never a green
     /// "rolled back" over a dead daemon or a broken pointer.
     private func rollback(
@@ -468,12 +506,19 @@ public actor RuntimeInstallCoordinator {
                 remediation: "Quit and reopen Claudexor to restart the engine.")
         }
 
-        // 3. Prove the restored engine is the exact prior closure. A reachable
-        // version without its authoritative build SHA is not a recovery proof.
+        // 3. Prove the restored engine is the exact prior closure and accepts
+        // normal work. A reachable version without its authoritative build SHA,
+        // or the exact closure answering only in recovery mode, is not a
+        // recovery proof.
         switch await pollHandshake(expected: expectedIdentity) {
         case .matched:
             onPhase(.rolledBack(reason: reason))
             return .recovered
+        case .recoveryOnly:
+            return rollbackFailed(
+                reason,
+                step: "confirm the previous runtime accepts normal work (it answered only in recovery mode)",
+                remediation: "Normal readiness was not confirmed during rollback. If the engine is still unavailable, install the latest Claudexor app: the previous engine may not read data a newer engine already upgraded.")
         case let .mismatch(got):
             return rollbackFailed(
                 reason, step: "confirm the previous runtime is serving (engine reported \(got))",

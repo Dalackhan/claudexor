@@ -1,5 +1,16 @@
 # @claudexor/control-api
 
+## 4.2.0
+
+### Patch Changes
+
+- @claudexor/delivery@4.2.0
+- @claudexor/event-log@4.2.0
+- @claudexor/schema@4.2.0
+- @claudexor/secrets@4.2.0
+- @claudexor/util@4.2.0
+- @claudexor/workspace@4.2.0
+
 ## 4.1.1
 
 ### Patch Changes

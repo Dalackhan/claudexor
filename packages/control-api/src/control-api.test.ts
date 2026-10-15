@@ -1384,18 +1384,18 @@ describe("DaemonControlApiServer", () => {
       expect(body.runs).toHaveLength(2);
       // Only the 2 paged terminal records are fingerprinted, and each terminal
       // fingerprint short-circuits to delivery_state + the retention tombstone
-      // + the kept-envelope pointer (adoption/discard move it): 6 total, not
+      // + continuation sources and the kept-envelope pointer: 8 total, not
       // 6 records x 13 paths.
-      expect(runListFingerprintProbeCountForTests()).toBe(6);
+      expect(runListFingerprintProbeCountForTests()).toBe(8);
     });
 
     const running = [pagedRunRecord(0, "running", runDir)];
     await withDaemonServer(pagedDaemon(running), async (base) => {
       resetRunListFingerprintProbeCountForTests();
       await fetchRunList(base);
-      // An active run keeps the full 13-path fingerprint (events + final/* land
+      // An active run keeps all 18 paths (events + final/* land
       // while live), so it must NOT be short-circuited.
-      expect(runListFingerprintProbeCountForTests()).toBe(13);
+      expect(runListFingerprintProbeCountForTests()).toBe(18);
     });
   });
 

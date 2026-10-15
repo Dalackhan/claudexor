@@ -20,9 +20,13 @@ import {
   dominantHarnessFailureCategory,
   harnessFailureNextActions,
 } from "./harnessFailure.js";
-import { cancelledResult } from "./runTerminals.js";
+import { cancelReasonFromSignalToken, cancelledResult } from "./runTerminals.js";
 import { gatesPassed } from "@claudexor/review";
 import { publishUnverifiedGitCandidate } from "./candidateWorkProduct.js";
+import {
+  persistFailedCandidateOutput,
+  persistFailedInPlaceWorkProduct,
+} from "./delegationFailure.js";
 import { resumableOf, resumableTerminal } from "./continuity-terminal.js";
 
 interface CandidateTerminalContext {
@@ -62,17 +66,27 @@ export async function cancelledCandidatesResult(
       log,
     });
   if (runs.length === 1 && input.git) {
-    await publishUnverifiedGitCandidate({
-      ...input.git,
-      run: runs[0]!,
-      store,
-      paths,
-      log,
-      taskId,
-      mode,
-      kind: "patch",
-      facts: makeOutcomeFacts("cancelled", { noChanges: !runs[0]!.diff.trim() }),
-    });
+    const run = runs[0]!;
+    const output = { ...input.git, run, store, paths, log, taskId, mode, kind: "patch" as const };
+    if (run.captureRefusal) {
+      // An incomplete capture publishes no patch; live effects keep the shared
+      // capture-refused receipt (adopted, review-blocked, not revertable) with
+      // the cancellation's own facts, so the public result never reads as
+      // not_applied while the tree already changed. An isolated source stays
+      // in retained custody and is not adopted.
+      await persistFailedCandidateOutput({
+        ...output,
+        facts: makeOutcomeFacts("cancelled", {
+          reason: cancelReasonFromSignalToken(signal?.reason),
+          noChanges: null,
+        }),
+      });
+    } else {
+      await publishUnverifiedGitCandidate({
+        ...output,
+        facts: makeOutcomeFacts("cancelled", { noChanges: !run.diff.trim() }),
+      });
+    }
   } else if (runs.some((run) => run.diff.trim() && !run.captureRefusal)) {
     const patches = runs.filter((run) => run.diff.trim() && !run.captureRefusal);
     store.writeText(
@@ -197,13 +211,22 @@ export async function failedCandidatesResult(
     runs: CandidateRun[];
     budgetDenial?: BudgetDenial | null;
     writeTelemetry(): void;
+    /** The race's dominant uncaptured candidate: its live effects keep the
+     * shared capture-refused receipt, with this terminal's own facts. */
+    liveCapture?: Omit<Parameters<typeof persistFailedInPlaceWorkProduct>[0], "facts">;
   },
 ): Promise<OrchestratorResult> {
   const { store, paths, log, runId, taskId, mode, ledger, runs, writeTelemetry } = input;
   const first = runs[0] as CandidateRun;
-  const budget = input.budgetDenial
-    ? classifyBudgetFailure({ denial: input.budgetDenial, terminal: ledger.terminal() })
-    : null;
+  // A lease denial, or a budget terminal the ledger settled on a candidate
+  // whose capture then failed (stream hard cap, exact overshoot, unverifiable
+  // cash), owns the terminal: the shared classifier leads and the capture
+  // facts and inspection actions follow (parity with convergence).
+  const budgetTerminal = ledger.terminal();
+  const budget =
+    input.budgetDenial || (budgetTerminal && runs.some((run) => run.captureRefusal))
+      ? classifyBudgetFailure({ denial: input.budgetDenial ?? null, terminal: budgetTerminal })
+      : null;
   const phase =
     budget?.phase ??
     (first.captureRefusal
@@ -224,11 +247,15 @@ export async function failedCandidatesResult(
       facts,
       log,
     });
+  if (input.liveCapture) await persistFailedInPlaceWorkProduct({ ...input.liveCapture, facts });
   store.writeYaml(join(paths.arbitrationDir, "decision.yaml"), {
     winner: null,
     facts,
     why_winner: rootCause,
-    evidence_facts: runs.map((r) => `${r.attemptId} produced no work: ${r.errors[0] ?? "unknown"}`),
+    evidence_facts: runs.map(
+      (r) =>
+        `${r.attemptId} ${r.captureRefusal ? "capture incomplete" : "produced no work"}: ${r.errors[0] ?? "unknown"}`,
+    ),
     apply_recommendation: "continue",
     budget_summary: decisionBudgetSummary(ledger),
   });
@@ -262,6 +289,7 @@ export async function failedCandidatesResult(
     runDir: paths.root,
     resetsAt: unanimous?.resetsAt ?? null,
     requestRefusal: unanimous?.requestRefusal,
+    captureFailure: first.captureRefusal?.failure,
     // The first candidate speaks (like harnessId/attemptId); a budget terminal speaks for itself.
     vendorFailure: budget ? null : attemptVendorFailure([first], first.attemptId),
     nextActions: first.captureRefusal
@@ -270,7 +298,11 @@ export async function failedCandidatesResult(
         ? ["Check the project folder", "Open diagnostics", "Retry the run"]
         : harnessFailureNextActions(harnessCategory),
     ...(budget
-      ? budgetFailureRecord(budget, { eventRefs: existingEventRefs, runDir: paths.root })
+      ? budgetFailureRecord(budget, {
+          eventRefs: existingEventRefs,
+          runDir: paths.root,
+          followUps: secretDiff.captureInspectionActions(first.captureRefusal),
+        })
       : {}),
   });
   log.emit("output.ready", { kind: "summary", path: "final/summary.md", state: "diagnostic" });

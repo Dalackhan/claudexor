@@ -42,6 +42,7 @@ export function writeFailure(
      * null/omitted when no vendor-typed evidence exists. Opaque evidence. */
     vendorFailure?: VendorFailureEvidence | null;
     requestRefusal?: HarnessRequestRefusal;
+    captureFailure?: RunFailure["captureFailure"];
     nextActions?: string[];
   },
 ): void {
@@ -67,25 +68,30 @@ export function writeFailure(
     runDir: failure.runDir ?? paths.root,
     resetsAt: failure.resetsAt ?? null,
     ...(failure.requestRefusal ? { requestRefusal: failure.requestRefusal } : {}),
+    ...(failure.captureFailure ? { captureFailure: failure.captureFailure } : {}),
     // Vendor text was redacted at event ingress; redact again like safeMessage (INV-062).
     vendorFailure: vendor && {
       code: vendor.code === null ? null : redactSecrets(vendor.code),
       message: vendor.message === null ? null : redactSecrets(vendor.message),
       source: vendor.source,
     },
-    nextActions:
-      failure.code === "input_too_large"
-        ? [
-            "Fit the input to the reported transport limit or supply source references",
-            "Choose another compatible harness if the complete input must remain inline",
-          ]
-        : failure.code === "vendor_cli_too_old"
+    nextActions: [
+      ...new Set([
+        ...(failure.code === "input_too_large"
           ? [
-              `Update the Claude Code CLI${installation ? ` at ${installation}` : ""}`,
-              "Use the update method for that installation, then retry the requested model",
-              "Open diagnostics",
+              "Fit the input to the reported transport limit or supply source references",
+              "Choose another compatible harness if the complete input must remain inline",
             ]
-          : (failure.nextActions ?? []),
+          : failure.code === "vendor_cli_too_old"
+            ? [
+                `Update the Claude Code CLI${installation ? ` at ${installation}` : ""}`,
+                "Use the update method for that installation, then retry the requested model",
+                "Open diagnostics",
+              ]
+            : (failure.nextActions ?? [])),
+        ...(failure.captureFailure ? (failure.nextActions ?? []) : []),
+      ]),
+    ],
   });
 }
 
@@ -245,11 +251,14 @@ export function failTerminally(
   err: unknown,
   spendUsd?: number | null,
   failureMeta: {
-    category?: "harness_error" | "internal";
+    category?: "harness_error" | "internal" | "project";
+    captureFailure?: RunFailure["captureFailure"];
     harnessId?: string;
     attemptId?: string;
     rawDetailRef?: string;
     nextActions?: string[];
+    /** Actions that follow this terminal's own remedy (an earlier record's capture actions). */
+    followUps?: readonly string[];
     priorFacts?: RunOutcomeFacts;
     continuity?: readonly ContinuityTerminalFacts[];
   } = {},
@@ -265,7 +274,7 @@ export function failTerminally(
   const failFacts = terminalOutcomeFacts(
     failureMeta.priorFacts,
     "failed",
-    budget?.reason ?? "harness_failed",
+    budget?.reason ?? (phase === "workspace" ? "workspace_unavailable" : "harness_failed"),
   );
   store.writeText(
     join(paths.finalDir, "summary.md"),
@@ -279,11 +288,14 @@ export function failTerminally(
     attemptId: budget?.attemptId ?? failureMeta.attemptId,
     safeMessage: message,
     rawDetailRef: failureMeta.rawDetailRef,
+    captureFailure: failureMeta.captureFailure,
     runDir: paths.root,
     resetsAt: declared.resetsAt,
     requestRefusal: declared.requestRefusal,
-    nextActions: budget?.nextActions ??
-      failureMeta.nextActions ?? ["Open diagnostics", "Retry the run"],
+    nextActions: [
+      ...(budget?.nextActions ?? failureMeta.nextActions ?? ["Open diagnostics", "Retry the run"]),
+      ...(failureMeta.followUps ?? []),
+    ],
   });
   log.emit("output.ready", { kind: "summary", path: "final/summary.md", state: "diagnostic" });
   log.emit("run.failed", {

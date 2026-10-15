@@ -19,7 +19,7 @@ import {
   isTerminalLifecycle,
 } from "@claudexor/schema";
 import { readTextSafe, writeText } from "@claudexor/util";
-import { retainedEnvelopeOfRun } from "@claudexor/workspace";
+import { holdsRetainedSources } from "@claudexor/workspace";
 
 export interface RetentionPolicy {
   runsMaxAgeDays: number;
@@ -218,8 +218,18 @@ export async function runRetentionPass(
       // operator may still act on. The decision RECORDS themselves are
       // journal-durable and survive independently of the tree.
       // Stopped work kept for continueFrom (A9) is never cleaned automatically:
-      // its run tree holds the evidence a successor continues from.
-      if (hasActionableWorkProduct(root) || retainedEnvelopeOfRun(root, runId)) {
+      // its run tree holds the evidence a successor continues from. Capture
+      // sources kept for inspection hold it the same way; an unreadable or
+      // invalid pointer or custody record keeps the tree and is reported here,
+      // never read as nothing held (only explicit discard releases a source).
+      if (
+        hasActionableWorkProduct(root) ||
+        holdsRetainedSources(root, runId, (error) =>
+          errors.push(
+            `runs/${runId}: kept; its retained sources are unreadable: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+        )
+      ) {
         kept.actionable += 1;
         continue;
       }

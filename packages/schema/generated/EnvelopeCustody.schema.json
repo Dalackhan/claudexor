@@ -25,6 +25,10 @@
           "minLength": 1,
           "description": "Absolute run directory of the holder."
         },
+        "continuation_eligible": {
+          "type": "boolean",
+          "description": "False for diagnostic source retention addressed by attempt, without a run continuation pointer. Absent retains the historical singleton continuation contract."
+        },
         "envelope": {
           "type": "object",
           "properties": {

@@ -1,7 +1,13 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseUnifiedDiff, runCaptureRaw, WorkspaceError } from "@claudexor/core";
+import {
+  CaptureOutputExceeded,
+  assertCaptureComplete,
+  parseUnifiedDiff,
+  runCaptureRaw,
+  WorkspaceError,
+} from "@claudexor/core";
 import { containsSecretLikeToken, isClaudexorOwnedRuntimePath } from "@claudexor/util";
 import {
   initializeGitRepository,
@@ -25,7 +31,8 @@ export async function git(
   input?: string,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const r = await runCaptureRaw("git", ["-C", repo, ...args], { timeoutMs: 60_000, input });
-  return { code: r.code, stdout: r.stdout, stderr: r.stderr };
+  assertCaptureComplete(r);
+  return r;
 }
 
 /** `git` with extra environment (e.g. a scratch GIT_INDEX_FILE for snapshots). */
@@ -40,7 +47,8 @@ async function gitEnv(
     env,
     input,
   });
-  return { code: r.code, stdout: r.stdout, stderr: r.stderr };
+  assertCaptureComplete(r);
+  return r;
 }
 
 export async function isGitRepo(repo: string): Promise<boolean> {
@@ -190,6 +198,8 @@ export async function diffTrees(repo: string, baseSha: string, endSha: string): 
  * directory is read-only through Git's alternates mechanism.
  */
 export interface TransientDiffCapture {
+  captureIncomplete: boolean;
+  captureFailure?: CaptureOutputExceeded;
   patch: string;
   /** Changed binary files whose pre- or postimage holds secret-like bytes (or
    * could not be read for inspection). The exact patch still carries their
@@ -253,17 +263,24 @@ export async function captureWorkingTreeTransient(
           : []),
       ];
       for (const blob of blobs) {
-        const content = await gitEnv(repo, ["show", `${blob.tree}:${blob.path}`], env);
-        // An unreadable blob is unprovable, so its payload is withheld too.
-        if (content.code !== 0 || containsSecretLikeToken(content.stdout)) {
-          flagged.add(file.newPath ?? file.oldPath ?? blob.path);
-          break;
+        try {
+          const content = await gitEnv(repo, ["show", `${blob.tree}:${blob.path}`], env);
+          // An unreadable blob is unprovable, so its payload is withheld too.
+          if (content.code === 0 && !containsSecretLikeToken(content.stdout)) continue;
+        } catch (error) {
+          // A complete compressed patch may carry a much larger blob. Failed
+          // inspection withholds that payload, not the already complete patch.
+          if (!(error instanceof CaptureOutputExceeded)) throw error;
         }
+        flagged.add(file.newPath ?? file.oldPath ?? blob.path);
+        break;
       }
     }
-    return { patch: diff.stdout, binarySecretPaths: [...flagged] };
+    return { patch: diff.stdout, binarySecretPaths: [...flagged], captureIncomplete: false };
   } catch (error) {
     primaryError = error;
+    if (error instanceof CaptureOutputExceeded)
+      return { patch: "", binarySecretPaths: [], captureIncomplete: true, captureFailure: error };
     throw error;
   } finally {
     // Unlike ordinary best-effort scratch cleanup, this directory may contain
@@ -291,7 +308,13 @@ export async function captureWorkingTreeTransient(
             enumerable: false,
           });
         } catch {
-          // Even a frozen/non-extensible typed error remains the primary cause.
+          // A frozen typed error cannot accept cleanup evidence. Preserve both
+          // through a wrapper, keeping its machine facts and original cause.
+          throw Object.assign(
+            new WorkspaceError(primaryError.message, { cause: primaryError }),
+            primaryError,
+            { cleanupError },
+          );
         }
       }
     }
@@ -303,7 +326,9 @@ export async function diffWorkingTreeTransient(
   baseSha: string,
   pathExcludes: string[] = [],
 ): Promise<string> {
-  return (await captureWorkingTreeTransient(repo, baseSha, pathExcludes)).patch;
+  const captured = await captureWorkingTreeTransient(repo, baseSha, pathExcludes);
+  if (captured.captureIncomplete) throw captured.captureFailure;
+  return captured.patch;
 }
 
 /**
@@ -391,6 +416,7 @@ export async function isolatedCloneAdd(
     ["clone", "--shared", "--no-checkout", "--", repo, path],
     { timeoutMs: 120_000 },
   );
+  assertCaptureComplete(cloned);
   if (cloned.code !== 0) {
     throw new WorkspaceError(`isolated clone failed: ${cloned.stderr.trim()}`);
   }

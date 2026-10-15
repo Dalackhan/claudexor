@@ -3,6 +3,7 @@ import { PR_SECRET_LIKE_REFUSAL, verifyAndDeliver } from "@claudexor/delivery";
 import {
   advanceThreadWorktree,
   captureWorkingTreeTransient,
+  captureFailureEvidence,
   git,
   snapshotTree,
 } from "@claudexor/workspace";
@@ -43,6 +44,19 @@ export async function applyThreadDiff(
   const projectRoot = thread.repo.root;
   const base = ws.base_sha ?? "HEAD";
   const captured = await captureWorkingTreeTransient(ws.worktree_path, base);
+  if (captured.captureIncomplete) {
+    const failure = captureFailureEvidence(captured.captureFailure);
+    // Problem context is the existing wire/journal carrier of typed facts, so
+    // the first refusal and every idempotent replay answer the same evidence.
+    throw Object.assign(
+      new Error(`Thread changes could not be captured completely: ${failure.message}`),
+      {
+        status: 409,
+        code: failure.code,
+        context: { captureFailure: failure },
+      },
+    );
+  }
   const patch = captured.patch;
   if (!patch.trim())
     return {

@@ -79,9 +79,27 @@ export const VendorFailureEvidence = z
   );
 export type VendorFailureEvidence = z.infer<typeof VendorFailureEvidence>;
 
+/** Capture evidence is separate from native harness failure and never inferred from prose. */
+export const WorkspaceCaptureFailure = z.object({
+  code: z.enum([
+    "capture_output_exceeded",
+    "capture_output_incomplete",
+    "capture_preview_truncated",
+    "capture_failed",
+  ]),
+  message: z.string(),
+  causeCode: z.string().optional(),
+  bufferBudgetBytes: z.number().int().nonnegative().optional(),
+  stream: z.enum(["stdout", "stderr"]).optional(),
+  drain: z.literal("truncated").optional(),
+  cleanup: z.object({ code: z.string().nullable(), message: z.string() }).optional(),
+});
+export type WorkspaceCaptureFailure = z.infer<typeof WorkspaceCaptureFailure>;
+
 export const RunFailure = z
   .object({
     requestRefusal: HarnessRequestRefusal.optional(),
+    captureFailure: WorkspaceCaptureFailure.optional(),
     phase: z.string().default("unknown").describe("Pipeline phase where the failure happened."),
     category: z
       .enum([

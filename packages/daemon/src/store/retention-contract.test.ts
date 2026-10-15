@@ -1,4 +1,10 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  WorkspaceManager,
+  retainForInspection,
+  releaseRetainedEnvelope,
+} from "@claudexor/workspace";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -131,6 +137,130 @@ describe("SQL command retention contract", () => {
     ]);
     // Unique inline results disappear with their last owner, while shared params remain.
     expect(f.store.prepare("SELECT count(*) AS n FROM blob").get()).toEqual({ n: 502 });
+  });
+
+  it("keeps an expired inspection holder addressable until explicit source release", async () => {
+    const f = await fixture();
+    const repo = join(f.root, "project");
+    const runDir = join(f.root, "run-inspection");
+    mkdirSync(repo);
+    mkdirSync(runDir);
+    const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args]);
+    git("init", "-q");
+    git(
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit",
+      "--allow-empty",
+      "-qm",
+      "base",
+    );
+    const manager = new WorkspaceManager(repo);
+    const envelope = await manager.create({
+      taskId: "inspection-task",
+      attemptId: "a01",
+      baseRef: "HEAD",
+    });
+    writeFileSync(join(envelope.worktree_path, "kept.txt"), "unique source");
+    const custody = retainForInspection(envelope, { runId: "run-inspection", runDir });
+    cleanup.push(async () => {
+      await releaseRetainedEnvelope(custody);
+    });
+    const rows = Array.from({ length: 501 }, (_, i) =>
+      prepareCommandRow(
+        {
+          id: `old-${String(i).padStart(4, "0")}`,
+          state: "succeeded",
+          params: {},
+          createdAt: new Date(Date.parse(OLD) + i).toISOString(),
+          finishedAt: OLD,
+          ...(i === 0 ? { runId: "run-inspection", runDir } : {}),
+        },
+        { pid: f.generations[0]!.pid, live: true, operation: "run.create", clientId: null },
+        (bytes) => f.blobs.prepareBody(bytes),
+      ),
+    );
+    runMutation(f.store, (tx) => {
+      for (const row of rows) applyCommandInTx(tx, row, "accept");
+    });
+    expect(f.pruner.pruneHistory(500, MONTH, NOW)).toEqual(["old-0001"]);
+    expect(f.store.prepare("SELECT id FROM command WHERE run_id=?").get("run-inspection")).toEqual({
+      id: "old-0000",
+    });
+    expect(readFileSync(join(envelope.worktree_path, "kept.txt"), "utf8")).toBe("unique source");
+    await releaseRetainedEnvelope(custody);
+    expect(f.pruner.pruneHistory(499, MONTH, NOW)).toEqual(["old-0000"]);
+  });
+
+  it("holds only a candidate whose inspection addresses cannot be read and prunes the rest", async () => {
+    const f = await fixture();
+    const lines: string[] = [];
+    const pruner = new SqlCommandPruner(f.store, f.blobs, { log: (line) => lines.push(line) });
+    const runDir = join(f.root, "run-unreadable");
+    mkdirSync(runDir);
+    writeFileSync(join(runDir, "attempts"), "not a directory");
+    const rows = Array.from({ length: 502 }, (_, i) =>
+      prepareCommandRow(
+        {
+          id: `old-${String(i).padStart(4, "0")}`,
+          state: "succeeded",
+          params: {},
+          createdAt: new Date(Date.parse(OLD) + i).toISOString(),
+          finishedAt: OLD,
+          ...(i === 0 ? { runId: "run-unreadable", runDir } : {}),
+        },
+        { pid: f.generations[0]!.pid, live: true, operation: "run.create", clientId: null },
+        (bytes) => f.blobs.prepareBody(bytes),
+      ),
+    );
+    runMutation(f.store, (tx) => {
+      for (const row of rows) applyCommandInTx(tx, row, "accept");
+    });
+    expect(pruner.pruneHistory(500, MONTH, NOW)).toEqual(["old-0001", "old-0002"]);
+    expect(f.store.prepare("SELECT id FROM command WHERE run_id=?").get("run-unreadable")).toEqual({
+      id: "old-0000",
+    });
+    expect(lines).toEqual([expect.stringMatching(/old-0000\b.*run-unreadable.*ENOTDIR/)]);
+  });
+
+  it("holds a candidate whose inspection pointer is invalid and prunes the rest", async () => {
+    const f = await fixture();
+    const lines: string[] = [];
+    const pruner = new SqlCommandPruner(f.store, f.blobs, { log: (line) => lines.push(line) });
+    const runDir = join(f.root, "run-invalid-pointer");
+    mkdirSync(join(runDir, "attempts", "a01"), { recursive: true });
+    writeFileSync(join(runDir, "attempts", "a01", "retained-envelope.json"), "{");
+    const rows = Array.from({ length: 502 }, (_, i) =>
+      prepareCommandRow(
+        {
+          id: `old-${String(i).padStart(4, "0")}`,
+          state: "succeeded",
+          params: {},
+          createdAt: new Date(Date.parse(OLD) + i).toISOString(),
+          finishedAt: OLD,
+          ...(i === 0 ? { runId: "run-invalid-pointer", runDir } : {}),
+        },
+        { pid: f.generations[0]!.pid, live: true, operation: "run.create", clientId: null },
+        (bytes) => f.blobs.prepareBody(bytes),
+      ),
+    );
+    runMutation(f.store, (tx) => {
+      for (const row of rows) applyCommandInTx(tx, row, "accept");
+    });
+    expect(pruner.pruneHistory(500, MONTH, NOW)).toEqual(["old-0001", "old-0002"]);
+    expect(
+      f.store.prepare("SELECT id FROM command WHERE run_id=?").get("run-invalid-pointer"),
+    ).toEqual({ id: "old-0000" });
+    expect(lines).toEqual([
+      expect.stringMatching(
+        /old-0000\b.*run-invalid-pointer.*invalid retained-envelope pointer at .*a01[\\/]retained-envelope\.json/,
+      ),
+    ]);
+    // A readable, released address is legitimately nothing held: the row prunes.
+    rmSync(join(runDir, "attempts", "a01", "retained-envelope.json"));
+    expect(pruner.pruneHistory(499, MONTH, NOW)).toEqual(["old-0000"]);
   });
 
   it("keeps needs-decision, retained custody, continuation and recent rows; hides old generations", async () => {

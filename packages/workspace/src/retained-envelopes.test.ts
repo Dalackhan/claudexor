@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -18,11 +19,43 @@ import { WorkspaceManager } from "./manager.js";
 import {
   RETAINED_ENVELOPE_POINTER,
   adoptRetainedEnvelope,
+  holdsRetainedSources,
   recoverOrphanCustody,
   releaseRetainedEnvelope,
   retainForContinuation,
+  retainForInspection,
+  retainedEnvelopeBase,
   retainedEnvelopeOfRun,
+  retainedSourcesOfRun,
 } from "./retained-envelopes.js";
+
+/** chmod 0o000 denies reads only where the platform honors the mode bits for
+ * the current user (not root, not Windows where Node changes only the write
+ * bit): probe the real capability once instead of guessing from uid. */
+const canDenyRead = (() => {
+  const dir = mkdtempSync(join(tmpdir(), "claudexor-retained-probe-"));
+  const probe = join(dir, "probe");
+  try {
+    writeFileSync(probe, "x");
+    chmodSync(probe, 0o000);
+    try {
+      readFileSync(probe);
+      return false;
+    } catch (error) {
+      return (error as { code?: string }).code === "EACCES";
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
+function thrownBy(fn: () => unknown): { code?: string; message: string } {
+  try {
+    fn();
+  } catch (error) {
+    return error as { code?: string; message: string };
+  }
+  throw new Error("expected the strict read to throw");
+}
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -204,5 +237,99 @@ describe("retained envelopes (A9 custody)", () => {
     });
     writeFileSync(join(plain.worktree_path, "a.txt"), "edited\n");
     expect(await recoverOrphanCustody(envelopeBaseOf(plain))).toBeNull();
+  });
+});
+
+describe("strict reads at the destructive seam", () => {
+  it("reads absent and stale inspection addresses as nothing held but reports an unreadable or invalid pointer or custody record", async () => {
+    const repo = initRepo();
+    const runDir = temp("run");
+    const { env } = await createKept(repo, runDir);
+    // Nothing retained yet: every address is absent.
+    expect(retainedSourcesOfRun(runDir, "run-p")).toEqual([]);
+    const custody = retainForInspection(env, { runId: "run-p", runDir });
+    expect(retainedSourcesOfRun(runDir, "run-p").map((s) => s.envelope.id)).toEqual([env.id]);
+    expect(retainedSourcesOfRun(runDir, "run-other")).toEqual([]); // another holder: not held
+    const pointer = join(runDir, "attempts", "a01", "retained-envelope.json");
+    const pointerBytes = readFileSync(pointer);
+    const custodyFile = join(envelopeBaseOf(env), "continuation-custody.json");
+    const custodyBytes = readFileSync(custodyFile);
+    const reports: unknown[] = [];
+
+    writeFileSync(pointer, "{");
+    expect(thrownBy(() => retainedSourcesOfRun(runDir, "run-p")).message).toMatch(
+      /invalid retained-envelope pointer at .*a01[\\/]retained-envelope\.json/,
+    );
+    expect(holdsRetainedSources(runDir, "run-p", (e) => reports.push(e))).toBe(true);
+    expect(retainedEnvelopeBase(runDir, "a01")).toBeNull(); // observational: still tolerant
+    writeFileSync(pointer, JSON.stringify({ envelope_base: 42 }));
+    expect(thrownBy(() => retainedSourcesOfRun(runDir, "run-p")).message).toMatch(
+      /envelope_base is missing/,
+    );
+    for (const address of ["", "relative/dir"]) {
+      // An empty or relative address names no envelope: never "nothing retained".
+      writeFileSync(pointer, JSON.stringify({ envelope_base: address }));
+      expect(thrownBy(() => retainedSourcesOfRun(runDir, "run-p")).message).toMatch(
+        /envelope_base is not absolute/,
+      );
+    }
+    rmSync(pointer);
+    mkdirSync(pointer);
+    expect(thrownBy(() => retainedSourcesOfRun(runDir, "run-p")).code).toBe("EISDIR");
+    rmSync(pointer, { recursive: true });
+    writeFileSync(pointer, pointerBytes);
+    if (canDenyRead) {
+      chmodSync(pointer, 0o000);
+      expect(thrownBy(() => retainedSourcesOfRun(runDir, "run-p")).code).toBe("EACCES");
+      expect(holdsRetainedSources(runDir, "run-p", (e) => reports.push(e))).toBe(true);
+      chmodSync(pointer, 0o600);
+      chmodSync(custodyFile, 0o000);
+      expect(thrownBy(() => retainedSourcesOfRun(runDir, "run-p")).code).toBe("EACCES");
+      expect(readEnvelopeCustody(envelopeBaseOf(env))).toBeNull(); // observational: tolerant
+      chmodSync(custodyFile, 0o600);
+    }
+    writeFileSync(custodyFile, "{");
+    expect(thrownBy(() => retainedSourcesOfRun(runDir, "run-p")).message).toMatch(
+      /invalid envelope custody record at .*continuation-custody\.json/,
+    );
+    expect(holdsRetainedSources(runDir, "run-p", (e) => reports.push(e))).toBe(true);
+    writeFileSync(custodyFile, custodyBytes);
+    expect(reports.length).toBe(canDenyRead ? 3 : 2);
+    // Readable again: held, and a stale address (custody released) is nothing held.
+    expect(retainedSourcesOfRun(runDir, "run-p")).toHaveLength(1);
+    await releaseRetainedEnvelope(custody);
+    writeFileSync(pointer, pointerBytes); // a stale address left behind
+    expect(retainedSourcesOfRun(runDir, "run-p")).toEqual([]);
+    expect(holdsRetainedSources(runDir, "run-p", (e) => reports.push(e))).toBe(false);
+    expect(reports.length).toBe(canDenyRead ? 3 : 2);
+  });
+
+  it("reads the continuation singleton pointer with the same strictness", async () => {
+    const repo = initRepo();
+    const runDir = temp("run");
+    const { env } = await createKept(repo, runDir);
+    retainForContinuation(env, { runId: "run-p", runDir }, "cancelled");
+    expect(retainedSourcesOfRun(runDir, "run-p").map((s) => s.envelope.id)).toEqual([env.id]);
+    const pointer = join(runDir, RETAINED_ENVELOPE_POINTER);
+    const reports: unknown[] = [];
+    writeFileSync(pointer, "null");
+    expect(thrownBy(() => retainedSourcesOfRun(runDir, "run-p")).message).toMatch(
+      /envelope_base is missing/,
+    );
+    expect(holdsRetainedSources(runDir, "run-p", (e) => reports.push(e))).toBe(true);
+    expect(retainedEnvelopeOfRun(runDir, "run-p")).toBeNull(); // observational: tolerant
+    writeFileSync(pointer, JSON.stringify({ envelope_base: "" }));
+    expect(thrownBy(() => retainedSourcesOfRun(runDir, "run-p")).message).toMatch(
+      /envelope_base is not absolute/,
+    );
+    if (canDenyRead) {
+      writeFileSync(pointer, JSON.stringify({ envelope_base: envelopeBaseOf(env) }));
+      chmodSync(pointer, 0o000);
+      expect(thrownBy(() => retainedSourcesOfRun(runDir, "run-p")).code).toBe("EACCES");
+      chmodSync(pointer, 0o600);
+    }
+    rmSync(pointer);
+    expect(retainedSourcesOfRun(runDir, "run-p")).toEqual([]); // absent: nothing held
+    expect(reports).toHaveLength(1);
   });
 });

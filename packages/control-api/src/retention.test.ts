@@ -1,4 +1,6 @@
+import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -9,6 +11,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  WorkspaceManager,
+  envelopeBaseOf,
+  releaseEnvelopeCustody,
+  retainForInspection,
+} from "@claudexor/workspace";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   runRetentionPass,
@@ -113,6 +121,149 @@ describe("runRetentionPass", () => {
       "run-interrupted",
     ]);
   });
+  it("keeps and discloses a run whose inspection addresses cannot be read; deletes the rest", async () => {
+    const { project } = sandbox();
+    const unreadable = seedRun(project.runsDir, "run-unreadable");
+    writeFileSync(join(unreadable, "attempts"), "not a directory");
+    seedRun(project.runsDir, "run-ordinary");
+    const records = ["run-unreadable", "run-ordinary"].map((runId) => ({
+      runId,
+      state: "failed",
+      finishedAt: daysAgo(90),
+    }));
+    const receipt = await runRetentionPass(
+      { ...POLICY, keepLastRunsPerProject: 0 },
+      { dry_run: false },
+      deps(project, { records: () => records }),
+    );
+    expect(receipt.deleted_runs.map((row) => row.run_id)).toEqual(["run-ordinary"]);
+    expect(receipt.kept.actionable).toBe(1);
+    expect(receipt.errors).toEqual([expect.stringMatching(/^runs\/run-unreadable: .*ENOTDIR/)]);
+    expect(readFileSync(join(unreadable, "attempts"), "utf8")).toBe("not a directory");
+    expect(existsSync(join(project.runsDir, "run-ordinary", "final"))).toBe(false);
+  });
+  // chmod 0o000 denies reads only where the platform honors the mode bits for
+  // the current user (not root, not Windows where Node changes only the write
+  // bit): probe the real capability once instead of guessing from uid.
+  const canDenyRead = (() => {
+    const dir = mkdtempSync(join(tmpdir(), "claudexor-retention-probe-"));
+    const probe = join(dir, "probe");
+    try {
+      writeFileSync(probe, "x");
+      chmodSync(probe, 0o000);
+      try {
+        readFileSync(probe);
+        return false;
+      } catch (error) {
+        return (error as { code?: string }).code === "EACCES";
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  })();
+  it.each([
+    { fault: "pointer-malformed", error: /invalid retained-envelope pointer/ },
+    { fault: "pointer-is-a-directory", error: /EISDIR/ },
+    { fault: "custody-malformed", error: /invalid envelope custody record/ },
+    ...(canDenyRead
+      ? [
+          { fault: "pointer-eacces", error: /EACCES/ },
+          { fault: "custody-eacces", error: /EACCES/ },
+        ]
+      : []),
+  ])(
+    "keeps and discloses a run whose kept source has fault $fault; a released source follows retention",
+    async ({ fault, error }) => {
+      const { project } = sandbox();
+      execFileSync("git", ["init", "-q", project.root]);
+      writeFileSync(join(project.root, "a.txt"), "a\n");
+      execFileSync("git", ["-C", project.root, "add", "-A"]);
+      execFileSync("git", [
+        ...["-C", project.root, "-c", "user.email=t@t", "-c", "user.name=t"],
+        ...["commit", "-qm", "init"],
+      ]);
+      const runDir = seedRun(project.runsDir, "run-kept");
+      mkdirSync(join(runDir, "attempts", "a01"), { recursive: true });
+      writeFileSync(join(runDir, "attempts", "a01", "answer.md"), "generated answer\n");
+      seedRun(project.runsDir, "run-ordinary");
+      const env = await new WorkspaceManager(project.root).create({
+        taskId: "task-kept",
+        attemptId: "a01",
+        baseRef: "HEAD",
+        custody: { runId: "run-kept", runDir },
+      });
+      writeFileSync(join(env.worktree_path, "unique.txt"), "irreplaceable source bytes\n");
+      retainForInspection(env, { runId: "run-kept", runDir });
+      const pointer = join(runDir, "attempts", "a01", "retained-envelope.json");
+      const custodyFile = join(envelopeBaseOf(env), "continuation-custody.json");
+      const pointerBytes = readFileSync(pointer);
+      const custodyBytes = readFileSync(custodyFile);
+      const restore: Array<() => void> = [];
+      if (fault === "pointer-malformed") writeFileSync(pointer, "{");
+      if (fault === "pointer-is-a-directory") {
+        rmSync(pointer);
+        mkdirSync(pointer);
+        restore.push(() => rmSync(pointer, { recursive: true }));
+      }
+      if (fault === "custody-malformed") writeFileSync(custodyFile, "{");
+      if (fault === "pointer-eacces") {
+        chmodSync(pointer, 0o000);
+        restore.push(() => chmodSync(pointer, 0o600));
+      }
+      if (fault === "custody-eacces") {
+        chmodSync(custodyFile, 0o000);
+        restore.push(() => chmodSync(custodyFile, 0o600));
+      }
+      const records = ["run-kept", "run-ordinary"].map((runId) => ({
+        runId,
+        state: "failed",
+        finishedAt: daysAgo(90),
+      }));
+      const receipt = await runRetentionPass(
+        { ...POLICY, keepLastRunsPerProject: 0 },
+        { dry_run: false },
+        deps(project, { records: () => records }),
+      );
+      expect(receipt.deleted_runs.map((row) => row.run_id)).toEqual(["run-ordinary"]);
+      expect(receipt.kept.actionable).toBe(1);
+      expect(receipt.errors).toEqual([
+        expect.stringMatching(/^runs\/run-kept: kept; its retained sources are unreadable: /),
+      ]);
+      expect(receipt.errors[0]).toMatch(error);
+      expect(readFileSync(join(runDir, "attempts", "a01", "answer.md"), "utf8")).toBe(
+        "generated answer\n",
+      );
+      expect(readFileSync(join(env.worktree_path, "unique.txt"), "utf8")).toBe(
+        "irreplaceable source bytes\n",
+      );
+      for (const undo of restore) undo();
+      writeFileSync(pointer, pointerBytes);
+      writeFileSync(custodyFile, custodyBytes);
+      // Readable again: still held, without an error. Once custody is released
+      // (an explicit disposition), the stale address is legitimately nothing
+      // held and the run follows ordinary retention.
+      const held = await runRetentionPass(
+        { ...POLICY, keepLastRunsPerProject: 0 },
+        { dry_run: false },
+        deps(project, { records: () => records }),
+      );
+      expect(held.deleted_runs).toEqual([]);
+      expect(held.kept.actionable).toBe(1);
+      expect(held.errors).toEqual([]);
+      releaseEnvelopeCustody(envelopeBaseOf(env));
+      const released = await runRetentionPass(
+        { ...POLICY, keepLastRunsPerProject: 0 },
+        { dry_run: false },
+        deps(project, { records: () => records }),
+      );
+      expect(released.deleted_runs.map((row) => row.run_id)).toEqual(["run-kept"]);
+      expect(released.errors).toEqual([]);
+      expect(readFileSync(join(env.worktree_path, "unique.txt"), "utf8")).toBe(
+        "irreplaceable source bytes\n",
+      );
+      await new WorkspaceManager(project.root).dispose(env);
+    },
+  );
   it("retains the remainder of partial files delivery and releases explicit discard to normal retention", async () => {
     const { project } = sandbox();
     const records = ["pending", "discarded", "direct"].map((id) => {

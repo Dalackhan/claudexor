@@ -670,6 +670,8 @@ events.jsonl
 context/task.yaml
 context/context_pack.yaml?
 attempts/a01/attempt.yaml
+attempts/a01/answer.md?
+attempts/a01/retained-envelope.json?  (capture-refused inspection source)
 attempts/a01/patch.diff
 reviews/a01.yaml
 arbitration/decision.yaml

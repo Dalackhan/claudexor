@@ -1,4 +1,4 @@
-import { retainedEnvelopeOfRun } from "@claudexor/workspace";
+import { holdsRetainedSources, retainedEnvelopeOfRun } from "@claudexor/workspace";
 import type { BlobFiles } from "./blob-files.js";
 import { deleteTargetIdempotencyInTx } from "./idempotency.js";
 import { requireTransaction, runMutation, type SqlWriteContext } from "./mutation.js";
@@ -80,10 +80,15 @@ export class SqlCommandPruner {
         !!(
           candidate.runDir &&
           candidate.runId &&
-          (this.options.retainedEnvelope ?? retainedEnvelopeOfRun)(
+          ((this.options.retainedEnvelope ?? retainedEnvelopeOfRun)(
             candidate.runDir,
             candidate.runId,
-          )
+          ) ||
+            holdsRetainedSources(candidate.runDir, candidate.runId, (error) =>
+              this.options.log?.(
+                `command retention kept ${candidate.id}: retained sources of run ${candidate.runId} are unreadable: ${error instanceof Error ? error.message : String(error)}`,
+              ),
+            ))
         ),
     });
     this.prune(selection.victims.map((row) => row.id));

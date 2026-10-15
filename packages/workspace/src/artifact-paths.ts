@@ -1,11 +1,12 @@
-import { runCaptureRaw, WorkspaceError } from "@claudexor/core";
+import { assertCaptureComplete, runCaptureRaw, WorkspaceError } from "@claudexor/core";
 
 async function git(
   repo: string,
   args: string[],
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const r = await runCaptureRaw("git", ["-C", repo, ...args], { timeoutMs: 60_000 });
-  return { code: r.code, stdout: r.stdout, stderr: r.stderr };
+  assertCaptureComplete(r);
+  return r;
 }
 
 /**

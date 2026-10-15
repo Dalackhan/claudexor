@@ -695,10 +695,11 @@ describe("WorkspaceManager", () => {
 
     expect(captured.diff).toContain("[diff truncated]");
     expect(captured.diff).not.toContain(secret);
-    // The bounded projection is the only text a saved copy is built from, so
-    // the capture is complete and names no binary; the live file is untouched.
+    // The display is clipped, so exact consumers must refuse. The live file
+    // stays untouched and no secret-bearing suffix enters the preview.
     expect(captured.binarySecretPaths).toEqual([]);
-    expect(captured.captureIncomplete).toBe(false);
+    expect(captured.captureIncomplete).toBe(true);
+    expect(captured.captureFailure).toMatchObject({ code: "capture_preview_truncated" });
     expect(readFileSync(join(dir, "LONG.txt"), "utf8")).toContain(secret);
     await mgr.dispose(env);
   });
@@ -713,7 +714,8 @@ describe("WorkspaceManager", () => {
     chmodSync(leak, 0o000);
     try {
       const captured = await mgr.captureDiff(env);
-      expect(captured).toEqual({ diff: "", binarySecretPaths: [], captureIncomplete: true });
+      expect(captured).toMatchObject({ diff: "", binarySecretPaths: [], captureIncomplete: true });
+      expect(captured.captureFailure?.message).toContain("Permission denied");
     } finally {
       chmodSync(leak, 0o600);
       await mgr.dispose(env);

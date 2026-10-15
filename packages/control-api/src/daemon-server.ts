@@ -1,7 +1,6 @@
 import { handleAccountResourceRoute } from "./account-resource-routes.js";
 import { projectProcessScope } from "./run-detail-scope.js";
 import { ControlAccountResetRequest } from "@claudexor/schema";
-import { readThreadCommands } from "./command-reads.js";
 import { recoverInterruptedOutput } from "./retained-output.js";
 import { recordedExecutionRoot } from "./run-delivery-state.js";
 import * as exactPatch from "./run-exact-patch.js";
@@ -51,7 +50,12 @@ import {
   timelineEvents,
 } from "./run-timeline.js";
 import { projectTurnRunCards } from "./thread-projection.js";
-import { projectSession, projectThread, projectTurn } from "./thread-projection.js";
+import {
+  projectSession,
+  projectThread,
+  projectThreadList,
+  projectTurn,
+} from "./thread-projection.js";
 import {
   handleThreadTurnCreate,
   handleThreadTurnRetry,
@@ -117,10 +121,11 @@ import {
   lruGet,
   lruSet,
   parseRunListQuery,
+  summarizeRunPage,
   selectRunListPage,
   type RunListQuery,
 } from "./run-list.js";
-import { summaryFingerprint } from "./run-list-fingerprint.js";
+import { summaryFingerprint, type RunListFingerprint } from "./run-list-fingerprint.js";
 export {
   resetRunListFingerprintProbeCountForTests,
   runListFingerprintProbeCountForTests,
@@ -196,7 +201,6 @@ import {
   ControlThreadTurnRequest,
   ControlThreadUpdateRequest,
   ControlThreadDetail,
-  ControlThreadListResponse,
   DecisionRecord,
   Id,
   ModeKind,
@@ -946,20 +950,10 @@ export class DaemonControlApiServer {
       const svc = this.opts.services?.listThreads;
       if (!svc)
         return this.json(res, 501, { error: "threads are not supported by this engine build" });
-      const { threads, problems } = await svc();
-      const runs = await readThreadCommands(this.opts.daemon, threads);
-      const blocked = new Set(
-        runs.filter((r) => this.runNeedsAttention(r)).map((r) => r.runId ?? r.id),
-      );
       return this.json(
         res,
         200,
-        ControlThreadListResponse.parse({
-          threads: threads.map((t) =>
-            projectThread(t, blocked.has((t as { head_run_id?: string | null }).head_run_id ?? "")),
-          ),
-          problems: problems ?? [],
-        }),
+        await projectThreadList(this.opts.daemon, await svc(), (r) => this.runNeedsAttention(r)),
       );
     }
 
@@ -2031,7 +2025,7 @@ export class DaemonControlApiServer {
       res,
       200,
       ControlRunListResponse.parse({
-        runs: page.map((r) => this.summarizeRunOrDiagnostic(r)),
+        runs: await summarizeRunPage(page, (r) => this.summarizeRunOrDiagnostic(r)),
         nextCursor,
         hasMore,
       }),
@@ -2091,6 +2085,7 @@ export class DaemonControlApiServer {
    * OR a non-overridable D-16 work_state needs-input veto. Inbox/head surfaces
    * fold both so a needs_input run still surfaces as needing the operator. */
   private runNeedsAttention(rec: DaemonRunRecord): boolean {
+    if (rec.state !== "succeeded") return false;
     const arb = safeReadStructuredArtifact(rec, "arbitration/decision.yaml", DecisionRecord);
     const facts = runOutcomeFacts(rec, arb, readFailure(rec), winnerWorkStateFor(rec));
     if (!facts) return false;
@@ -2201,7 +2196,7 @@ export class DaemonControlApiServer {
 
   private readonly summaryCache = new Map<
     string,
-    { fingerprint: string; summary: ControlRunSummary }
+    { fingerprint: RunListFingerprint; summary: ControlRunSummary }
   >();
 
   /**
@@ -2213,9 +2208,9 @@ export class DaemonControlApiServer {
   private static readonly SUMMARY_CACHE_MAX = 1_000;
 
   private summarizeRunCached(rec: DaemonRunRecord): ControlRunSummary {
-    const fingerprint = summaryFingerprint(rec);
     const hit = lruGet(this.summaryCache, rec.id);
-    if (hit && hit.fingerprint === fingerprint) return hit.summary;
+    const fingerprint = summaryFingerprint(rec, hit?.fingerprint);
+    if (hit && hit.fingerprint.value === fingerprint.value) return hit.summary;
     const summary = summarizeRun(rec);
     // QA-052: LRU-bounded eviction (oldest entry drops) instead of the old
     // wholesale clear at the guard, so a large retained set never pays a full

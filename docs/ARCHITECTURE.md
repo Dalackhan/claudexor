@@ -2605,11 +2605,17 @@ not retry automatically.
   inserts/prunes with no duplicates or omissions. Ordering, `state` filtering,
   and page slicing all happen on raw records BEFORE any summary is materialized,
   so per-run artifact fingerprint/projection work is bounded by page size rather
-  than total retained records; a terminal run's fingerprint further short-circuits
-  to file identities for only the mutable `delivery_state.yaml` overlay and the
-  retention-owned `tombstone.yaml` transition (all other artifacts are frozen once
-  the run is terminal). The bare parameterless call stays valid — it now yields the
-  newest 200 with a cursor to page the rest.
+  than total retained records. Each summary yields with `setImmediate` before
+  the next. The LRU remembers file identities for delivery, tombstone, continuation
+  sources, every local/ancestor retained-envelope pointer and its addressed custody
+  file, plus ancestor roots/tombstones (GC can reclaim an ancestor without a
+  pointer). Unchanged polls only stat that set; any dependency change rebuilds it.
+  Active runs also track mutable artifacts, including the task contract and
+  structured-output conformance receipt; terminal artifacts are otherwise frozen.
+  The bare call returns the newest 200 with a cursor to page the rest.
+- `GET /v2/threads` projects every thread in store order and validates the response
+  once. Its inbox bit resolves only head command ids (batches of 1000), then reads
+  attention artifacts only for succeeded heads, including operator decisions.
 - Retained-command RPC reads require one strict addressed selector: a job/run
   `id`, a set of `ids`, `turnId`, `threadId` (optionally active only), `threadIds`,
   active commands, direct Delegate children, transitive Delegate descendants,
@@ -4713,6 +4719,8 @@ events.jsonl
 context/task.yaml
 context/context_pack.yaml?
 attempts/aNN/attempt.yaml       (Agent candidate evidence)
+attempts/aNN/answer.md?         (selected answer, even if capture failed)
+attempts/<envelope-attempt>/retained-envelope.json? (inspection-source address)
 attempts/pNN/council-input.yaml? (Council planner input evidence)
 council/draft-<harness>.md?
 council/membership.yaml?
@@ -5533,8 +5541,67 @@ code touching one of these areas must honor it or change it explicitly here.
   baseline, a failed `diff`), Claudexor records a capture refusal: a sanitized
   `manual_cleanup` receipt in phase `workspace`, with nothing rolled back; it
   never substitutes an empty diff and asks reviewers to trust the live tree.
-  The non-Git text diff is bounded to 200 kB, and the saved copy and its match
-  counts are built from that bounded projection.
+  All `runCaptureRaw` callers share a combined stdout/stderr buffer policy of
+  256 MiB (not an RSS bound): capture, delivery/revert Git and reviewer inventory
+  reads refuse larger output. Oversized binary inspection withholds that payload
+  from saved copies without discarding an already complete compressed patch;
+  `pr` refuses it like a secret-like finding (one refusal names both causes),
+  while local apply, branch and commit deliver its exact bytes. Overflow,
+  spawn/I/O or scratch-cleanup failure becomes typed workspace evidence,
+  including budget/stream, primary cause, cleanup and any available
+  incomplete-drain facts. Thread apply refuses an incomplete capture with 409
+  and these facts in problem `context.captureFailure`; its delivery journal
+  replays that context. Completed answers are saved per attempt and observed
+  spend survives both post-try and final-only refusal. The failed post-try
+  capture is reused; a new native try resets it.
+  Isolated sources survive disposal and startup sweeping in existing durable
+  envelope custody, with auth stripped. Eligible daemon singletons retain their
+  continuation pointer; other sources have distinct
+  `attempts/<envelope-attempt>/retained-envelope.json` addresses and are for manual
+  inspection, not automatic continuation or already-applied live results.
+  File GC and command pruning keep these addresses, like the continuation
+  pointer, until explicit discard. Only these destructive owners read strictly:
+  an absent or stale address and released custody read as nothing held, while
+  an unreadable or invalid pointer or custody record (not only an unreadable
+  attempts directory) keeps its run and is reported (GC `errors[]`, daemon log);
+  explicit discard reports that failure and releases nothing, never only the
+  readable sources. Projections keep tolerating the same addresses.
+  Capture receipts/actions name the execution root, also after the own remedy
+  of a budget terminal, a leading Delegate failure (its record carries the typed
+  capture facts as well) or a convergence cancellation; such terminals keep
+  their cause and publish no exact patch (live effects keep their capture-refused
+  record, in race cancellation too, so the public result never reads as
+  `not_applied` while the tree already changed). A race cancellation writes no
+  failure record: an isolated source it leaves in retained custody is named
+  only by attempt evidence. A budget terminal the ledger
+  settled on the same attempt (stream hard cap, exact overshoot, unverifiable
+  cash) outranks that attempt's capture failure in race and convergence: the
+  shared classifier names the budget cause and remedy first and the capture
+  facts and inspection actions follow. A live race capture failure shares the
+  isolated lane's no-working-candidate terminal, so a recorded budget denial or
+  a unanimous typed refusal leads there too, as in convergence. A cancellation
+  that wins late (during a
+  Delegate parent's child drain, or a drain that fails after it) re-labels a
+  prepared failure record that carries capture facts as the cancellation's own
+  (category `cancelled`, its summary, no typed code) instead of removing it, so
+  those facts and the inspection/manual-cleanup actions stay on the public
+  failure surface; a record without capture facts is removed as before. A child
+  drain that fails without a cancellation leads with its own typed failure and
+  keeps such a record's capture facts, with its actions as follow-ups. An
+  inspection-only source's root is in
+  attempt evidence (`capture_refusal.sourceRoot`); its measured size is only in
+  that envelope's `continuation-custody.json`, not the singleton
+  `retainedEnvelope` UI.
+  Durability requires this custody schema: an older engine can reject the new
+  inspection field and reclaim its source on downgrade. Capture results do not
+  promise preservation across that rollback; export kept work before it.
+  Non-Git text is projected to 200,000 characters while draining, with binary
+  inspection beyond that preview. A clipped preview carries explicit incomplete
+  capture and cannot enter exact apply/revert/digest/synthesis; the live source
+  remains available. Complete small previews retain their existing behavior.
+  Explicit directory file-manifest capture is separate: its refusal carries no
+  typed capture facts, so the late-cancel and drain rules above do not keep it.
+  No truncated exact Git patch is delivered. Cursor NDJSON frames remain uncapped.
 - Isolated-thread worktrees are pinned by persistent `claudexor/thread-*`
   branches. The stored SHA is a checked cache; successful apply advances the
   branch, and explicit trash/restore/purge owns its retention lifecycle.

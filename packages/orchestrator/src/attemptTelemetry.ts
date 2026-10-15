@@ -538,6 +538,7 @@ export function toolWarnings(t: AttemptTelemetry): ToolErrorRecord[] {
 export function setAttemptOutcome(
   t: AttemptTelemetry,
   opts: {
+    captureFailed?: boolean;
     deliverablePresent: boolean;
     gatesPassed: boolean | null;
     harnessErrored: boolean;
@@ -546,12 +547,9 @@ export function setAttemptOutcome(
      * incomplete veto rides HERE without flipping `status` — the lifecycle
      * stays succeeded-class; applyability and the CLI exit read the axis. */
     workState?: WorkState;
-    /** The lane's contract does NOT require a deliverable: a clean completion
-     * with an honestly empty answer stays a success (read-only ask/report,
-     * where "(no output)" is a valid outcome). Every harder axis still wins —
-     * a harness error, failed gate, unsatisfied web, or belt failure fails the
-     * attempt exactly as before; this only stops a MISSING deliverable from
-     * being counted as a contract failure on its own. */
+    /** A lane may accept a clean empty deliverable (read-only ask/report).
+     * Harness, gate, web and belt failures still fail the attempt; only the
+     * missing deliverable stops being a contract failure on its own. */
     emptyDeliverableAllowed?: boolean;
   },
 ): void {
@@ -565,7 +563,7 @@ export function setAttemptOutcome(
   const beltUnavailable = belt.delegationBeltUnavailable(t) || belt.delegationBeltToolFailure(t);
   const status: AttemptOutcomeStatus = opts.webRequiredUnsatisfied
     ? "blocked"
-    : opts.harnessErrored || contractFailed || beltUnavailable
+    : opts.harnessErrored || opts.captureFailed || contractFailed || beltUnavailable
       ? "failed"
       : warnings > 0
         ? "success_with_warnings"

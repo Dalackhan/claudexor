@@ -34,6 +34,12 @@ export const EnvelopeCustody = z
     state: z.enum(["live", "retained"]),
     holder_run_id: Id.describe("Run that holds the envelope."),
     holder_run_dir: z.string().min(1).describe("Absolute run directory of the holder."),
+    continuation_eligible: z
+      .boolean()
+      .optional()
+      .describe(
+        "False for diagnostic source retention addressed by attempt, without a run continuation pointer. Absent retains the historical singleton continuation contract.",
+      ),
     envelope: WorkspaceEnvelope.describe("The envelope exactly as created (adoption reuses it)."),
     cause: ResumableCause.nullable().describe("Why the holder stopped; null while live."),
     retained_at: z.string().nullable().describe("When custody became retained; null while live."),

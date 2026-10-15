@@ -29,8 +29,8 @@ describe("run-list delivery fingerprint", () => {
       writeFileSync(replacement, "state: new\n");
       utimesSync(replacement, timestamp, timestamp);
       renameSync(replacement, statePath);
-      const after = summaryFingerprint(record);
-      expect(after).not.toBe(before);
+      const after = summaryFingerprint(record, before);
+      expect(after.value).not.toBe(before.value);
     } finally {
       rmSync(runDir, { recursive: true, force: true });
     }
@@ -55,9 +55,68 @@ describe("run-list delivery fingerprint", () => {
     mkdirSync(runDir);
     writeFileSync(join(runDir, "tombstone.yaml"), "reason: retention\n");
     try {
-      expect(summaryFingerprint(record)).not.toBe(before);
+      expect(summaryFingerprint(record, before).value).not.toBe(before.value);
     } finally {
       rmSync(runDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("remembered continuation addresses", () => {
+  it("rebuilds for pointer creation/replacement/deletion, custody-only changes, and changed source sets", async () => {
+    const { writeContinuationSources, ENVELOPE_CUSTODY_FILE, RETAINED_ENVELOPE_POINTER } =
+      await import("@claudexor/workspace");
+    const root = mkdtempSync(join(tmpdir(), "cx-fingerprint-chain-"));
+    const dirs = ["head", "first", "second", "third", "env-a", "env-b"].map((name) =>
+      join(root, name),
+    );
+    for (const dir of dirs) mkdirSync(join(dir, "final"), { recursive: true });
+    const [head, first, second, third, envA, envB] = dirs as [
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+    ];
+    const rec = { id: "head", runId: "head", runDir: head, state: "failed", params: {} };
+    const source = (runDir: string) => ({
+      runDir,
+      runId: runDir.split("/").at(-1)!,
+      state: "failed",
+    });
+    writeContinuationSources(head, [source(first), source(second)]);
+    const pointer = (dir: string, base: string) =>
+      writeFileSync(join(dir, RETAINED_ENVELOPE_POINTER), JSON.stringify({ envelope_base: base }));
+    let previous = summaryFingerprint(rec);
+    const changed = () => {
+      const next = summaryFingerprint(rec, previous);
+      expect(next.value).not.toBe(previous.value);
+      expect(summaryFingerprint(rec, next)).toBe(next);
+      previous = next;
+    };
+    try {
+      pointer(first, envA);
+      changed();
+      // The second ancestor stays remembered even while the first is retained.
+      pointer(second, envB);
+      changed();
+      writeFileSync(join(envB, ENVELOPE_CUSTODY_FILE), "live");
+      changed();
+      pointer(second, envA);
+      changed();
+      rmSync(join(second, RETAINED_ENVELOPE_POINTER));
+      changed();
+      writeContinuationSources(head, [source(third)]);
+      changed();
+      pointer(third, envB);
+      changed();
+      writeFileSync(join(envB, ENVELOPE_CUSTODY_FILE), "adopted");
+      changed();
+      rmSync(third, { recursive: true });
+      changed(); // No tombstone publication.
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

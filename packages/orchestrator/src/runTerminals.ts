@@ -41,6 +41,7 @@ import {
 } from "./runTerminalResults.js";
 import {
   clearFailureArtifact,
+  preparedCaptureFacts,
   reconcileWorkProductTerminal,
   terminalOutcomeFacts,
 } from "./terminalOutcome.js";
@@ -257,7 +258,7 @@ export async function guardAnnouncedRun(
               preparedFacts: result.facts,
             });
             reconcileWorkProductTerminal(context, reconciledCancelFacts);
-            clearFailureArtifact(context);
+            clearFailureArtifact(context, { summary: cancelSummary });
           } catch {
             /* the cancellation terminal below remains authoritative */
           }
@@ -375,7 +376,7 @@ export async function guardAnnouncedRun(
               ...(preparedResult ? { preparedFacts: preparedResult.facts } : {}),
             });
             reconcileWorkProductTerminal(a, reconciledCancelFacts);
-            clearFailureArtifact(a);
+            clearFailureArtifact(a, { summary: cancelSummary });
           } catch {
             /* the cancellation terminal below remains authoritative */
           }
@@ -433,7 +434,8 @@ export async function guardAnnouncedRun(
             barrierFailed ? "delegation_drain" : a.phase,
             terminalError,
             spendUsd,
-            { priorFacts: reconciledFailureFacts },
+            // Read before this terminal replaces the prepared record.
+            { priorFacts: reconciledFailureFacts, ...preparedCaptureFacts(a) },
           );
           await flushContinuationTerminal(a, failed.facts);
           result = preparedResult

@@ -9,7 +9,7 @@ import { publicJobRecord, type JobRecord } from "../../daemon/src/job-record.js"
 import { DaemonControlApiServer, type DaemonControlApiOptions } from "./daemon-server.js";
 import { chainIdleRunMutation } from "./thread-mutation.js";
 import { resolveThreadRecoveryTurn } from "./thread-recovery.js";
-import { readCommandIds, readThreadCommands } from "./command-reads.js";
+import { readCommandIds, readThreadHeads } from "./command-reads.js";
 import type { DaemonFacadeClient } from "./run-record.js";
 
 const roots: string[] = [];
@@ -149,7 +149,7 @@ describe("[INV-142:addressed-reads] collection routes with 1600 unrelated record
     });
     expect(f.queries).toEqual([
       { page: { limit: 2, cursor: null, state: null } },
-      { threadIds: ["thread"] },
+      { ids: ["run-source"] },
       { threadId: "thread" },
     ]);
   });
@@ -272,12 +272,12 @@ describe("[INV-142:addressed-reads] collection routes with 1600 unrelated record
   it("batches ids without imposing a lifetime cap and skips an empty collection", async () => {
     const f = fixture();
     expect(await readCommandIds(f.daemon, [])).toEqual([]);
-    expect(await readThreadCommands(f.daemon, [])).toEqual([]);
+    expect(await readThreadHeads(f.daemon, [])).toEqual([]);
     expect(f.queries).toHaveLength(0);
     const ids = Array.from({ length: 2001 }, (_, i) => `thread-${i}`);
-    await readThreadCommands(
+    await readThreadHeads(
       f.daemon,
-      ids.map((id) => ({ id })),
+      ids.map((id) => ({ head_run_id: id })),
     );
     await readCommandIds(f.daemon, ids);
     expect(

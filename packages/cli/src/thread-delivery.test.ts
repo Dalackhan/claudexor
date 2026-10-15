@@ -1,16 +1,41 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { type ProjectThreadPort } from "@claudexor/daemon";
 import { PR_SECRET_LIKE_REFUSAL } from "@claudexor/delivery";
 import { projectRuntimeDir } from "@claudexor/util";
 import { ensureThreadWorktree } from "@claudexor/workspace";
+import { sqlFixture } from "../../daemon/src/store/test-support/sql-fixture.js";
 import { applyThreadDiff } from "./thread-delivery.js";
 
+// While enabled, only the binary inspection read exceeds the capture buffer;
+// Git still produces the complete, small binary patch.
+const inspection = vi.hoisted(() => ({ overflow: false }));
+vi.mock("@claudexor/core", async (original) => {
+  const core = await original<typeof import("@claudexor/core")>();
+  return {
+    ...core,
+    runCaptureRaw: (...args: Parameters<typeof core.runCaptureRaw>) =>
+      inspection.overflow && args[0] === "git" && args[1][2] === "show"
+        ? Promise.reject(new core.CaptureOutputExceeded("stdout"))
+        : core.runCaptureRaw(...args),
+  };
+});
+
 const dirs: string[] = [];
-afterEach(() => {
+const stores: Array<{ close(): Promise<void> }> = [];
+afterEach(async () => {
+  inspection.overflow = false;
+  for (const store of stores.splice(0)) await store.close();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -25,10 +50,9 @@ const leakBytes = (kind: "text" | "binary"): Buffer =>
     : Buffer.concat([Buffer.from([0]), Buffer.from(secret), Buffer.from([0])]);
 const leakName = (kind: "text" | "binary"): string => (kind === "text" ? "LEAK.txt" : "LEAK.bin");
 
-/** A project with a pushable `origin` and an isolated thread worktree that
- * holds one changed file with secret-like bytes. */
-async function threadWithLeak(kind: "text" | "binary") {
-  const repo = mkdtempSync(join(tmpdir(), "claudexor-thread-delivery-"));
+/** A committed project with a pushable bare `origin`. */
+function projectWithOrigin() {
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), "claudexor-thread-delivery-")));
   const remote = mkdtempSync(join(tmpdir(), "claudexor-thread-delivery-remote-"));
   dirs.push(repo, remote, projectRuntimeDir(repo));
   execFileSync("git", ["init", "--bare", "-b", "main", remote]);
@@ -38,6 +62,13 @@ async function threadWithLeak(kind: "text" | "binary") {
   git(repo, "-c", "user.email=t@t.dev", "-c", "user.name=Test", "commit", "-m", "init");
   git(repo, "remote", "add", "origin", remote);
   git(repo, "push", "-q", "origin", "main");
+  return { repo, remote };
+}
+
+/** A project with a pushable `origin` and an isolated thread worktree that
+ * holds one changed file with secret-like bytes. */
+async function threadWithLeak(kind: "text" | "binary") {
+  const { repo, remote } = projectWithOrigin();
   const worktree = await ensureThreadWorktree(repo, "thread-1");
   writeFileSync(join(worktree.path, leakName(kind)), leakBytes(kind));
   const thread = {
@@ -54,15 +85,53 @@ async function threadWithLeak(kind: "text" | "binary") {
 
 describe("thread delivery keeps secret-like bytes local (INV-062)", () => {
   it.each(["text", "binary"] as const)(
-    "applies the live %s worktree bytes exactly instead of refusing them",
+    "applies the live %s worktree bytes exactly and advances the durable watermark to them",
     async (kind) => {
-      const { repo, threads } = await threadWithLeak(kind);
+      const { repo } = projectWithOrigin();
+      const storeRoot = realpathSync(mkdtempSync(join(tmpdir(), "cx-thread-store-")));
+      dirs.push(storeRoot);
+      const sql = await sqlFixture(storeRoot);
+      stores.push(sql);
+      // The real daemon thread store is the watermark owner (no port double).
+      const threads = sql.graph.threads;
+      const thread = threads.createThread({ repoRoot: repo, workspace: "isolated" });
+      const worktree = await ensureThreadWorktree(repo, thread.id);
+      threads.setThreadWorktree(thread.id, worktree.path, worktree.baseSha);
+      threads.bindTurnRun(threads.createTurn(thread.id, "write the file").id, "run-head");
+      writeFileSync(join(worktree.path, leakName(kind)), leakBytes(kind));
 
-      const result = await applyThreadDiff(threads, "thread-1", { mode: "apply" });
+      const result = await applyThreadDiff(threads, thread.id, { mode: "apply" });
 
       expect(result).toMatchObject({ applied: true, status: "applied" });
       // The exact bytes the agent wrote arrive in the project, unredacted.
       expect(readFileSync(join(repo, leakName(kind))).equals(leakBytes(kind))).toBe(true);
+      // Success durably advances base and delivered-through together, to the
+      // delivered project snapshot the persistent branch and worktree now hold.
+      const delivered = threads.getThread(thread.id)!.workspace;
+      expect(delivered).toMatchObject({
+        mode: "isolated",
+        worktree_path: worktree.path,
+        delivered_through_run_id: "run-head",
+      });
+      const sha = delivered.base_sha!;
+      expect(sha).not.toBe(worktree.baseSha);
+      expect(git(repo, "rev-parse", `refs/heads/claudexor/thread-${thread.id}`)).toBe(sha);
+      expect(git(worktree.path, "rev-parse", "HEAD")).toBe(sha);
+      expect(git(worktree.path, "status", "--porcelain")).toBe("");
+      const blob = execFileSync("git", [
+        "-C",
+        repo,
+        "cat-file",
+        "blob",
+        `${sha}:${leakName(kind)}`,
+      ]);
+      expect(blob.equals(leakBytes(kind))).toBe(true);
+      // The advanced watermark is the next base: nothing is delivered twice.
+      await expect(applyThreadDiff(threads, thread.id, { mode: "apply" })).resolves.toMatchObject({
+        applied: false,
+        status: "empty",
+      });
+      expect(threads.getThread(thread.id)!.workspace.base_sha).toBe(sha);
     },
   );
 
@@ -91,6 +160,40 @@ describe("thread delivery keeps secret-like bytes local (INV-062)", () => {
       expect(git(remote, "for-each-ref")).toBe(remoteRefsBefore);
     },
   );
+
+  it("refuses 'pr' but applies exactly when a binary payload cannot be inspected", async () => {
+    const { repo, remote } = projectWithOrigin();
+    const worktree = await ensureThreadWorktree(repo, "thread-1");
+    // No secret-like content at all: only its inspection read is refused.
+    const bytes = Buffer.concat([Buffer.from([0]), Buffer.alloc(4096, 7)]);
+    writeFileSync(join(worktree.path, "large.bin"), bytes);
+    const threads = {
+      getThread: () => ({
+        workspace: { mode: "isolated", worktree_path: worktree.path, base_sha: worktree.baseSha },
+        repo: { root: repo },
+        head_run_id: null,
+      }),
+      setThreadWorktree: () => undefined,
+    } as unknown as ProjectThreadPort;
+    const remoteRefsBefore = git(remote, "for-each-ref");
+    inspection.overflow = true;
+
+    const refused = await applyThreadDiff(threads, "thread-1", { mode: "pr" });
+
+    expect(refused).toMatchObject({ applied: false, status: "rejected", headMoved: false });
+    expect(refused.detail).toBe(PR_SECRET_LIKE_REFUSAL);
+    // The one shared refusal names both causes; it never asks to remove a
+    // secret that was not found.
+    expect(PR_SECRET_LIKE_REFUSAL).toContain("binary content that could not be inspected");
+    expect(PR_SECRET_LIKE_REFUSAL).not.toContain("remove the strings");
+    expect(existsSync(join(repo, "large.bin"))).toBe(false);
+    expect(git(remote, "for-each-ref")).toBe(remoteRefsBefore);
+
+    const applied = await applyThreadDiff(threads, "thread-1", { mode: "apply" });
+
+    expect(applied).toMatchObject({ applied: true, status: "applied" });
+    expect(readFileSync(join(repo, "large.bin")).equals(bytes)).toBe(true);
+  });
 
   it.each(["branch", "commit"] as const)(
     "allows the local '%s' delivery of a secret-like text patch",

@@ -1,12 +1,13 @@
 import { join } from "node:path";
 import { ArtifactStore, type RunPaths } from "@claudexor/artifact-store";
 import { EventLog } from "@claudexor/event-log";
-import { makeOutcomeFacts, type ModeKind } from "@claudexor/schema";
+import { makeOutcomeFacts, type ModeKind, type RunOutcomeFacts } from "@claudexor/schema";
 import { newId } from "@claudexor/util";
 import { snapshotTree } from "@claudexor/workspace";
 import { publishUnverifiedGitCandidate } from "./candidateWorkProduct.js";
 import type { AttemptTelemetry } from "./attemptTelemetry.js";
 import type { CandidateRun } from "./candidateEvidence.js";
+import { publishDirectoryCandidate } from "./directoryCandidate.js";
 import { delegationBeltToolFailure, delegationBeltUnavailable } from "./delegationToolEvidence.js";
 import { captureRefusalNextActions } from "./secretDiff.js";
 
@@ -36,12 +37,12 @@ export function candidateFailureKind(run: CandidateRun): DelegationFailureKind |
 
 /** Race-level precedence: an unrecovered injected-belt failure dominates all
  * siblings; an uncaptured isolated candidate is merely ineligible (its bytes
- * died with the envelope), while an uncaptured in-place candidate remains
+ * remain in retained custody), while an uncaptured in-place candidate remains
  * terminal because its live effects need direct inspection. */
 export function dominantRaceCandidateFailure(runs: CandidateRun[]): CandidateRun | undefined {
   return (
     runs.find((run) => delegationFailureKind(run.telemetry)) ??
-    runs.find((run) => run.captureRefusal && run.captureRefusal.disposition !== "discarded")
+    runs.find((run) => run.captureRefusal?.disposition === "manual_cleanup")
   );
 }
 
@@ -76,41 +77,40 @@ export function delegationFailureTerminal(run: CandidateRun, lane: "race" | "con
   };
 }
 
+/** A Delegate failure leads when both occur. An incomplete capture is
+ * orthogonal to the leading cause: its typed facts (capture failure, unknown
+ * changes) and inspection actions ride with either cause, so a later terminal
+ * owner (a late cancellation) recognizes the record by those facts. */
 export function candidateFailureTerminal(run: CandidateRun, lane: "race" | "convergence") {
-  const delegation = delegationFailureKind(run.telemetry);
-  if (delegation) {
-    const terminal = delegationFailureTerminal(run, lane);
-    return run.captureRefusal
-      ? {
-          ...terminal,
-          metadata: {
-            ...terminal.metadata,
-            nextActions: [
-              ...captureRefusalNextActions(run.captureRefusal),
-              ...terminal.metadata.nextActions,
-            ],
-          },
-        }
-      : terminal;
-  }
-  if (!run.captureRefusal) throw new Error("candidate failure terminal requested without cause");
+  const refusal = run.captureRefusal;
+  const terminal = delegationFailureKind(run.telemetry)
+    ? delegationFailureTerminal(run, lane)
+    : refusal && {
+        phase: refusal.phase ?? "workspace",
+        error: new Error(run.errors[0] ?? refusal.detail),
+        metadata: {
+          category: "project" as const,
+          harnessId: run.harnessId,
+          attemptId: run.attemptId,
+          rawDetailRef: `attempts/${run.attemptId}/attempt.yaml`,
+          nextActions: [] as string[],
+        },
+      };
+  if (!terminal) throw new Error("candidate failure terminal requested without cause");
+  if (!refusal) return terminal;
   return {
-    phase: run.captureRefusal.phase ?? "workspace",
-    error: new Error(run.errors[0] ?? run.captureRefusal.detail),
+    ...terminal,
     metadata: {
-      category: "harness_error" as const,
-      harnessId: run.harnessId,
-      attemptId: run.attemptId,
-      rawDetailRef: `attempts/${run.attemptId}/attempt.yaml`,
-      nextActions: captureRefusalNextActions(run.captureRefusal),
+      ...terminal.metadata,
+      captureFailure: refusal.failure,
+      // failTerminally derives the reason from the leading cause's phase.
+      priorFacts: makeOutcomeFacts("failed", { noChanges: null }),
+      nextActions: [...captureRefusalNextActions(refusal), ...terminal.metadata.nextActions],
     },
   };
 }
 
-/** An explicitly in-place harness may have changed the live tree before a
- * required Delegate failure becomes terminal. Persist those unavoidable bytes
- * as blocked and revertable; envelope runs stay diagnostic-only. */
-export async function persistFailedInPlaceWorkProduct(input: {
+type FailedCandidateOutput = {
   live: boolean;
   run: CandidateRun;
   store: ArtifactStore;
@@ -123,17 +123,35 @@ export async function persistFailedInPlaceWorkProduct(input: {
   mode: ModeKind;
   kind: "patch" | "new_repo";
   attempts?: number;
-}): Promise<void> {
+  /** The run's own terminal facts when a budget or cancel outranks the failure. */
+  facts?: RunOutcomeFacts;
+};
+
+/** One owner for what a failed candidate leaves behind: complete directory
+ * files keep their manifest; live Git effects keep their blocked record. */
+export async function persistFailedCandidateOutput(input: FailedCandidateOutput): Promise<void> {
+  const { run } = input;
+  if (!run.files) return persistFailedInPlaceWorkProduct(input);
+  await publishDirectoryCandidate({
+    ...{ store: input.store, paths: input.paths, taskId: input.taskId, log: input.log },
+    ...{ files: run.files, attemptId: run.attemptId, harnessId: run.harnessId },
+    facts: input.facts ?? makeOutcomeFacts("failed", { noChanges: run.files.noChanges }),
+  });
+}
+
+/** An explicitly in-place harness may have changed the live tree before a
+ * required Delegate failure becomes terminal. Persist those unavoidable bytes
+ * as blocked and revertable; envelope runs stay diagnostic-only. */
+export async function persistFailedInPlaceWorkProduct(input: FailedCandidateOutput): Promise<void> {
   if (!input.live || (!input.run.diff.trim() && !input.run.captureRefusal)) return;
   const refusal = input.run.captureRefusal;
   if (refusal) {
     // Uncaptured live effects: nothing was rolled back and no patch or revert
     // anchor can be produced, so the record says exactly that.
     const manualCleanup = refusal.disposition === "manual_cleanup";
-    const facts = makeOutcomeFacts("failed", {
-      reason: "harness_failed",
-      noChanges: !manualCleanup,
-    });
+    const facts =
+      input.facts ??
+      makeOutcomeFacts("failed", { reason: "workspace_unavailable", noChanges: null });
     input.store.writeYaml(join(input.paths.finalDir, "work_product.yaml"), {
       id: newId("wp"),
       kind: input.kind,
@@ -150,6 +168,8 @@ export async function persistFailedInPlaceWorkProduct(input: {
         capture_refused: true,
         capture_recovery: refusal.disposition,
         recovery_detail: refusal.detail,
+        capture_failure: refusal.failure,
+        execution_root: refusal.sourceRoot,
         adopted: manualCleanup,
         apply_state: manualCleanup ? "applied_review_blocked" : "not_applied",
         pre_turn_sha: input.preTurnSha,
@@ -176,6 +196,7 @@ export async function persistFailedInPlaceWorkProduct(input: {
   await publishUnverifiedGitCandidate({
     ...input,
     postTurnSha,
-    facts: makeOutcomeFacts("failed", { reason: "harness_failed", noChanges: false }),
+    facts:
+      input.facts ?? makeOutcomeFacts("failed", { reason: "harness_failed", noChanges: false }),
   });
 }

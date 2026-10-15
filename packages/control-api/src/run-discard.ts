@@ -5,7 +5,7 @@
  * for `continueFrom` (A9). Direct effects already in place are never undone.
  */
 import { ControlRunDecisionResponse } from "@claudexor/schema";
-import { releaseRetainedEnvelope, retainedEnvelopeOfRun } from "@claudexor/workspace";
+import { releaseRetainedEnvelope, retainedSourcesOfRun } from "@claudexor/workspace";
 import { readFilesWorkProduct } from "./files-work-product.js";
 import { appendRunAuditEvent } from "./run-audit.js";
 import { controlRunResult, markRunApplyState } from "./run-delivery-state.js";
@@ -13,21 +13,25 @@ import type { DaemonRunRecord } from "./run-record.js";
 import { TERMINAL_STATES } from "./sse-shared.js";
 
 export async function discardRunResult(rec: DaemonRunRecord): Promise<ControlRunDecisionResponse> {
-  const retained =
+  // Strict read: an unreadable or invalid source address or custody record is
+  // this decision's own failure (reported to the caller before anything is
+  // released), never "nothing held" and never a partial discard of the
+  // readable sources only.
+  const sources =
     TERMINAL_STATES.has(rec.state) && rec.runDir && rec.runId
-      ? retainedEnvelopeOfRun(rec.runDir, rec.runId)
-      : null;
-  if (retained) {
-    await releaseRetainedEnvelope(retained);
+      ? retainedSourcesOfRun(rec.runDir, rec.runId)
+      : [];
+  if (sources.length) {
+    for (const source of sources) await releaseRetainedEnvelope(source);
     appendRunAuditEvent(rec, "control.applied", {
       decision: "discard",
-      retained_envelope: retained.envelope.worktree_path,
+      retained_envelopes: sources.map((source) => source.envelope.worktree_path),
     });
     return ControlRunDecisionResponse.parse({
       accepted: true,
       status: "discarded",
       message:
-        "Stopped work discarded; its kept envelope was removed. A continuation starts from the project base.",
+        "Stopped work discarded; its kept source envelopes were removed. A continuation starts from the project base.",
     });
   }
   const files = readFilesWorkProduct(rec);

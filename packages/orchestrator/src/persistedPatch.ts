@@ -18,7 +18,7 @@ export const PERSISTED_PATCH_NOTICE =
   "a reviewer workspace copy omits files with secret-like content. Apply through Claudexor, never from this copy.";
 
 const BINARY_PAYLOAD_WITHHELD =
-  "# Claudexor: binary payload withheld from this saved copy (secret-like bytes)";
+  "# Claudexor: binary payload withheld from this saved copy (secret-like or uninspectable bytes)";
 
 export interface SecretLikeFileFinding {
   path: string;
@@ -175,7 +175,7 @@ export function secretLikeSummaryLine(finding: SecretLikeFinding | undefined): s
   }
   if (finding.binary_paths.length > 0) {
     parts.push(
-      `${finding.binary_paths.length} binary payload(s) withheld from the saved patch (${named(finding.binary_paths)})`,
+      `${finding.binary_paths.length} secret-like or uninspectable binary payload(s) withheld from the saved patch (${named(finding.binary_paths)})`,
     );
   }
   if (finding.answer_matches > 0) parts.push(`${finding.answer_matches} hidden in the answer`);

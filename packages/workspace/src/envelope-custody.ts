@@ -25,7 +25,7 @@ import { EnvelopeCustody, type ResumableCause, type WorkspaceEnvelope } from "@c
 import { nowIso } from "@claudexor/util";
 import { git } from "./git.js";
 
-const CUSTODY_FILE = "continuation-custody.json";
+export const ENVELOPE_CUSTODY_FILE = "continuation-custody.json";
 
 /** The envelope base of a Git envelope: its scoped HOME's parent, the one
  * directory `dispose()` removes. */
@@ -33,10 +33,42 @@ export function envelopeBaseOf(env: Pick<WorkspaceEnvelope, "home_dir">): string
   return dirname(env.home_dir);
 }
 
-/** The envelope's custody record, or null when none was written (or it is torn). */
+/** A path that is simply not there (never written, released, or its parent
+ * directory gone): the one read failure that legitimately means "absent". */
+export function absentPath(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/** The custody record read strictly: absent is a legitimate state (never
+ * written, or released by an explicit disposition) and reads as null; any
+ * other read failure, or a record this engine cannot parse, is thrown, so a
+ * destructive owner (retention, pruning, discard) holds and reports it
+ * instead of reading it as released. */
+export function readEnvelopeCustodyStrict(base: string): EnvelopeCustody | null {
+  const path = join(base, ENVELOPE_CUSTODY_FILE);
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    if (absentPath(error)) return null;
+    throw error;
+  }
+  try {
+    return EnvelopeCustody.parse(JSON.parse(text));
+  } catch (error) {
+    throw new Error(
+      `invalid envelope custody record at ${path}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+}
+
+/** The envelope's custody record, or null when none was written (or it is
+ * torn or unreadable): the observational reader for projections and adoption. */
 export function readEnvelopeCustody(base: string): EnvelopeCustody | null {
   try {
-    return EnvelopeCustody.parse(JSON.parse(readFileSync(join(base, CUSTODY_FILE), "utf8")));
+    return readEnvelopeCustodyStrict(base);
   } catch {
     return null;
   }
@@ -44,7 +76,7 @@ export function readEnvelopeCustody(base: string): EnvelopeCustody | null {
 
 /** Atomic write: a reader sees the previous record or the new one, never a torn file. */
 export function writeEnvelopeCustody(base: string, custody: EnvelopeCustody): void {
-  const path = join(base, CUSTODY_FILE);
+  const path = join(base, ENVELOPE_CUSTODY_FILE);
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(EnvelopeCustody.parse(custody), null, 2) + "\n", {
     mode: 0o600,
@@ -54,7 +86,7 @@ export function writeEnvelopeCustody(base: string, custody: EnvelopeCustody): vo
 
 /** End custody (adoption hand-over or disposition); the envelope becomes ordinary. */
 export function releaseEnvelopeCustody(base: string): void {
-  rmSync(join(base, CUSTODY_FILE), { force: true });
+  rmSync(join(base, ENVELOPE_CUSTODY_FILE), { force: true });
 }
 
 /** True when `env` is held for continuation and must survive `dispose()`. */
@@ -114,11 +146,13 @@ export function retainEnvelopeCustody(
   env: WorkspaceEnvelope,
   holder: { runId: string; runDir: string },
   cause: ResumableCause | null,
+  continuationEligible = true,
 ): EnvelopeCustody {
   stripRouteScopedAuth(env);
   const custody: EnvelopeCustody = {
     ...liveEnvelopeCustody(env, holder),
     state: "retained",
+    ...(continuationEligible ? {} : { continuation_eligible: false }),
     cause,
     retained_at: nowIso(),
     bytes: envelopeDiskBytes(envelopeBaseOf(env)),

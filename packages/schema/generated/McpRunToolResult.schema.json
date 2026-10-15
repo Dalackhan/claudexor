@@ -937,6 +937,65 @@
                   ],
                   "description": "Vendor-attested request refusal that another account cannot repair; input and executable causes carry their own evidence."
                 },
+                "captureFailure": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "capture_output_exceeded",
+                        "capture_output_incomplete",
+                        "capture_preview_truncated",
+                        "capture_failed"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "causeCode": {
+                      "type": "string"
+                    },
+                    "bufferBudgetBytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "stream": {
+                      "type": "string",
+                      "enum": [
+                        "stdout",
+                        "stderr"
+                      ]
+                    },
+                    "drain": {
+                      "type": "string",
+                      "const": "truncated"
+                    },
+                    "cleanup": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "additionalProperties": false
+                },
                 "phase": {
                   "type": "string",
                   "default": "unknown",

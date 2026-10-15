@@ -217,7 +217,10 @@ describe("persistedPatchCopy (V4C T8)", () => {
 
     expect(copy.text).not.toContain("TcmZQzU|?imU|`^5");
     expect(copy.text).toContain("ScmZQzU|?imU|`^4");
-    expect(copy.text).toContain("# Claudexor: binary payload withheld from this saved copy");
+    // One notice covers a matched payload and one that could not be inspected.
+    expect(copy.text).toContain(
+      "GIT binary patch\n# Claudexor: binary payload withheld from this saved copy (secret-like or uninspectable bytes)\n",
+    );
     // Both records still read as binary changes of the same two paths.
     expect(parseUnifiedDiff(copy.text).files.map((file) => [file.newPath, file.binary])).toEqual([
       ["leak.bin", true],

@@ -123,7 +123,7 @@ export function partitionCandidates(runs: CandidateRun[]): {
   why: string;
 } {
   const working = runs.filter(isWorkingCandidate);
-  const noChanges = runs.some((r) => r.files?.noChanges === null)
+  const noChanges = runs.some((r) => r.captureRefusal || r.files?.noChanges === null)
     ? null
     : runs.every((r) =>
         r.files
@@ -132,7 +132,13 @@ export function partitionCandidates(runs: CandidateRun[]): {
       );
   const facts = runs.some((r) => r.outcomeClass === "interrupted")
     ? makeOutcomeFacts("interrupted", { reason: "context_capacity_exhausted", noChanges })
-    : makeOutcomeFacts("failed", { reason: "harness_failed", noChanges });
+    : makeOutcomeFacts("failed", {
+        reason:
+          runs.length > 0 && runs.every((r) => r.captureRefusal)
+            ? "workspace_unavailable"
+            : "harness_failed",
+        noChanges,
+      });
   const why = runs
     .map((r) => {
       const reason =

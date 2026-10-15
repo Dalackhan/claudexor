@@ -94,7 +94,11 @@ export function relativizePlainDiffHeaders(
  * every depth and would hide unrelated user files that happen to share an
  * engine-generated envelope basename. Ambiguous/unparsed blocks stay captured. */
 export function excludePlainDiffPathPrefix(text: string, relativeDir: string): string {
-  const normalized = relativeDir.split("\\").join("/").replace(/^\.\//, "").replace(/\/+$/, "");
+  const slashes = relativeDir.split("\\").join("/").replace(/^\.\//, "");
+  // Scan once backwards; an unanchored trailing-slash regexp retries each start.
+  let end = slashes.length;
+  while (end > 0 && slashes[end - 1] === "/") end -= 1;
+  const normalized = slashes.slice(0, end);
   if (
     normalized === "" ||
     normalized.startsWith("/") ||

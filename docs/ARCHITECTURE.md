@@ -2962,7 +2962,8 @@ running engine version. Older engines then refuse that root with
 Keep preserved journals, SQL evidence and run artifacts; an older backup must
 not automatically replace later work. Logical partition recovery and physical
 whole-store recovery are described under
-[Legacy import and recovery](#legacy-import-and-recovery).
+[Legacy import and recovery](#legacy-import-and-recovery), and a complete
+pre-upgrade backup under [Upgrade backup and restore](#upgrade-backup-and-restore).
 
 Every shutdown trigger — SIGTERM/SIGINT, the `claudexor.shutdown` socket RPC,
 a startup failure — enters ONE state machine (`DaemonRuntimeShutdown
@@ -3466,6 +3467,31 @@ no old upload replay authority. Accounts, runs and `journal-legacy/` stay in
 place. The same idempotent recovery operation resumes before ordinary startup
 selection; it never reimports legacy state or replaces newer work automatically.
 This migration is forward-fix only.
+
+#### Upgrade backup and restore
+
+Store migrations are one-way. There is no in-place downgrade, and selecting an
+older runtime (an executable-pointer rollback) does not restore data: an older
+engine can serve recovery only with `store_schema_unsupported` when startup
+stopped after the migration but before the floor advanced. After the advance,
+`root_authority_floor_regression` refuses startup before any transport binds. No built-in
+command takes a complete backup; logical and diagnostic exports are not one.
+
+A complete pre-upgrade backup is taken while the daemon and every other writer
+are stopped, as an independent copy that preserves owners and modes and
+contains no hard links. For the default layout it covers all of `~/.claudexor`
+and `~/.cache/claudexor`. For an explicit `CLAUDEXOR_CONFIG_DIR` it covers the
+complete config root, `~/.cache/claudexor`, every externally referenced
+Claudexor-owned store and, for the desktop app, `~/.claudexor/runtime`.
+
+To return to it, stop the daemon, move the newer state aside and keep it
+untouched, restore the backup to its original absolute paths, and start a
+matching pre-upgrade build compatible with the backup's recorded floor; starting
+a newer build can simply migrate the restored data again. The root-authority marker
+grants authority only as a regular, singly linked file owned by the running
+user with private permissions. A copy restored at another path is not a
+supported restore. Work created after the backup is not included, and restored
+credentials may be stale and need sign-in again.
 
 ### Interactive runs (waiting_on_user)
 
@@ -5384,10 +5410,21 @@ refuses without stopping; the request names the freshly observed serving
 version/build SHA and writer-lease owner) → identity-proven termination
 confirmation with no-successor proof (never a raw kill) → ATOMIC `current.json`
 swap (write a temp file + a single rename, inside a `flock` over the whole
-check-then-swap critical section) → relaunch → handshake-verify the new engine
-identity against the signed manifest → rollback to `last-known-good.json` on
-activation failure while that reader remains compatible with the retained state,
-accepting recovery only when its exact identity returns. After a feature writes
+check-then-swap critical section) → relaunch → handshake-verify the new engine's
+exact identity against the signed manifest and its normal product admission →
+rollback to `last-known-good.json` when the relaunched engine has another
+identity or never answers, while that reader remains compatible with the
+retained state, accepting recovery only when its exact identity returns with
+normal admission. Every startup answers `recovery_only` before admission opens,
+so the bounded poll waits through it. If the exact new engine answered in
+recovery mode and normal readiness was not confirmed by the deadline, it is not
+rolled back, even if it stopped answering: it may already hold state the previous
+reader cannot open. It stays selected with the historical recovery observation
+and unconfirmed readiness reported. A previous engine answering only in recovery
+mode after a rollback is a failed recovery, not a rollback. Handshake `ok` remains the
+connectivity/protocol verdict: the app still waits in Connecting against a
+recovery-only engine, and identity-bound stop and reconciliation still name it.
+After a feature writes
 new terminal facts or publishes the SQL store an older reader cannot understand,
 recovery retains that state and uses a compatible newer runtime. A last-known-good
 pointer cannot bypass the data root's semantic floor, as described in the daemon
@@ -5445,7 +5482,11 @@ the closure.
   GET the latest release manifest (`api.github.com`, ETag-cached) → verify the
   signature fail-closed → compare `version` to the running engine and gate on
   `minAppVersion` → surface "Update available → vX.Y.Z" with an Install action.
-  There is no background update timer.
+  The last install attempt's historical outcome stays visible above any later
+  Install and "View release" offer. A selected engine, including one observed
+  only in recovery mode, retires its offer; a recovery-only install clears the
+  stale serving identity so a re-check uses the selected runtime pointer until
+  normal connection adopts an identity. There is no background update timer.
 - **Build-sha stamping (QA-002).** `build-engine-resources.sh` stamps `CLAUDEXOR_BUILD_SHA`
   into the esbuild daemon and CLI bundles via `--define`, and
   `build-runtime-closure.mjs` embeds the SAME sha in the manifest and refuses to

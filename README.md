@@ -31,7 +31,7 @@ with a vendor usage source (Antigravity, Claude, and Codex); Cursor has none
 yet. Everything runs on your machine, files are the source of truth, and there
 is no telemetry.
 
-Current status: **v4.1.1**. See "Stability at 2.0" below for what is a stable
+Current status: **v4.2.0**. See "Stability at 2.0" below for what is a stable
 contract and what remains experimental; retired verbs and mode ids hard-error
 with the new spelling instead of silently aliasing.
 
@@ -197,10 +197,14 @@ client verifiers themselves stay fail-closed for the waived versions too).
   newer runtime is offered, surfaces "Update available → vX.Y.Z". One click
   installs it **in place, no new DMG**: the app downloads the closure, verifies
   its SHA-256 against the signed manifest, unpacks it under
-  `~/.claudexor/runtime/versions/<version>/`, probe-starts it, waits until the
-  engine is idle (it never interrupts running jobs), stops the daemon, swaps the
-  active pointer atomically, relaunches, and re-checks the version — rolling back
-  to the last-known-good runtime on any failure. The manifest is signed by a
+  `~/.claudexor/runtime/versions/<version>/`, probe-starts it, requires that the
+  engine is confirmed idle (otherwise it refuses and you can try Install again),
+  stops the daemon, swaps the active pointer atomically, relaunches, and confirms the exact new engine
+  accepts normal work — rolling back to the last-known-good runtime when the new
+  engine is wrong or never answers. An engine answering only in recovery mode is
+  reported as such, never as updated or rolled back by the new app; already-installed
+  older apps check identity only and can still report either outcome over a
+  recovery-only engine. The manifest is signed by a
   dedicated offline key the app pins; an unsigned, unknown-key, tampered, or
   downgraded manifest is refused. Node stays app-owned, so a Node bump still
   ships a new signed DMG. There is no background update timer; the check runs
@@ -969,6 +973,8 @@ Claudexor owns these locations:
   journal and process state (`daemon/`: token, socket, log), local harness
   metrics (`telemetry/`), host-plugin ownership state (`plugins/`), and
   user-level runs for no-project asks.
+- `~/.cache/claudexor/` — Claudexor caches, including the no-project repository
+  workspace (`no-project/`); include it in a complete pre-upgrade backup.
 - `~/.claudexor/runtime/` — the installed engine-runtime closures the macOS app
   updates in place (QA-071): `versions/<version>/` holds each unpacked closure,
   `current.json` names the active one, and `last-known-good.json` is the rollback

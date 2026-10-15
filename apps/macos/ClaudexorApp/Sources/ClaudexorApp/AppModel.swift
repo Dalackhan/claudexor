@@ -209,13 +209,9 @@ final class AppModel {
                 guard let client = try? ControlApiDiscovery.load().makeClient() else { return nil }
                 do { return try await client.engineHasActiveWork() } catch { return nil }
             },
-            handshakeIdentityProbe: {
-                guard let client = try? ControlApiDiscovery.load().makeClient(),
-                    let outcome = try? await client.handshake(), outcome.ok,
-                    let engine = outcome.engine
-                else { return nil }
-                return AppRuntimeDaemonControl.runtimeIdentity(
-                    version: engine.version, buildSha: engine.sha)
+            handshakeProbe: {
+                guard let client = try? ControlApiDiscovery.load().makeClient() else { return nil }
+                return await AppRuntimeDaemonControl.servingHandshake(using: client)
             })
     }
     /// The one session-wide exact owner shared by updater installation and

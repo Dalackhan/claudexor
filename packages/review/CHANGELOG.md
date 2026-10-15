@@ -1,5 +1,17 @@
 # @claudexor/review
 
+## 4.2.0
+
+### Patch Changes
+
+- @claudexor/budget@4.2.0
+- @claudexor/config@4.2.0
+- @claudexor/context@4.2.0
+- @claudexor/core@4.2.0
+- @claudexor/schema@4.2.0
+- @claudexor/util@4.2.0
+- @claudexor/workspace@4.2.0
+
 ## 4.1.1
 
 ### Patch Changes

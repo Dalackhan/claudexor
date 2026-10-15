@@ -1,5 +1,18 @@
 # @claudexor/daemon
 
+## 4.2.0
+
+### Minor Changes
+
+- Preserve successful-account routing evidence across restarts and retain complete settled refusal diagnostics. Address run and thread lists before materialization, and retain answers, monetary facts and source work when capture exceeds its bounded string budget. Engine-store schema 2 is forward-only; retain a full stopped pre-upgrade data-root backup for recovery with an older engine.
+
+### Patch Changes
+
+- @claudexor/core@4.2.0
+- @claudexor/schema@4.2.0
+- @claudexor/util@4.2.0
+- @claudexor/workspace@4.2.0
+
 ## 4.1.1
 
 ### Patch Changes

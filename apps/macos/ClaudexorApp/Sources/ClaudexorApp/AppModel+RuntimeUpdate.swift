@@ -137,12 +137,31 @@ extension AppModel {
                 "Refusing update: the download URL does not match the signed manifest."
             return
         }
+        await runRuntimeInstall(manifest: manifest, assetURL: assetURL, transport: transport)
+    }
+
+    /// Run the install coordinator for one verified manifest and publish its
+    /// result. The runtime root, rollback selection and handshake poll default
+    /// to production; tests bind synthetic ones.
+    func runRuntimeInstall(
+        manifest: RuntimeManifest,
+        assetURL: URL,
+        transport: RuntimeReleaseTransport,
+        installer: RuntimeInstaller = RuntimeInstaller(),
+        rollbackSelection: @escaping @Sendable () -> LocalRuntimeClosureSelection? = {
+            DaemonLauncher.resolvedRuntime()
+        },
+        handshakePollInterval: TimeInterval = LocalDaemonBootPolicy.handshakePollInterval,
+        handshakePollTimeout: TimeInterval = LocalDaemonBootPolicy.handshakeTimeout
+    ) async {
         let coordinator = RuntimeInstallCoordinator(
-            installer: RuntimeInstaller(),
+            installer: installer,
             transport: transport,
             daemon: makeDaemonControl(),
             lifecycleOwner: localRuntimeLifecycleOwner,
-            rollbackSelection: { DaemonLauncher.resolvedRuntime() },
+            rollbackSelection: rollbackSelection,
+            handshakePollInterval: handshakePollInterval,
+            handshakePollTimeout: handshakePollTimeout,
             onPhase: { [weak self] phase in
                 Task { @MainActor in self?.applyInstallPhase(phase) }
             })
@@ -153,10 +172,23 @@ extension AppModel {
             await runtimeUpdater?.recordInstalledVersion(
                 version, appVersion: Self.appVersionString())
             applyRuntimeDecision(.upToDate)
+        } catch let error as RuntimeInstallError {
+            runtimeInstallStatus = error.errorDescription
+            // The exact new closure is installed and selected; only normal
+            // admission was not confirmed. Retire its offer so the chip shows this
+            // status instead of an Install the monotonic check would refuse.
+            if case let .servingRecoveryOnly(identity) = error {
+                // The pre-install handshake no longer describes the selected
+                // closure. Until normal connection adopts it, re-check uses
+                // current.json instead of re-offering this installed version.
+                engineIdentity = nil
+                await runtimeUpdater?.recordInstalledVersion(
+                    identity.version, appVersion: Self.appVersionString())
+                applyRuntimeDecision(.upToDate)
+            }
         } catch {
             runtimeInstallStatus =
-                (error as? RuntimeInstallError)?.errorDescription
-                ?? (error as? RuntimeUpdateError)?.errorDescription
+                (error as? RuntimeUpdateError)?.errorDescription
                 ?? "Update failed: \(error.localizedDescription)"
         }
     }
@@ -172,13 +204,15 @@ extension AppModel {
         case .probing:
             runtimeInstallStatus = "Checking the new runtime…"
         case .awaitingIdle:
-            runtimeInstallStatus = "Waiting for running jobs to finish…"
+            runtimeInstallStatus = "Checking whether the engine is idle…"
         case .swapping:
             runtimeInstallStatus = "Switching to the new runtime…"
         case .relaunching:
             runtimeInstallStatus = "Relaunching the engine…"
         case let .done(version):
             runtimeInstallStatus = "Updated to engine v\(version)."
+        case let .recoveryOnly(identity):
+            runtimeInstallStatus = RuntimeInstallError.servingRecoveryOnly(identity).errorDescription
         case let .rolledBack(reason):
             runtimeInstallStatus = "Update rolled back: \(reason)."
         case let .failed(reason):

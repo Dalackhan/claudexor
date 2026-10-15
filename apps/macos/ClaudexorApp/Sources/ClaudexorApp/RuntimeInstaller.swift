@@ -133,6 +133,9 @@ public enum RuntimeInstallError: Error, LocalizedError, Equatable {
     case probeMismatch(expected: RuntimeClosureIdentity, got: RuntimeClosureIdentity?)
     case daemonBusy
     case handshakeMismatch(expected: RuntimeClosureIdentity, got: RuntimeClosureIdentity?)
+    /// The exact new closure is installed and selected but answered only in
+    /// recovery mode during the update check; normal readiness was not proved.
+    case servingRecoveryOnly(RuntimeClosureIdentity)
     /// A rollback could not be PROVEN: the named recovery step (pointer restore,
     /// relaunch, or expected-identity handshake) failed, so the engine may be in a
     /// degraded state. Carries the exact step + user remediation.
@@ -152,9 +155,13 @@ public enum RuntimeInstallError: Error, LocalizedError, Equatable {
             return "Runtime \(t) is not newer than the installed runtime; refusing a downgrade."
         case let .probeMismatch(e, g):
             return "The unpacked runtime reported \(Self.describe(g)), expected \(Self.describe(e))."
-        case .daemonBusy: return "The engine is busy running jobs; the update will retry when idle."
+        case .daemonBusy: return "Update not applied: the engine is busy or its activity could not be confirmed. Try Install again when the engine is idle."
         case let .handshakeMismatch(e, g):
-            return "After relaunch the engine reported \(Self.describe(g)), expected \(Self.describe(e)); rolling back."
+            // Thrown only after a proven rollback; lead with that consequence so
+            // the chip's two visible lines carry it ahead of the build SHAs.
+            return "Update rolled back: after relaunch the engine reported \(Self.describe(g)), expected \(Self.describe(e))."
+        case let .servingRecoveryOnly(identity):
+            return "Engine v\(identity.version) was selected, but answered only in recovery mode during the update check; normal readiness was not confirmed."
         case let .recoveryFailed(step, remediation):
             return "Recovery after a failed update did not complete: could not \(step). \(remediation)"
         case .rollbackIdentityUnavailable:

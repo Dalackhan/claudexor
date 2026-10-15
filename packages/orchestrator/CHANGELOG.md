@@ -1,5 +1,25 @@
 # @claudexor/orchestrator
 
+## 4.2.0
+
+### Patch Changes
+
+- @claudexor/arbitration@4.2.0
+- @claudexor/artifact-store@4.2.0
+- @claudexor/budget@4.2.0
+- @claudexor/config@4.2.0
+- @claudexor/context@4.2.0
+- @claudexor/core@4.2.0
+- @claudexor/delivery@4.2.0
+- @claudexor/event-log@4.2.0
+- @claudexor/gateway@4.2.0
+- @claudexor/policy@4.2.0
+- @claudexor/review@4.2.0
+- @claudexor/schema@4.2.0
+- @claudexor/synthesis@4.2.0
+- @claudexor/util@4.2.0
+- @claudexor/workspace@4.2.0
+
 ## 4.1.1
 
 ### Patch Changes

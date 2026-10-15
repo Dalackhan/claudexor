@@ -34,9 +34,12 @@ public struct RunFailureInfo: Codable, Sendable, Equatable {
     /// wire always carries the key, so dropping it forced every surface to
     /// parse "resets …" out of `safeMessage` — which is what it exists to end.
     public let resetsAt: String?
+    /// Every failed execution try in order, each with its own account and
+    /// error text; empty for a record written before the field existed.
+    public let poolAttempts: [PoolAttemptFailureInfo]
 
     enum CodingKeys: String, CodingKey {
-        case captureFailure, phase, category, code, harnessId, attemptId, safeMessage, rawDetailRef, logRefs, eventRefs, runDir, nextActions, resetsAt
+        case captureFailure, phase, category, code, harnessId, attemptId, safeMessage, rawDetailRef, logRefs, eventRefs, runDir, nextActions, resetsAt, poolAttempts
     }
 
     public init(from decoder: Decoder) throws {
@@ -54,5 +57,31 @@ public struct RunFailureInfo: Codable, Sendable, Equatable {
         runDir = try c.decodeIfPresent(String.self, forKey: .runDir)
         nextActions = try c.decodeIfPresent([String].self, forKey: .nextActions) ?? []
         resetsAt = try c.decodeIfPresent(String.self, forKey: .resetsAt)
+        poolAttempts = try c.decodeIfPresent([PoolAttemptFailureInfo].self, forKey: .poolAttempts) ?? []
     }
+}
+
+/// One failed execution try attributed to the account it ran on (diagnostic
+/// evidence; the engine's retry and routing never read it).
+public struct PoolAttemptFailureInfo: Codable, Sendable, Equatable {
+    public let harnessId: String
+    public let profileId: String?
+    public let profileDisplayName: String?
+    public let requestedModel: String?
+    public let attemptId: String
+    public let tryIndex: Int
+    public let observedAt: String
+    /// pre_start | pre_progress | after_progress.
+    public let phase: String
+    public let category: String
+    /// The try's own error text, redacted by the engine.
+    public let error: String
+    public let vendorFailure: VendorFailureInfo?
+}
+
+/// The vendor's own typed failure, verbatim: display it, never branch on it.
+public struct VendorFailureInfo: Codable, Sendable, Equatable {
+    public let code: String?
+    public let message: String?
+    public let source: String
 }

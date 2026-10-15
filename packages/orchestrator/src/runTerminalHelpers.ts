@@ -10,17 +10,24 @@ import {
   needsOperatorAttention,
   normalizeCancelReasonCode,
   RunOutcomeFacts,
+  type PoolAttemptFailure,
   type RunOutcomeFacts as RunOutcomeFactsType,
 } from "@claudexor/schema";
 import type { BudgetTerminal } from "@claudexor/budget";
 import type { TerminalRunEventType } from "@claudexor/event-log";
 import { readTextSafe } from "@claudexor/util";
 import { budgetFailureRecord, classifyBudgetFailure } from "./budgetFailure.js";
+import type { ContinuityTerminalFacts } from "./continuity-terminal.js";
+import { poolFailure } from "./pool-attempt-evidence.js";
 import { reconcileDecisionBudget, type SettledBudgetSnapshot } from "./decisionBudget.js";
 import type { OrchestratorResult } from "./orchestrator.js";
 import type { AnnouncedRunContext } from "./runTerminalContext.js";
-import { writeFailure } from "./runTerminalResults.js";
-import { reconcileWorkProductTerminal, terminalOutcomeFacts } from "./terminalOutcome.js";
+import { cancellationStatement, writeFailure } from "./runTerminalResults.js";
+import {
+  clearFailureArtifact,
+  reconcileWorkProductTerminal,
+  terminalOutcomeFacts,
+} from "./terminalOutcome.js";
 
 export function ownsDelegateDrain(context: AnnouncedRunContext): boolean {
   try {
@@ -43,15 +50,16 @@ export function postDrainBudgetFailure(
   const facts = terminalOutcomeFacts(prior.facts, "failed", mapping.reason);
   reconcileDecisionBudget(context, budget, { facts, why: mapping.safeMessage });
   reconcileWorkProductTerminal(context, facts);
+  const { message, poolAttempts } = poolFailure(mapping.safeMessage, context.attempts?.() ?? []);
   context.store.writeText(
     join(context.paths.finalDir, "summary.md"),
-    `# Run ${context.runId} (${context.mode})\n\n- Lifecycle: failed (${mapping.reason})\n- Phase: budget\n\n${mapping.safeMessage}\n`,
+    `# Run ${context.runId} (${context.mode})\n\n- Lifecycle: failed (${mapping.reason})\n- Phase: budget\n\n${message}\n`,
   );
-  writeFailure(
-    context.store,
-    context.paths,
-    budgetFailureRecord(mapping, { runDir: context.paths.root }),
-  );
+  writeFailure(context.store, context.paths, {
+    ...budgetFailureRecord(mapping, { runDir: context.paths.root }),
+    safeMessage: message,
+    poolAttempts,
+  });
   context.log.emit("output.ready", {
     kind: "summary",
     path: "final/summary.md",
@@ -62,15 +70,84 @@ export function postDrainBudgetFailure(
     facts,
     reason: mapping.reason,
     phase: "budget",
-    error: mapping.safeMessage,
+    error: message,
+    pool_attempts: poolAttempts,
     failure_ref: "final/failure.yaml",
   });
   return {
     ...prior,
     lifecycle: "failed",
     facts,
-    summary: mapping.safeMessage,
+    summary: message,
     spendUsd: budget.spendUsd,
+  };
+}
+
+/** The terminal-facts failure's message with the run's list, like every
+ * failure terminal; an unreadable history costs only the list, never the terminal. */
+export function terminalFactsFailure(
+  context: AnnouncedRunContext,
+  detail: string,
+): { message: string; poolAttempts: PoolAttemptFailure[] } {
+  const message = `terminal facts preparation failed: ${detail}`;
+  try {
+    return poolFailure(message, context.attempts?.() ?? []);
+  } catch {
+    return { message, poolAttempts: [] };
+  }
+}
+
+/** A cancellation the terminal commit chose over the strategy's own verdict. */
+export interface CommittedCancellation {
+  summary: string;
+  cancelReason?: string;
+  payload: Record<string, unknown>;
+}
+
+/**
+ * The cancel landed after the strategy's last checkpoint, so the terminal
+ * commit (not the strategy) chose it: state it like every cancelled terminal.
+ * The run's collected attempts name their earlier failed tries on the event and
+ * in summary.md; the verdict's own failure cause and record are not the
+ * cancel's (a cancellation has none), except a record that carries capture
+ * facts: it stays on the public failure surface re-labelled with this same
+ * statement (`clearFailureArtifact`), and the event keeps its address. Best
+ * effort: an unreadable history costs only the list, an unwritable artifact
+ * never the terminal.
+ */
+export function commitCancellation(
+  context: AnnouncedRunContext,
+  signal: AbortSignal,
+  payload: Record<string, unknown>,
+): CommittedCancellation {
+  let attempts: readonly ContinuityTerminalFacts[] | null = null;
+  try {
+    attempts = context.attempts?.() ?? null;
+  } catch {
+    /* the cancellation stands without its list */
+  }
+  const statement = cancellationStatement(context.runId, context.mode, signal, attempts ?? []);
+  try {
+    context.store.writeText(join(context.paths.finalDir, "summary.md"), statement.markdown);
+  } catch {
+    /* the terminal event remains the authority */
+  }
+  let failureKept = false;
+  try {
+    failureKept = clearFailureArtifact(context, { summary: statement.summary });
+  } catch {
+    /* the terminal event remains the authority */
+  }
+  const { phase: _phase, error: _error, failure_ref: _failureRef, ...kept } = payload;
+  return {
+    summary: statement.summary,
+    ...(statement.cancelReason ? { cancelReason: statement.cancelReason } : {}),
+    payload: {
+      ...kept,
+      ...(failureKept ? { failure_ref: "final/failure.yaml" } : {}),
+      ...(statement.cancelReason ? { cancel_reason: statement.cancelReason } : {}),
+      ...(attempts ? { pool_attempts: statement.poolAttempts } : {}),
+    },
   };
 }
 

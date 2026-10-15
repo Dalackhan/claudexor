@@ -284,8 +284,13 @@ struct AccountsSurface: View {
             accountsList
             ForEach(apiKeyRouteDisclosures, id: \.self) { harness in
                 Label(
-                    "\(HarnessFamily(rawValue: harness).label): the next unpinned run uses the API-key route (no enabled account is ready).",
+                    "\(HarnessFamily(rawValue: harness).label): the next unpinned default-model run uses the API-key route (no enabled account is ready).",
                     systemImage: "key")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            // The additive evidence read failed: one notice; the rows stay current.
+            if let problem = model.accountsRoutingEvidence.problems[model.activeExecutionLocation] {
+                Label(problem, systemImage: "exclamationmark.triangle")
                     .font(.caption2).foregroundStyle(.secondary)
             }
             if let notice = actionNotice.message {

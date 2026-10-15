@@ -396,7 +396,17 @@ cursor. A quota marker or a rejected/lost cursor invalidates the quota and
 and wait for an explicit Accounts Refresh rather than automatically fetching a
 new snapshot. The engine-default API-key fallback can appear as the native
 `next_up` route, but it never becomes an account row or changes the account
-count.
+count. `next_up` in either listing is the configured default model's verdict,
+never a forecast for another model.
+
+`GET /v2/accounts/routing-evidence` is the additive, read-only Accounts
+evidence: the live pre-progress refusal marks and each registered account's last
+service per requested model (most recent first), strict and query-free, with no
+probe and no quota refresh. Clients negotiate it through the operation catalog
+(`get:accounts.routing-evidence`) and keep the legacy listings unchanged. An
+engine without it answers 404, which first-party clients treat as no new data;
+any other failure leaves the listing authoritative with one diagnostic. Last
+service is a routing observation, never a quota or authentication verdict.
 
 `GET /v2/run-applicability` takes an absolute `repoRoot` query and returns the
 live Workspace Git status plus the engine-owned in-place/isolated run-shape
@@ -475,6 +485,18 @@ null), or `null` — also the meaning of an absent key from an older engine —
 when no vendor-typed evidence exists. Display the code beside the message as a
 fact; never branch on its value or map it to a remedy, so codes a vendor adds
 later flow through with no release on either side.
+The failure's `poolAttempts` (on `summary.failure`, the run detail, the run list
+and MCP run results) lists every failed execution try in order, each with its account row,
+requested model, phase, typed category and its own redacted error text, so a
+pool failure names each account's refusal rather than only the last one. The
+failure record of a run blocked by review or checks carries it too. A
+work-state veto (input required or work incomplete) and a cancellation write no
+failure record of their own (a cancellation keeps only a prepared record that
+carries capture facts, re-labelled `cancelled` with the same message and list):
+their earlier failed tries ride the terminal event (`pool_attempts`) and the
+summary. It is
+diagnostic evidence: classification, retry and routing never read it, and a
+record from an older engine decodes with an empty list.
 Web/tool evidence is projected from the engine-owned
 `final/telemetry.yaml`; runs that predate it report `available: false`. Unknown
 quota or spend remains unknown; do not render missing values as `$0`. The optional
@@ -629,7 +651,10 @@ the mutability matrix, run-control keys), and the read-only recovery tools
 view, including freshness and `next_up` state — the default read is the
 retained readiness observation, with its check time, composed with current
 quota and registry facts; `fresh: true` opts into the expensive atomic snapshot,
-which honors account/route rate-limit cooldowns and retained legacy vendor floors),
+which honors account/route rate-limit cooldowns and retained legacy vendor floors;
+the additive `routingEvidence` carries the model-scoped recent refusals and last
+service, absent for an older engine, and a failed evidence read adds one
+`routingEvidenceProblem` while the listing stays authoritative),
 `claudexor_runs`, `claudexor_inspect`, `claudexor_run_status`,
 `claudexor_run_result`, `claudexor_run_cancel`,
 `claudexor_run_interactions`, `claudexor_answer_interaction`,

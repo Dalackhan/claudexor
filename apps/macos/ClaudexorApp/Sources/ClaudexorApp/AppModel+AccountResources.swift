@@ -10,6 +10,16 @@ extension AppModel {
         }
     }
 
+    /// The additive, catalog-negotiated routing-evidence read beside an
+    /// Accounts hydration; it settles independently and never fails it.
+    func refreshAccountsRoutingEvidence(at location: ExecutionLocationID, client: GatewayClient) async {
+        let request = accountsRoutingEvidence.begin(at: location)
+        let capabilities = await loadAccountResourceCapabilities(client: client, at: location)
+        await accountsRoutingEvidence.refresh(
+            request, client: client, at: location, capabilities: capabilities,
+            isCurrent: { [weak self] in self?.isCurrentGateway(client, at: location) == true })
+    }
+
     func accountResourceConnection(at location: ExecutionLocationID) -> AccountResourceConnection? {
         guard let requestClient = gateway(for: location) else { return nil }
         return AccountResourceConnection(location: location, client: requestClient,

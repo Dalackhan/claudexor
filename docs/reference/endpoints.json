@@ -63,6 +63,18 @@
     },
     {
       "method": "GET",
+      "path": "/v2/accounts/routing-evidence",
+      "mutating": false,
+      "applicability": "global",
+      "summary": "Read live model-scoped refusal marks and the durable last-served order; no probe or quota refresh.",
+      "auth": "loopback_bearer",
+      "request_schema": null,
+      "parameters": [],
+      "response_schema": "ControlAccountRoutingEvidenceResponse",
+      "error_schema": "ControlProblem"
+    },
+    {
+      "method": "GET",
       "path": "/v2/agent-capabilities",
       "mutating": false,
       "applicability": "global",

@@ -1154,7 +1154,32 @@ cleanly, or on a credential-generation change. A try binds its row's credential
 generation before it spawns, so an outcome after such a change neither records
 nor clears a mark; while a login of that harness holds its credential-mutation
 window the generation is no number at all, so a try bound before or inside the
-window never records or clears one (#363). When the default route is not ready
+window never records or clears one (#363). Among selectable rows that are
+otherwise equal with unknown headroom, the row that most recently SERVED the
+requested model ranks first, before the profile-id tie-break (INV-135). Service
+uses the predicate that clears a mark — typed agent progress or an error-free
+delivery — judged per try against the row the try bound before it spawned. The
+vendor's model label is never compared with the request (aliases and picker
+labels answer under resolved names), so a substituted model still counts as
+service of the requested one; a try whose own events name another row or a
+non-subscription route serves nothing and retracts the fact it wrote. The fact
+lives in the engine store's `account_last_service` table: one current row per
+harness, account, requested-model key and credential-binding digest (kind,
+secret name, locator, creation time — a rename or Enabled toggle keeps it),
+ordered by an acceptance sequence the single writer allocates, never by the
+wall clock. The credential-generation changes that void a row's other evidence
+delete its facts after the generation moved; a failed delete is logged and
+leaves at most a stale preference. An Enabled PATCH, even one that changes
+nothing, voids the same verdicts and moves the same generation, so a try bound
+before it records nothing after it, but it keeps the binding's facts. Agent Runs (both lanes) produce it; run
+admission, reviewer resolution, the `next_up` projection and a model
+operation's Auto account choice read it once per ranking; model operations
+never produce it. The daemon builds one
+account-evidence graph per engine-store lifetime, injected into every reader and
+writer: global recovery keeps it and closing the store retires it. A credential
+changed outside Claudexor's lifecycle keeps its preference; each reader's own
+negative evidence (Agent pre-progress refusal or model substitution) can demote
+the row, as above. When the default route is not ready
 and no registered row admits a lane, the refusal names every row with its own
 observed readiness (`<harness> has no ready account (<row>: <detail>; …)`)
 instead of the default route's doctor advice, so login advice appears only where
@@ -1235,8 +1260,12 @@ account row or count. Accounts are SYMMETRIC: the
 listing (`GET /v2/credential-profiles`, `claudexor profiles`) projects every
 credential row with its `enabled` flag (the only routing
 control) plus the additive `accountPools` key — the per-harness pool
-authority whose `next_up` verdict says who an unpinned run would route to
-next, computed by the same routing owner. Its `kind` is
+authority whose `next_up` verdict says who an unpinned run of the configured
+default model would route to next, computed by the same routing owner; it is
+never a forecast for another model. The separate read-only
+`GET /v2/accounts/routing-evidence` carries the live refusal marks and the
+last-served facts of the registered rows, each scoped to its requested model,
+and leaves the legacy listings unchanged. Its `kind` is
 `profile | api_key_route | none`. The pool authority is also served alone by
 `GET /v2/account-pools`, whose catalog presence is the unified-accounts
 feature marker old clients detect. The legacy `harnessAccounts` key stays on
@@ -1331,7 +1360,44 @@ headroom-plus-cooldown check. When no
 target survives (all spent/excluded/wrong-kind), the engine emits typed
 `route.profile.rotation_exhausted` with each rejected profile's reason and
 headroom or cooldown evidence (with its earliest known release instant); the
-UI surfaces the exhaustion instead of implying a switch. Exhaustion is also a
+UI surfaces the exhaustion instead of implying a switch. Inside an attempt the
+event also names each candidate's own failed tries (`attempt_failures`) and the
+ordered list of every failed try (`pool_attempts`). Every terminal that is not
+a clean completion, decided by its actual outcome axes, publishes that one
+list across all of the run's attempts (a best-of synthesis included):
+failure terminals (candidate, convergence, read-only chain and deep scan,
+including those after review, arbitration, final verification or delivery, a
+delivered report that still fails, the run's own Delegate child-drain or
+post-drain budget failure, and a terminal-facts preparation failure); D8
+blocks with a succeeded lifecycle (review blocked, checks failed, work-state
+veto); and cancellations. It rides the `RunFailure` field `poolAttempts` in
+`final/failure.yaml` where the terminal writes one, and `pool_attempts` on its
+`run.failed` or `run.blocked` event, with one rendering appended to
+`safeMessage`, `summary.md` and the returned summary: per try its row, requested
+model, phase (`pre_start`, `pre_progress`, `after_progress`), typed category and
+its own redacted error text. A cancellation keeps the cancel as its own
+statement, and the list never mints a failure record. A cancel that lands after
+the strategy's last checkpoint is decided at the terminal commit, which states
+it the same way: both summaries are rewritten, and a block or failure record the
+replaced verdict wrote is removed, unless it carries capture facts: that record
+stays under the cancellation's own category and this same statement (see the
+capture contract). A block's own check, review or work-state cause is never a row. Only a physical try has a row: a selected
+successor whose own model, processing or billing preparation failed before its
+send was admitted, a cancelled or budget-stopped try and a request refusal have
+none, while an adapter that fails on entry keeps one. A try's row is recorded
+before workspace capture; a cancel or deadline that lands during that capture
+still stops the attempt with no successor, probe or retry, while the try's own
+pre-progress refusal observation (#363), judged on the captured workspace, is
+still recorded. An attempt rebuilt after a
+post-stream failure, continued by its one-shot continuation, or a synthesis
+that threw after its tries while the run went on, keeps every earlier try. An
+Ask attempt (chain step or deep-scan explorer) owns its tries' rows from launch
+until its record joins the list, as an Agent attempt does, so a step that throws
+after its tries settled (rotation's next lane home, finishing the attempt) still
+names them, once; only a persistence or process failure inside a still-running
+try can end the run before that try's row is recorded. A row deleted mid-run keeps its entry. Classification, retry and rotation
+never read it; records written before the field existed decode with an empty
+list. Exhaustion is also a
 TYPED terminal: a reactive rotation-eligible failure with nowhere to go
 terminalizes the attempt on `credential_pool_exhausted` (category
 `harness_unavailable` — nothing malfunctioned) only when the triggering
@@ -2223,6 +2289,7 @@ No memory, loop or store measurements impose automatic admission thresholds.
 - `POST /v2/account-resets`
 - `GET /v2/account-resets/:id`
 - `POST /v2/accounts-migration/rollback`
+- `GET /v2/accounts/routing-evidence`
 - `GET /v2/agent-capabilities`
 - `GET /v2/credential-profiles`
 - `POST /v2/credential-profiles`
@@ -3232,6 +3299,14 @@ kept only for cold import and an independent frozen copy kept for tests.
   Bodies up to 64 KiB live inline in the `blob` table; larger bodies are
   content-addressed files under the resource store, written in the same tick
   as the owning transaction.
+- Schema version 2 adds the INV-135 `account_last_service` table to the
+  version-1 DDL in place; no other row changes. Opening the store applies it
+  automatically, before startup advances the root-authority floor, and the
+  adoption is one-way like the rest of this store's forward-fix migrations: no
+  downgrade path is promised. An engine that serves only version 1 — including
+  an older build of the same release version, which the semantic floor cannot
+  tell apart — refuses the upgraded file with `store_schema_unsupported` before
+  any write.
 - The flusher worker owns the power-loss barrier. Every 200 ms it fsyncs each
   directory registered since the previous pass, reads `data_version`, runs a
   PASSIVE checkpoint for space, and — whenever anything was committed since

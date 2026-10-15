@@ -3,10 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DurableJournal } from "../../daemon/src/store/test-support/fixtures/legacy/journal/index.js";
-import { QuotaRegistry } from "@claudexor/daemon";
+import { QuotaRegistry, createAccountEvidence } from "@claudexor/daemon";
 import type { CredentialExecutionObserverFactory } from "@claudexor/core";
 import type { HarnessEvent } from "@claudexor/schema";
-import { buildRunOrchestrator, credentialUnusableLedger } from "./run-orchestrator.js";
+import { buildRunOrchestrator } from "./run-orchestrator.js";
+
+// The store graph's evidence, injected like the daemon does.
+const accounts = createAccountEvidence();
+const credentialUnusableLedger = accounts.unusable;
 
 const cleanup: Array<() => void> = [];
 afterEach(() => {
@@ -23,6 +27,7 @@ function fixture() {
     rmSync(root, { recursive: true, force: true });
   });
   const orchestrator = buildRunOrchestrator({
+    accounts,
     p: {} as Parameters<typeof buildRunOrchestrator>[0]["p"],
     delegationBudgetAuthority: undefined,
     quotaStore: () => quota,

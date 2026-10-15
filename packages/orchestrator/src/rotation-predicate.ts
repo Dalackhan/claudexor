@@ -21,7 +21,9 @@
  * mutation — a partially-acted attempt never silently reruns under another
  * credential.
  */
+import { acceptedTryOutput } from "@claudexor/core";
 import type { AttemptOutputMarkers } from "./attemptOutputMarkers.js";
+import type { TryFacts } from "./inrun-continuity-types.js";
 
 /** Typed evidence one native try presents to the rotation predicate. */
 export interface RotationEvidence {
@@ -86,5 +88,30 @@ export function reactiveRotationEvidence(args: {
     mutationObserved: (args.workspaceDiffNonEmpty ?? false) || args.markers.fileChanges > 0,
     terminalNonTransientDeath: args.attemptErrored && !args.sawRetryable,
     sawAgentProgress: args.markers.sawAgentProgress,
+  };
+}
+
+/**
+ * One settled in-run try's facts as that fold's input. After progress
+ * (`forceEligible`) the no-deliverable/no-mutation fence scopes only the
+ * `fresh` carrier: the planner picks the carrier, rotation only the account.
+ */
+export function inRunRotationArgs(
+  facts: TryFacts,
+  forceEligible: boolean,
+): Parameters<typeof reactiveRotationEvidence>[0] {
+  const accepted = acceptedTryOutput(facts.answer, facts.harnessErrored);
+  return {
+    markers: forceEligible
+      ? { sawAgentProgress: false, fileChanges: 0, sawSessionStart: facts.markers.sawSessionStart }
+      : facts.markers,
+    requestRefused: facts.requestRefused,
+    sawTypedLimit: facts.sawTypedLimit,
+    sawRetryable: facts.sawRetryable,
+    attemptErrored: facts.harnessErrored,
+    deliverableEmpty: forceEligible
+      ? true
+      : facts.workspaceDiffNonEmpty !== true && accepted.length === 0,
+    workspaceDiffNonEmpty: forceEligible ? false : facts.workspaceDiffNonEmpty,
   };
 }

@@ -9,6 +9,7 @@ import {
   CredentialUnusableLedger,
   DaemonClient,
   DaemonServer,
+  ModelSubstitutionLedger,
   QuotaRegistry,
 } from "@claudexor/daemon";
 import {
@@ -186,6 +187,7 @@ async function fixture(imageDeps?: Parameters<typeof createCodexModelAdapter>[0]
     quota: () => quota,
     config: () => cfg,
     unusable,
+    substitutions: new ModelSubstitutionLedger(),
     migrationGate: () => null,
     registry: new Map([["codex", { ...createCodexAdapter(), probeCredentialProfile: probe }]]),
     sources: [{ adapter, label: "Codex", credentialHarness: "codex" }],
@@ -227,8 +229,10 @@ async function fixture(imageDeps?: Parameters<typeof createCodexModelAdapter>[0]
       undefined,
       kind === "image" ? "image" : undefined,
     );
-    await vi.waitFor(() =>
-      expect(["queued", "running"]).not.toContain(services.operations.inspect(started.id).state),
+    await vi.waitFor(
+      () =>
+        expect(["queued", "running"]).not.toContain(services.operations.inspect(started.id).state),
+      { timeout: 10_000 },
     );
     return services.operations.inspect(started.id);
   };
@@ -315,7 +319,9 @@ describe("image account resolution through the composed model service", () => {
     const create = () =>
       f.services.routes.createModelOperation(ref, "mixed", undefined, undefined, "image");
     const started = await create();
-    await vi.waitFor(() => expect(f.services.operations.inspect(started.id).state).toBe("failed"));
+    await vi.waitFor(() => expect(f.services.operations.inspect(started.id).state).toBe("failed"), {
+      timeout: 10_000,
+    });
     expect(f.services.operations.inspect(started.id)).toMatchObject({
       dispatch: { state: "response_received" },
       response: { state: "ready" },

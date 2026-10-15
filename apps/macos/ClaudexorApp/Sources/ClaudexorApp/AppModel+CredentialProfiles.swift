@@ -99,7 +99,13 @@ extension AppModel {
                 error: $2)
         }
         do {
+            let evidenceRead = accountsRoutingEvidence.begin(at: locationID)
             let capabilities = await loadAccountResourceCapabilities(client: requestClient, at: locationID)
+            Task { @MainActor [weak self] in
+                await self?.accountsRoutingEvidence.refresh(
+                    evidenceRead, client: requestClient, at: locationID, capabilities: capabilities,
+                    isCurrent: { [weak self] in self?.isCurrentGateway(requestClient, at: locationID) == true })
+            }
             let response = try await requestClient.credentialProfilesSnapshot(resources: capabilities?.accountsSnapshot == true)
             guard accountsRefreshIsCurrent(generation, client: requestClient, at: locationID)
             else {

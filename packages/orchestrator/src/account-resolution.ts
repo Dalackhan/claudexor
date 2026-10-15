@@ -8,7 +8,7 @@ import type {
   PreProgressRefusalObservation,
   QuotaSnapshot,
 } from "@claudexor/schema";
-import { accountPoolRows, selectFromAccountPool } from "./account-pool.js";
+import { accountPoolRows, selectFromAccountPool, type LastServiceReader } from "./account-pool.js";
 import {
   credentialProfilePolicyProblem,
   HarnessUnavailableError,
@@ -96,6 +96,8 @@ export interface AccountResolutionContext {
    * pool choice exactly like substitutions and never reach a pin or a usable
    * bound account. */
   refusals?: readonly PreProgressRefusalObservation[];
+  /** Durable last-served facts: only the final tie-break among unknown-headroom rows. */
+  lastService?: LastServiceReader | null;
   probe: ((profile: CredentialProfile) => Promise<CredentialProfileStatus>) | undefined;
   /** The explicit pin, already resolved/validated by the caller (null = unpinned). */
   pinnedProfile: CredentialProfile | null;
@@ -538,6 +540,7 @@ export async function resolveAccountForRun(
     model,
     substitutions: ctx.substitutions,
     refusals: ctx.refusals,
+    lastService: ctx.lastService,
   });
   if (selection.outcome === "selected") {
     const chosen = selection.candidate.profile;

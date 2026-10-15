@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createAccountEvidence } from "@claudexor/daemon";
 import { controlServices } from "./control-services.js";
 
 /**
@@ -30,6 +31,7 @@ function servicesWith(
     undefined as never,
     undefined as never,
     undefined as never,
+    createAccountEvidence(),
     () => jobs,
   );
 }

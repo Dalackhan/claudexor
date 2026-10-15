@@ -18,13 +18,16 @@ import { reconcileDecisionBudget, settledBudgetSnapshot } from "./decisionBudget
 import {
   cancelReasonFromSignalToken,
   cancellationFacts,
+  commitCancellation,
   committedOutcome,
   committedResult,
+  type CommittedCancellation,
   isTerminalRecoveryRequired,
   ownsDelegateDrain,
   postDrainBudgetFailure,
   settledSpend,
   terminalEventTypeFor,
+  terminalFactsFailure,
   terminalOutcomeFromPayload,
 } from "./runTerminalHelpers.js";
 import { reconcileDecisionTerminal } from "./decisionTerminalReconciliation.js";
@@ -34,6 +37,7 @@ import type { AnnouncedRunContext } from "./runTerminalContext.js";
 import { flushContinuationTerminal } from "./continuation-custody.js";
 import { publishRetainedOutput } from "./retainedOutput.js";
 import {
+  cancellationStatement,
   cancelledResult,
   declaredFailure,
   failTerminally,
@@ -48,7 +52,6 @@ import {
 
 export type { AnnouncedRunContext } from "./runTerminalContext.js";
 export { cancelledResult, declaredFailure, failTerminally, writeFailure };
-export { attemptVendorFailure } from "./harnessFailure.js";
 export { cancelReasonFromSignalToken } from "./runTerminalHelpers.js";
 
 /**
@@ -75,6 +78,7 @@ export async function guardAnnouncedRun(
   let announced: AnnouncedRunContext | null = null;
   let preparedResult: OrchestratorResult | null = null;
   let canonicalOutcome: RunOutcomeFactsType | null = null;
+  let committedCancel: CommittedCancellation | null = null;
   let terminalPreparationError: string | null = null;
   let barrierAttempted = false;
   let barrierFailed = false;
@@ -134,10 +138,18 @@ export async function guardAnnouncedRun(
                   : payloadOutcome;
               const prepared = prepareRunFactsReceipt(a, terminalOutcome);
               canonicalOutcome = prepared.facts.outcome;
+              // A cancellation chosen here replaces the strategy's own verdict,
+              // so the terminal states that cancellation instead.
+              committedCancel =
+                signal &&
+                payloadOutcome.lifecycle !== "cancelled" &&
+                prepared.facts.outcome.lifecycle === "cancelled"
+                  ? commitCancellation(a, signal, payload)
+                  : null;
               return {
                 type: terminalEventTypeFor(originalType, prepared.facts.outcome),
                 payload: {
-                  ...payload,
+                  ...(committedCancel?.payload ?? payload),
                   lifecycle: prepared.facts.outcome.lifecycle,
                   facts: prepared.facts.outcome,
                   reason: prepared.facts.outcome.reason,
@@ -148,13 +160,16 @@ export async function guardAnnouncedRun(
                 rollback: () => {
                   prepared.rollback();
                   canonicalOutcome = null;
+                  committedCancel = null;
                 },
               };
             } catch (error) {
+              committedCancel = null;
               // A contradictory terminal projection must fail the run, not throw
               // out of the hook and retry the same contradiction forever.
               const detail = redactSecrets(error instanceof Error ? error.message : String(error));
-              terminalPreparationError = `terminal facts preparation failed: ${detail}`;
+              const history = terminalFactsFailure(a, detail);
+              terminalPreparationError = history.message;
               const failureOutcome = makeOutcomeFacts("failed", {
                 reason: "harness_failed",
               });
@@ -168,6 +183,7 @@ export async function guardAnnouncedRun(
                   phase: "terminal_facts",
                   category: "internal",
                   safeMessage: terminalPreparationError,
+                  poolAttempts: history.poolAttempts,
                   runDir: a.paths.root,
                   nextActions: [
                     "Open diagnostics",
@@ -191,6 +207,7 @@ export async function guardAnnouncedRun(
                     run_facts: prepared.facts,
                     phase: "terminal_facts",
                     error: terminalPreparationError,
+                    pool_attempts: history.poolAttempts,
                     ...(failureRefWritten ? { failure_ref: "final/failure.yaml" } : {}),
                   },
                   commit: prepared.commit,
@@ -212,6 +229,7 @@ export async function guardAnnouncedRun(
                     reason: failureOutcome.reason,
                     phase: "terminal_facts",
                     error: terminalPreparationError,
+                    pool_attempts: history.poolAttempts,
                     ...(failureRefWritten ? { failure_ref: "final/failure.yaml" } : {}),
                   },
                 };
@@ -249,6 +267,16 @@ export async function guardAnnouncedRun(
             signal.reason === "wall_clock_exceeded"
               ? "run cancelled: wall-clock deadline (maxSeconds) exceeded"
               : "run cancelled";
+          const attempts = context.attempts?.();
+          // A kept capture-bearing record is re-labelled with the same
+          // statement the cancelled terminal below makes (cancel, then the
+          // run's earlier failed tries).
+          const statement = cancellationStatement(
+            context.runId,
+            context.mode,
+            signal,
+            attempts ?? [],
+          );
           let reconciledCancelFacts = cancelFacts;
           try {
             reconcileDecisionBudget(context, budget);
@@ -258,7 +286,7 @@ export async function guardAnnouncedRun(
               preparedFacts: result.facts,
             });
             reconcileWorkProductTerminal(context, reconciledCancelFacts);
-            clearFailureArtifact(context, { summary: cancelSummary });
+            clearFailureArtifact(context, { summary: statement.summary });
           } catch {
             /* the cancellation terminal below remains authoritative */
           }
@@ -274,6 +302,8 @@ export async function guardAnnouncedRun(
             signal,
             context.store,
             reconciledCancelFacts,
+            undefined,
+            attempts,
           );
           await flushContinuationTerminal(context, cancelled.facts);
           result = {
@@ -367,6 +397,10 @@ export async function guardAnnouncedRun(
             signal.reason === "wall_clock_exceeded"
               ? "run cancelled: wall-clock deadline (maxSeconds) exceeded"
               : "run cancelled";
+          const attempts = a.attempts?.();
+          // As above: a kept capture-bearing record carries the cancelled
+          // terminal's own statement.
+          const statement = cancellationStatement(a.runId, a.mode, signal, attempts ?? []);
           let reconciledCancelFacts = cancelFacts;
           try {
             if (delegateBarrierArmed) reconcileDecisionBudget(a, budget);
@@ -376,7 +410,7 @@ export async function guardAnnouncedRun(
               ...(preparedResult ? { preparedFacts: preparedResult.facts } : {}),
             });
             reconcileWorkProductTerminal(a, reconciledCancelFacts);
-            clearFailureArtifact(a, { summary: cancelSummary });
+            clearFailureArtifact(a, { summary: statement.summary });
           } catch {
             /* the cancellation terminal below remains authoritative */
           }
@@ -394,6 +428,8 @@ export async function guardAnnouncedRun(
             signal,
             a.store,
             reconciledCancelFacts,
+            undefined,
+            attempts,
           );
           await flushContinuationTerminal(a, cancelled.facts);
           result = preparedResult
@@ -435,7 +471,11 @@ export async function guardAnnouncedRun(
             terminalError,
             spendUsd,
             // Read before this terminal replaces the prepared record.
-            { priorFacts: reconciledFailureFacts, ...preparedCaptureFacts(a) },
+            {
+              priorFacts: reconciledFailureFacts,
+              ...preparedCaptureFacts(a),
+              attempts: a.attempts?.(),
+            },
           );
           await flushContinuationTerminal(a, failed.facts);
           result = preparedResult
@@ -486,12 +526,19 @@ export async function guardAnnouncedRun(
     }
     // TS cannot see assignments performed inside EventLog's hook closure.
     const settledOutcome = canonicalOutcome as RunOutcomeFactsType | null;
+    const settledCancel = committedCancel as CommittedCancellation | null;
     if (settledOutcome) {
       result = {
         ...result,
         lifecycle: settledOutcome.lifecycle,
         facts: settledOutcome,
         ...(terminalPreparationError ? { winner: null, summary: terminalPreparationError } : {}),
+        ...(settledCancel
+          ? {
+              summary: settledCancel.summary,
+              ...(settledCancel.cancelReason ? { cancelReason: settledCancel.cancelReason } : {}),
+            }
+          : {}),
       };
     }
     return result;

@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  createAccountEvidence,
   type InteractionRegistry,
   type ProjectThreadPort,
   type QuotaRegistry,
@@ -24,7 +25,6 @@ const captured = vi.hoisted(() => ({ input: undefined as Record<string, unknown>
 // run() records what the runner forwarded and then drives the REAL Orchestrator,
 // so the real trust gate in task-contract-builder decides admission.
 vi.mock("./run-orchestrator.js", () => ({
-  credentialUnusableLedger: { note: () => {}, entries: () => [] },
   buildRunOrchestrator: () => ({
     async run(input: Record<string, unknown>) {
       captured.input = input;
@@ -55,6 +55,7 @@ function runnerFixture(ingest = vi.fn(), publish = vi.fn()) {
   return createDaemonAgentRunner({
     delegationBudgetAuthority: {} as unknown as DelegationBudgetAuthority,
     quotaStore: () => ({ ingest }) as unknown as QuotaRegistry,
+    accounts: createAccountEvidence(),
     threads,
     commands: { getByRunId: () => undefined },
     interactions: { register: () => {} } as unknown as InteractionRegistry,

@@ -3,7 +3,7 @@ import { accountResourceTools } from "./account-resource-tools.js";
 import { runExecutionSchema } from "./run-execution-schema.js";
 import { isAbsolute } from "node:path";
 import agentCapabilityCatalogSchemaRaw from "@claudexor/schema/generated/AgentCapabilityCatalog.schema.json" with { type: "json" };
-import accountsQuerySchemaRaw from "@claudexor/schema/generated/ControlCredentialProfilesQueryResponse.schema.json" with { type: "json" };
+import accountsQuerySchemaRaw from "@claudexor/schema/generated/McpAccountsToolResult.schema.json" with { type: "json" };
 import mcpRunToolResultSchemaRaw from "@claudexor/schema/generated/McpRunToolResult.schema.json" with { type: "json" };
 import mcpRunHandleResultSchemaRaw from "@claudexor/schema/generated/McpRunHandleResult.schema.json" with { type: "json" };
 import paidBudgetSchemaRaw from "@claudexor/schema/generated/PaidBudget.schema.json" with { type: "json" };

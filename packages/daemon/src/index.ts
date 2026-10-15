@@ -50,6 +50,7 @@ export * from "./credential-unusable-ledger.js";
 export * from "./credential-generation.js";
 export * from "./model-substitution-ledger.js";
 export * from "./pre-progress-refusal-ledger.js";
+export * from "./account-evidence.js";
 export * from "./model-operations.js";
 export * from "./memory-facts.js";
 export * from "./loop-facts.js";

@@ -1167,6 +1167,109 @@
                   "description": "The vendor's own typed failure for the attempt this record speaks for, or null when no vendor-typed evidence exists (every harness without such a channel, and any unreadable record). Facts only: carries no remedy.",
                   "default": null
                 },
+                "poolAttempts": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "harnessId": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Harness the try ran on."
+                      },
+                      "profileId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "Account row the try ran on; null = the harness default route."
+                      },
+                      "profileDisplayName": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "The row's display name at try time (redacted); null for the default route."
+                      },
+                      "requestedModel": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "Model the try asked for; null = the harness default model."
+                      },
+                      "attemptId": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Attempt the try belongs to."
+                      },
+                      "tryIndex": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Zero-based try index within the attempt."
+                      },
+                      "observedAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "When the try's first error was observed."
+                      },
+                      "phase": {
+                        "type": "string",
+                        "enum": [
+                          "pre_start",
+                          "pre_progress",
+                          "after_progress"
+                        ],
+                        "description": "How far the try got: before a typed session start, after start but before agent progress, or after progress."
+                      },
+                      "category": {
+                        "type": "string",
+                        "enum": [
+                          "timeout",
+                          "rate_limited",
+                          "auth_failed",
+                          "capability_refused",
+                          "process_crash",
+                          "config_error",
+                          "unknown_harness_error"
+                        ],
+                        "description": "Typed failure category of the try; untyped errors are unknown_harness_error."
+                      },
+                      "error": {
+                        "type": "string",
+                        "description": "The try's own error text with its original wording and whitespace, redacted."
+                      },
+                      "vendorFailure": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/definitions/McpRunToolResult/properties/failure/anyOf/0/properties/vendorFailure/anyOf/0"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "The vendor's own typed failure for this try, when the adapter attached one."
+                      }
+                    },
+                    "required": [
+                      "harnessId",
+                      "profileId",
+                      "profileDisplayName",
+                      "requestedModel",
+                      "attemptId",
+                      "tryIndex",
+                      "observedAt",
+                      "phase",
+                      "category",
+                      "error",
+                      "vendorFailure"
+                    ],
+                    "additionalProperties": false,
+                    "description": "Per-try account attribution of a failed execution try (diagnostic evidence only)."
+                  },
+                  "default": [],
+                  "description": "Every failed execution try in order, each with its own account and error text; empty when no try failed (and for records written before this field existed)."
+                },
                 "nextActions": {
                   "type": "array",
                   "items": {

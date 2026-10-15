@@ -2,6 +2,7 @@ import type { ArtifactStore } from "@claudexor/artifact-store";
 import type { BudgetLedger, BudgetTerminal } from "@claudexor/budget";
 import type { EventLog } from "@claudexor/event-log";
 import type { ModeKind } from "@claudexor/schema";
+import type { ContinuityTerminalFacts } from "./continuity-terminal.js";
 
 export interface AnnouncedRunContext {
   log: EventLog;
@@ -25,6 +26,9 @@ export interface AnnouncedRunContext {
    * Ordinary runs may already have emitted a non-deferred terminal and must
    * never be terminalized a second time by the post-drain recheck. */
   recheckBudgetAfterBarrier?: () => boolean;
+  /** The lane's own attempts once they exist (each with its tries' accounts):
+   * a failure this owner stamps after the strategy names their failed tries. */
+  attempts?: () => readonly ContinuityTerminalFacts[];
 }
 
 type AnnouncedRunIdentity = Pick<

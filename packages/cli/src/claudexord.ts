@@ -56,7 +56,6 @@ import { SqlDaemonStorage } from "./sql-daemon-storage.js";
 import { deferredCommands, sqlActivityRecords, sqlStartupRoots } from "./sql-daemon-queries.js";
 import { threadPurgeEffect } from "./thread-purge.js";
 import { accountResetServices } from "./account-reset-services.js";
-
 type Graph = ReturnType<typeof createSqlDaemonServices>;
 
 export async function main(): Promise<void> {
@@ -98,7 +97,7 @@ export async function main(): Promise<void> {
         rootDir: daemonDir(),
         store,
         onCredentialStateMayHaveChanged: (harness) =>
-          bustLoginCredentialState(() => value.quota, readiness, harness),
+          bustLoginCredentialState(() => value.quota, value.accounts, readiness, harness),
       }),
     );
   }
@@ -179,6 +178,7 @@ export async function main(): Promise<void> {
         readiness,
         () => value.resources,
         () => value.quota,
+        value.accounts,
         () => sqlActivityRecords(value.store),
         caps,
         value.purgeFiles,

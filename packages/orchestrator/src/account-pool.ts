@@ -34,6 +34,11 @@ import { liveRefusalMarks } from "./pre-progress-refusal.js";
  * request before any progress (#363, Agent Runs). A mark never excludes a row
  * and never makes a pool exhausted.
  *
+ * Among rows that are otherwise equal with UNKNOWN headroom, the row that most
+ * recently served this requested model ranks first (durable last-served facts,
+ * INV-135), before the profile-id tie-break. It never outranks known headroom,
+ * a mark, a cooldown or a pin, and a row with no service history keeps id order.
+ *
  * The pool contains SUBSCRIPTION-kind rows only: an api_key row is a paid
  * route and is never silently selected (INV-061); it remains an explicit pin
  * target. Pool exhaustion is the typed `credential_pool_exhausted` terminal
@@ -49,6 +54,15 @@ export type PoolQuotaVerdict =
 export interface PoolCandidate {
   profile: CredentialProfile;
   verdict: PoolQuotaVerdict;
+}
+
+/** Durable last-served facts, read once per ranking (higher = more recent). */
+export interface LastServiceReader {
+  orders(
+    harnessId: string,
+    model: string | null,
+    profiles: readonly CredentialProfile[],
+  ): ReadonlyMap<string, number>;
 }
 
 /** The subscription-kind enabled rows of one harness (the static pool). */
@@ -104,6 +118,8 @@ export function rankAccountPool(args: {
   substitutions?: readonly ModelSubstitutionObservation[];
   /** Live pre-progress refusal observations; only this harness and model apply. */
   refusals?: readonly PreProgressRefusalObservation[];
+  /** Durable last-served facts for the final unknown-headroom tie-break. */
+  lastService?: LastServiceReader | null;
 }): PoolCandidate[] {
   const now = Date.now();
   const markedAt = liveRefusalMarks(args.refusals ?? [], args.harnessId, args.model, now);
@@ -167,6 +183,15 @@ export function rankAccountPool(args: {
       verdict: headroom === null ? { kind: "unknown" } : { kind: "fresh_headroom", headroom },
     });
   }
+  const unknown = candidates.filter((candidate) => candidate.verdict.kind === "unknown");
+  const served =
+    unknown.length > 1 && args.lastService
+      ? args.lastService.orders(
+          args.harnessId,
+          args.model ?? null,
+          unknown.map((candidate) => candidate.profile),
+        )
+      : new Map<string, number>();
   const rankOf = (verdict: PoolQuotaVerdict): number =>
     verdict.kind === "fresh_headroom" ? 0 : verdict.kind === "unknown" ? 1 : 2;
   // Exhausted rows keep their place at the end whatever their mark says.
@@ -184,6 +209,11 @@ export function rankAccountPool(args: {
     if (a.verdict.kind === "fresh_headroom" && b.verdict.kind === "fresh_headroom") {
       const byHeadroom = b.verdict.headroom - a.verdict.headroom;
       if (byHeadroom !== 0) return byHeadroom;
+    }
+    if (a.verdict.kind === "unknown" && b.verdict.kind === "unknown") {
+      const byService =
+        (served.get(b.profile.profile_id) ?? 0) - (served.get(a.profile.profile_id) ?? 0);
+      if (byService !== 0) return byService;
     }
     return a.profile.profile_id < b.profile.profile_id
       ? -1

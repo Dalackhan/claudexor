@@ -246,7 +246,7 @@ export class CredentialUnusableLedger implements CredentialEvidenceAuthority {
   /** ONE subject's credential changed (a control-API profile or profile-secret
    * mutation): only ITS verdicts are void, across every model scope.
    * `profileId` null = the harness's default subject. */
-  clearSubject(harnessId: string, profileId: string | null): void {
+  clearSubject(harnessId: string, profileId: string | null, keepsBinding = false): void {
     for (const k of this.successes.keys())
       if (k.startsWith([harnessId, profileId ?? "", ""].join("\0"))) this.successes.delete(k);
     for (const [k, obs] of this.rows) {
@@ -255,7 +255,7 @@ export class CredentialUnusableLedger implements CredentialEvidenceAuthority {
         this.orders.delete(k);
       }
     }
-    this.credentials.clearSubject(harnessId, profileId);
+    this.credentials.clearSubject(harnessId, profileId, keepsBinding);
   }
 
   /** A bare managed secret name changed an engine-DEFAULT credential slot.

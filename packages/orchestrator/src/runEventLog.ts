@@ -85,7 +85,13 @@ function announcePreparedProjectGitInitialization(input: RunInput, log: EventLog
 export function beginAnnouncedRun(
   start: RunAnnouncementInput,
   announce: (context: AnnouncedRunContext) => void,
-): { store: ArtifactStore; paths: RunPaths; log: EventLog; ledger: BudgetLedger } {
+): {
+  store: ArtifactStore;
+  paths: RunPaths;
+  log: EventLog;
+  ledger: BudgetLedger;
+  runContext: AnnouncedRunContext;
+} {
   const { input, contract, quotaSnapshots, store, authority, runId, taskId, mode, phase } = start;
   const paths = store.createRun(runId);
   const log = createRunEventLog(paths.eventsPath, runId, taskId, input);
@@ -104,14 +110,13 @@ export function beginAnnouncedRun(
     log.emit("run.created", { mode, prompt: redactSecrets(start.prompt) });
     return preparedLedger;
   });
-  announce(
-    announcedRunContext(
-      { log, store, paths, runId, taskId, mode, phase },
-      ledger,
-      () => authority?.hasParent(runId) === true,
-    ),
+  const runContext = announcedRunContext(
+    { log, store, paths, runId, taskId, mode, phase },
+    ledger,
+    () => authority?.hasParent(runId) === true,
   );
+  announce(runContext);
   safeInvoke(input.onRunStart, { runId, taskId, runDir: paths.root });
   announcePreparedProjectGitInitialization(input, log);
-  return { store, paths, log, ledger };
+  return { store, paths, log, ledger, runContext };
 }

@@ -222,7 +222,6 @@ import {
   TestCommandInvocation,
   WorkProduct,
 } from "@claudexor/schema";
-
 import { resolveControlProtocol, type ControlServingMode } from "./control-protocol.js";
 import { readControlRequestBody } from "./request-body.js";
 import { withControlHttpTimeouts } from "./http-server-options.js";
@@ -304,6 +303,7 @@ export interface DaemonControlApiOptions {
         input?: ControlQuotaRefreshRequest & { view?: "resources" },
       ) => Promise<unknown>;
       accountPools?: () => Promise<unknown>;
+      accountRoutingEvidence?: () => Promise<unknown>;
       rollbackAccountsMigration?: (input: unknown) => Promise<unknown>;
       credentialProfiles?: (input?: { snapshot?: boolean; view?: "resources" }) => Promise<unknown>;
       runApplicability?: (input: { repoRoot: string }) => Promise<unknown>;

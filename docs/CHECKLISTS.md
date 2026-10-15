@@ -136,7 +136,10 @@ pnpm test
 - Account catalog views must be negotiated through the operation catalog. Check
   strict legacy shapes, all enabled account inventories, exact pins, independent
   failures, and original observation/provenance. A union must not manufacture a
-  maximum capability or weaken fresh execution admission.
+  maximum capability or weaken fresh execution admission. The same holds for
+  `GET /v2/accounts/routing-evidence`: an older engine (404) shows nothing new,
+  any other failure keeps the listing with one diagnostic, and `next_up` stays
+  labelled as the configured default model's verdict.
 - Tool success, web evidence, and tmp/workspace claims must be evidence-based:
   preserve redacted tool error detail; `tool_result.is_error === true` blocks
   claimed success unless verified recovery exists; absolute `/tmp/...` is not
@@ -428,6 +431,14 @@ pnpm test
   configured gates render `n/a`, not “passed”.
 - Auto-rotation with no surviving profile emits
   `route.profile.rotation_exhausted` with per-profile rejection/headroom facts.
+  A pool failure names every tried account with its own refusal in order
+  (`poolAttempts` on `RunFailure`, `run.failed`/`run.blocked`, summary): check
+  two different refusals end to end, a review/arbitration failure after a
+  fallback, a check/review block and a cancellation after a fallback,
+  including a Stop or deadline while the final verification gate runs (the
+  cancel replaces the verdict; the list never mints a failure record), a
+  synthesis whose tries refused, and that a successor failing before dispatch,
+  a cancelled try or a check failure adds no row.
 - Account/profile coherence: ready is exact-source `available + passed`; Use
   atomically selects the profile harness/pool; incompatible explicit pools
   start zero adapters; delete clears all thread pins, matching native-session

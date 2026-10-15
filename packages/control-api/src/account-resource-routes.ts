@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   ControlAccountResourcesResponse,
+  ControlAccountRoutingEvidenceResponse,
   ControlQuotaFreshnessResponse,
   ControlQuotaResponse,
   ControlQuotaReadRequest,
@@ -32,6 +33,16 @@ const readParameters = [
   }),
 ];
 export const ACCOUNT_RESOURCE_OPERATION_DRAFTS: OperationDraft[] = [
+  {
+    method: "GET",
+    path: "/v2/accounts/routing-evidence",
+    mutability: "read_only",
+    requestSchema: null,
+    responseSchema: "ControlAccountRoutingEvidenceResponse",
+    responseKind: "json",
+    summary:
+      "Read live model-scoped refusal marks and the durable last-served order; no probe or quota refresh.",
+  },
   {
     method: "GET",
     path: "/v2/credential-profiles",
@@ -94,7 +105,7 @@ export const ACCOUNT_RESOURCE_OPERATION_DRAFTS: OperationDraft[] = [
 interface Context {
   services?: Pick<
     NonNullable<DaemonControlApiOptions["services"]>,
-    "quota" | "refreshQuota" | "createAccountReset" | "accountReset"
+    "accountRoutingEvidence" | "quota" | "refreshQuota" | "createAccountReset" | "accountReset"
   >;
   readBody: (req: IncomingMessage) => Promise<unknown>;
   json: (res: ServerResponse, status: number, body: unknown) => void;
@@ -116,6 +127,12 @@ export async function handleAccountResourceRoute(
   res: ServerResponse,
 ): Promise<boolean> {
   try {
+    if (method === "GET" && path === "/accounts/routing-evidence") {
+      assertOnlyQueryParams(url, []);
+      const payload = await required(ctx.services?.accountRoutingEvidence)();
+      ctx.json(res, 200, ControlAccountRoutingEvidenceResponse.parse(payload));
+      return true;
+    }
     if ((method === "GET" && path === "/quota") || (method === "POST" && path === "/quota")) {
       assertOnlyQueryParams(url, method === "GET" ? ["view", "requestKind", "model"] : ["view"]);
       const view = method === "GET" ? quotaReadViewQuery(url) : resourceViewQuery(url);

@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
 import type {
+  AccountEvidence,
   InteractionRegistry,
   LiveInputRegistry,
   ProjectThreadPort,
@@ -36,6 +37,8 @@ import { continuationForRun } from "./continue-from-run.js";
 export function createDaemonAgentRunner(deps: {
   delegationBudgetAuthority: DelegationBudgetAuthority;
   quotaStore: () => QuotaRegistry;
+  /** The store's account evidence graph: every run binds and reads the same one. */
+  accounts: AccountEvidence;
   threads: ProjectThreadPort;
   commands: Pick<CommandQueries, "getByRunId">;
   interactions: InteractionRegistry;
@@ -75,6 +78,7 @@ export function createDaemonAgentRunner(deps: {
     if (p.council) assertCouncilWidth(p.n, runtimeConcurrencyCaps.max_council_members);
     if (noProjectAsk) mkdirSync(NO_PROJECT_ROOT, { recursive: true, mode: 0o700 });
     const orchestrator = buildRunOrchestrator({
+      accounts: deps.accounts,
       p,
       delegationBudgetAuthority,
       quotaStore: () => quotaStore(),

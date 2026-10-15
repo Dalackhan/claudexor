@@ -9,6 +9,8 @@ public struct AccountResourceCapabilities: Sendable, Equatable {
     public let accountsSnapshot: Bool
     public let reset: Bool
     public let resetStatus: Bool
+    /// `GET /v2/accounts/routing-evidence` (model-scoped refusals + last service).
+    public let routingEvidence: Bool
 }
 
 /// Only the declaration slice needed by this consumer. No version guesses or
@@ -44,7 +46,8 @@ struct AccountResourceOperationCatalog: Decodable, Sendable {
             read: rich("get:quota"), refresh: rich("post:quota"),
             accountsSnapshot: rich("get:credential-profiles"),
             reset: operations.contains { $0.id == "post:account-resets" },
-            resetStatus: operations.contains { $0.id == "get:account-resets.id" })
+            resetStatus: operations.contains { $0.id == "get:account-resets.id" },
+            routingEvidence: operations.contains { $0.id == "get:accounts.routing-evidence" })
     }
 }
 

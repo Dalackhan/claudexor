@@ -8,9 +8,11 @@
  */
 import { join } from "node:path";
 import type { ArtifactStore, RunPaths } from "@claudexor/artifact-store";
-import type { ResumableCause, RunResumable } from "@claudexor/schema";
+import type { PoolAttemptFailure, ResumableCause, RunResumable } from "@claudexor/schema";
 
 export interface ContinuityTerminalFacts {
+  /** Every failed try of the attempt with its own account (diagnostic). */
+  poolAttempts?: PoolAttemptFailure[];
   resumable?: RunResumable;
   /** Internal snapshot used only if gates/review/arbitration later leave work unfinished. */
   resumableOnFailure?: RunResumable;

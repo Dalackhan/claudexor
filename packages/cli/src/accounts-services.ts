@@ -1,5 +1,5 @@
 import { loadConfig } from "@claudexor/config";
-import type { QuotaRegistry } from "@claudexor/daemon";
+import type { AccountEvidence, QuotaRegistry } from "@claudexor/daemon";
 import { StatusProjectionCache, globalConfigVersion } from "./status-projection-cache.js";
 import { normalizeReadiness, type HarnessStatus } from "@claudexor/gateway";
 import { probeGitCapability } from "@claudexor/workspace";
@@ -13,7 +13,6 @@ import {
   composeCredentialProfileEvidence,
   type VendorQuotaObservations,
 } from "@claudexor/orchestrator";
-import { credentialUnusableLedger } from "./run-orchestrator.js";
 import { accountPoolsProjection, profileAccountProjection } from "./accounts-projection.js";
 import { buildGateway, buildRegistry, checkHarnessModel } from "./registry.js";
 import { delegationCapabilityFor } from "./delegation-capability.js";
@@ -65,8 +64,12 @@ export async function projectHarnessStatuses(statuses: readonly HarnessStatus[])
  * first and then derives next_up from that exact returned response; no client
  * can accidentally pair a newer quota card with an older routing identity.
  * Returns the listing service plus the pool-authority read
- * (`GET /v2/account-pools`) so both share one cached projection. */
-export function createCredentialProfilesService(quotaRegistry: () => QuotaRegistry) {
+ * (`GET /v2/account-pools`) so both share one cached projection, and the
+ * additive model-scoped routing-evidence read. */
+export function createCredentialProfilesService(
+  quotaRegistry: () => QuotaRegistry,
+  accounts: AccountEvidence,
+) {
   const projectProfiles = (fresh = false) => {
     const profiles = loadConfig(NO_PROJECT_ROOT).global.credential_profiles;
     return Promise.all(
@@ -101,15 +104,15 @@ export function createCredentialProfilesService(quotaRegistry: () => QuotaRegist
   const buildPollResponse = async () => {
     const [probed, statuses] = await Promise.all([projectProfiles(), readHarnesses()]);
     const quota = quotaRegistry().read();
-    const unusable = credentialUnusableLedger.live();
-    const evidence = { ...quota, honored: credentialUnusableLedger.honored() };
+    const unusable = accounts.unusable.live();
+    const evidence = { ...quota, honored: accounts.unusable.honored() };
     const out = withAccountEvidence(probed, evidence, unusable);
     return {
       profiles: out,
       // Unified account model: the legacy carrier stays PRESENT and empty for
       // strict old clients; routing facts ride accountPools.
       harnessAccounts: [],
-      accountPools: await accountPoolsProjection(NO_PROJECT_ROOT, quota.snapshots, {
+      accountPools: await accountPoolsProjection(NO_PROJECT_ROOT, accounts, quota.snapshots, {
         profiles: out,
         statuses,
         quota: evidence,
@@ -127,14 +130,14 @@ export function createCredentialProfilesService(quotaRegistry: () => QuotaRegist
         quotaRegistry().refreshWithCursor(),
       ]);
       const rawQuota = fencedQuota.response;
-      const unusable = credentialUnusableLedger.live();
-      const evidence = { ...rawQuota, honored: credentialUnusableLedger.honored() };
+      const unusable = accounts.unusable.live();
+      const evidence = { ...rawQuota, honored: accounts.unusable.honored() };
       const out = withAccountEvidence(probed, evidence, unusable);
       // Explicit acquisition refreshes the display observation, not just TTL.
       return {
         profiles: out,
         harnessAccounts: [],
-        accountPools: await accountPoolsProjection(NO_PROJECT_ROOT, rawQuota.snapshots, {
+        accountPools: await accountPoolsProjection(NO_PROJECT_ROOT, accounts, rawQuota.snapshots, {
           profiles: out,
           statuses,
           quota: evidence,
@@ -154,7 +157,21 @@ export function createCredentialProfilesService(quotaRegistry: () => QuotaRegist
   const accountPools = async () => ({
     accountPools: (await buildPollResponse()).accountPools,
   });
-  return { credentialProfiles, accountPools };
+  /** `GET /v2/accounts/routing-evidence`: the live refusal marks and the durable
+   * last-served facts of the registered rows. Reads only: no probe, no quota
+   * refresh, no store write. Service facts are routing evidence, never a
+   * quota or authentication verdict. */
+  const accountRoutingEvidence = async () => {
+    const profiles = loadConfig(NO_PROJECT_ROOT).global.credential_profiles;
+    const registered = new Set(profiles.map((p) => `${p.harness_id}\0${p.profile_id}`));
+    return {
+      refusals: accounts.refusals
+        .live()
+        .filter((mark) => registered.has(`${mark.harness_id}\0${mark.profile_id}`)),
+      lastService: accounts.services?.latest(profiles) ?? [],
+    };
+  };
+  return { credentialProfiles, accountPools, accountRoutingEvidence };
 }
 
 /**

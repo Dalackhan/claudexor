@@ -13,6 +13,7 @@
     "runDir": null,
     "resetsAt": "2026-07-19T17:00:00.000Z",
     "vendorFailure": null,
+    "poolAttempts": [],
     "nextActions": [
       "Wait for the window to reopen, or route to another credential."
     ]

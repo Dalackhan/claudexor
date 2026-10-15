@@ -1,8 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { updateGlobalConfig } from "@claudexor/config";
 import type { HarnessAdapter } from "@claudexor/core";
-import type { QuotaRegistry } from "@claudexor/daemon";
-import { CredentialUnusableLedger } from "../../daemon/src/credential-unusable-ledger.js";
+import { createAccountEvidence, type QuotaRegistry } from "@claudexor/daemon";
 import { createFakeHarness } from "@claudexor/harness-fake";
 import { probeCredentialProfileStatus, profileStatusAdmits } from "@claudexor/orchestrator";
 import {
@@ -26,19 +25,11 @@ import {
 
 const owned = vi.hoisted(() => ({
   adapters: new Map<string, HarnessAdapter>(),
-  evidence: null as Pick<CredentialUnusableLedger, "live" | "honored"> | null,
 }));
 vi.mock("./registry.js", async (original) => ({
   ...(await original<typeof import("./registry.js")>()),
   buildRegistry: () => owned.adapters,
   buildGateway: () => ({ statusAllForAccounts: async () => [], statusAll: async () => [] }),
-}));
-vi.mock("./run-orchestrator.js", () => ({
-  preProgressRefusalLedger: { live: () => [] },
-  credentialUnusableLedger: {
-    live: () => owned.evidence?.live() ?? [],
-    honored: () => owned.evidence?.honored() ?? [],
-  },
 }));
 vi.mock("@claudexor/workspace", async (original) => ({
   ...(await original<typeof import("@claudexor/workspace")>()),
@@ -50,7 +41,6 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2026-10-04T12:00:00Z"));
   accountObservations.invalidate();
   owned.adapters.clear();
-  owned.evidence = null;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -94,8 +84,11 @@ function fixture() {
     };
   const read = vi.fn(() => quota);
   const refresh = vi.fn(async () => ({ response: quota, quotaEventCursor: "fixture-cursor" }));
+  // The store graph's evidence, injected like the daemon does (fresh per fixture).
+  const accounts = createAccountEvidence();
   const service = createCredentialProfilesService(
     () => ({ read, refreshWithCursor: refresh }) as unknown as QuotaRegistry,
+    accounts,
   );
   const catalog = () =>
     harnessAccountModels({
@@ -103,10 +96,11 @@ function fixture() {
       cwd: "/display-fixture",
       registry: owned.adapters,
       config,
-      quota: { ...quota, honored: owned.evidence?.honored() ?? [] },
-      unusable: owned.evidence?.live() ?? [],
+      quota: { ...quota, honored: accounts.unusable.honored() },
+      unusable: accounts.unusable.live(),
     });
   return {
+    accounts,
     profile,
     adapter,
     probe,
@@ -125,8 +119,7 @@ function fixture() {
 describe("Accounts display acquisition", () => {
   it("composes route-matching recovery over retained observations without reacquiring displays", async () => {
     const f = fixture();
-    const ledger = new CredentialUnusableLedger();
-    owned.evidence = ledger;
+    const ledger = f.accounts.unusable;
     await Promise.all([f.service.credentialProfiles(), f.catalog()]);
     const rejectedAt = new Date().toISOString();
     const refusal: QuotaAbsence = {

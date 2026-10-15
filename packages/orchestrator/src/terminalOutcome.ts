@@ -36,16 +36,16 @@ export function reconcileWorkProductTerminal(
  * whose live or retained source still needs inspection). That record stays on
  * the public failure surface under the cancellation's own category and
  * summary, with no typed code, keeping its phase, capture facts, refs and
- * inspection/manual-cleanup actions. */
+ * inspection/manual-cleanup actions. Returns whether such a record was kept. */
 export function clearFailureArtifact(
   context: { store: ArtifactStore; paths: { finalDir: string } },
   cancellation: { summary: string },
-): void {
+): boolean {
   const path = join(context.paths.finalDir, "failure.yaml");
   const current = RunFailure.safeParse(context.store.readYaml<unknown>(path));
   if (!current.success || !current.data.captureFailure) {
     rmSync(path, { force: true });
-    return;
+    return false;
   }
   context.store.writeYaml(path, {
     ...current.data,
@@ -53,6 +53,7 @@ export function clearFailureArtifact(
     code: null,
     safeMessage: cancellation.summary,
   });
+  return true;
 }
 
 /** A failure that replaces a prepared record without a cancellation (a

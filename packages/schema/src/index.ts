@@ -91,4 +91,5 @@ export * from "./command-summary.js";
 export * from "./daemon-status.js";
 export * from "./store-status.js";
 export * from "./account-resources.js";
+export * from "./account-routing-evidence.js";
 export * from "./host-binding.js";

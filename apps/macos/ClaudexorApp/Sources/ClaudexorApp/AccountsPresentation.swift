@@ -42,11 +42,18 @@ struct AccountRowModel: Identifiable {
     /// pseudo-row). This is the ONLY routing control.
     let enabled: Bool
     /// Server-computed NEXT-UP (the `accountPools` pool authority): true when
-    /// an unpinned run of this harness would route to THIS row next.
-    /// INFORMATIONAL only — rendered as a quiet "Next up" badge, never a
-    /// control. false when the projection is absent (older daemon) or another
-    /// row/route is next up.
+    /// an unpinned run of this harness's configured DEFAULT model would route
+    /// to THIS row next. INFORMATIONAL only — rendered as a quiet
+    /// "Next up · default model" badge, never a control and never a forecast
+    /// for another model. false when the projection is absent (older daemon)
+    /// or another row/route is next up.
     let nextUp: Bool
+    /// Live pre-progress refusal marks of this row, each scoped to the one
+    /// requested model it orders (`GET /v2/accounts/routing-evidence`).
+    var refusalMarks: [AccountRefusalMark] = []
+    /// The row's latest observed service per requested model: a routing
+    /// observation, never a quota or authentication verdict.
+    var lastService: [AccountLastService] = []
     /// Non-secret {email, plan} of this account (INV-067), projected
     /// daemon-side from the owning credential-profile probe. When present it
     /// drives the row's secondary line (`identityLine`); nil when the source
@@ -253,9 +260,54 @@ enum AccountsPresentation {
                 enabled: entry.profile.enabled,
                 nextUp: model.authoritativeNextUp(for: entry.profile.harnessId)?
                     .isProfile(entry.profile.profileId) ?? false,
+                // Joined by account id from separate state: a PATCHed row keeps it.
+                refusalMarks: model.accountsRoutingEvidence.marks(
+                    harnessId: entry.profile.harnessId, profileId: entry.profile.profileId,
+                    at: model.activeExecutionLocation),
+                lastService: model.accountsRoutingEvidence.lastService(
+                    harnessId: entry.profile.harnessId, profileId: entry.profile.profileId,
+                    at: model.activeExecutionLocation),
                 identity: entry.identity
             )
         }
+    }
+
+    /// The next-up badge copy: `next_up` is the configured default model's verdict.
+    static let nextUpLabel = "Next up · default model"
+
+    /// "Recent refusal · <model>, …": which requested models this row refused
+    /// before progress (each mark orders the pool for its own model only).
+    static func refusalLine(_ marks: [AccountRefusalMark]) -> String? {
+        guard !marks.isEmpty else { return nil }
+        var models: [String] = []
+        for mark in marks where !models.contains(modelLabel(mark.requestedModel)) {
+            models.append(modelLabel(mark.requestedModel))
+        }
+        return "Recent refusal · \(models.joined(separator: ", "))"
+    }
+
+    /// "Last served · <model> · <age>; …", most recent first.
+    static func lastServedLine(_ services: [AccountLastService], now: Date = Date()) -> String? {
+        guard !services.isEmpty else { return nil }
+        let parts = services.map { "\(modelLabel($0.requestedModel)) · \(age($0.observedAt, now: now))" }
+        return "Last served · \(parts.joined(separator: "; "))"
+    }
+
+    static func modelLabel(_ requestedModel: String?) -> String {
+        requestedModel ?? "default model"
+    }
+
+    /// English, locale-independent age of a past instant (INV-141).
+    static func age(_ value: String, now: Date = Date()) -> String {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let date = fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+        else { return value }
+        let minutes = max(0, Int(now.timeIntervalSince(date) / 60))
+        if minutes < 1 { return "just now" }
+        if minutes < 60 { return "\(minutes)m ago" }
+        if minutes < 1440 { return "\(minutes / 60)h ago" }
+        return "\(minutes / 1440)d ago"
     }
 
     private static func readiness(

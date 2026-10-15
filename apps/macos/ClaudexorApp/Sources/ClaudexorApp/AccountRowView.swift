@@ -75,11 +75,21 @@ struct AccountRowView: View {
             AlignedRowBadge(row.harnessId, emphasis: .secondary)
         ]
         if row.nextUp {
-            // F1 informational hint: this is who an unpinned run routes to next.
-            badges.append(AlignedRowBadge("Next up", systemImage: "arrow.turn.down.right", emphasis: .accent))
+            // F1 informational hint: who an unpinned run of the configured
+            // default model routes to next — never a forecast for another model.
+            badges.append(AlignedRowBadge(
+                AccountsPresentation.nextUpLabel, systemImage: "arrow.turn.down.right", emphasis: .accent,
+                help: "The configured default model's next unpinned run routes here. Other models order separately."))
         }
         var details: [AlignedRowDetail] = []
         details.append(quotaDetail)
+        // Model-scoped routing evidence: ordering facts, not readiness verdicts.
+        if let refusals = AccountsPresentation.refusalLine(row.refusalMarks) {
+            details.append(AlignedRowDetail(100, refusals, emphasis: .warning))
+        }
+        if let served = AccountsPresentation.lastServedLine(row.lastService) {
+            details.append(AlignedRowDetail(101, served, emphasis: .secondary))
+        }
         // Identity and readiness are different facts. Failures stay inline;
         // healthy rows with identity keep the detail in status-marker help so a
         // long account list remains compact.

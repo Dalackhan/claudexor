@@ -9230,7 +9230,8 @@ describe("DaemonControlApiServer", () => {
       };
       expect(body.primaryOutput?.kind).toBe("diagnostic");
       expect(body.primaryOutput?.text).toContain("Auth failed");
-      expect(body.failure).toEqual(failure);
+      // A record written before per-try attribution decodes with an empty list.
+      expect(body.failure).toEqual({ ...failure, poolAttempts: [] });
     });
 
     const cancelledAsk = fakeDaemon();

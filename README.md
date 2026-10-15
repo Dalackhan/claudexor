@@ -532,8 +532,11 @@ sibling only with a disclosed lane switch. An explicit pin (per-run
 that account or a typed refusal (`subscription_window_exhausted` with the
 reset time when its quota window is spent), never a silent rotation.
 `claudexor profiles` shows the informational **next-up** verdict — who an
-unpinned run would route to next — computed server-side by the same routing
-owner (`accountPools`; also `GET /v2/account-pools`). When the pool is empty
+unpinned run of the configured default model would route to next — computed
+server-side by the same routing owner (`accountPools`; also
+`GET /v2/account-pools`), plus each account's recent refusals and last service
+per requested model. Among accounts with unknown quota, the one that last
+served the requested model is tried first, also after a daemon restart. When the pool is empty
 or exhausted, the typed API-key fallback may serve the run as an explicit,
 disclosed **route** — never a synthetic account row; key management stays in
 Auth. The macOS Accounts surface renders these rows directly from ONE server

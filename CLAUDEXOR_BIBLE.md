@@ -1067,6 +1067,17 @@ invariant or operator decision before proceeding.
   account and requested model and never recorded by a pin), ranks after
   every other selectable row, oldest observation first, and is never
   excluded by it; deterministic profile-id tie-break.
+  **CONCEPT-CHANGE(INV-135):** before that profile-id tie-break, among
+  otherwise-equal selectable rows with unknown headroom, the row that most
+  recently SERVED this requested model ranks first. Service is a selected
+  Agent or Ask try's own typed agent progress or error-free delivery on that
+  row for that request, never the vendor's model label; Plan/Council and
+  raw-model operations do not produce it, though the shared selectors read the
+  same facts. The fact is durable across engine restarts, bound to the row's
+  credential binding, kept by an Enabled toggle, and cleared by the other
+  credential changes that void the row's evidence. It never outranks known
+  headroom, a mark, a cooldown, a pin or a usable bound row, and it is
+  ordering evidence only.
   **CONCEPT-CHANGE(INV-135), #363:** an unpinned choice is admitted on FRESH
   readiness, with one bounded exception for Cursor rows: when a row's
   `cursor-agent status` probe did not answer within its own budget, that row
@@ -1123,7 +1134,10 @@ invariant or operator decision before proceeding.
   preflightProfile/account-pool tests; the accounts-unified-migration
   battery; threads binding/resume-isolation tests; profile-delete tests;
   `packages/harness-cursor/src/status-cache.test.ts` +
-  `packages/orchestrator/src/rowAdmission.test.ts` (#363 stale admission).
+  `packages/orchestrator/src/rowAdmission.test.ts` (#363 stale admission);
+  `packages/daemon/src/store/account-service.test.ts` +
+  `packages/cli/src/account-last-service.integration.test.ts` (last-served
+  order across a restart).
 - **INV-136** High-volume UI evidence is PROGRESSIVE, BOUNDED, and honest:
   per-run milestone bursts are exactly one in-flight request plus at most one
   trailing refresh (events during the trailing load cannot chain more GETs);

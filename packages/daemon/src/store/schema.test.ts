@@ -67,6 +67,7 @@ describeStore("engine schema (SYNTHESIS_R5 §5)", () => {
       .sort();
     expect(withoutRowid).toEqual(
       [
+        "account_last_service",
         "effect_obligation",
         "event",
         "idempotency",

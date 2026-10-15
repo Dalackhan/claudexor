@@ -27,7 +27,12 @@ import {
   persistFailedCandidateOutput,
   persistFailedInPlaceWorkProduct,
 } from "./delegationFailure.js";
-import { resumableOf, resumableTerminal } from "./continuity-terminal.js";
+import {
+  resumableOf,
+  resumableTerminal,
+  type ContinuityTerminalFacts,
+} from "./continuity-terminal.js";
+import { poolFailure } from "./pool-attempt-evidence.js";
 
 interface CandidateTerminalContext {
   ledger: BudgetLedger;
@@ -42,6 +47,8 @@ interface CandidateTerminalContext {
 export async function cancelledCandidatesResult(
   input: CandidateTerminalContext & {
     runs: CandidateRun[];
+    /** Every attempt whose earlier failed tries the cancellation keeps (default: `runs`). */
+    attempts?: readonly ContinuityTerminalFacts[];
     signal?: AbortSignal;
     writeTelemetry(): void;
     git?: {
@@ -122,18 +129,24 @@ export async function cancelledCandidatesResult(
     store,
     undefined,
     resumableOf(runs, "cancelled"),
+    input.attempts ?? runs,
   );
 }
 
-/** A review/arbitration failure still owns the completed candidates' continuity. */
+/** A review/arbitration failure still owns the completed candidates' continuity
+ * and names every failed try of the run's attempts (default: those candidates). */
 export function failAfterCandidates(
-  input: CandidateTerminalContext & { runs: CandidateRun[] },
+  input: CandidateTerminalContext & {
+    runs: CandidateRun[];
+    attempts?: readonly ContinuityTerminalFacts[];
+  },
   phase: "review" | "arbitration",
   error: unknown,
 ): OrchestratorResult {
   const { log, store, paths, runId, taskId, mode, ledger, runs } = input;
   return failTerminally(log, store, paths, runId, taskId, mode, phase, error, ledger.spend(), {
     continuity: runs,
+    attempts: input.attempts,
   });
 }
 
@@ -209,6 +222,8 @@ export function emptyCandidateResult(
 export async function failedCandidatesResult(
   input: CandidateTerminalContext & {
     runs: CandidateRun[];
+    /** Every attempt whose failed tries the terminal names (default: `runs`). */
+    attempts?: CandidateRun[];
     budgetDenial?: BudgetDenial | null;
     writeTelemetry(): void;
     /** The race's dominant uncaptured candidate: its live effects keep the
@@ -234,7 +249,10 @@ export async function failedCandidatesResult(
       : (first.infraPhase ?? "harness"));
   const partition = partitionCandidates(runs);
   const facts = budget ? { ...partition.facts, reason: budget.reason } : partition.facts;
-  const rootCause = budget?.safeMessage ?? partition.why;
+  const { message: rootCause, poolAttempts } = poolFailure(
+    budget?.safeMessage ?? partition.why,
+    input.attempts ?? runs,
+  );
   const captured = runs.find((run) => run.files);
   if (captured?.files)
     await publishDirectoryCandidate({
@@ -283,7 +301,6 @@ export async function failedCandidatesResult(
     code: unanimous?.code ?? null,
     harnessId: first.harnessId,
     attemptId: first.attemptId,
-    safeMessage: rootCause,
     rawDetailRef: `attempts/${first.attemptId}/attempt.yaml`,
     eventRefs: existingEventRefs,
     runDir: paths.root,
@@ -304,6 +321,9 @@ export async function failedCandidatesResult(
           followUps: secretDiff.captureInspectionActions(first.captureRefusal),
         })
       : {}),
+    // After the budget record: every terminal speaks the same message and list.
+    safeMessage: rootCause,
+    poolAttempts,
   });
   log.emit("output.ready", { kind: "summary", path: "final/summary.md", state: "diagnostic" });
   log.emit("run.failed", {
@@ -312,6 +332,7 @@ export async function failedCandidatesResult(
     reason: facts.reason,
     phase,
     error: rootCause,
+    pool_attempts: poolAttempts,
     failure_ref: "final/failure.yaml",
     ...resumableTerminal(store, paths, runs, true),
   });

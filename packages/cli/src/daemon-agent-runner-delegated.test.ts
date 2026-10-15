@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SCHEMA_VERSION, Thread } from "@claudexor/schema";
 import { expect, it, vi } from "vitest";
+import { createAccountEvidence } from "@claudexor/daemon";
 import { createDaemonAgentRunner } from "./daemon-agent-runner.js";
 
 const startHarness = vi.hoisted(() => vi.fn().mockResolvedValue({ lifecycle: "succeeded" }));
@@ -53,6 +54,7 @@ it.each(["agent", "ask", "plan"] as const)(
       } as never,
       delegationBudgetAuthority: {} as never,
       quotaStore: () => ({}) as never,
+      accounts: createAccountEvidence(),
       interactions: {} as never,
       liveInputs: {} as never,
       resources: () => ({ resolve: () => [] }) as never,

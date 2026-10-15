@@ -519,7 +519,10 @@ describe("claudexor accounts snapshot (read-only agent doorway)", () => {
       stdout += String(chunk);
       return true;
     }) as never);
-    const get = vi.fn(async () => snapshot);
+    const evidence = { refusals: [], lastService: [] };
+    const get = vi.fn(async (path: string) =>
+      path === "/accounts/routing-evidence" ? evidence : snapshot,
+    );
 
     const code = await accountsCommandWithDeps(
       parseArgs(["accounts", "snapshot", "--json"]),
@@ -528,9 +531,15 @@ describe("claudexor accounts snapshot (read-only agent doorway)", () => {
     );
 
     expect(code).toBe(0);
-    expect(get).toHaveBeenCalledOnce();
-    expect(get).toHaveBeenCalledWith("/credential-profiles?snapshot=true");
-    expect(JSON.parse(stdout)).toMatchObject({ quotaEventCursor: "q-1" });
+    // Two reads, no probe or mutation: the snapshot and the additive evidence.
+    expect(get.mock.calls.map(([path]) => path)).toEqual([
+      "/credential-profiles?snapshot=true",
+      "/accounts/routing-evidence",
+    ]);
+    expect(JSON.parse(stdout)).toMatchObject({
+      quotaEventCursor: "q-1",
+      routingEvidence: evidence,
+    });
     expect(write).toHaveBeenCalledOnce();
   });
 
@@ -550,29 +559,33 @@ describe("claudexor accounts snapshot (read-only agent doorway)", () => {
       return true;
     }) as never);
     const code = await accountsCommandWithDeps(parseArgs(["accounts"]), false, {
-      daemonGet: async () => ({
-        ...snapshot,
-        quota: {
-          ...snapshot.quota,
-          refresh_skipped: [
-            {
-              vendor: "claude",
-              not_before: "2026-10-04T15:00:00Z",
-              subject: {
-                harness: "claude",
-                subject_id: "limited",
-                credential_route: "vendor_native",
-                plan_label: null,
+      daemonGet: async (path: string) =>
+        path === "/accounts/routing-evidence"
+          ? { refusals: [], lastService: [] }
+          : {
+              ...snapshot,
+              quota: {
+                ...snapshot.quota,
+                refresh_skipped: [
+                  {
+                    vendor: "claude",
+                    not_before: "2026-10-04T15:00:00Z",
+                    subject: {
+                      harness: "claude",
+                      subject_id: "limited",
+                      credential_route: "vendor_native",
+                      plan_label: null,
+                    },
+                  },
+                ],
               },
             },
-          ],
-        },
-      }),
     });
     expect(code).toBe(0);
     expect(stdout).toContain("quota refresh skipped for claude/limited (vendor_native):");
-    expect(stdout).toContain("next up claude: work");
+    expect(stdout).toContain("next up (default model) claude: work");
     expect(stdout).not.toContain("quota refresh skipped for claude/work");
+    expect(stdout).not.toContain("routing evidence unavailable");
   });
 });
 

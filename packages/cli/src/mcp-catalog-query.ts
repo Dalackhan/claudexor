@@ -2,6 +2,7 @@ import { connectDaemonIfRunning, ensureDaemon } from "./daemon-run.js";
 import { controlApiFetch } from "./live.js";
 import { daemonUnavailableError } from "./mcp-daemon-unavailable.js";
 import { controlProblemError } from "./cli-error.js";
+import { readRoutingEvidence } from "./account-routing-read.js";
 
 export async function catalogQuery(
   mode: "__status" | "__capabilities" | "__accounts",
@@ -33,6 +34,21 @@ export async function catalogQuery(
       body,
       `control API ${path} failed (HTTP ${response.status})`,
     );
+  // Accounts join the additive model-scoped evidence; 404 = an older engine.
+  if (mode === "__accounts")
+    return {
+      ...body,
+      ...(await readRoutingEvidence(async (evidencePath) => {
+        const evidence = await controlApiFetch(addr, evidencePath);
+        const payload: unknown = await evidence.json().catch(() => ({}));
+        if (!evidence.ok)
+          throw Object.assign(
+            controlProblemError(evidence.status, payload, `HTTP ${evidence.status}`),
+            { status: evidence.status },
+          );
+        return payload;
+      })),
+    };
   if (mode !== "__status") return body;
   const harnesses = Array.isArray(body["harnesses"])
     ? (body["harnesses"] as Record<string, unknown>[])

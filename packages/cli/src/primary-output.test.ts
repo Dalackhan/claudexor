@@ -90,6 +90,7 @@ describe("primaryOutputForCli", () => {
           rawDetailRef: null,
           resetsAt: null,
           vendorFailure: null,
+          poolAttempts: [],
           logRefs: [],
           eventRefs: [],
           runDir: root,

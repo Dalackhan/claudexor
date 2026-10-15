@@ -300,7 +300,8 @@ describe("projectTerminalTurnDetail (post-terminal degrade)", () => {
         },
         planReadiness: { state: "needs_answers", questionCount: 1 },
         planQuestions: [{ id: "q1" }],
-        failure: typedFailure,
+        // A record written before per-try attribution decodes with an empty list.
+        failure: { ...typedFailure, poolAttempts: [] },
         outcomeFacts: makeOutcomeFacts("cancelled", { reason: "wall_clock_exceeded" }),
         outcomeBanner: "Time limit reached",
         runFacts: null,

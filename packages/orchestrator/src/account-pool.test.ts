@@ -461,3 +461,105 @@ describe("account pool selection", () => {
     expect(selection).toEqual({ outcome: "empty", resets_at: null });
   });
 });
+
+describe("last-served tie-break (INV-135: only among otherwise-equal unknown headroom)", () => {
+  const MODEL = "grok-4.7";
+  /** Durable last-served facts for one ranking: `served` maps row → service order. */
+  const reader = (served: Record<string, number>, forModel = MODEL, forHarness = "claude") => {
+    const reads: Array<{ harnessId: string; model: string | null; rows: string[] }> = [];
+    return {
+      reads,
+      orders: (harnessId: string, model: string | null, profiles: readonly CredentialProfile[]) => {
+        reads.push({ harnessId, model, rows: profiles.map((p) => p.profile_id) });
+        if (harnessId !== forHarness || model !== forModel) return new Map<string, number>();
+        return new Map(
+          profiles
+            .filter((p) => p.profile_id in served)
+            .map((p) => [p.profile_id, served[p.profile_id]!]),
+        );
+      },
+    };
+  };
+  const pool = (ids: string[], usedRatios: Record<string, number> = {}) => ({
+    ...baseArgs,
+    model: MODEL as string | null,
+    registry: ids.map((id) => row(id)),
+    snapshots: Object.entries(usedRatios).map(([id, used]) => snapshot(id, used)),
+    readyProfileIds: new Set(ids),
+  });
+  const order = (args: Parameters<typeof rankAccountPool>[0]) =>
+    rankAccountPool(args).map((c) => c.profile.profile_id);
+  const mark = (profileId: string, observedAt: string): PreProgressRefusalObservation => ({
+    harness_id: "claude",
+    profile_id: profileId,
+    requested_model: MODEL,
+    observed_at: observedAt,
+    expires_at: "2099-01-01T00:00:00.000Z",
+  });
+
+  it("puts the row that last served this model first, then keeps id order; no history = id order", () => {
+    expect(order({ ...pool(["a", "b", "c"]), lastService: reader({ b: 7, c: 3 }) })).toEqual([
+      "b",
+      "c",
+      "a",
+    ]);
+    expect(order({ ...pool(["a", "b"]), lastService: reader({}) })).toEqual(["a", "b"]);
+    expect(order({ ...pool(["a", "b"]), lastService: null })).toEqual(["a", "b"]);
+  });
+
+  it("reads the facts once per ranking, for this harness, requested model and unknown rows only", () => {
+    const facts = reader({ b: 1 });
+    order({ ...pool(["a", "b", "known"], { known: 0.2 }), lastService: facts });
+    expect(facts.reads).toEqual([{ harnessId: "claude", model: MODEL, rows: ["a", "b"] }]);
+    // Another model's or harness's service never reorders this ranking.
+    expect(order({ ...pool(["a", "b"]), lastService: reader({ b: 1 }, "other-model") })).toEqual([
+      "a",
+      "b",
+    ]);
+    expect(order({ ...pool(["a", "b"]), lastService: reader({ b: 1 }, MODEL, "cursor") })).toEqual([
+      "a",
+      "b",
+    ]);
+    // A singleton needs no tie-break: nothing to read.
+    const single = reader({ only: 1 });
+    expect(order({ ...pool(["only"]), lastService: single })).toEqual(["only"]);
+    expect(single.reads).toEqual([]);
+  });
+
+  it("never outranks known headroom, a mark or exhaustion", () => {
+    const facts = reader({ unknown: 9, marked: 9, spent: 9 });
+    expect(order({ ...pool(["known", "unknown"], { known: 0.5 }), lastService: facts })).toEqual([
+      "known",
+      "unknown",
+    ]);
+    const at = "2026-09-28T19:52:00.000Z";
+    const marked = {
+      ...pool(["fresh", "marked"]),
+      lastService: facts,
+      refusals: [mark("marked", at)],
+    };
+    expect(order(marked)).toEqual(["fresh", "marked"]);
+    expect(order({ ...pool(["a", "spent"], { spent: 0.99 }), lastService: facts })).toEqual([
+      "a",
+      "spent",
+    ]);
+    // A fully marked pool still selects (oldest mark first), whatever served last.
+    expect(
+      selectFromAccountPool({
+        ...pool(["a", "b"]),
+        lastService: reader({ a: 9 }),
+        refusals: [mark("a", "2026-09-28T19:55:00.000Z"), mark("b", at)],
+      }),
+    ).toMatchObject({ outcome: "selected", candidate: { profile: { profile_id: "b" } } });
+  });
+
+  it("an expired mark restores the service preference", () => {
+    const expired: PreProgressRefusalObservation = {
+      ...mark("b", "2020-01-01T00:00:00.000Z"),
+      expires_at: "2020-01-01T01:00:00.000Z",
+    };
+    expect(
+      order({ ...pool(["a", "b"]), lastService: reader({ b: 2 }), refusals: [expired] }),
+    ).toEqual(["b", "a"]);
+  });
+});

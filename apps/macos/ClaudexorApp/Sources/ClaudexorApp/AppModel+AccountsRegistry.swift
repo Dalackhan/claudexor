@@ -20,14 +20,21 @@ extension AppModel {
     /// the main actor. If an older GET owns the location lane, it is allowed to
     /// settle inertly and the lane performs exactly one trailing read. Further
     /// mutations during that read fence it and coalesce behind another pass.
+    /// The routing-evidence read is fenced at the same receipt and read again.
     func refreshCredentialProfilesAfterMutation(
         locationID requestedLocationID: ExecutionLocationID? = nil
     ) async {
         let locationID = requestedLocationID ?? activeExecutionLocation
         accountsRegistryGenerations[locationID] =
             (accountsRegistryGenerations[locationID] ?? 0) &+ 1
+        accountsRoutingEvidence.begin(at: locationID)
         if let inFlight = accountsRegistryLoadTasks[locationID] {
             accountsRegistryTrailingHydrations.insert(locationID)
+            if let client = gateway(for: locationID) {
+                Task { @MainActor [weak self] in
+                    await self?.refreshAccountsRoutingEvidence(at: locationID, client: client)
+                }
+            }
             _ = await inFlight.value
             return
         }
@@ -66,6 +73,10 @@ extension AppModel {
         let token = UUID()
         accountsRegistryLoadTokens[locationID] = token
         accountsRegistryLoadStates[locationID] = .loading
+        // Concurrent and independent: its failure is a notice, never this load's.
+        Task { @MainActor [weak self] in
+            await self?.refreshAccountsRoutingEvidence(at: locationID, client: requestClient)
+        }
         let task: Task<String?, Never> = Task { @MainActor [weak self] in
             guard let self else { return Optional("Accounts stopped loading.") }
             return await self.runAccountsRegistryHydrationLane(

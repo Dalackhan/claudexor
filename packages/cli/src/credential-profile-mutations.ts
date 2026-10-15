@@ -45,7 +45,11 @@ export interface CredentialProfileMutationDeps {
   secretStore: Pick<SecretStore, "delete">;
   /** Credential-mutation cache bust; the optional subject scopes the A7
    * unusable-ledger clearing to exactly the credential this mutation touched. */
-  bustStatusCaches: (subject?: { harnessId: string; profileId: string }) => void;
+  bustStatusCaches: (subject?: {
+    harnessId: string;
+    profileId: string;
+    keepsBinding?: boolean;
+  }) => void;
   activeLoginJob: (harnessId: string, profileId: string) => ControlSetupJob | undefined;
   /** Deterministic platform-policy tests; production uses process.platform. */
   platform?: NodeJS.Platform;
@@ -128,7 +132,8 @@ export function credentialProfileMutations(deps: CredentialProfileMutationDeps) 
       if (!updated) {
         throw Object.assign(new Error("profile update did not persist"), { status: 500 });
       }
-      deps.bustStatusCaches({ harnessId, profileId });
+      // Enabled is routing, not the credential: the row keeps its binding and service history.
+      deps.bustStatusCaches({ harnessId, profileId, keepsBinding: true });
       return {
         profile: updated,
         // Same vendor overlay the listing applies: a single-profile response

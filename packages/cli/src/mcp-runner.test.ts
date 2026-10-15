@@ -1658,7 +1658,7 @@ describe("mcp daemon body mapping", () => {
       for (const mode of ["__run_inspect", "__run_status", "__run_result"]) {
         const result = (await runner({ mode, runId: "run-failed" })) as Record<string, unknown>;
         expect(result["status"]).toBe("failed");
-        expect(result["failure"]).toEqual(failure);
+        expect(result["failure"]).toEqual({ ...failure, poolAttempts: [] });
       }
     } finally {
       connectSpy.mockRestore();

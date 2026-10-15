@@ -9,6 +9,7 @@ import {
   ProjectStorePort,
   ResourceStorePort,
   QuotaRegistry,
+  AccountEvidence,
 } from "@claudexor/daemon";
 import { loadConfig } from "@claudexor/config";
 import { listTrustService, updateTrustService } from "./trust-services.js";
@@ -35,7 +36,6 @@ import { profileDoctorStatus } from "./accounts-projection.js";
 import { createRetentionRunner } from "./retention-service.js";
 import { AuthReadinessService } from "@claudexor/gateway";
 import { buildGateway, harnessModels, harnessAccountModels } from "./registry.js";
-import { credentialUnusableLedger } from "./run-orchestrator.js";
 import {
   createCredentialProfilesService,
   projectHarnessStatuses,
@@ -100,6 +100,8 @@ export function controlServices(
    * routes touch it, so the recovery plane must never materialize it. */
   resources: () => ResourceStorePort,
   quotaRegistry: () => QuotaRegistry,
+  /** The store's account evidence graph: invalidation and Accounts reads share it. */
+  accounts: AccountEvidence,
   daemonJobs: () => Array<{ runId?: string; state: string; finishedAt?: string; params?: unknown }>,
   effectiveConcurrencyCaps?: RuntimeConcurrencyCaps,
   purgeDurability?: ThreadPurgeDurability,
@@ -121,7 +123,7 @@ export function controlServices(
     versionOf: globalConfigVersion,
   });
   const bustStatusCaches = (subject?: CredentialMutationSubject) =>
-    bustCredentialStatusCaches(quotaRegistry, subject);
+    bustCredentialStatusCaches(quotaRegistry, accounts, subject);
   const journalPartition = (partition: string): PartitionControlPort =>
     partition === "global" ? journalManager : threads.journal(partition);
   const setupJobs = (): SetupJobManager => {
@@ -331,8 +333,8 @@ export function controlServices(
             ...input,
             cwd: NO_PROJECT_ROOT,
             config: loadConfig(NO_PROJECT_ROOT).global,
-            quota: { ...quotaRegistry().read(), honored: credentialUnusableLedger.honored() },
-            unusable: credentialUnusableLedger.live(),
+            quota: { ...quotaRegistry().read(), honored: accounts.unusable.honored() },
+            unusable: accounts.unusable.live(),
           })
         : harnessModels(input.harnessId, NO_PROJECT_ROOT, true, input.route),
     authReadiness: async (input: { harnessId: string; request: unknown }) =>
@@ -348,7 +350,7 @@ export function controlServices(
     // profile; adapters without profile support report honest unknown.
     // The pool-authority read (GET /v2/account-pools) shares the same cached
     // projection so the listing and the pool verdict cannot disagree.
-    ...createCredentialProfilesService(quotaRegistry),
+    ...createCredentialProfilesService(quotaRegistry, accounts),
     // PATCH + DELETE /credential-profiles/:harness/:id — the Enabled toggle
     // (with the migrated row's native_credentials_enabled downgrade mirror)
     // and the provable D-U4 removal, owned by credential-profile-mutations.ts.

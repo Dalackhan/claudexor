@@ -23,7 +23,7 @@ import { createModelServices } from "./model-services.js";
 type SqlServices = ReturnType<typeof createSqlDaemonServices>;
 type ModelOptions = Pick<
   Parameters<typeof createModelServices>[0],
-  "sources" | "registry" | "config" | "unusable" | "substitutions" | "migrationGate"
+  "sources" | "registry" | "config" | "migrationGate"
 >;
 
 /** Compose the existing queue and runners with one SQL graph. This factory
@@ -101,6 +101,9 @@ export function createSqlDaemonExecutors(
 ) {
   const models = createModelServices({
     ...options.models,
+    unusable: graph.accounts.unusable,
+    substitutions: graph.accounts.substitutions,
+    lastService: graph.accounts.services,
     commands: graph.commands,
     resourceQueries: graph.commands.queries,
     resources: () => graph.resources,
@@ -118,6 +121,7 @@ export function createSqlDaemonExecutors(
   const agent = (options.agent ?? createDaemonAgentRunner)({
     delegationBudgetAuthority: options.authority,
     quotaStore: () => graph.quota,
+    accounts: graph.accounts,
     threads: graph.threads,
     commands: graph.commands.queries,
     interactions: graph.interactions,

@@ -3,7 +3,8 @@ import { credentialProfilePolicyState } from "@claudexor/core";
 import { loadConfigCached } from "@claudexor/config";
 import {
   ModelOperations,
-  ModelSubstitutionLedger,
+  type AccountServiceEvidence,
+  type ModelSubstitutionLedger,
   type CredentialUnusableLedger,
   type DaemonClient,
   type ModelOperationDependencies,
@@ -35,19 +36,11 @@ import {
 import { errorCode, noProjectRepoRoot, redactSecrets } from "@claudexor/util";
 import { accountsMigrationGate } from "./accounts-unified-migration.js";
 import { buildRegistry } from "./registry.js";
-import { credentialUnusableLedger } from "./run-orchestrator.js";
 import type { RetentionRunner } from "./retention-service.js";
 import { catalogProfiles, enumerateAccountCatalogs } from "./account-catalog.js";
 import { bindModelAccountEvidence, withImageAccountEvidence } from "./model-account-evidence.js";
 import { modelOperationControlServices } from "./model-operation-control.js";
 import { modelError, poolExhausted } from "./model-service-refusals.js";
-
-/**
- * Daemon-lifetime model-substitution observations: in-memory and bounded, like
- * the unusable-credential ledger, and cleared at the same credential-generation
- * call sites. Model operations are their only producer and consumer.
- */
-export const modelSubstitutionLedger = new ModelSubstitutionLedger();
 
 interface ModelSource {
   adapter: ModelAdapter;
@@ -63,8 +56,13 @@ type Dependencies = ModelOperationPersistence &
     config?: () => GlobalConfig;
     registry?: AdapterRegistry;
     sources?: readonly ModelSource[];
-    unusable?: CredentialUnusableLedger;
-    substitutions?: ModelSubstitutionLedger;
+    /** The store graph's ledgers (`createAccountEvidence`); model-substitution
+     * observations are produced and consumed only by model operations. */
+    unusable: CredentialUnusableLedger;
+    substitutions: ModelSubstitutionLedger;
+    /** The graph's durable last-served facts: read by the Auto pool choice,
+     * never written here (only Agent and Ask tries serve). */
+    lastService?: Pick<AccountServiceEvidence, "orders"> | null;
     migrationGate?: typeof accountsMigrationGate;
   };
 
@@ -76,8 +74,7 @@ export function createModelServices(deps: Dependencies) {
   ];
   const registry = deps.registry ?? buildRegistry({ includeFakes: false });
   const config = deps.config ?? (() => loadConfigCached(noProjectRepoRoot()).global);
-  const unusable = deps.unusable ?? credentialUnusableLedger;
-  const substitutions = deps.substitutions ?? modelSubstitutionLedger;
+  const { unusable, substitutions } = deps;
   const quotaEvidence = () => ({ ...deps.quota().read(), honored: unusable.honored() });
   const lifetime = new AbortController();
   const getSource = (id: string): ModelSource => {
@@ -199,6 +196,7 @@ export function createModelServices(deps: Dependencies) {
         quota: currentQuota,
         unusable: unusable.live(),
         substitutions: substitutions.live(),
+        lastService: deps.lastService,
         probe,
         pinnedProfile,
         boundProfileId: account.mode === "auto" ? (account.preferredProfileId ?? null) : null,

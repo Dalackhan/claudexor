@@ -4,6 +4,9 @@ import {
   type CredentialExecutionSubject,
 } from "@claudexor/core";
 
+/** The registered rows a credential change voided (null = every row). */
+export type CredentialInvalidation = { harnessId: string; profileId: string } | null;
+
 /** Extracted from the pre-progress ledger: one managed lifecycle for all observations. */
 export class CredentialGeneration {
   private changes = 0;
@@ -11,13 +14,18 @@ export class CredentialGeneration {
   private defaultChangedAt = 0;
   private accountChangedAt = new Map<string, number>();
   private dispatchOrder = 0;
+  private retired = false;
 
   constructor(
     private readonly mutating: (harnessId: string) => boolean = credentialMutationWindowOpen,
+    /** Durable facts about registered rows that the same change voids. Called
+     * after the generation moved, so a failing hook can never leave a stale
+     * binding current. */
+    private readonly onInvalidated: (scope: CredentialInvalidation) => void = () => {},
   ) {}
 
   generation(harnessId: string, profileId: string | null): number {
-    if (this.mutating(harnessId)) return Number.NaN;
+    if (this.retired || this.mutating(harnessId)) return Number.NaN;
     return Math.max(
       this.everyAccountChangedAt,
       profileId === null ? this.defaultChangedAt : 0,
@@ -43,17 +51,34 @@ export class CredentialGeneration {
     );
   }
 
+  /** The owning store closed: no binding is current any more, so a late
+   * outcome of a run from the closed graph neither records nor clears. */
+  retire(): void {
+    this.retired = true;
+  }
+
   noteCredentialChange(): void {
     this.accountChangedAt.clear();
     this.everyAccountChangedAt = ++this.changes;
+    this.invalidated(null);
   }
 
-  clearSubject(harnessId: string, profileId: string | null): void {
+  /** A change that keeps the row's binding (its Enabled toggle) still moves the
+   * generation, so no try bound before it records or clears anything after it,
+   * but leaves that binding's durable facts. */
+  clearSubject(harnessId: string, profileId: string | null, keepsBinding = false): void {
     this.accountChangedAt.set(key(harnessId, profileId), ++this.changes);
+    // Durable facts exist only for registered rows, never the default subject.
+    if (profileId !== null && !keepsBinding) this.invalidated({ harnessId, profileId });
   }
 
   clearDefaultSubjects(): void {
     this.defaultChangedAt = ++this.changes;
+  }
+
+  private invalidated(scope: CredentialInvalidation): void {
+    // A retired generation's store is closed; its facts died with the graph.
+    if (!this.retired) this.onInvalidated(scope);
   }
 }
 

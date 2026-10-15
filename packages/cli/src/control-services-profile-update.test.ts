@@ -11,11 +11,16 @@ import {
   ControlCredentialProfileUpdateResponse,
   type QuotaSnapshot,
 } from "@claudexor/schema";
+import { createAccountEvidence } from "@claudexor/daemon";
 import { controlServices } from "./control-services.js";
-import { credentialUnusableLedger, preProgressRefusalLedger } from "./run-orchestrator.js";
-import { modelSubstitutionLedger } from "./model-services.js";
 import { bustGlobalCredentialStatusCaches } from "./credential-status-invalidation.js";
 import { registerConfigDirProfile } from "./profile-registration.js";
+
+// One evidence graph for this file, injected the way the daemon injects its store's graph.
+const accounts = createAccountEvidence();
+const credentialUnusableLedger = accounts.unusable;
+const preProgressRefusalLedger = accounts.refusals;
+const modelSubstitutionLedger = accounts.substitutions;
 
 const gatewayMock = vi.hoisted(() => ({
   statuses: [] as unknown[],
@@ -206,6 +211,7 @@ function services(
     undefined as never,
     undefined as never,
     (() => quota) as never,
+    accounts,
     () => [],
   );
 }
@@ -1023,7 +1029,7 @@ describe("A7 per-subject unusable-ledger clearing on control-API credential muta
     const svc = services();
     await svc.updateCredentialProfile({ harnessId: "codex", profileId: "work", enabled: false });
     expect(modelSubstitutionLedger.live().map((o) => o.profile_id)).toEqual(["other"]);
-    bustGlobalCredentialStatusCaches(() => ({ noteCredentialChange }) as never);
+    bustGlobalCredentialStatusCaches(() => ({ noteCredentialChange }) as never, accounts);
     expect(modelSubstitutionLedger.live()).toEqual([]);
   });
 

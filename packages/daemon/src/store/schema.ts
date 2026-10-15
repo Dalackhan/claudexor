@@ -5,7 +5,22 @@ import { StoreSchemaUnsupportedError } from "./errors.js";
 /** `PRAGMA application_id` of every engine store ("CXEN"). */
 export const ENGINE_APPLICATION_ID = 0x4358454e;
 /** `PRAGMA user_version`: the one schema this engine creates and serves. */
-export const ENGINE_SCHEMA_VERSION = 1;
+export const ENGINE_SCHEMA_VERSION = 2;
+
+/**
+ * Version 2: the latest request each account served per requested model
+ * (INV-135 last-served tie-break). One current row per (harness, row,
+ * requested-model key, credential-binding digest); the model key is the JSON
+ * encoding, so the default model (`null`), `""` and `"null"` stay distinct.
+ * `service_seq` orders services by acceptance in the single writer, never by
+ * the wall clock.
+ */
+const ACCOUNT_LAST_SERVICE_SQL = `
+CREATE TABLE account_last_service(harness_id TEXT NOT NULL, profile_id TEXT NOT NULL, requested_model_key TEXT NOT NULL,
+  binding_digest TEXT NOT NULL, service_seq INTEGER NOT NULL, observed_at TEXT NOT NULL, run_id TEXT NOT NULL,
+  attempt_id TEXT NOT NULL, try_index INTEGER NOT NULL,
+  PRIMARY KEY(harness_id, profile_id, requested_model_key, binding_digest)) WITHOUT ROWID, STRICT;
+`;
 
 /**
  * SYNTHESIS_R5 §5 with R5_AMENDMENTS A1 (`command.kind`/`live` replace
@@ -98,7 +113,7 @@ CREATE TABLE import_partition(name TEXT PRIMARY KEY, status TEXT NOT NULL, pid I
   previous_frame_hash TEXT, source_size INTEGER, source_mtime TEXT, fingerprint TEXT, records INTEGER, digest TEXT, problem TEXT) STRICT;
 CREATE TABLE unclassified(pid INTEGER NOT NULL, seq INTEGER NOT NULL, type TEXT NOT NULL, reason TEXT NOT NULL, payload BLOB NOT NULL,
   PRIMARY KEY(pid, seq)) WITHOUT ROWID, STRICT;
-`;
+${ACCOUNT_LAST_SERVICE_SQL}`;
 
 /** Every table the DDL creates, in creation order (for tests and the importer seam). */
 export const ENGINE_TABLES: readonly string[] = Object.freeze(
@@ -107,10 +122,13 @@ export const ENGINE_TABLES: readonly string[] = Object.freeze(
 
 /**
  * Migrations from an older `user_version` to the current one, keyed by the
- * version they start from. Empty for version 1; a stored version with no
- * entry here (older without a path, or newer than this engine) is refused.
+ * version they start from; a stored version with no entry here (older without
+ * a path, or newer than this engine) is refused. Each step only adds: an
+ * older engine refuses the upgraded file as newer, so the upgrade is one-way.
  */
-const SCHEMA_MIGRATIONS: ReadonlyMap<number, (db: DatabaseSync) => void> = new Map();
+const SCHEMA_MIGRATIONS: ReadonlyMap<number, (db: DatabaseSync) => void> = new Map([
+  [1, (db: DatabaseSync) => db.exec(ACCOUNT_LAST_SERVICE_SQL)],
+]);
 
 export interface SchemaIdentity {
   applicationId: number;

@@ -19,7 +19,7 @@ import {
   type QuotaBlock,
 } from "./credential-cooldown.js";
 import type { AttemptOutputMarkers } from "./attemptOutputMarkers.js";
-import { refusedBeforeProgress } from "./pre-progress-refusal.js";
+import { noteRefusedBeforeProgress } from "./pre-progress-refusal.js";
 import { applicableCredentialUnusable } from "./account-evidence.js";
 import {
   reactiveRotationEvidence,
@@ -491,7 +491,7 @@ export async function rotateSpecOnTypedLimit(args: {
     }
     return null;
   }
-  if (current && refusedBeforeProgress(evidence, args.markers)) args.notePreProgressRefusal?.();
+  noteRefusedBeforeProgress(args);
   const route = limitSubjectRoute(
     current,
     args.defaultRouteWasVendorNative === true ? "local_session" : null,

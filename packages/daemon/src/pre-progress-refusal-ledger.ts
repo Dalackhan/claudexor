@@ -99,11 +99,11 @@ export class PreProgressRefusalLedger {
 
   /** ONE account's credential changed (a control-API profile mutation): only
    * ITS verdicts are void, across every requested model. */
-  clearSubject(harnessId: string, profileId: string): void {
+  clearSubject(harnessId: string, profileId: string, keepsBinding = false): void {
     for (const [k, obs] of this.rows) {
       if (obs.harness_id === harnessId && obs.profile_id === profileId) this.rows.delete(k);
     }
-    this.credentials.clearSubject(harnessId, profileId);
+    this.credentials.clearSubject(harnessId, profileId, keepsBinding);
   }
 
   private prune(): void {

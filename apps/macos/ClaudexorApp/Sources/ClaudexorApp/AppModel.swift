@@ -275,6 +275,7 @@ final class AppModel {
     /// Stale values may remain visible, but can never make `next_up` current.
     var accountsQuotaDisplayStates: [ExecutionLocationID: AccountsQuotaDisplayState] = [:]
     let accountResourceActions = AccountsResourceActions(preferences: .standard)
+    let accountsRoutingEvidence = AccountsRoutingEvidenceState()
     @ObservationIgnored var accountsQuotaDisplayGenerations: [ExecutionLocationID: UInt64] = [:]
     @ObservationIgnored var accountsQuotaSubscribers:
         [ExecutionLocationID: Set<UUID>] = [:]

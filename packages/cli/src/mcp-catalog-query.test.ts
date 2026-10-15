@@ -35,9 +35,12 @@ describe("catalogQuery __accounts routing (MCP accounts default is cached)", () 
   it("anything but fresh:true stays cached", async () => {
     await catalogQuery("__accounts", false, {});
     await catalogQuery("__accounts", false, { fresh: false });
+    // Each listing joins the additive routing-evidence read; neither refreshes.
     expect(controlApiFetch.mock.calls.map(([, path]) => path)).toEqual([
       "/credential-profiles",
+      "/accounts/routing-evidence",
       "/credential-profiles",
+      "/accounts/routing-evidence",
     ]);
   });
 });

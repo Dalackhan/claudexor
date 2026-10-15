@@ -1,3 +1,4 @@
+import { createAccountEvidence } from "../account-evidence.js";
 import { InteractionRegistry } from "../interactions.js";
 import { LiveInputRegistry } from "../live-input.js";
 import { QuotaRegistry } from "../quota-registry.js";
@@ -72,6 +73,8 @@ export function createSqlDaemonServices(store: EngineStore, options: SqlDaemonSe
   const liveInputs = new LiveInputRegistry({
     pendingForRun: (runId) => interactions.pendingForRun(runId),
   });
+  // Store-scoped like the facts it owns: global recovery keeps both.
+  const accounts = createAccountEvidence(store, (line) => options.log?.(line));
   return {
     store,
     blobs,
@@ -94,6 +97,7 @@ export function createSqlDaemonServices(store: EngineStore, options: SqlDaemonSe
     },
     interactions,
     liveInputs,
+    accounts,
     /** Called by the existing global recovery replacement owner after it
      * drains setup and changes the registry generation. Publish both owners
      * together only after the new quota projection validates. */
@@ -123,6 +127,7 @@ export function createSqlDaemonServices(store: EngineStore, options: SqlDaemonSe
     },
     /** Caller closes transports/runners first, then this graph, then its store. */
     async close() {
+      accounts.retire();
       await maintenance.stop();
       try {
         await store.flushed();

@@ -275,7 +275,11 @@ export async function daemonGet(path: string): Promise<unknown> {
     headers: { Authorization: `Bearer ${addr.token}` },
   });
   if (!response.ok) {
-    throw new Error(`control API ${path} failed (${response.status}): ${await response.text()}`);
+    // The status stays typed so an additive read can tell an older daemon (404).
+    throw Object.assign(
+      new Error(`control API ${path} failed (${response.status}): ${await response.text()}`),
+      { status: response.status },
+    );
   }
   return response.json();
 }

@@ -24,11 +24,10 @@ import { createCursorAdapter } from "@claudexor/harness-cursor";
 import type { ControlSetupJob, CredentialProfile } from "@claudexor/schema";
 import { parseArgs } from "./args.js";
 import { profilesCommandWithDeps } from "./credential-commands.js";
+import { createAccountEvidence } from "@claudexor/daemon";
 import { bustLoginCredentialState } from "./credential-status-invalidation.js";
-import { modelSubstitutionLedger } from "./model-services.js";
 import { controlApiFetch } from "./live.js";
 import { registerConfigDirProfile } from "./profile-registration.js";
-import { credentialUnusableLedger, preProgressRefusalLedger } from "./run-orchestrator.js";
 import { attachSetupJob } from "./setup-attach-command.js";
 import { setupJobControlServices } from "./setup-job-control-services.js";
 import { createSetupJobManager } from "./setup-jobs.js";
@@ -40,6 +39,11 @@ import { createSetupJobManager } from "./setup-jobs.js";
 // the test scripts, and the real setup-job manager owns the credential-mutation
 // window with real process-group evidence. The Cursor status coordinator
 // probes the same synthetic store. No vendor, no account, no installed daemon.
+
+// The daemon store graph's evidence the setup lifecycle invalidates.
+const accounts = createAccountEvidence();
+const { unusable: credentialUnusableLedger, substitutions: modelSubstitutionLedger } = accounts;
+const preProgressRefusalLedger = accounts.refusals;
 
 const vendor = vi.hoisted(() => {
   const dir = `${(process.env.TMPDIR ?? "/tmp").replace(/\/+$/, "")}/claudexor-363-lifecycle-${process.pid}`;
@@ -146,7 +150,7 @@ async function withDaemon<T>(
       ...(options.loginTimeoutMs ? { loginTimeoutMs: options.loginTimeoutMs } : {}),
       onCredentialStateMayHaveChanged: (harness) => {
         bumps.push(harness);
-        bustLoginCredentialState(() => quota as never, { invalidate() {} }, harness);
+        bustLoginCredentialState(() => quota as never, accounts, { invalidate() {} }, harness);
       },
     });
   let manager = build();

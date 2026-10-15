@@ -4,14 +4,15 @@
  * wiring it siblings: the same event stream that feeds the quota registry
  * feeds the unusable-credential ledger's success-clearing, and the same deps
  * boundary that injects quota snapshots injects the ledger's observations.
+ *
+ * The account evidence is the engine store's graph (`createSqlDaemonServices`
+ * builds one per store lifetime): its in-memory ledgers are bounded and
+ * self-expiring, the last-served facts are durable, and the same credential
+ * generation clears both. Agent Runs produce refusal marks and service facts;
+ * every unpinned pool choice (runs, reviewers, the Accounts `next_up`
+ * projection) reads them.
  */
-import {
-  CredentialUnusableLedger,
-  CredentialGeneration,
-  PreProgressRefusalLedger,
-  logPath,
-  type QuotaRegistry,
-} from "@claudexor/daemon";
+import { logPath, type AccountEvidence, type QuotaRegistry } from "@claudexor/daemon";
 import { Orchestrator, createCredentialExecutionObserver } from "@claudexor/orchestrator";
 import type { normalizeRunStartRequest } from "@claudexor/control-api";
 import { buildRegistry } from "./registry.js";
@@ -19,34 +20,25 @@ import type { RuntimeConcurrencyCaps } from "@claudexor/schema";
 import { logLine } from "./log-line.js";
 import { daemonRunScopeIndex } from "./run-scope-index.js";
 
-/**
- * Daemon-lifetime typed `credential_unusable` evidence (A7): in-memory and
- * bounded by design — the poller re-derives vendor rejections within a cycle
- * after a restart, and a restart usually follows the re-login that heals a
- * dead credential. `claudexord` clears it on credential-generation changes.
- */
-const credentialGeneration = new CredentialGeneration();
-export const credentialUnusableLedger = new CredentialUnusableLedger(
-  undefined,
-  undefined,
-  credentialGeneration,
-);
-
-/**
- * Daemon-lifetime pre-progress refusal observations (#363): in-memory and
- * bounded like the unusable ledger, cleared at the same credential-generation
- * call sites. Agent Runs produce them and every unpinned pool choice (runs,
- * reviewers, the Accounts `next_up` projection) reads them.
- */
-export const preProgressRefusalLedger = new PreProgressRefusalLedger(
-  undefined,
-  undefined,
-  credentialGeneration,
-);
-
 type OrchestratorDeps = ConstructorParameters<typeof Orchestrator>[0];
 
+/** The orchestrator's #363 memory over the store's evidence graph. */
+function refusalMemory(
+  accounts: AccountEvidence,
+): NonNullable<OrchestratorDeps["preProgressRefusals"]> {
+  const { refusals } = accounts;
+  return {
+    live: () => refusals.live(),
+    generation: (harnessId, profileId) => refusals.generation(harnessId, profileId),
+    record: (value) => refusals.record(value),
+    clear: (harnessId, profileId, model) => refusals.clear(harnessId, profileId, model),
+    services: accounts.services,
+  };
+}
+
 export function buildRunOrchestrator(args: {
+  /** The store's account evidence graph (required: never a private fallback). */
+  accounts: AccountEvidence;
   p: ReturnType<typeof normalizeRunStartRequest>;
   delegationBudgetAuthority: OrchestratorDeps["delegationBudgetAuthority"];
   quotaStore: () => QuotaRegistry;
@@ -56,6 +48,7 @@ export function buildRunOrchestrator(args: {
   runtimeConcurrencyCaps?: RuntimeConcurrencyCaps;
 }): Orchestrator {
   const { p, quotaStore } = args;
+  const credentialUnusableLedger = args.accounts.unusable;
   return new Orchestrator({
     registry: buildRegistry(),
     delegationBudgetAuthority: args.delegationBudgetAuthority,
@@ -108,7 +101,7 @@ export function buildRunOrchestrator(args: {
     },
     credentialUnusable: () => credentialUnusableLedger.live(),
     credentialEvidence: credentialUnusableLedger,
-    preProgressRefusals: preProgressRefusalLedger,
+    preProgressRefusals: refusalMemory(args.accounts),
     reviewerPanel: p.reviewerPanel,
     reviewerModels:
       p.reviewerModels && typeof p.reviewerModels === "object" ? p.reviewerModels : undefined,

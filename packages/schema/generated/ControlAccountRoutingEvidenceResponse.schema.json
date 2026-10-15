@@ -1,0 +1,101 @@
+{
+  "$ref": "#/definitions/ControlAccountRoutingEvidenceResponse",
+  "definitions": {
+    "ControlAccountRoutingEvidenceResponse": {
+      "type": "object",
+      "properties": {
+        "refusals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "harness_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Harness family the observed account belongs to."
+              },
+              "profile_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Account row whose started session was refused before progress."
+              },
+              "requested_model": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Model the run asked this account for; null = the harness default model."
+              },
+              "observed_at": {
+                "type": "string",
+                "minLength": 1,
+                "description": "When the pre-progress refusal was observed."
+              },
+              "expires_at": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Self-expiry instant (observation retention, not a vendor reset time); after this the observation is ignored."
+              }
+            },
+            "required": [
+              "harness_id",
+              "profile_id",
+              "requested_model",
+              "observed_at",
+              "expires_at"
+            ],
+            "additionalProperties": false,
+            "description": "A bounded, self-expiring typed observation that an account refused a started session before any progress; it orders the account pool and never excludes a row."
+          },
+          "description": "Live pre-progress refusal observations, each scoped to one requested model."
+        },
+        "lastService": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "harness_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Harness family of the account."
+              },
+              "profile_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Account row that served the request."
+              },
+              "requested_model": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Model the run asked for; null = the harness default model."
+              },
+              "observed_at": {
+                "type": "string",
+                "minLength": 1,
+                "description": "When the account was observed serving that request."
+              }
+            },
+            "required": [
+              "harness_id",
+              "profile_id",
+              "requested_model",
+              "observed_at"
+            ],
+            "additionalProperties": false,
+            "description": "The latest observed service of one account for one requested model under its current credential binding."
+          },
+          "description": "Latest observed service per registered account and requested model, most recent service first."
+        }
+      },
+      "required": [
+        "refusals",
+        "lastService"
+      ],
+      "additionalProperties": false,
+      "description": "Model-scoped account routing evidence: live refusal marks and the durable last-served order."
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

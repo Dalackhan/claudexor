@@ -51,6 +51,7 @@ import {
   preProgressRefusalSubject,
   type PreProgressRefusalMemory,
   type PreProgressRefusalSubject,
+  type ServiceProducer,
 } from "./pre-progress-refusal.js";
 import type { TransientFailureObservation } from "./transientClassify.js";
 import type { RunInput } from "./orchestrator.js";
@@ -262,10 +263,11 @@ export class OrchestratorCredentials {
     });
   }
 
-  /** #363: bind one try's pre-progress refusal subject before its session
-   * spawns, so its outcome never crosses a credential change made mid-try. */
-  bindPreProgressRefusal(harnessId: string, spec: HarnessRunSpec) {
-    return preProgressRefusalSubject(this.host.preProgressRefusals(), harnessId, spec);
+  /** #363: bind one try's pre-progress refusal and last-served subject before
+   * its session spawns, so its outcome never crosses a credential change made
+   * mid-try. */
+  bindPreProgressRefusal(harnessId: string, spec: HarnessRunSpec, producer: ServiceProducer) {
+    return preProgressRefusalSubject(this.host.preProgressRefusals(), harnessId, spec, producer);
   }
 
   /** A7 wiring for one reactive rotation decision: the sibling differential
@@ -452,6 +454,7 @@ export class OrchestratorCredentials {
       quota,
       unusable: this.host.credentialUnusable(),
       refusals: this.host.preProgressRefusals()?.live(),
+      lastService: this.host.preProgressRefusals()?.services,
       probe: adapter?.probeCredentialProfile?.bind(adapter),
       pinnedProfile,
       excludedProfileIds: input.excludedProfileIds,
@@ -492,6 +495,7 @@ export class OrchestratorCredentials {
       quota: this.vendorQuotaObservations(),
       unusable: this.host.credentialUnusable(),
       refusals: this.host.preProgressRefusals()?.live(),
+      lastService: this.host.preProgressRefusals()?.services,
       probe: probes ? probes.record(probe) : probe,
       pinnedProfile: this.resolveCredentialProfile(input, harnessId),
       boundProfileId: input.threadAccountBindings?.[harnessId] ?? null,

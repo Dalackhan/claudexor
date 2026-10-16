@@ -1929,6 +1929,14 @@ reservation. `serviceTier` remains an exact native override. Requested cognitive
 model and native variant stay distinct, and the per-spawn model gate validates
 the actual account's chosen variant. Result/event Processing receipts separate
 request, submission and observation; sessions may remain mixed or unknown.
+Codex's Processing cost owner qualifies ordinary native Fast against the
+subscription allowance described in the [Processing rule](DEVELOPMENT.md#processing-preference).
+The same paid-policy resolver prepares routing, reviewers and final native
+execution; final preparation recomputes the billing basis for the actual
+credential route rather than retaining another route's included verdict.
+The prepared `ProcessingCostBasis.kind=included` describes prospective allowance.
+Codex Fast execution events instead carry unknown billing evidence until there
+is an actual debit receipt; token valuation alone never proves zero cash.
 
 Existing catalog endpoints provide an opt-in `view=accounts` declared in the
 operation catalog. It includes every enabled compatible account with its

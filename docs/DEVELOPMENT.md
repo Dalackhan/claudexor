@@ -454,7 +454,19 @@ produce a new Standard request and reservation; an unknown outcome may not.
 
 Choosing Fast permits its premium service within existing monetary limits. It
 does not enable paid account settings, change credentials, buy credits, or raise
-limits. An explicit no-paid policy selects ordinary fallback before dispatch.
+limits. An explicit no-paid policy selects ordinary fallback before dispatch
+unless the exact native mode has a documented subscription allowance. On a
+verified ChatGPT subscription, ordinary Codex Fast (`fast`/`priority`) consumes
+included subscription limits ([OpenAI Speed documentation](https://learn.chatgpt.com/docs/agent-configuration/speed))
+and remains eligible under `paid_fallback: never` and `finite(0)`. This allowance
+does not cover `ultrafast`, other premium or unknown tiers, API credentials or
+unknown routes. Advisory Fast still requires the selected model/account's
+advertisement; an inherited native setting is preserved only within the same
+paid policy, and omission never selects Fast by itself.
+Allowance admission is not a debit receipt: Codex Fast execution events keep
+actual cash/credit consumption unknown unless the vendor supplies amount evidence.
+An unlimited cash budget can complete with that uncertainty; a finite cash budget
+retains the existing `cost_unverifiable` refusal when the debit cannot be verified.
 Resolve native controls and mode-qualified billing before ranking and reservation;
 carry observed usage through the existing ledger. Authentication proves the
 credential route, not inclusion of premium service. A native list-price amount is

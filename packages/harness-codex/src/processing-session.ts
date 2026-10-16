@@ -12,6 +12,7 @@ import {
   codexProcessingCost,
   codexConfiguredTier,
   legacyCodexProcessing,
+  codexProcessingForPaidPolicy,
 } from "./processing.js";
 import { tomlBasicString } from "./toml.js";
 type Env = Record<string, string | null | undefined>;
@@ -90,25 +91,25 @@ export function codexProcessingMethods(
       const env = home ? envFor(input.env, home) : undefined;
       const catalog =
         native && input.preference ? (await codexEffortsForEnv(runtime, env)).catalog : undefined;
-      let receipt = input.preference
+      const subscription = native
+        ? true
+        : input.credentialProfile?.credential_kind === "api_key"
+          ? false
+          : null;
+      const selected = input.preference
         ? prepareCodexProcessing(
             input.preference,
             catalog?.processing?.[input.model ?? catalog.defaultModel ?? ""],
+            undefined,
+            input.allowPaid,
+            subscription,
           )!
         : legacyCodexProcessing(codexConfiguredTier(home));
-      if (input.allowPaid === false && receipt.submitted !== "standard")
-        receipt = {
-          ...prepareCodexProcessing("standard")!,
-          requested: input.preference ?? null,
-          reason: "paid_processing_disallowed; ordinary_service_requested",
-        };
+      const receipt = codexProcessingForPaidPolicy(selected, input.allowPaid, subscription);
       return {
         model: input.model,
         receipt,
-        costBasis: codexProcessingCost(
-          receipt,
-          native ? true : input.credentialProfile?.credential_kind === "api_key" ? false : null,
-        ),
+        costBasis: codexProcessingCost(receipt, subscription),
       };
     },
   };
@@ -149,18 +150,24 @@ export function applyCodexRunProcessing(
       ? prepareCodexProcessing(
           spec.processing_preference,
           catalog.processing?.[spec.model_hint ?? catalog.defaultModel ?? ""],
-          undefined,
+          inheritedTier,
           spec.processing_allow_paid,
+          subscription,
         )
       : inheritedTier
         ? legacyCodexProcessing(inheritedTier)
         : undefined);
-  if (processing)
+  if (processing) {
+    const actual = codexProcessingForPaidPolicy(
+      processing,
+      spec.processing_allow_paid,
+      subscription,
+    );
     spec = {
       ...spec,
-      processing,
-      processing_cost_basis:
-        spec.processing_cost_basis ?? codexProcessingCost(processing, subscription),
+      processing: actual,
+      processing_cost_basis: codexProcessingCost(actual, subscription),
     };
+  }
   return spec;
 }

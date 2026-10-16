@@ -104,6 +104,7 @@ export function preflightDefaultSubject(args: {
     if (hard) {
       throw credentialPoolExhausted({
         harnessId,
+        model,
         profileId: null,
         reason: "profile_headroom_preflight",
         candidates,

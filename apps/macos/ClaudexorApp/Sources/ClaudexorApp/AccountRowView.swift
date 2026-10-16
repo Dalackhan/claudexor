@@ -45,7 +45,8 @@ struct AccountRowView: View {
                             Image(systemName: expanded ? "chevron.down" : "chevron.right")
                                 .accessibilityHidden(true)
                             Text("Resources · \(resourceSummary ?? "Details")")
-                                .lineLimit(1).truncationMode(.tail)
+                                .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
+                                .multilineTextAlignment(.leading)
                         }
                         .font(.caption2)
                     }

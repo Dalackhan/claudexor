@@ -11726,7 +11726,7 @@ describe("DaemonControlApiServer", () => {
             expect.objectContaining({
               name: "view",
               location: "query",
-              enum: ["resources", "constraint_freshness"],
+              enum: ["resources", "constraint_freshness", "resources_freshness"],
             }),
           ],
         });

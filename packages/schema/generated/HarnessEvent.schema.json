@@ -606,6 +606,25 @@
           ],
           "description": "Typed refusal code for a rejected raw patch contract."
         },
+        "permission_denial": {
+          "type": "object",
+          "properties": {
+            "permission": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "permission",
+            "source"
+          ],
+          "additionalProperties": false,
+          "description": "Adapter-attested native tool permission refusal, not a claim inferred from model prose or empty output. Does not grant broader access."
+        },
         "usage": {
           "type": "object",
           "properties": {

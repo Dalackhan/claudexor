@@ -61,7 +61,12 @@ export function resourceViewQuery(url: URL): "resources" | undefined {
 /** GET-only quota read selector; POST refresh keeps resourceViewQuery. */
 export function quotaReadViewQuery(url: URL): ControlQuotaReadRequest["view"] {
   const view = singleQuery(url, "view");
-  if (view !== undefined && view !== "resources" && view !== "constraint_freshness")
-    throw new Error("view must be resources or constraint_freshness");
+  if (
+    view !== undefined &&
+    view !== "resources" &&
+    view !== "constraint_freshness" &&
+    view !== "resources_freshness"
+  )
+    throw new Error("view must be resources, constraint_freshness or resources_freshness");
   return view;
 }

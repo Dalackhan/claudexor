@@ -12,7 +12,7 @@ import {
  * operation discovery is optional, and old engines may return strict legacy data
  * (3.24) or reject the selector with HTTP 400 (3.25.0/3.25.1). */
 export const ControlQuotaReadRequest = ControlQuotaRefreshRequest.omit({ target: true })
-  .extend({ view: z.enum(["resources", "constraint_freshness"]).optional() })
+  .extend({ view: z.enum(["resources", "constraint_freshness", "resources_freshness"]).optional() })
   .strict()
   .describe(
     "GET /v2/quota query selectors, each at most once; there is no body. Omitted requestKind means text availability, omitted model keeps the model-agnostic projection, and omitted view keeps the legacy shape. Reads cached snapshots without refreshing quota.",

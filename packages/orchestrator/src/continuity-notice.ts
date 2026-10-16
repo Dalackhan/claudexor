@@ -24,6 +24,7 @@ const CAUSE_PHRASE: Record<ResumableCause, string> = {
   pool_exhausted: "every account's usage limit",
   pinned_limit: "the pinned account's usage limit",
   transport: "the process died",
+  permission_denied: "a native tool permission was refused (no automatic privilege escalation)",
   context_exhausted: "the context window was exhausted",
   wall_clock: "the wall-clock deadline",
   cancelled: "a cancel",

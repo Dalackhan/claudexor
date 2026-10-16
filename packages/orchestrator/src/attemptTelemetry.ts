@@ -25,6 +25,7 @@ import {
   type TransientFailureObservation,
   classifyCompletedCrash,
   classifyRateLimit,
+  classifyPermissionDenial,
   classifyStatusError,
   classifyTransientSignal,
 } from "./transientClassify.js";
@@ -316,6 +317,7 @@ export function observeAttemptTelemetry(t: AttemptTelemetry, ev: HarnessEvent): 
   // Typed transient/auth/capability evidence owns retry and remediation;
   // rate limits also stay available to credential rotation.
   if (ev.transient) t.transientFailures.push(classifyTransientSignal(ev.transient));
+  if (ev.permission_denial) t.transientFailures.push(classifyPermissionDenial());
   if (ev.rate_limit) {
     t.rateLimits.push({
       retryDelayMs: ev.rate_limit.retry_delay_ms ?? null,

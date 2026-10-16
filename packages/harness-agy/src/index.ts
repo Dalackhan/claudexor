@@ -25,6 +25,7 @@ import {
 } from "@claudexor/core";
 import { CLAUDEXOR_VERSION, nowIso, redactSecrets } from "@claudexor/util";
 import { parseAgyEvent } from "./parse.js";
+import { createAgyNativeCompletion } from "./native-completion.js";
 import { isAgyProfileKeychainUnsafe, prepareAgyProfileKeychain } from "./keychain.js";
 import {
   AGY_BIN,
@@ -497,28 +498,32 @@ async function* runAgy(
   // INV-137: the vendor conversation id is the resumable native session.
   if (spec.resume_session_id) args.push("--conversation", spec.resume_session_id);
 
-  yield* runCliHarness({
-    bin: AGY_BIN(),
-    args,
-    input,
-    spec,
-    env: route.env,
-    label: "agy",
-    redact: redactSecrets,
-    parseEvent: (obj, sessionId) => {
-      const out = parseAgyEvent(obj, sessionId);
-      if (out) {
-        for (const ev of out) {
-          ev.credential_route = "vendor_native";
-          ev.credential_source = "native_session";
-          ev.credential_profile_id = profile.profile_id;
-          if (spec.processing) {
-            ev.processing = spec.processing;
-            ev.processing_cost_basis = spec.processing_cost_basis;
+  const completion = createAgyNativeCompletion();
+  yield* completion.wrap(
+    runCliHarness({
+      bin: AGY_BIN(),
+      args,
+      input,
+      spec,
+      env: route.env,
+      label: "agy",
+      redact: redactSecrets,
+      observeStderr: completion.observeStderr,
+      parseEvent: (obj, sessionId) => {
+        const out = parseAgyEvent(obj, sessionId);
+        if (out) {
+          for (const ev of out) {
+            ev.credential_route = "vendor_native";
+            ev.credential_source = "native_session";
+            ev.credential_profile_id = profile.profile_id;
+            if (spec.processing) {
+              ev.processing = spec.processing;
+              ev.processing_cost_basis = spec.processing_cost_basis;
+            }
           }
         }
-      }
-      return out;
-    },
-  });
+        return out;
+      },
+    }),
+  );
 }

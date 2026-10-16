@@ -500,6 +500,45 @@
                                 "items": {
                                   "type": "object",
                                   "properties": {
+                                    "scope": {
+                                      "type": "string",
+                                      "enum": [
+                                        "personal",
+                                        "team"
+                                      ]
+                                    },
+                                    "usage_kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "included",
+                                        "bonus",
+                                        "on_demand",
+                                        "total"
+                                      ]
+                                    },
+                                    "period": {
+                                      "type": "object",
+                                      "properties": {
+                                        "starts_at": {
+                                          "$ref": "#/definitions/ControlAccountResetResponse/properties/completed_at"
+                                        },
+                                        "ends_at": {
+                                          "$ref": "#/definitions/ControlAccountResetResponse/properties/completed_at"
+                                        }
+                                      },
+                                      "required": [
+                                        "starts_at",
+                                        "ends_at"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "fee_included": {
+                                      "type": [
+                                        "boolean",
+                                        "null"
+                                      ],
+                                      "description": "Whether the reported amount includes fees; null means the source did not establish this."
+                                    },
                                     "id": {
                                       "type": "string"
                                     },
@@ -610,6 +649,18 @@
                                 "items": {
                                   "type": "object",
                                   "properties": {
+                                    "scope": {
+                                      "$ref": "#/definitions/ControlAccountResetResponse/properties/resources/anyOf/0/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/scope"
+                                    },
+                                    "usage_kind": {
+                                      "$ref": "#/definitions/ControlAccountResetResponse/properties/resources/anyOf/0/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/usage_kind"
+                                    },
+                                    "period": {
+                                      "$ref": "#/definitions/ControlAccountResetResponse/properties/resources/anyOf/0/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/period"
+                                    },
+                                    "fee_included": {
+                                      "$ref": "#/definitions/ControlAccountResetResponse/properties/resources/anyOf/0/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/fee_included"
+                                    },
                                     "id": {
                                       "type": "string"
                                     },

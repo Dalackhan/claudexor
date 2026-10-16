@@ -70,7 +70,7 @@ export function refreshCoverage(
   batches: ReturnType<typeof validatedRefreshBatches>,
   skipped: ReadonlyArray<{ subject?: import("@claudexor/schema").QuotaSubject }>,
 ) {
-  return [
+  const subjects = [
     ...batches.flatMap((batch) => [
       ...(batch?.snapshots ?? []).map((value) => value.subject),
       ...(batch?.absences ?? []).map((value) => value.subject),
@@ -81,6 +81,12 @@ export function refreshCoverage(
       ? []
       : [resourceKey({ harness: subject.harness, profile_id: subject.subject_id })],
   );
+  return [
+    ...subjects,
+    ...batches.flatMap((batch) =>
+      (batch?.resources ?? []).map((value) => resourceKey(value.target)),
+    ),
+  ];
 }
 
 /** Exact management targets may be disabled and therefore absent from the

@@ -993,9 +993,16 @@ nullable currency and provider-reported `decimal_places`. Reset offer/grant
 codes retain provenance while their detail explains the state, including false/unknown.
 These resources do not enable paid usage or change routing policy.
 
+`cursor-quota-source` uses the bound vendor file store (macOS HOME, Linux XDG,
+Windows APPDATA; config stays CURSOR_CONFIG_DIR). Source-derived layouts are not
+native-platform proof. Existing demand/pacing emits bounded `usage_http` receipts;
+Retry-After starts at response receipt. USD minor-unit resources (scale 2) never
+admit runs; `no_source` means no quota-window source, not no account resources.
+
 The operation catalog advertises `view=resources` on quota and atomic Accounts
-reads. Without a view selector, quota responses keep the strict legacy representation, including
-the historical Codex reset-credit label at the serializer boundary. A refresh body
+reads; `resources_freshness` combines the freshness view (including its Codex reset-credit
+compatibility label), typed resources and a model/request-kind echo on passive GET
+(wire contract: INTEGRATIONS). Unselected quota reads keep the strict legacy shape. A refresh body
 may select one exact `target` (harness and profile id), including a named default
 or a disabled portable profile. It uses the existing refresh coordinator and pacing
 floor, retains other accounts, and cannot join a cycle that did not cover its target.
@@ -4250,8 +4257,8 @@ read uses existing pruning rules without refresh or event writes. The legacy GET
 POST refresh (whose `view` stays `resources` only), Accounts responses, raw
 schemas, routing and refresh demand keep their contract. Supporting engines reject
 empty, unknown and repeated `view`; the catalog's `ControlQuotaQueryResponse` is a
-union of the strict whole-response shapes (legacy, `resources`,
-`constraint_freshness`). A direct caller accepts only a fully valid explicit or
+union of four strict whole-response shapes (legacy, `resources`,
+`constraint_freshness`, `resources_freshness`). A caller accepts only valid explicit or
 legacy response; missing nested freshness in valid legacy data keeps conservative
 snapshot freshness and never implies independent freshness or refill. Malformed or
 partial explicit metadata, including mixed explicit/legacy constraints or
@@ -4507,7 +4514,9 @@ loop attaches a bounded, adapter-redacted `stderr_tail` to the terminal
 SSE / `--json-stream`), never a verdict axis. Persistence into attempt events
 is guaranteed for consumers that drain the stream to completion; an
 orchestrator-side abort that stops consuming before the terminal event does
-not persist it (bounded residue).
+not persist it (bounded residue). AGY observes redacted stderr lines before tail
+eviction, retains only confirmed native denial and projects it as typed run evidence;
+a nonempty typed final remains usable with a warning, never proof of tool success.
 
 Structured output: routes whose manifest declares `json_schema_output`
 receive `HarnessRunSpec.output_schema` — a CALLER-supplied per-run schema the
@@ -4687,9 +4696,13 @@ resume keeps the id; codex compares the `thread/resume` reply before
 session) and the adapter's typed rejection of carried state. "Acted" is a
 sticky fact of the attempt (an accepted answer, agent progress, a file change
 or a diff in any try). An attempt that did not act keeps the rotation and
-transient rules above byte for byte, except that a context exhaustion ends the
-attempt with `resumable` cause `context_exhausted` instead of a structural
-rotation (another account has the same window). After progress: a typed vendor limit on an
+transient rules above, except typed context exhaustion and native permission
+refusal end the attempt rather than replaying the same limitation. AGY's adapter
+recognizes exact native-stderr auto-denial, not empty output or model prose.
+Only a nonempty typed final keeps an answer with that warning; narration
+cannot make the refusal successful. `permission_denial` records
+`capability_refused`/`permission_denied` without upgrading access or retrying.
+A DONE tool without output is diagnostic, not successful read evidence. After progress: a typed vendor limit on an
 unpinned `rotate` route hops to the next eligible account and the next try
 carries the work — `native_moved` when the adapter's `continuity` located the
 session and moved it into the target store (claude: `<sid>.jsonl` + `<sid>/`

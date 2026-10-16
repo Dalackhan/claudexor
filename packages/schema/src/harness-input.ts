@@ -41,6 +41,17 @@ export const HarnessRequestRefusal = z
   );
 export type HarnessRequestRefusal = z.infer<typeof HarnessRequestRefusal>;
 
+export const HarnessPermissionDenial = z
+  .object({
+    permission: z.string().min(1),
+    source: z.string().min(1),
+  })
+  .strict()
+  .describe(
+    "Adapter-attested native tool permission refusal, not a claim inferred from model prose or empty output. Does not grant broader access.",
+  );
+export type HarnessPermissionDenial = z.infer<typeof HarnessPermissionDenial>;
+
 export const CatalogInputLimit = HarnessInputLimit.extend({
   askPromptBudget: z
     .object({

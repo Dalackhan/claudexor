@@ -138,8 +138,8 @@ export const HarnessCapabilities = z
       ),
     /**
      * The adapter can surface interactive user questions (interaction_requested
-     * events) and deliver typed answers back into the live session. Claude's
-     * bidirectional stream-json control protocol today; honest false elsewhere.
+     * events) and deliver typed answers back into the live session (including
+     * native approvals). Declared only on transports that implement the channel.
      */
     interactive: z
       .boolean()

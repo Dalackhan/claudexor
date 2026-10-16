@@ -31,6 +31,7 @@ import {
 } from "./thread-execution-workspace.js";
 import { threadRunResumeInputs, threadContinuityContext } from "./thread-continuity-context.js";
 import { continuationForRun } from "./continue-from-run.js";
+import { createRunTimeLimit } from "./run-time-limit.js";
 
 /** Agent commands alone own projects, tool execution, and conversation continuity.
  * Model commands are dispatched before entering this run-normalization boundary. */
@@ -137,6 +138,7 @@ export function createDaemonAgentRunner(deps: {
     const executionRoot = p.execution.workspaceRoot ?? threadExecutionRoot;
     const onRunStart = (info: { runId: string; taskId: string; runDir: string }): void => {
       ctx.onRunStart?.(info);
+      timeLimit.started(info);
       if (!threadId) return;
       try {
         if (turnId) {
@@ -151,15 +153,6 @@ export function createDaemonAgentRunner(deps: {
         /* turn binding must never fail the run */
       }
     };
-    // maxSeconds: a hard wall-clock deadline for the WHOLE run (run-scoped,
-    // never per-attempt). Combine the daemon's per-run cancel signal with a
-    // deadline that aborts with a typed STRING reason so the terminal is
-    // `cancelled` + wall_clock_exceeded rather than a bare user cancel.
-    const maxSeconds =
-      typeof p.maxSeconds === "number" && p.maxSeconds > 0
-        ? // setTimeout 32-bit-ms overflow defense (schema caps at 7 days).
-          Math.min(p.maxSeconds, 604_800)
-        : null;
     // INV-135 precedence: explicit per-turn profile > thread sticky >
     // unpinned; an explicit NULL forces unpinned (release wave round-11).
     const requestedProfileId =
@@ -176,15 +169,8 @@ export function createDaemonAgentRunner(deps: {
       turnId,
       profileId: requestedProfileId,
     });
-    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-    let runSignal: AbortSignal | undefined = ctx.signal;
-    if (maxSeconds !== null) {
-      const deadline = new AbortController();
-      deadlineTimer = setTimeout(() => deadline.abort("wall_clock_exceeded"), maxSeconds * 1000);
-      deadlineTimer.unref?.();
-      runSignal = ctx.signal ? AbortSignal.any([ctx.signal, deadline.signal]) : deadline.signal;
-    }
     const delegationBelt = delegationBeltForRun(p.delegate === true, p.paidBudget);
+    const timeLimit = createRunTimeLimit(p, ctx);
     return orchestrator
       .run({
         onTerminalPersist: deps.terminalPersistence?.(ctx.jobId),
@@ -308,11 +294,11 @@ export function createDaemonAgentRunner(deps: {
         delegated: p.execution.delegated,
         workspaceKind: p.execution.workspaceKind,
         scopePaths: p.execution.scopePaths,
-        signal: runSignal,
+        signal: timeLimit.signal,
         onRunStart,
       })
       .finally(() => {
-        if (deadlineTimer) clearTimeout(deadlineTimer);
+        timeLimit.dispose();
       });
   };
 }

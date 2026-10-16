@@ -1,4 +1,6 @@
-import { rpcProblem } from "./rpc-problem.js";
+import { rpcProblem, storageOnlyFailure } from "./rpc-problem.js";
+import { RunTimeLimits } from "./run-time-limits.js";
+import type { RunTimeLimit } from "./run-time-limit.js";
 import { type Server, type Socket, createServer } from "node:net";
 
 import {
@@ -61,6 +63,7 @@ export { jobStateFromResult, socketAlive, type JobRecord };
 export interface RunContext {
   jobId: string;
   signal: AbortSignal;
+  registerTimeLimit?: (timer: RunTimeLimit) => void;
   onRunStart: (info: { runId: string; taskId: string; runDir: string }) => void;
 }
 
@@ -110,6 +113,7 @@ export class DaemonServer {
   private readonly activeJobs = new Map<string, AdmissionJob>();
   private readonly cancelled = new Set<string>();
   private readonly controllers = new Map<string, AbortController>();
+  private readonly timeLimits = new RunTimeLimits();
   private readonly activeTasks = new Set<Promise<void>>();
   private readonly taskFailures: unknown[] = [];
   private readonly commands: CommandBackend;
@@ -375,6 +379,8 @@ export class DaemonServer {
       case "claudexor.cancel": {
         return this.cancelJob(String(params?.id), normalizeCancelReasonCode(params?.reason_code));
       }
+      case "claudexor.runTimeLimit":
+        return this.timeLimits.dispatch(params, (id) => this.getRecord(id));
       case "claudexor.delegationFence": {
         const runId = String(params?.runId ?? "");
         const rec = this.commands.queries.getByRunId(runId);
@@ -527,6 +533,8 @@ export class DaemonServer {
       const result = await this.opts.runner(rec.params, {
         jobId: id,
         signal: controller.signal,
+        registerTimeLimit: (timer) =>
+          this.timeLimits.register(id, timer, () => !controller.signal.aborted),
         onRunStart: (info) => {
           rec = this.updateRecord(rec, info);
         },
@@ -552,6 +560,7 @@ export class DaemonServer {
         update: (record, patch) => this.updateRecord(record, patch),
       });
     } finally {
+      this.timeLimits.close(id);
       this.controllers.delete(id);
       this.activeJobs.delete(id);
       // An admitted child can fail before the orchestrator attaches its
@@ -594,12 +603,4 @@ export class DaemonServer {
       if (!this.stopping) this.drain();
     }
   }
-}
-
-function storageOnlyFailure(error: unknown): boolean {
-  if (error instanceof AggregateError)
-    return error.errors.length > 0 && error.errors.every(storageOnlyFailure);
-  return ["store_corrupt", "store_flush_unavailable"].includes(
-    (error as { code?: string })?.code ?? "",
-  );
 }

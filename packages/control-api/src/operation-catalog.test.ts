@@ -34,4 +34,22 @@ describe("operation catalog wording (QA-039 / QA-049)", () => {
     expect(remove?.responseSchema).toBe("ControlProjectRemoveReceipt");
     expect(remove?.summary.toLowerCase()).toMatch(/409|refused/);
   });
+
+  it("advertises addressed run timer read and revision-guarded mutation", () => {
+    const read = op("GET", "/v2/runs/:id/time-limit");
+    const patch = op("PATCH", "/v2/runs/:id/time-limit");
+    expect(read).toMatchObject({
+      mutability: "read_only",
+      responseSchema: "RunTimeLimitSnapshot",
+      applicability: "run",
+    });
+    expect(patch).toMatchObject({
+      mutability: "mutating",
+      requestSchema: "RunTimeLimitRequest",
+      responseSchema: "RunTimeLimitSnapshot",
+      applicability: "run",
+      idempotency: "none",
+    });
+    expect(patch?.summary).toContain("expected revision");
+  });
 });

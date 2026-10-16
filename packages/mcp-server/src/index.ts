@@ -31,6 +31,7 @@ import { formatRunResult, structuredRunResult } from "./run-result-format.js";
 import { assertNoPluginArtifactSkew } from "./plugin-skew.js";
 import { accountsTool } from "./accounts-tool.js";
 import { threadTools } from "./thread-tools.js";
+import { runTimeLimitTool } from "./run-time-limit-tool.js";
 import { inlineJsonSchemaRefs } from "./inline-json-schema-refs.js";
 import { reviewerPanelEntrySchema, processingPreferenceSchema } from "./reviewer-panel-schema.js";
 const mcpRunToolResultSchema = inlineJsonSchemaRefs(
@@ -305,6 +306,18 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
         enum: AccessProfile.options,
         description: "Optional access profile for this run.",
       },
+      maxSeconds: {
+        type: "integer",
+        minimum: 1,
+        maximum: 604800,
+        description:
+          "Initial run time limit in seconds. Explicit limits default to hard unless timeLimitMode is soft.",
+      },
+      timeLimitMode: {
+        type: "string",
+        enum: ["soft", "hard"],
+        description: "With maxSeconds: soft warns and continues; hard cancels on expiry.",
+      },
       ...(runControlApplicability({ mode }).reviewerPanel.applicable
         ? {
             review: {
@@ -454,6 +467,7 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
       },
     ),
     ...threadTools(runner),
+    runTimeLimitTool(runner),
     {
       name: "claudexor_status",
       description:

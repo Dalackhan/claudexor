@@ -153,6 +153,15 @@ export function formatRunEventLine(ev: Record<string, unknown>): string | null {
     }
     case "run.blocked":
       return `run blocked: ${truncate(String(p["error"] ?? "needs human decision"), 200)}`;
+    case "control.applied": {
+      const control = p["control"] as Record<string, unknown> | null | undefined;
+      const timeLimit = p["timeLimit"] as Record<string, unknown> | null | undefined;
+      return control?.["kind"] === "time_limit" &&
+        control["action"] === "reached" &&
+        timeLimit?.["mode"] === "soft"
+        ? "WARNING: Soft time limit reached; work continues. The controller may extend, disable, or stop the run."
+        : null;
+    }
     case "run.continuation":
       return `[${String(p["from_attempt"] ?? "?")}] continuing in a fresh session (${String(
         p["cause"] ?? "context exhausted",

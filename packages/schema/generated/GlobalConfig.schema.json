@@ -233,10 +233,17 @@
               "description": "Wall-clock timeout for a reviewer run, in milliseconds."
             },
             "harness_inactivity_timeout_ms": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "default": 3600000,
-              "description": "Inactivity watchdog for harness streams: no events for this window aborts the stream and fails the attempt with a typed timeout."
+              "description": "Inactivity watchdog for harness streams: no events for this window aborts the stream; null disables inactivity timing without changing cancellation or cleanup."
             },
             "max_concurrent": {
               "anyOf": [

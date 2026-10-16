@@ -60,6 +60,30 @@ async function withClient<T>(
 }
 
 describe("AcpServer official SDK projection", () => {
+  it("forwards explicit soft timer controls and presents the reached warning without cancelling", async () => {
+    await withClient(
+      async (params, hooks) => {
+        expect(params).toMatchObject({ maxSeconds: 60, timeLimitMode: "soft" });
+        hooks?.onEvent?.({
+          type: "control.applied",
+          payload: {
+            control: { kind: "time_limit", action: "reached" },
+            timeLimit: { mode: "soft" },
+          },
+        });
+        return { summary: "completed normally", status: "succeeded" };
+      },
+      async (agent, updates) => {
+        const result = await agent.request(acp.methods.agent.session.prompt, {
+          sessionId: "timer-session",
+          prompt: [{ type: "text", text: "work" }],
+          _meta: { claudexor: { maxSeconds: 60, timeLimitMode: "soft" } },
+        });
+        expect(result.stopReason).toBe("end_turn");
+        expect(JSON.stringify(updates)).toContain("Soft time limit reached; work continues");
+      },
+    );
+  });
   it("emits experimental terminal auth methods only after client opt-in", async () => {
     const method: acp.AuthMethodTerminal & { type: "terminal" } = {
       type: "terminal",

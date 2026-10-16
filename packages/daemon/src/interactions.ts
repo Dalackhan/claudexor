@@ -19,6 +19,8 @@ export interface InteractionContext {
   request: InteractionRequest;
   requestedAt: string;
   timeoutAt: string | null;
+  /** Runtime-only cancellation of this request; not part of the durable projection. */
+  signal?: AbortSignal;
 }
 
 export type InteractionAnswerStatus = "delivered" | "not_found" | "already_resolved" | "rejected";
@@ -34,6 +36,8 @@ interface LiveEntry {
   store: InteractionStorePort;
   resolve: (result: InteractionAnswerSet | InteractionHandlerRelease) => void;
   expiresAtMs: number | null;
+  signal?: AbortSignal;
+  onAbort?: () => void;
 }
 
 /** Live answer bridge; durable state remains owned by its store. */
@@ -52,17 +56,32 @@ export class InteractionRegistry {
     params: unknown,
   ): Promise<InteractionAnswerSet | InteractionHandlerRelease> {
     this.prune();
+    if (ctx.signal?.aborted) return Promise.resolve({ kind: "released", reason: "interrupted" });
     // Validate before the durable request append: a malformed internal
     // deadline must not leave an unanswerable journal row without a live owner.
     const expiresAtMs = parseExpiry(ctx.timeoutAt);
     const store = this.stores.forRequest(params);
     store.request(ctx);
     return new Promise<InteractionAnswerSet | InteractionHandlerRelease>((resolve) => {
-      this.live.set(interactionKey(ctx.runId, ctx.request.interaction_id), {
+      const key = interactionKey(ctx.runId, ctx.request.interaction_id);
+      const entry: LiveEntry = {
         store,
         resolve,
         expiresAtMs,
-      });
+        signal: ctx.signal,
+      };
+      this.live.set(key, entry);
+      if (ctx.signal) {
+        entry.onAbort = () => {
+          if (this.live.get(key) !== entry) return;
+          store.resolve(ctx.runId, ctx.request.interaction_id, "interrupted");
+          this.live.delete(key);
+          ctx.signal?.removeEventListener("abort", entry.onAbort!);
+          resolve({ kind: "released", reason: "interrupted" });
+        };
+        ctx.signal.addEventListener("abort", entry.onAbort, { once: true });
+        if (ctx.signal.aborted) entry.onAbort();
+      }
     });
   }
 
@@ -90,6 +109,7 @@ export class InteractionRegistry {
     const key = interactionKey(runId, interactionId);
     const entry = this.live.get(key);
     this.live.delete(key);
+    if (entry?.onAbort) entry.signal?.removeEventListener("abort", entry.onAbort);
     entry?.resolve(parsed.data);
     return { status: "delivered" };
   }
@@ -99,6 +119,7 @@ export class InteractionRegistry {
     for (const [key, entry] of this.live) {
       if (!key.startsWith(`${runId}\u0000`)) continue;
       this.live.delete(key);
+      if (entry.onAbort) entry.signal?.removeEventListener("abort", entry.onAbort);
       entry.resolve({ kind: "released", reason: "run_terminal" });
     }
   }
@@ -122,6 +143,7 @@ export class InteractionRegistry {
       const interactionId = key.slice(split + 1);
       entry.store.resolve(runId, interactionId, "timeout");
       this.live.delete(key);
+      if (entry.onAbort) entry.signal?.removeEventListener("abort", entry.onAbort);
       entry.resolve({ kind: "released", reason: "timeout" });
     }
   }

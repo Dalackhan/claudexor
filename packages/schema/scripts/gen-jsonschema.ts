@@ -96,6 +96,8 @@ import {
   CommandListQuery,
   RunListQuery,
   ControlRunControlRequest,
+  RunTimeLimitRequest,
+  RunTimeLimitSnapshot,
   ControlRunControlResponse,
   ControlGcReceipt,
   ControlGcRequest,
@@ -210,6 +212,8 @@ for (const name of readdirSync(outDir)) {
 }
 
 const schemas = {
+  RunTimeLimitRequest,
+  RunTimeLimitSnapshot,
   ControlHarnessMaintenanceInventory,
   ControlHarnessMaintenanceCreateRequest,
   ControlHarnessMaintenanceOperation,

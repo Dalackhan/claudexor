@@ -2346,6 +2346,8 @@ No memory, loop or store measurements impose automatic admission thresholds.
 - `GET /v2/runs/:id/produced/<path>`
 - `POST /v2/runs/:id/retry`
 - `GET /v2/runs/:id/run-again`
+- `GET /v2/runs/:id/time-limit`
+- `PATCH /v2/runs/:id/time-limit`
 - `GET /v2/secrets`
 - `POST /v2/secrets`
 - `DELETE /v2/secrets/:id`
@@ -3495,8 +3497,9 @@ credentials may be stale and need sign-in again.
 
 ### Interactive runs (waiting_on_user)
 
-Harnesses with the `interactive` capability (Claude Code via its bidirectional
-stream-json control protocol) can raise typed user questions mid-run; the
+Harnesses with the `interactive` capability (Claude Code's bidirectional
+stream-json questions and Codex app-server's native action approvals) can raise
+typed requests mid-run; the
 orchestrator OFFERS the interaction channel only to routes whose manifest
 declares `interactive`. The
 engine emits `interaction.requested` (questions, options, nullable timeout deadline),
@@ -3515,6 +3518,9 @@ expiry becomes a benign decline (`interaction.timeout`) so the model can
 continue with stated assumptions. With expiry disabled, answer, Cancel/abort,
 the run's outer deadline, terminal cleanup, daemon restart, or registry release
 still ends the wait; those releases must not be relabeled as timeouts.
+Adapters can also revoke one obsolete native request without cancelling the
+run: a runtime-only per-request abort signal releases the durable interaction as
+`interrupted`, clears the wait and never authorizes a late answer.
 Declined/timed-out interactive flow-control tools are benign timeline events,
 never blocking tool errors.
 
@@ -4783,6 +4789,14 @@ lease. Waiting on a typed user interaction suspends the watchdog under the
 separate finite-or-disabled interaction policy. Long active runs therefore stay
 alive while they make real progress; a tool call that streams nothing for the
 whole window remains indistinguishable from a hang and is killed.
+
+Set `runtime.harness_inactivity_timeout_ms: null` in the config to disable
+only inactivity timing; ordinary cancellation, stream cleanup, resource limits
+and explicit run deadlines remain in effect. The numeric environment override
+still takes precedence over this setting. No existing persisted value is
+rewritten, and omission retains the 60-minute default. Whole-run limits are
+independent: optional soft/hard deadlines can be changed on the live run through
+the [integration controls](INTEGRATIONS.md#embedder-run-controls-v21).
 
 Run detail includes terminal state and output-ready state. `summary.state` is the
 daemon terminal/lifecycle state. `summary.outputReadyState` is

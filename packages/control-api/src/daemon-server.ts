@@ -68,7 +68,7 @@ import {
   type ThreadLifecycleRouteCtx,
 } from "./thread-lifecycle-routes.js";
 import * as runStart from "./run-start.js";
-import { cancelDelegationFamily } from "./delegation-control.js";
+import { handleRunControlRoute } from "./run-control-routes.js";
 import {
   delegatedDescendantsFromRecords,
   paramsRecord,
@@ -83,6 +83,7 @@ export {
 } from "./run-record.js";
 import { handleRunRetryRoute } from "./run-retry-routes.js";
 import { handleRunMessageRoute } from "./run-message-routes.js";
+import { handleRunTimeLimitRoute } from "./run-time-limit-routes.js";
 import {
   handleRunApplyRoutes,
   runIdempotentDelivery,
@@ -168,8 +169,6 @@ import {
   ControlSetupJobListResponse,
   ControlRunStartInfo,
   type ControlRunStartRequest,
-  ControlRunControlRequest,
-  ControlRunControlResponse,
   ControlReviewerPanelEntry,
   ControlRunDetail,
   ControlRunListResponse,
@@ -834,6 +833,23 @@ export class DaemonControlApiServer {
       await handleRunMessageRoute(
         {
           services: this.opts.services,
+          findRun: (id) => this.findRun(id),
+          readBody: (request) => this.readBody(request),
+          json: (response, status, body) => this.json(response, status, body),
+          requestError: (response, error) => this.requestError(response, error),
+        },
+        method,
+        path,
+        req,
+        res,
+      )
+    )
+      return;
+
+    if (
+      await handleRunTimeLimitRoute(
+        {
+          daemon: this.opts.daemon,
           findRun: (id) => this.findRun(id),
           readBody: (request) => this.readBody(request),
           json: (response, status, body) => this.json(response, status, body),
@@ -1637,63 +1653,24 @@ export class DaemonControlApiServer {
       );
     }
     // (legacy /auth alias removed: it duplicated GET /harnesses byte-for-byte)
-    const controlMatch = /^\/runs\/([^/]+)\/control$/.exec(path);
-    if (method === "POST" && controlMatch) {
-      const rec = await this.findRun(decodeURIComponent(controlMatch[1] as string));
-      if (!rec) return this.json(res, 404, { error: "no such run" });
-      let body: ControlRunControlRequest;
-      try {
-        const raw = await this.readBody(req);
-        assertNoInlineSecretValues(raw);
-        body = ControlRunControlRequest.parse(raw);
-      } catch (err) {
-        return this.requestError(res, err);
-      }
-      appendRunAuditEvent(rec, "control.requested", { control: body.control });
-      // Honesty: a control action on a TERMINAL job has no process to stop;
-      // claiming "applied" would fabricate an effect that never happened.
-      if (rec.state !== "queued" && rec.state !== "running") {
-        appendRunAuditEvent(rec, "control.rejected", {
-          control: body.control,
-          reason: `run is terminal (${rec.state})`,
-        });
-        return this.json(res, 409, {
-          error: `run is ${rec.state}; ${body.control.kind} has nothing to stop`,
-        });
-      }
-      let activeDescendants: DaemonRunRecord[];
-      try {
-        const cancelled = await cancelDelegationFamily({
+    if (
+      await handleRunControlRoute(
+        {
           daemon: this.opts.daemon,
-          parent: rec,
-          descendantsAfterFence: () => this.delegatedDescendants(rec.runId ?? rec.id),
           pollMs: this.opts.pollMs,
-          // The typed class rides the abort into the terminal writers; the
-          // free-text reason stays audit-only (it was ALWAYS dropped before —
-          // even Claudexor's own ctrl-c relay coerced to user_cancelled).
-          reasonCode: body.control.reason_code,
-        });
-        activeDescendants = cancelled.descendants;
-      } catch (error) {
-        appendRunAuditEvent(rec, "control.rejected", {
-          control: body.control,
-          reason: error instanceof Error ? error.message : String(error),
-        });
-        return this.requestError(res, error);
-      }
-      appendRunAuditEvent(rec, "control.applied", { control: body.control });
-      return this.json(
+          findRun: (id) => this.findRun(id),
+          delegatedDescendants: (runId) => this.delegatedDescendants(runId),
+          readBody: (request) => this.readBody(request),
+          json: (response, status, body) => this.json(response, status, body),
+          requestError: (response, error) => this.requestError(response, error),
+        },
+        method,
+        path,
+        req,
         res,
-        200,
-        ControlRunControlResponse.parse({
-          accepted: true,
-          status: "applied",
-          runId: rec.runId ?? rec.id,
-          cascadeRunIds: activeDescendants.map((child) => child.runId ?? child.id),
-          message: `${body.control.kind} requested${activeDescendants.length ? ` for parent and ${activeDescendants.length} delegated descendant(s)` : ""}`,
-        }),
-      );
-    }
+      )
+    )
+      return;
 
     const eventsMatch = /^\/runs\/([^/]+)\/events$/.exec(path);
     if (method === "GET" && eventsMatch) {

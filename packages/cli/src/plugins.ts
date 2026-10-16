@@ -195,6 +195,8 @@ const CLAUDE_SLASH_COMMAND = "/claudexor:claudexor";
 
 const MCP_RUN_HANDLE_GUIDANCE =
   "MCP run tools enqueue work and return a durable run handle, not terminal output or a live thread. Follow the handle with `claudexor_run_status`/`claudexor_run_result` (or the CLI) before claiming the answer, completion, or applyability.";
+const MCP_WORKER_CONTROL_GUIDANCE =
+  "Any controlling MCP agent can inspect `claudexor_run_interactions` and use `claudexor_answer_interaction` for an exact action already authorized by the user and allowed by host policy; inspect the action, use the returned IDs and option label, never grant session-wide access, and ask the user for new authority. Delivery is not proof of execution. `claudexor_run_time_limit` reads, sets, extends or disables a live run deadline with the current expectedRevision; read again on conflict. Omit maxSeconds unless a deadline was requested; never extend or disable a user-mandated hard stop without permission.";
 
 const READINESS_GUIDANCE =
   "Readiness has separate owners: `claudexor_status`/doctor is the aggregate/default-store projection, `claudexor_accounts` is the server-authored exact-profile readiness/quota snapshot, `claudexor_capabilities` declares setup transport, and `claudexor models --harness <id>` is default-route discovery rather than a named profile entitlement. An unpinned request may still be admitted through the canonical account pool when it selects a ready exact profile; only a genuinely profile-less/default fallback depends on doctor status. For a selected profile, strict run/reviewer preflight owns model admission and result telemetry owns the observed profile/model route. `unknown/not_run`, stale quota, or unavailable inventory is uncertainty/refusal; `external_terminal` means the supported client terminal attach path and is not itself unreadiness.";
@@ -231,6 +233,7 @@ function skillText(host: PluginHost, runtime: RuntimePaths): string {
     ...hostFallbackCommands(runtime).map((command) => `\`${command}\``),
     "",
     MCP_RUN_HANDLE_GUIDANCE,
+    MCP_WORKER_CONTROL_GUIDANCE,
     "Use an explicit `repoPath` when the host cwd may not be the target project. Use `credentialProfileId` for a strict account pin. For multi-turn supervision, create the thread once, enqueue each follow-up with `claudexor_thread_turn` (pass an `idempotencyKey` and retry an unknown outcome with the same key and body), then follow its returned `runId` with the ordinary status/result tools. If the turn returns only a queued `jobId`, use `claudexor_runs` to recover its `runId` after binding; `claudexor_thread_read` lists earlier turns without starting work.",
     "",
     READINESS_GUIDANCE,

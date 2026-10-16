@@ -97,7 +97,7 @@ export interface DeepScanReducerDeps {
   hardTimeoutMs: number;
   /** Production defaults to the process-reap proof window. */
   cleanupGraceMs?: number;
-  inactivityTimeoutMs: number;
+  inactivityTimeoutMs: number | null;
   webRequired: boolean;
   quotaEventSink?: (harnessId: string, ev: HarnessEvent) => void;
 }

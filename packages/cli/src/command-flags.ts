@@ -21,6 +21,7 @@ export const COMMON_RUN_FLAGS: readonly string[] = [
   "primary-harness",
   "max-usd",
   "max-seconds",
+  "time-limit-mode",
   "max-turns",
   "prompt-file",
   "thread",
@@ -172,7 +173,12 @@ export const CLI_FLAGS: readonly CliFlagSpec[] = [
   valueFlag(
     "max-seconds",
     "<n>",
-    "Hard wall-clock deadline for the whole run (seconds); on expiry the run is cancelled (wall_clock_exceeded)",
+    "Initial wall-clock limit in seconds (max 604800); hard cancels on expiry, soft warns and continues",
+  ),
+  valueFlag(
+    "time-limit-mode",
+    "<soft|hard>",
+    "With --max-seconds: soft warns and continues; hard cancels (default)",
   ),
   valueFlag(
     "deny-path",

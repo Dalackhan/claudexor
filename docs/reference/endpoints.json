@@ -1121,6 +1121,30 @@
     },
     {
       "method": "GET",
+      "path": "/v2/runs/:id/time-limit",
+      "mutating": false,
+      "applicability": "run",
+      "summary": "Read a run's live time-limit snapshot and revision.",
+      "auth": "loopback_bearer",
+      "request_schema": null,
+      "parameters": [],
+      "response_schema": "RunTimeLimitSnapshot",
+      "error_schema": "ControlProblem"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/runs/:id/time-limit",
+      "mutating": true,
+      "applicability": "run",
+      "summary": "Set, extend, or disable a live run time limit with an expected revision.",
+      "auth": "loopback_bearer",
+      "request_schema": "RunTimeLimitRequest",
+      "parameters": [],
+      "response_schema": "RunTimeLimitSnapshot",
+      "error_schema": "ControlProblem"
+    },
+    {
+      "method": "GET",
       "path": "/v2/secrets",
       "mutating": false,
       "applicability": "global",

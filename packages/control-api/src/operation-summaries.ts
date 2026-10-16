@@ -43,6 +43,9 @@ export const OPERATION_SUMMARIES: Record<string, string> = {
     "List a bounded, newest-first, keyset-paginated page of durable run summaries visible to the daemon.",
   "POST /v2/runs": "Start a run and return its durable handle.",
   "GET /v2/runs/:id": "Read a run's full detail snapshot.",
+  "GET /v2/runs/:id/time-limit": "Read a run's live time-limit snapshot and revision.",
+  "PATCH /v2/runs/:id/time-limit":
+    "Set, extend, or disable a live run time limit with an expected revision.",
   "POST /v2/runs/:id/retry": "Retry a run, returning a new durable handle.",
   "GET /v2/runs/:id/run-again": "Draft a run-again request from a prior run.",
   "POST /v2/runs/:id/apply":

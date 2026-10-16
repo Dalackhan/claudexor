@@ -79,6 +79,8 @@ const MCP_TO_CLI = {
   model: { cli: "model" },
   effort: { cli: "effort" },
   processingPreference: { cli: "processing" },
+  maxSeconds: { cli: "max-seconds" },
+  timeLimitMode: { cli: "time-limit-mode" },
   execution: {
     cli: null,
     reason:
@@ -207,8 +209,6 @@ const CLI_ONLY_EXEMPT = {
   instructions:
     "embedder contract is CLI/HTTP-first (v2.1 W5, DECIDED_TRADEOFFS DT2.1-1); MCP exposure of per-run system instructions is deferred",
   "instructions-file": "file form of --instructions; MCP exposure deferred with it (DT2.1-1)",
-  "max-seconds":
-    "wall-clock run deadline; exposed as maxSeconds on claudexor_thread_turn, not the one-shot run tools checked here",
   "deny-path":
     "per-run deny globs; embedder contract is CLI/HTTP-first, MCP exposure deferred (DT2.1-1)",
   "output-schema":
@@ -390,6 +390,7 @@ const MUTATING_TOOLS = new Set([
   "claudexor_thread_create",
   "claudexor_thread_turn",
   "claudexor_run_cancel",
+  "claudexor_run_time_limit",
   "claudexor_answer_interaction",
   "claudexor_quarantine_journal",
   "claudexor_account_reset",

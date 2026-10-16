@@ -137,7 +137,7 @@ export interface PlannerAttemptDeps {
     harnessId: string,
     routed: RoutedAdapter,
   ): "metered" | "subscription_entitlement" | "unknown";
-  inactivityTimeoutMs(repoRoot: string): number;
+  inactivityTimeoutMs(repoRoot: string): number | null;
   quotaEventSink?: (harnessId: string, event: HarnessEvent) => void;
 }
 

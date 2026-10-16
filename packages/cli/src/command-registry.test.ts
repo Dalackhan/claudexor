@@ -147,6 +147,7 @@ describe("command registry — the one owner of the CLI surface", () => {
       "primary-harness",
       "max-usd",
       "max-seconds",
+      "time-limit-mode",
       "max-turns",
       "prompt-file",
       "thread",

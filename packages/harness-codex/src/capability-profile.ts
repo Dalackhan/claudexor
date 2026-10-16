@@ -10,7 +10,7 @@ export const CODEX_TURN_INPUT_LIMIT: HarnessInputLimit = {
   unit: "unicode_scalars",
   limit: 1_048_576,
   source: "codex.app-server.turn/start",
-  verified_against: "codex-cli 0.156.1",
+  verified_against: "codex-cli 0.162.1",
 };
 
 /** One manifest-owned declaration of the managed login's stdin contract. */

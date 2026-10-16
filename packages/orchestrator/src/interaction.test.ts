@@ -23,6 +23,39 @@ function request() {
 afterEach(() => vi.useRealTimers());
 
 describe("interactionChannelFor finite-or-disabled policy", () => {
+  it("releases only the aborted request while the run remains active", async () => {
+    const events: CapturedEvent[] = [];
+    const requestAbort = new AbortController();
+    let seenSignal: AbortSignal | undefined;
+    let resolveAnswer!: (value: null) => void;
+    const channel = interactionChannelFor(
+      {
+        interactionTimeoutMs: null,
+        onInteraction: (ctx) => {
+          seenSignal = ctx.signal;
+          return new Promise((resolve) => {
+            resolveAnswer = resolve;
+          });
+        },
+      },
+      eventLog(events) as never,
+      "run-live",
+      "task-live",
+      "a01",
+      "codex",
+      true,
+    );
+
+    const pending = channel!.request(request() as never, requestAbort.signal);
+    expect(channel!.pendingCount!()).toBe(1);
+    expect(seenSignal).toBe(requestAbort.signal);
+    requestAbort.abort();
+    await expect(pending).resolves.toBeNull();
+    expect(channel!.pendingCount!()).toBe(0);
+    expect(events.some((event) => event.type === "interaction.timeout")).toBe(false);
+    resolveAnswer(null);
+  });
+
   it("emits a nullable deadline and never age-expires a disabled interaction", async () => {
     vi.useFakeTimers();
     const events: CapturedEvent[] = [];

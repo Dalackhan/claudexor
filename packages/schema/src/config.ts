@@ -260,9 +260,10 @@ export const GlobalConfig = z
           .number()
           .int()
           .positive()
+          .nullable()
           .default(HARNESS_INACTIVITY_TIMEOUT_DEFAULT_MS)
           .describe(
-            "Inactivity watchdog for harness streams: no events for this window aborts the stream and fails the attempt with a typed timeout.",
+            "Inactivity watchdog for harness streams: no events for this window aborts the stream; null disables inactivity timing without changing cancellation or cleanup.",
           ),
         ...RuntimeConcurrencyCaps.shape,
       })

@@ -24,6 +24,13 @@
 # so they were NOT re-recorded and keep the version they were captured from.
 cli: codex
 fixtures:
+  # Credential-free loopback probe:1048576 scalars accepted,1048577 rejected
+  # before any provider request. This does not establish a model token window.
+  app-server/input-too-large-0.162.1.jsonl:
+    source: recorded
+    cli_version: "0.162.1"
+    recorded_at: "2026-10-14"
+    sanitized: "JSON-RPC error object only; unchanged code, message and data"
   # Actual native notifications from auth-free loopback Responses endpoints:
   # an idle SSE stream and HTTP 403, captured on macOS (not the original Windows incident).
   app-server/retry-status-0.156.1.jsonl:

@@ -284,7 +284,8 @@ export interface HarnessContinuityCapability {
  * the abort signal) because HarnessRunSpec is a serializable schema shape.
  */
 export interface InteractionChannel {
-  request(req: InteractionRequest): Promise<InteractionAnswerSet | null>;
+  /** Optional signal revokes only this obsolete native request, not the run. */
+  request(req: InteractionRequest, signal?: AbortSignal): Promise<InteractionAnswerSet | null>;
   /** Number of questions currently awaiting an answer. Lets stream watchdogs
    * treat waiting-on-user as legitimate silence instead of a wedged harness. */
   pendingCount?(): number;

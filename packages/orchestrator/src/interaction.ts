@@ -74,7 +74,11 @@ export function interactionChannelFor(
   return {
     pendingCount: () => pending,
     suspensionVersion: () => suspensionVersion,
-    request: async (request: InteractionRequest): Promise<InteractionAnswerSet | null> => {
+    request: async (
+      request: InteractionRequest,
+      signal?: AbortSignal,
+    ): Promise<InteractionAnswerSet | null> => {
+      if (signal?.aborted) return null;
       const requestedAt = nowIso();
       const deadlineAtMs =
         timeoutPolicy.kind === "finite" ? finiteDeadline(timeoutPolicy.timeoutMs) : null;
@@ -102,6 +106,7 @@ export function interactionChannelFor(
               request,
               requestedAt,
               timeoutAt,
+              signal,
             }),
           ).catch(() => null);
         } catch {
@@ -118,11 +123,13 @@ export function interactionChannelFor(
         });
         let cancelTimer: (() => void) | undefined;
         let onAbort: (() => void) | undefined;
+        let onRequestAbort: (() => void) | undefined;
         const startedWaiting = Date.now();
         type WaitResult =
           | { kind: "handler"; result: InteractionHandlerResult }
           | { kind: "timeout" }
-          | { kind: "abort" };
+          | { kind: "abort" }
+          | { kind: "request_abort" };
         const waits: Promise<WaitResult>[] = [
           answersPromise.then((result) => ({ kind: "handler", result })),
           // A cancelled run must release the interaction wait IMMEDIATELY —
@@ -133,6 +140,12 @@ export function interactionChannelFor(
             if (input.signal.aborted) return resolve({ kind: "abort" });
             onAbort = () => resolve({ kind: "abort" });
             input.signal.addEventListener("abort", onAbort, { once: true });
+          }),
+          new Promise<WaitResult>((resolve) => {
+            if (!signal) return;
+            if (signal.aborted) return resolve({ kind: "request_abort" });
+            onRequestAbort = () => resolve({ kind: "request_abort" });
+            signal.addEventListener("abort", onRequestAbort, { once: true });
           }),
         ];
         if (deadlineAtMs !== null) {
@@ -145,6 +158,8 @@ export function interactionChannelFor(
         const result = await Promise.race(waits);
         cancelTimer?.();
         if (onAbort) input.signal?.removeEventListener("abort", onAbort);
+        if (onRequestAbort) signal?.removeEventListener("abort", onRequestAbort);
+        if (result.kind === "request_abort") return null;
         // Run cancellation has its own terminal event and is not an expired
         // answer window. Emitting interaction.timeout here makes downstream
         // surfaces briefly claim a benign timeout before the cancellation

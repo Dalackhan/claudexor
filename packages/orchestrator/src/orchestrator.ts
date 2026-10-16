@@ -648,6 +648,8 @@ export interface PendingInteractionContext {
   request: InteractionRequest;
   requestedAt: string;
   timeoutAt: string | null;
+  /** Runtime-only cancellation of this request; never persisted in interaction state. */
+  signal?: AbortSignal;
 }
 
 export interface OrchestratorResult {

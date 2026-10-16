@@ -73,7 +73,8 @@ export function threadTools(runner: RunnerFn): McpTool[] {
       credentialProfileId: nonBlankString,
       access: { type: "string", enum: AccessProfile.options },
       web: { type: "string", enum: ExternalContextPolicy.options },
-      maxSeconds: { type: "integer", minimum: 1 },
+      maxSeconds: { type: "integer", minimum: 1, maximum: 604800 },
+      timeLimitMode: { type: "string", enum: ["soft", "hard"] },
       idempotencyKey: {
         ...nonBlankString,
         maxLength: 256,

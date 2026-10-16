@@ -257,6 +257,8 @@ const operations: ControlOperationDescriptor[] = [
     idempotency: "key_required",
   }),
   j("GET", "/v2/runs/:id", "read_only", null, "ControlRunDetail"),
+  j("GET", "/v2/runs/:id/time-limit", "read_only", null, "RunTimeLimitSnapshot"),
+  j("PATCH", "/v2/runs/:id/time-limit", "mutating", "RunTimeLimitRequest", "RunTimeLimitSnapshot"),
   j("POST", "/v2/runs/:id/retry", "mutating", null, "ControlRunRetryResponse", {
     completion: "durable_handle",
     idempotency: "key_required",

@@ -14,6 +14,11 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+export function runControlsFromMeta(meta: unknown): Record<string, unknown> {
+  if (!isPlainRecord(meta)) return {};
+  return isPlainRecord(meta.claudexor) ? meta.claudexor : {};
+}
+
 /** Typed validation verdict: message for humans, optional machine code. */
 export interface RunControlError {
   message: string;
@@ -35,6 +40,8 @@ export function validateRunControls(params: unknown): RunControlError | null {
     "model",
     "effort",
     "processingPreference",
+    "maxSeconds",
+    "timeLimitMode",
     "execution",
     "n",
     "race",

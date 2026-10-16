@@ -1,4 +1,9 @@
-import { browserMcpCommand, type LiveMessageResult } from "@claudexor/core";
+import {
+  browserMcpCommand,
+  type ChildStdin,
+  type LiveMessageResult,
+  type spawnProcess,
+} from "@claudexor/core";
 import type {
   EffortHint,
   HarnessEvent,
@@ -14,6 +19,66 @@ export { CodexRpcError } from "./rpc-error.js";
 
 export type JsonObject = Record<string, unknown>;
 
+export interface CodexAppServerRunInput {
+  bin: string;
+  args: string[];
+  spec: HarnessRunSpec;
+  env: Record<string, string | null | undefined>;
+  spawn?: typeof spawnProcess;
+  controller?: CodexAppServerController;
+  /** The run's ONE effort receipt (`submitted`); resolved from the snapshot when absent. */
+  effort?: EffortHint | null;
+  pollIntervalMs?: number;
+  cancelDeadlineMs?: number;
+  /** Bound on the vendor's `turn/steer` answer (default 30 s); see createCodexSteer. */
+  steerDeadlineMs?: number;
+}
+
+export class CodexServerRequestRefusal extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+export function codexApprovalDenial(params: JsonObject | null): "decline" | "cancel" {
+  const offered = params?.["availableDecisions"];
+  return Array.isArray(offered) && !offered.includes("decline") ? "cancel" : "decline";
+}
+
+/** Server IDs are independent of client IDs; unattended requests never grant authority. */
+export function refuseCodexServerRequest(
+  message: JsonObject,
+  io: Pick<ChildStdin, "write">,
+  reason = "this run cannot grant native approval",
+): void {
+  const method = message["method"];
+  if (
+    typeof method !== "string" ||
+    (typeof message["id"] !== "number" && typeof message["id"] !== "string")
+  )
+    return;
+  const approval =
+    method === "item/fileChange/requestApproval" ||
+    method === "item/commandExecution/requestApproval";
+  io.write(
+    `${JSON.stringify({
+      id: message["id"],
+      ...(approval
+        ? { result: { decision: codexApprovalDenial(asObject(message["params"])) } }
+        : { error: { code: -32601, message: "Unsupported server request" } }),
+    })}\n`,
+  );
+  throw new CodexServerRequestRefusal(
+    approval ? "codex_approval_required" : "codex_request_unsupported",
+    approval
+      ? `Codex approval refused (${method}): ${reason}; declined without expanding access`
+      : `Codex requested an unsupported client action (${method})`,
+  );
+}
+
 export function asObject(value: unknown): JsonObject | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as JsonObject)
@@ -22,6 +87,32 @@ export function asObject(value: unknown): JsonObject | null {
 
 export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Startup is not ready while a required MCP server is still initializing. */
+export function codexRequiredMcpStatuses(spec: HarnessRunSpec) {
+  return new Map<string, { status: "starting" | "ready" | "failed" | "cancelled"; error?: string }>(
+    spec.extra_mcp_servers
+      .filter((server) => server.required)
+      .map((server) => [server.name, { status: "starting" }] as const),
+  );
+}
+
+export async function waitForCodexMcp(
+  statuses: Map<string, { status: "starting" | "ready" | "failed" | "cancelled"; error?: string }>,
+  nextNotification: (method: string) => Promise<JsonObject>,
+): Promise<void> {
+  while (statuses.size) {
+    const failed = [...statuses].filter(
+      ([, value]) => value.status === "failed" || value.status === "cancelled",
+    );
+    if (failed.length)
+      throw new Error(
+        `required MCP servers failed to initialize: ${failed.map(([name, value]) => `${name}: ${value.error ?? value.status}`).join(", ")}`,
+      );
+    if ([...statuses.values()].every((value) => value.status === "ready")) return;
+    await nextNotification("mcpServer/startupStatus/updated");
+  }
 }
 
 /** Native machine evidence, never a match against the vendor's error wording. */
@@ -354,10 +445,17 @@ export function codexAppServerThreadParams(
     cwd: spec.cwd,
     model: spec.model_hint,
     ...(sandbox ? { sandbox } : {}),
-    approvalPolicy: "never",
-    approvalsReviewer: "auto_review",
+    ...codexAppServerApprovalParams(spec),
     ...(spec.instructions?.trim() ? { developerInstructions: spec.instructions } : {}),
     config,
+  };
+}
+
+export function codexAppServerApprovalParams(spec: HarnessRunSpec): JsonObject {
+  return {
+    // Native automatic review needs an interactive policy to receive requests.
+    approvalPolicy: spec.access === "workspace_write" ? "on-request" : "never",
+    approvalsReviewer: "auto_review",
   };
 }
 

@@ -1,4 +1,4 @@
-import { Thread, ThreadTurn } from "@claudexor/schema";
+import { Session, Thread, ThreadTurn } from "@claudexor/schema";
 import type { EngineStore } from "./store.js";
 import { decodeBody } from "./thread-rows.js";
 
@@ -6,6 +6,7 @@ export interface DiskRetentionReferences {
   projectRoots: string[];
   protectedProjectRoots: Set<string>;
   referencedRunIds: Set<string>;
+  nativeSessions: Map<string, Set<string>>;
   records: Array<{ runId: string; state: string; finishedAt?: string }>;
 }
 
@@ -49,6 +50,7 @@ export function diskRetentionReferences(
     protectedProjectRoots.add(row.root);
   }
   const referencedRunIds = new Set<string>();
+  const nativeSessions = new Map<string, Set<string>>();
   const add = (id: string | null | undefined) => {
     if (id) referencedRunIds.add(id);
   };
@@ -60,12 +62,25 @@ export function diskRetentionReferences(
       throw new Error(`thread ${thread.id} retention state disagrees`);
     if (thread.repo) roots.add(thread.repo.root);
     if (ignoreThreadIds.has(thread.id)) continue;
+    for (const sessionRow of store
+      .prepare("SELECT harness_id,body FROM session WHERE thread_id=?")
+      .all(thread.id) as Array<{ harness_id: string; body: Uint8Array }>) {
+      const session = Session.parse(decodeBody(sessionRow));
+      if (session.thread_id !== thread.id || session.harness_id !== sessionRow.harness_id)
+        throw new Error("native session retention owner disagrees");
+      if (session.native_session_id) {
+        const ids = nativeSessions.get(session.harness_id) ?? new Set<string>();
+        ids.add(session.native_session_id);
+        nativeSessions.set(session.harness_id, ids);
+      }
+    }
     thread.run_ids.forEach(add);
     add(thread.head_run_id);
     for (const turnRow of store
       .prepare("SELECT body FROM turn WHERE thread_id=?")
       .all(thread.id) as Array<{ body: Uint8Array }>) {
       const turn = RetainedTurn.parse(decodeBody(turnRow));
+      if (turn.thread_id !== thread.id) throw new Error("retention turn owner disagrees");
       [turn.run_id, turn.parent_run_id, turn.answers_plan_run_id, turn.plan_run_id].forEach(add);
     }
   }
@@ -85,5 +100,11 @@ export function diskRetentionReferences(
     state: row.state,
     finishedAt: row.finishedAt ?? undefined,
   }));
-  return { projectRoots: [...roots], protectedProjectRoots, referencedRunIds, records };
+  return {
+    projectRoots: [...roots],
+    protectedProjectRoots,
+    referencedRunIds,
+    records,
+    nativeSessions,
+  };
 }

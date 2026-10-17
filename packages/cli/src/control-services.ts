@@ -33,6 +33,7 @@ import { registerConfigDirProfile } from "./profile-registration.js";
 import { StatusProjectionCache, globalConfigVersion } from "./status-projection-cache.js";
 import { vendorVerifiedProfileStatus } from "@claudexor/orchestrator";
 import { profileDoctorStatus } from "./accounts-projection.js";
+import { createNativeHomeRetention } from "./native-home-retention.js";
 import { createRetentionRunner } from "./retention-service.js";
 import { AuthReadinessService } from "@claudexor/gateway";
 import { buildGateway, harnessModels, harnessAccountModels } from "./registry.js";
@@ -65,7 +66,7 @@ const NO_PROJECT_ROOT = noProjectRepoRoot();
 type SetupJobManager = ReturnType<typeof createSetupJobManager>;
 type SetupBinding = Pick<
   SetupLifecycleBinding<SetupJobStorePort, SetupJobManager>,
-  "current" | "isBoundToCurrentGeneration" | "replaceAfter"
+  "current" | "isBoundToCurrentGeneration" | "replaceAfter" | "hasActiveWork"
 >;
 /**
  * The project ROOT a non-terminal job runs against (project-remove active-run
@@ -195,6 +196,12 @@ export function controlServices(
       daemonJobs,
       purgeThread,
       hasPurgeLeftovers,
+      nativeHomes: createNativeHomeRetention({
+        threads,
+        isBusy: () =>
+          setupBinding.hasActiveWork() ||
+          daemonJobs().some((job) => !(TERMINAL_LIFECYCLES as ReadonlySet<string>).has(job.state)),
+      }),
     }),
     // Nested projects are disclosed, never refused.
     listProjects: async () => ({ projects: projects().listWithNesting() as unknown[] }),

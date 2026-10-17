@@ -168,6 +168,11 @@ const ALL_OPENCODE_INTENTS = [...OPENCODE_ENABLED_INTENTS, ...OPENCODE_DISABLED_
 
 export function createOpenCodeAdapter(): HarnessAdapter {
   return {
+    nativeHomeLifetime: {
+      status: "not_pruned",
+      reason:
+        "OpenCode session database relationships have no proven independent pruning contract.",
+    },
     id: "opencode",
 
     async discover(): Promise<HarnessManifest> {

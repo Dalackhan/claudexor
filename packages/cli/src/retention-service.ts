@@ -15,12 +15,14 @@ import { findActiveThreadRun, runRetentionPass } from "@claudexor/control-api";
 import { loadConfig } from "@claudexor/config";
 import { claudexorOwnedRoot, noProjectRepoRoot, userConfigDir } from "@claudexor/util";
 import { sweepOrphanLanes } from "@claudexor/workspace";
+import type { NativeRetentionRequest, NativeRetentionResult } from "./native-home-retention.js";
 import { retentionProjects } from "./retention-projects.js";
 export { scheduleStartupRetention } from "./retention-schedule.js";
 
 export interface RetentionRunnerDeps {
   projects: () => ProjectStorePort;
   maxDeletionsPerPass?: number;
+  nativeHomes?: (request: NativeRetentionRequest) => NativeRetentionResult;
   threads: ProjectThreadPort;
   daemonJobs: () =>
     | Array<{ runId?: string; state: string; finishedAt?: string; params?: unknown }>
@@ -182,11 +184,24 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
         dataRootMode: claudexorOwnedRoot() === userConfigDir() ? "override" : "default",
       },
     );
+    const native = deps.nativeHomes?.({
+      dryRun: request.dry_run,
+      olderThan: Date.now() - retention.runs_max_age_days * 24 * 60 * 60_000,
+      ignoredRunIds: new Set(request.dry_run ? receipt.deleted_runs.map((run) => run.run_id) : []),
+      ignoredThreadIds: previewPurged,
+    });
+    if (native) {
+      receipt.freed_bytes += native.freedBytes;
+      receipt.errors.push(...native.errors);
+      morePending ||= native.truncated;
+      if (request.native_home_report) receipt.native_homes = native.reports;
+    }
     receipt.errors.unshift(...leftovers.errors, ...trash.errors);
     if (request.trash_purge_report) {
       receipt.purged_threads = trash.purged;
       receipt.purge_leftovers = leftovers.finished;
     }
+    receipt.finished_at = new Date().toISOString();
     return receipt;
   };
   const run: RetentionRunner = (request) => {

@@ -126,3 +126,13 @@ export const claudeContinuity: HarnessContinuityCapability = {
     );
   },
 };
+
+/** Native persistence is owned together with this adapter's resume contract. */
+export const claudePersistence = {
+  continuity: claudeContinuity,
+  nativeHomeLifetime: {
+    status: "not_pruned" as const,
+    reason:
+      "The Claude CLI owns transcript expiry; independent pruning of its session sidecars is not proven safe.",
+  },
+};

@@ -3168,6 +3168,41 @@ the purged (or would-be-purged) expired trash and `purge_leftovers` the
 finished (or would-be-finished) purges; like `data_root_unrecognized` both are
 opt-in (`trash_purge_report`, sent only by a lockstep CLI), the startup pass
 requests them for its log line, and `claudexor gc` prints them.
+NATIVE HOME RETENTION uses each adapter's `nativeHomeLifetime` contract. The
+same pass applies the run-age window (30 days by default) to Codex rollout files
+under its owned default home and every registered config-dir profile, including
+disabled profiles. A full reference inventory precedes deletion: all non-purged
+SQL thread sessions across retained generations, every retained attempt's typed
+session capsule, and every retained run's typed resumable record protect their
+native session IDs across all homes of that harness. Archived threads and pinned
+account continuations retain that protection. Missing artifacts have no reference;
+malformed or unreadable references, linked artifact directories, unavailable
+project generations, active/unknown runs, or active/unconfirmed setup work prevent
+native pruning. This synchronous idle check, inventory and unlink sequence does
+not yield to engine admission between proof and deletion. It is conservative:
+retaining a run can retain its session even if that run no longer needs resume.
+
+Codex owns only the recognized `sessions/YYYY/MM/DD/rollout-…-<uuid>.jsonl`
+and `.jsonl.zst` candidates. All parts of a referenced session survive; a recent
+part protects the whole group. File identity and modification facts are rechecked
+before deletion. Each pass removes at most 500 native files and promptly continues
+when capped. Credentials, configuration, SQLite logs/indexes, archived sessions,
+unknown filenames/layouts and symlinks remain untouched. Codex SQLite reclamation
+is **not pruned: no proven independent row/file lifetime contract**. Claude is
+**not pruned: its CLI owns transcript expiry and the engine has no independent
+sidecar deletion proof**. Cursor, Agy and OpenCode are **not pruned: their native
+session/index relationships have no proven independent pruning contract**. ACP is
+**not pruned: the protocol supplies no vendor-independent native storage contract**.
+The adapter is the owner of those declarations; the engine never guesses a format.
+
+The opt-in `native_home_report` request returns `native_homes` with per-home
+retirement counts, deleted paths, errors, and a reason for retained/unsupported
+formats. Cleanup runs for older clients too; only the disclosure is negotiated.
+The lockstep CLI prints those reasons. Dry-run performs the same proof and previews
+the bytes without unlinking; it accounts for runs/threads that this pass would
+retire. This does not delete conversation records or promise full account-home
+reclamation: unsupported vendor databases and still-referenced sessions remain.
+
 STOPPED ISOLATED WORK IS KEPT for `continueFrom` (A9): a daemon-owned,
 single-candidate, mutating Agent run records `live` custody of its isolated
 envelope (`continuation-custody.json` in the envelope base, written before

@@ -69,7 +69,12 @@ describe("gcCommand data_root_report capability negotiation", () => {
       engine: engine(CLAUDEXOR_VERSION),
     });
     expect(await gcCommand(parseArgs(["gc", "--dry-run"]), true)).toBe(0);
-    expect(sentBody()).toEqual({ dry_run: true, data_root_report: true, trash_purge_report: true });
+    expect(sentBody()).toEqual({
+      dry_run: true,
+      data_root_report: true,
+      trash_purge_report: true,
+      native_home_report: true,
+    });
   });
 
   it("prints the thread purges a lockstep receipt discloses", async () => {

@@ -1,0 +1,118 @@
+import { existsSync, lstatSync, readdirSync, unlinkSync, type Stats } from "node:fs";
+import { join } from "node:path";
+import type { NativeHomeLifetime, NativeHomeRetentionInput } from "@claudexor/core";
+import { canonicalIsolationLocator } from "@claudexor/core";
+import { codexContinuity, codexStoreHome } from "./continuity.js";
+
+const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const ROLLOUT = new RegExp(`^rollout-.+-(${UUID})\\.jsonl(?:\\.zst)?$`, "i");
+const SESSION_ID = new RegExp(`^${UUID}$`, "i");
+
+/** The same filename/part contract as codexContinuity. SQLite logs and indexes
+ * have no proven independent deletion contract and are deliberately untouched. */
+function prune(input: NativeHomeRetentionInput) {
+  const result = {
+    deleted_files: [] as string[],
+    errors: [] as string[],
+    freed_bytes: 0,
+    kept_referenced: 0,
+    kept_recent: 0,
+    kept_unknown: 0,
+    truncated: false,
+  };
+  const protectedIds = new Set(
+    [...input.protectedSessionIds].map((id) => {
+      if (!SESSION_ID.test(id)) throw new Error("unrecognized Codex session reference; home kept");
+      return id.toLowerCase();
+    }),
+  );
+  const home = canonicalIsolationLocator(input.home, "Codex retention home");
+  const sessions = join(home, "sessions");
+  if (!existsSync(sessions)) return result;
+  if (!lstatSync(sessions).isDirectory())
+    throw new Error("Codex sessions is not a plain directory; home kept");
+  const groups = new Map<string, Array<{ path: string; stat: Stats }>>();
+  const scan = (dir: string, depth: number) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (
+        depth > 0 &&
+        entry.isDirectory() &&
+        (depth === 3 ? /^\d{4}$/ : /^\d{2}$/).test(entry.name)
+      )
+        scan(path, depth - 1);
+      else if (depth === 0 && entry.isFile()) {
+        const match = ROLLOUT.exec(entry.name);
+        if (!match) {
+          result.kept_unknown += 1;
+          continue;
+        }
+        const id = match[1]!.toLowerCase();
+        const parts = groups.get(id) ?? [];
+        parts.push({ path, stat: lstatSync(path) });
+        groups.set(id, parts);
+      } else result.kept_unknown += 1;
+    }
+  };
+  // Complete inventory before the first unlink; a failed read deletes nothing.
+  scan(sessions, 3);
+  for (const [id, parts] of groups) {
+    if (protectedIds.has(id)) {
+      result.kept_referenced += parts.length;
+      continue;
+    }
+    if (parts.some((part) => part.stat.mtimeMs >= input.olderThan)) {
+      result.kept_recent += parts.length;
+      continue;
+    }
+    let current: Stats[];
+    try {
+      current = parts.map((part) => lstatSync(part.path));
+    } catch (error) {
+      result.errors.push(`${id}: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
+    if (
+      current.some(
+        (stat, i) =>
+          !stat.isFile() ||
+          stat.dev !== parts[i]!.stat.dev ||
+          stat.ino !== parts[i]!.stat.ino ||
+          stat.mtimeMs !== parts[i]!.stat.mtimeMs ||
+          stat.size !== parts[i]!.stat.size,
+      )
+    ) {
+      result.kept_unknown += parts.length;
+      continue;
+    }
+    for (const [i, part] of parts.entries()) {
+      if (result.deleted_files.length >= input.maxDeletions) {
+        result.truncated = true;
+        return result;
+      }
+      try {
+        if (!input.dryRun) unlinkSync(part.path);
+        result.deleted_files.push(part.path);
+        if (current[i]!.nlink === 1) result.freed_bytes += current[i]!.size;
+      } catch (error) {
+        result.errors.push(
+          `${part.path}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+  }
+  return result;
+}
+
+const codexNativeHomeLifetime: NativeHomeLifetime = {
+  status: "managed",
+  preserves:
+    "Credentials, configuration, SQLite logs/indexes, archived sessions and unknown layouts; referenced or recently updated rollout parts.",
+  home: (env) => canonicalIsolationLocator(codexStoreHome(env), "Codex retention home"),
+  prune,
+};
+
+export const codexPersistence = {
+  continuity: codexContinuity,
+  nativeHomeLifetime: codexNativeHomeLifetime,
+};

@@ -21,7 +21,7 @@ export function scheduleStartupRetention(
     timer = setTimeout(() => {
       if (stopped || opts.shuttingDown()) return;
       let more = false;
-      flight = runner({ dry_run: false, trash_purge_report: true })
+      flight = runner({ dry_run: false, trash_purge_report: true, native_home_report: true })
         .then(
           (receipt) => {
             more = runner.hasMore?.() ?? false;
@@ -29,7 +29,8 @@ export function scheduleStartupRetention(
               opts.logPath,
               `retention: freed ${receipt.freed_bytes} bytes (${receipt.deleted_runs.length} runs, ` +
                 `${receipt.deleted_reviews.length} reviews, ${receipt.purged_threads?.length ?? 0} expired trash threads, ` +
-                `${receipt.purge_leftovers?.length ?? 0} finished purges, ${receipt.errors.length} errors)`,
+                `${receipt.purge_leftovers?.length ?? 0} finished purges, ` +
+                `${receipt.native_homes?.reduce((sum, home) => sum + home.deleted_files.length, 0) ?? 0} native files, ${receipt.errors.length} errors)`,
             );
           },
           (error: unknown) =>

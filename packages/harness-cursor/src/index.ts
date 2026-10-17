@@ -250,6 +250,10 @@ export function createCursorAdapter(deps: Partial<CursorRuntimeDeps> = {}): Harn
       fileStoreEnv: cursorFileStoreEnv,
     });
   return {
+    nativeHomeLifetime: {
+      status: "not_pruned",
+      reason: "Cursor session/index storage has no proven independent pruning contract.",
+    },
     id: "cursor",
     // The level is a token of the compound model id: `prepareProcessing`
     // selects the listed variant of the requested model's family from this

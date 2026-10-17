@@ -475,7 +475,9 @@ describe("expired trash purge in the retention pass (owner decision E2)", () => 
     for (let i = 0; i < 500 && !readLog().includes("retention:"); i += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    expect(requests).toEqual([{ dry_run: false, trash_purge_report: true }]);
+    expect(requests).toEqual([
+      { dry_run: false, trash_purge_report: true, native_home_report: true },
+    ]);
     expect(readLog()).toContain("1 expired trash threads");
     await stop();
   });

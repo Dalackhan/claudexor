@@ -1,23 +1,24 @@
-import { join } from "node:path";
 import { WorkspaceError } from "@claudexor/core";
 import { gitEnv } from "./git-run.js";
 
 /** Submodule paths the working tree's own `.gitmodules` declares, relative to
  * the worktree top (where the file lives, whatever directory the capture runs
  * in): a submodule the candidate added on purpose is captured as its commit
- * link, as before. No file, or no declared path, declares nothing. */
+ * link, as before. No file, or no declared path, declares nothing. The file is
+ * named relative to the capture directory (`--show-cdup` is only `../`
+ * steps), so no worktree path, whatever its spelling, is parsed here. */
 async function declaredSubmodulePaths(
   repo: string,
   env: Record<string, string>,
 ): Promise<Set<string>> {
-  const top = await gitEnv(repo, ["rev-parse", "--show-toplevel"], env);
-  if (top.code !== 0 || !top.stdout.trim()) return new Set();
+  const cdup = await gitEnv(repo, ["rev-parse", "--show-cdup"], env);
+  if (cdup.code !== 0) return new Set();
   const listed = await gitEnv(
     repo,
     [
       "config",
       "--file",
-      join(top.stdout.trim(), ".gitmodules"),
+      `${cdup.stdout.trim()}.gitmodules`,
       "--null",
       "--get-regexp",
       "^submodule\\..*\\.path$",

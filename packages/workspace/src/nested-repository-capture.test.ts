@@ -192,3 +192,26 @@ it("snapshots a dirty tree without its undeclared nested repositories", async ()
     names.filter((name) => name.startsWith("scratch-repo") || name.startsWith("ref/")),
   ).toEqual([]);
 });
+
+it("reads .gitmodules whatever the worktree path is spelled like", async () => {
+  // A trailing space is a legal path byte; the declared submodule must still be found.
+  const parent = mkdtempSync(join(tmpdir(), "cx-nested-spelling-"));
+  roots.push(parent);
+  const root = join(parent, "project ");
+  mkdirSync(root);
+  const git = (cwd: string, ...args: string[]) => {
+    execFileSync("git", ["-C", cwd, ...args], { stdio: "ignore" });
+  };
+  git(root, "init", "-q");
+  writeFileSync(join(root, "tracked.txt"), "base\n");
+  git(root, "add", "tracked.txt");
+  git(root, ...identity, "commit", "-qm", "base");
+  mkdirSync(join(root, "sub"));
+  git(root, "-c", "protocol.file.allow=always", "submodule", "add", "-q", library(), "sub/library");
+
+  const captured = await captureWorkingTreeTransient(join(root, "sub"), "HEAD");
+
+  expect(captured.captureIncomplete).toBe(false);
+  expect(captured.patch).toContain("b/sub/library");
+  expect(captured.excludedNestedRepositories).toBeUndefined();
+});

@@ -7,7 +7,7 @@ import { sha256 } from "./index.js";
 
 vi.mock("node:fs", async (original) => {
   const actual = await original<typeof fs>();
-  return { ...actual, linkSync: vi.fn(actual.linkSync) };
+  return { ...actual, linkSync: vi.fn(actual.linkSync), fsyncSync: vi.fn(actual.fsyncSync) };
 });
 
 const roots: string[] = [];
@@ -18,6 +18,7 @@ const root = () => {
 };
 afterEach(() => {
   vi.mocked(fs.linkSync).mockReset();
+  vi.mocked(fs.fsyncSync).mockReset();
   for (const path of roots.splice(0)) fs.rmSync(path, { recursive: true, force: true });
 });
 
@@ -83,5 +84,44 @@ describe("immutable patch publication", () => {
     });
     expect(() => writePatchObject(dir, target, "new bytes")).toThrow("full");
     expect(fs.readFileSync(target, "utf8")).toBe("same bytes\r\n");
+  });
+
+  it("keeps objects outside a linked cache namespace", () => {
+    const dir = root();
+    const outside = root();
+    const path = join(outside, `${sha256("outside bytes").slice(7)}.patch`);
+    fs.writeFileSync(path, "outside bytes");
+    fs.symlinkSync(outside, join(dir, "patches"), "dir");
+    for (const dryRun of [true, false])
+      expect(() => prunePatchObjects(dir, dryRun)).toThrow("plain directory");
+    expect(() => writePatchObject(dir, join(dir, "run.patch"), "outside bytes")).toThrow(
+      "plain directory",
+    );
+    expect(fs.readFileSync(path, "utf8")).toBe("outside bytes");
+    fs.unlinkSync(join(dir, "patches"));
+    fs.mkdirSync(join(dir, "patches"));
+    fs.renameSync(path, join(dir, "patches", `${sha256("outside bytes").slice(7)}.patch`));
+    expect(prunePatchObjects(dir, false)).toBe(Buffer.byteLength("outside bytes"));
+  });
+
+  it("promotes ordinary run bytes to durable anchor ownership before publication", () => {
+    const dir = root();
+    const run = join(dir, "runs", "r", "patch.diff");
+    const anchor = join(dir, "anchors", "objects", "a.patch");
+    writePatchObject(dir, run, "shared bytes", { durable: false });
+    expect(fs.fsyncSync).not.toHaveBeenCalled();
+    const ino = fs.statSync(run).ino;
+    const flushed: { ino: number; file: boolean; anchorExists: boolean }[] = [];
+    const original = vi.mocked(fs.fsyncSync).getMockImplementation()!;
+    vi.mocked(fs.fsyncSync).mockImplementation((fd) => {
+      const stat = fs.fstatSync(fd);
+      flushed.push({ ino: stat.ino, file: stat.isFile(), anchorExists: fs.existsSync(anchor) });
+      original(fd);
+    });
+    writePatchObject(dir, anchor, "shared bytes");
+    expect(fs.statSync(anchor).ino).toBe(ino);
+    expect(flushed).toContainEqual({ ino, file: true, anchorExists: false });
+    expect(flushed.some((entry) => !entry.file && entry.anchorExists)).toBe(true);
+    expect(fs.readFileSync(anchor, "utf8")).toBe("shared bytes");
   });
 });

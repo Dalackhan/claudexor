@@ -4984,8 +4984,10 @@ attempts/aNN/events.jsonl?    (read-only modes)
 Patch writers publish identical bytes through a per-project content-addressed
 `patches/<sha256>.patch` cache. Attempt/final `patch.diff` paths and private
 `anchors/objects/<sha256>.patch` paths are ordinary hard links to those bytes;
-replacing a saved patch publishes a new inode atomically. Filesystems that
-cannot link receive independent byte-identical copies. Masked display copies
+replacing a saved patch publishes a new inode atomically. Ordinary saved copies
+retain the existing non-flushing artifact-write contract; an anchor flushes the
+shared inode before publishing its durable authoritative link. The cache path is
+advisory. Filesystems that cannot link receive independent byte-identical copies. Masked display copies
 and their different exact bytes remain separate objects. Existing plain-file
 run trees and anchors stay readable without migration. Retention removes cache
 entries only after their last run/anchor link is gone; an anchor keeps its

@@ -24,7 +24,7 @@ export function scheduleStartupRetention(
       flight = runner({ dry_run: false, trash_purge_report: true, native_home_report: true })
         .then(
           (receipt) => {
-            more = runner.hasMore?.() ?? false;
+            more = runner.hasMore?.(receipt) ?? false;
             logLine(
               opts.logPath,
               `retention: freed ${receipt.freed_bytes} bytes (${receipt.deleted_runs.length} runs, ` +

@@ -162,3 +162,15 @@ it("continues bounded passes until all eligible orphan runs retire", async () =>
   expect((await gc({ dry_run: false })).deleted_runs).toHaveLength(1);
   expect(gc.hasMore!()).toBe(false);
 });
+
+it("keeps each capped receipt's continuation signal across queued manual passes", async () => {
+  const projectRoot = repo("queued");
+  for (let i = 0; i < 3; i++) run(projectRoot, `queued-${i}`);
+  const gc = runner(2);
+  const [scheduled, manual] = await Promise.all([gc({ dry_run: false }), gc({ dry_run: false })]);
+  expect(scheduled.deleted_runs).toHaveLength(2);
+  expect(manual.deleted_runs).toHaveLength(1);
+  expect(gc.hasMore!(scheduled)).toBe(true);
+  expect(gc.hasMore!(manual)).toBe(false);
+  expect(gc.hasMore!()).toBe(false);
+});

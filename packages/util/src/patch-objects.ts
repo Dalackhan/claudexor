@@ -18,7 +18,7 @@ import { ensureDir, fsyncDirectory, sha256 } from "./index.js";
 const LINK_UNAVAILABLE = new Set(["EXDEV", "EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EMLINK"]);
 
 /** Publish a new directory entry, never truncate an inode shared by other patches. */
-function publishLink(source: string, target: string): void {
+function publishLink(source: string, target: string, durable: boolean): void {
   ensureDir(dirname(target));
   const temp = `${target}.tmp-${crypto.randomUUID()}`;
   try {
@@ -27,25 +27,35 @@ function publishLink(source: string, target: string): void {
     } catch (error) {
       if (!LINK_UNAVAILABLE.has((error as NodeJS.ErrnoException).code ?? "")) throw error;
       copyFileSync(source, temp);
-      const fd = openSync(temp, "r+");
-      try {
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
+      if (durable) {
+        const fd = openSync(temp, "r+");
+        try {
+          fsyncSync(fd);
+        } finally {
+          closeSync(fd);
+        }
       }
     }
     renameSync(temp, target);
-    fsyncDirectory(dirname(target));
+    if (durable) fsyncDirectory(dirname(target));
   } finally {
     if (existsSync(temp)) unlinkSync(temp);
   }
 }
 
 /** Shared by display copies and private anchors. Different bytes never share an object. */
-export function writePatchObject(runtimeDir: string, target: string, patch: string): void {
+export function writePatchObject(
+  runtimeDir: string,
+  target: string,
+  patch: string,
+  options: { durable?: boolean } = {},
+): void {
+  const durable = options.durable ?? true;
   const id = sha256(patch).slice(7);
   const object = join(runtimeDir, "patches", `${id}.patch`);
   ensureDir(dirname(object));
+  if (!lstatSync(dirname(object)).isDirectory())
+    throw new Error("patch cache is not a plain directory; publication refused");
   if (existsSync(object)) {
     if (sha256(readFileSync(object, "utf8")) !== `sha256:${id}`) {
       throw new Error(`patch object ${id} failed its content digest`);
@@ -56,17 +66,26 @@ export function writePatchObject(runtimeDir: string, target: string, patch: stri
       const fd = openSync(temp, "wx", 0o600);
       try {
         writeFileSync(fd, patch, "utf8");
-        fsyncSync(fd);
       } finally {
         closeSync(fd);
       }
       renameSync(temp, object);
-      fsyncDirectory(dirname(object));
     } finally {
       if (existsSync(temp)) unlinkSync(temp);
     }
   }
-  publishLink(object, target);
+  // Ordinary run copies retain writeText's durability contract. An anchor
+  // promotes the shared inode before publishing its durable authoritative link;
+  // the cache pathname itself has no authority and can be recreated after a crash.
+  if (durable) {
+    const fd = openSync(object, "r+");
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  }
+  publishLink(object, target, durable);
   // A filesystem without hard links keeps the published copy, not an extra cache copy.
   if (lstatSync(object).nlink === 1) unlinkSync(object);
 }
@@ -79,6 +98,8 @@ export function prunePatchObjects(
 ): number {
   const directory = join(runtimeDir, "patches");
   if (!existsSync(directory)) return 0;
+  if (!lstatSync(directory).isDirectory())
+    throw new Error("patch cache is not a plain directory; objects kept");
   let bytes = 0;
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (!entry.isFile() || !/^[0-9a-f]{64}\.patch$/.test(entry.name)) continue;

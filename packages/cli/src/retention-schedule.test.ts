@@ -86,3 +86,14 @@ it("retries failures on the interval and starts no work after shutdown", async (
   expect(run).toHaveBeenCalledTimes(2);
   await stop();
 });
+
+it("asks about the completed receipt when deciding continuation", async () => {
+  vi.useFakeTimers();
+  const run: RetentionRunner = async () => receipt;
+  const more = vi.fn((completed) => completed === receipt);
+  run.hasMore = more;
+  const stop = scheduleStartupRetention(run, options());
+  await vi.advanceTimersByTimeAsync(10);
+  expect(more).toHaveBeenCalledWith(receipt);
+  await stop();
+});

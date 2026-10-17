@@ -35,7 +35,7 @@ export interface RetentionRunnerDeps {
 }
 
 export type RetentionRunner = ((request: ControlGcRequest) => Promise<ControlGcReceipt>) & {
-  hasMore?: () => boolean;
+  hasMore?: (receipt?: ControlGcReceipt) => boolean;
 };
 
 /** Trashed threads whose restore window (`purge_after`) has ended. */
@@ -115,11 +115,12 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
   // tombstone writes on the same candidates, which would double-count
   // freed_bytes and cross-report deletions between receipts.
   let inFlight: Promise<ControlGcReceipt> | null = null;
-  let morePending = false;
+  let lastReceipt: ControlGcReceipt | null = null;
+  const truncatedReceipts = new WeakSet<ControlGcReceipt>();
   const runOnce = async (request: ControlGcRequest): Promise<ControlGcReceipt> => {
     // Policy is read fresh per pass (configurable without restart); the
     // reference set spans EVERY non-purged thread's full run lineage.
-    morePending = false;
+    let morePending = false;
     const retention = loadConfig(noProjectRoot).global.retention;
     const jobs = await deps.daemonJobs();
     // Purges left unfinished by an earlier failure, then expired trash, both
@@ -202,6 +203,8 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
       receipt.purge_leftovers = leftovers.finished;
     }
     receipt.finished_at = new Date().toISOString();
+    if (morePending) truncatedReceipts.add(receipt);
+    lastReceipt = receipt;
     return receipt;
   };
   const run: RetentionRunner = (request) => {
@@ -214,6 +217,7 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
       if (inFlight === chained) inFlight = null;
     });
   };
-  run.hasMore = () => morePending;
+  run.hasMore = (receipt = lastReceipt ?? undefined) =>
+    receipt !== undefined && truncatedReceipts.has(receipt);
   return run;
 }

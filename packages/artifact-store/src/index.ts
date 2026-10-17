@@ -100,7 +100,7 @@ export class ArtifactStore {
   }
 
   writePatch(path: string, text: string): void {
-    writePatchObject(this.claudexorDir, path, text);
+    writePatchObject(this.claudexorDir, path, text, { durable: false });
   }
 
   readYaml<T = unknown>(path: string): T | null {

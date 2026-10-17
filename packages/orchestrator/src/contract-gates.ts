@@ -1,13 +1,17 @@
 import type {
   AccessProfile,
   ActiveTaskContract,
+  FinalVerifyRecord,
   GateResult,
   ProjectConfig,
   TestCommandGrant,
   TestCommandInvocation,
 } from "@claudexor/schema";
+import { finalVerifyFiles, finalVerifyPatch, type VerifyEventLog } from "@claudexor/delivery";
 import { canonicalProjectRoot, containsSecretLikeToken, hashJson, sha256 } from "@claudexor/util";
+import type { CandidateRun } from "./candidateEvidence.js";
 import { gateProtectedPaths } from "./runSupport.js";
+import { runScopeGateEnv } from "./runScope.js";
 import type { GateSpec } from "@claudexor/review";
 
 type GateCommands = ActiveTaskContract["tests"]["commands"];
@@ -70,19 +74,40 @@ export function resolveContractGates(input: {
   };
 }
 
-export function gateSpecsFromContract(contract: ActiveTaskContract): GateSpec[] {
+/** The run's gates. Given the run's scope marker, every gate process (candidate gates, final
+ * verification, adoption) is launched in the run's custody and ended at its barrier (INV-144). */
+export function gateSpecsFromContract(
+  contract: ActiveTaskContract,
+  runScopeMarker?: string,
+): GateSpec[] {
+  const env = runScopeGateEnv(runScopeMarker);
   return contract.tests.commands.map((command) => ({
     id: command.id,
     program: command.program,
     args: command.args,
     cwd: command.cwd,
     envAllowlist: command.envAllowlist,
+    ...(env ? { env } : {}),
     trustRequired: command.trust_required,
     trustGrant: command.trust_grant,
     projectRoot: contract.repo.root,
     accessProfile: contract.access.effective_profile,
     required: command.required,
   }));
+}
+
+/** Fresh verification (INV-115) of the run's own result, its gates in the run's custody. */
+export function finalVerifyRun(
+  execRoot: string,
+  result: CandidateRun,
+  contract: ActiveTaskContract,
+  log: VerifyEventLog,
+  owner: { runScopeMarker?: string },
+): Promise<FinalVerifyRecord> {
+  const specs = gateSpecsFromContract(contract, owner.runScopeMarker);
+  return result.files
+    ? finalVerifyFiles(result.files, undefined, specs, log)
+    : finalVerifyPatch(execRoot, result, specs, log);
 }
 
 export function renderTestsEvidence(contract: ActiveTaskContract, gates?: GateResult[]): string {

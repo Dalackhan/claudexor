@@ -1,3 +1,4 @@
+import { quotaConstraintAppliesToRequestKind, type QuotaRequestKind } from "@claudexor/schema";
 import type {
   CredentialProfile,
   CredentialUnusableObservation,
@@ -18,7 +19,7 @@ import {
   type QuotaBlock,
 } from "./credential-cooldown.js";
 import type { AttemptOutputMarkers } from "./attemptOutputMarkers.js";
-import { refusedBeforeProgress } from "./pre-progress-refusal.js";
+import { noteRefusedBeforeProgress } from "./pre-progress-refusal.js";
 import { applicableCredentialUnusable } from "./account-evidence.js";
 import {
   reactiveRotationEvidence,
@@ -123,6 +124,7 @@ export function profileHeadroomBreach(
   profileId: string | null,
   threshold: number,
   model?: string | null,
+  requestKind?: QuotaRequestKind,
 ): HeadroomBreach | null {
   for (const snapshot of snapshots) {
     // FRESH evidence only (release wave tier1 #3): a stale or unknown reading
@@ -131,6 +133,7 @@ export function profileHeadroomBreach(
     if (snapshot.subject.harness !== harnessId) continue;
     if ((snapshot.subject.subject_id ?? null) !== profileId) continue;
     for (const constraint of snapshot.constraints) {
+      if (!quotaConstraintAppliesToRequestKind(constraint, requestKind)) continue;
       if (!quotaConstraintAppliesToModel(constraint, model)) continue;
       if (constraint.used_ratio !== null && constraint.used_ratio >= threshold) {
         return {
@@ -488,7 +491,7 @@ export async function rotateSpecOnTypedLimit(args: {
     }
     return null;
   }
-  if (current && refusedBeforeProgress(evidence, args.markers)) args.notePreProgressRefusal?.();
+  noteRefusedBeforeProgress(args);
   const route = limitSubjectRoute(
     current,
     args.defaultRouteWasVendorNative === true ? "local_session" : null,

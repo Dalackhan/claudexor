@@ -11,9 +11,11 @@ import {
   type RunOutcomeFacts,
   type RunResumable,
   type VendorFailureEvidence,
+  type PoolAttemptFailure,
   HarnessRequestRefusal,
 } from "@claudexor/schema";
 import { redactSecrets } from "@claudexor/util";
+import { poolFailure, redactVendorFailure } from "./pool-attempt-evidence.js";
 import type { OrchestratorResult } from "./orchestrator.js";
 import { resumableTerminal, type ContinuityTerminalFacts } from "./continuity-terminal.js";
 import { terminalOutcomeFacts } from "./terminalOutcome.js";
@@ -42,6 +44,9 @@ export function writeFailure(
      * null/omitted when no vendor-typed evidence exists. Opaque evidence. */
     vendorFailure?: VendorFailureEvidence | null;
     requestRefusal?: HarnessRequestRefusal;
+    captureFailure?: RunFailure["captureFailure"];
+    /** Every failed try with its own account, in order (empty = none). */
+    poolAttempts?: readonly PoolAttemptFailure[];
     nextActions?: string[];
   },
 ): void {
@@ -67,25 +72,32 @@ export function writeFailure(
     runDir: failure.runDir ?? paths.root,
     resetsAt: failure.resetsAt ?? null,
     ...(failure.requestRefusal ? { requestRefusal: failure.requestRefusal } : {}),
+    ...(failure.captureFailure ? { captureFailure: failure.captureFailure } : {}),
     // Vendor text was redacted at event ingress; redact again like safeMessage (INV-062).
-    vendorFailure: vendor && {
-      code: vendor.code === null ? null : redactSecrets(vendor.code),
-      message: vendor.message === null ? null : redactSecrets(vendor.message),
-      source: vendor.source,
-    },
-    nextActions:
-      failure.code === "input_too_large"
-        ? [
-            "Fit the input to the reported transport limit or supply source references",
-            "Choose another compatible harness if the complete input must remain inline",
-          ]
-        : failure.code === "vendor_cli_too_old"
+    vendorFailure: vendor && redactVendorFailure(vendor),
+    poolAttempts: (failure.poolAttempts ?? []).map((row) => ({
+      ...row,
+      profileDisplayName: row.profileDisplayName && redactSecrets(row.profileDisplayName),
+      error: redactSecrets(row.error),
+      vendorFailure: row.vendorFailure && redactVendorFailure(row.vendorFailure),
+    })),
+    nextActions: [
+      ...new Set([
+        ...(failure.code === "input_too_large"
           ? [
-              `Update the Claude Code CLI${installation ? ` at ${installation}` : ""}`,
-              "Use the update method for that installation, then retry the requested model",
-              "Open diagnostics",
+              "Fit the input to the reported transport limit or supply source references",
+              "Choose another compatible harness if the complete input must remain inline",
             ]
-          : (failure.nextActions ?? []),
+          : failure.code === "vendor_cli_too_old"
+            ? [
+                `Update the Claude Code CLI${installation ? ` at ${installation}` : ""}`,
+                "Use the update method for that installation, then retry the requested model",
+                "Open diagnostics",
+              ]
+            : (failure.nextActions ?? [])),
+        ...(failure.captureFailure ? (failure.nextActions ?? []) : []),
+      ]),
+    ],
   });
 }
 
@@ -138,6 +150,40 @@ export function declaredFailure(err: unknown): DeclaredFailure {
 }
 
 /**
+ * The one statement of a cancellation, shared by every cancelled terminal: the
+ * cancel first (a STRING abort reason, e.g. the maxSeconds deadline, is named),
+ * then the run's earlier failed tries; `markdown` is its summary.md.
+ */
+export function cancellationStatement(
+  runId: string,
+  mode: ModeKind,
+  cancelSignal: AbortSignal | undefined,
+  attempts: readonly ContinuityTerminalFacts[],
+): {
+  cancelReason?: string;
+  summary: string;
+  markdown: string;
+  poolAttempts: PoolAttemptFailure[];
+} {
+  const cancelReason =
+    typeof cancelSignal?.reason === "string" && cancelSignal.reason
+      ? cancelSignal.reason
+      : undefined;
+  const { message, poolAttempts } = poolFailure(
+    cancelReason === "wall_clock_exceeded"
+      ? "run cancelled: wall-clock deadline (maxSeconds) exceeded"
+      : "run cancelled",
+    attempts,
+  );
+  return {
+    ...(cancelReason ? { cancelReason } : {}),
+    summary: message,
+    markdown: `# Run ${runId} (${mode})\n\n- Lifecycle: cancelled\n${cancelReason ? `- Reason: ${cancelReason}\n` : ""}\n${message}\n`,
+    poolAttempts,
+  };
+}
+
+/**
  * Terminal result for a cancelled run: emits run.failed with status
  * "cancelled" so every mode ends consistently. `writeTelemetry` carries the
  * PARTIAL attempt telemetry collected before the abort — a cancelled run
@@ -164,6 +210,9 @@ export function cancelledResult(
   priorFacts?: RunOutcomeFacts,
   /** The attempt's continuation facts (cause wall_clock/cancelled, carriers), when any. */
   resumable?: RunResumable | null,
+  /** The run's attempts: their earlier failed tries stay diagnostic history
+   * beside the cancellation (a cancelled try has no row; no failure record). */
+  attempts?: readonly ContinuityTerminalFacts[],
 ): OrchestratorResult {
   if (writeTelemetry) {
     try {
@@ -172,24 +221,19 @@ export function cancelledResult(
       /* partial telemetry is best-effort on the cancel path */
     }
   }
-  const cancelReason =
-    typeof cancelSignal?.reason === "string" && cancelSignal.reason
-      ? cancelSignal.reason
-      : undefined;
-  const summaryText =
-    cancelReason === "wall_clock_exceeded"
-      ? "run cancelled: wall-clock deadline (maxSeconds) exceeded"
-      : "run cancelled";
+  const {
+    cancelReason,
+    summary: summaryText,
+    markdown,
+    poolAttempts,
+  } = cancellationStatement(runId, mode, cancelSignal, attempts ?? []);
   // Materialize the diagnostic summary BEFORE announcing it — output.ready must
   // point at a file that exists (partial-output honesty), and it must precede
   // the terminal in every mode (INV-116).
   let summaryWritten = false;
   if (store) {
     try {
-      store.writeText(
-        join(runDir, "final", "summary.md"),
-        `# Run ${runId} (${mode})\n\n- Lifecycle: cancelled\n${cancelReason ? `- Reason: ${cancelReason}\n` : ""}\n${summaryText}\n`,
-      );
+      store.writeText(join(runDir, "final", "summary.md"), markdown);
       summaryWritten = true;
     } catch {
       /* best-effort: a write failure must not mask the cancel terminal */
@@ -212,6 +256,7 @@ export function cancelledResult(
     facts: cancelFacts,
     reason: cancelFacts.reason,
     ...(cancelReason ? { cancel_reason: cancelReason } : {}),
+    ...(attempts ? { pool_attempts: poolAttempts } : {}),
     ...(resumable ? { resumable } : {}),
   });
   return {
@@ -245,13 +290,18 @@ export function failTerminally(
   err: unknown,
   spendUsd?: number | null,
   failureMeta: {
-    category?: "harness_error" | "internal";
+    category?: "harness_error" | "internal" | "project";
+    captureFailure?: RunFailure["captureFailure"];
     harnessId?: string;
     attemptId?: string;
     rawDetailRef?: string;
     nextActions?: string[];
+    /** Actions that follow this terminal's own remedy (an earlier record's capture actions). */
+    followUps?: readonly string[];
     priorFacts?: RunOutcomeFacts;
     continuity?: readonly ContinuityTerminalFacts[];
+    /** Every attempt whose failed tries this terminal names (default: `continuity`). */
+    attempts?: readonly ContinuityTerminalFacts[];
   } = {},
 ): OrchestratorResult {
   const budget =
@@ -259,13 +309,15 @@ export function failTerminally(
       ? classifyBudgetFailure({ denial: err.denial, terminal: null })
       : null;
   if (budget) phase = budget.phase;
-  const message =
-    budget?.safeMessage ?? redactSecrets(err instanceof Error ? err.message : String(err));
+  const { message, poolAttempts } = poolFailure(
+    budget?.safeMessage ?? redactSecrets(err instanceof Error ? err.message : String(err)),
+    failureMeta.attempts ?? failureMeta.continuity ?? [],
+  );
   const declared = declaredFailure(err);
   const failFacts = terminalOutcomeFacts(
     failureMeta.priorFacts,
     "failed",
-    budget?.reason ?? "harness_failed",
+    budget?.reason ?? (phase === "workspace" ? "workspace_unavailable" : "harness_failed"),
   );
   store.writeText(
     join(paths.finalDir, "summary.md"),
@@ -279,11 +331,15 @@ export function failTerminally(
     attemptId: budget?.attemptId ?? failureMeta.attemptId,
     safeMessage: message,
     rawDetailRef: failureMeta.rawDetailRef,
+    captureFailure: failureMeta.captureFailure,
     runDir: paths.root,
     resetsAt: declared.resetsAt,
     requestRefusal: declared.requestRefusal,
-    nextActions: budget?.nextActions ??
-      failureMeta.nextActions ?? ["Open diagnostics", "Retry the run"],
+    poolAttempts,
+    nextActions: [
+      ...(budget?.nextActions ?? failureMeta.nextActions ?? ["Open diagnostics", "Retry the run"]),
+      ...(failureMeta.followUps ?? []),
+    ],
   });
   log.emit("output.ready", { kind: "summary", path: "final/summary.md", state: "diagnostic" });
   log.emit("run.failed", {
@@ -292,6 +348,7 @@ export function failTerminally(
     reason: failFacts.reason,
     phase,
     error: message,
+    pool_attempts: poolAttempts,
     failure_ref: "final/failure.yaml",
     ...resumableTerminal(store, paths, failureMeta.continuity ?? [], true),
   });

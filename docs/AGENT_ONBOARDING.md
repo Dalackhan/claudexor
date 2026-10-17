@@ -11,6 +11,10 @@ If you are a third-party agent (Cursor, Claude Code, Codex, OpenCode, a
 script) setting Claudexor up on this machine, follow this sequence in order.
 It is strict: skipping a step is how the 2026-07-21 incident happened.
 
+For an application-owned installation, use its registered command and follow
+the [external host binding](INTEGRATIONS.md#externally-owned-host-integrations)
+contract throughout these steps, including repair and connection recovery.
+
 1. **Confirm the CLI and daemon.** `claudexor --version`, then
    `claudexor doctor --json`. Doctor is the aggregate/default-store projection;
    it does not prove or veto a particular credential profile, model route, or
@@ -25,7 +29,9 @@ It is strict: skipping a step is how the 2026-07-21 incident happened.
    acting on staleness matters, since the atomic snapshot probes every
    profile and fans out to the vendors). It is one daemon-authored view of
    registered profiles, readiness,
-   quota freshness, and `next_up`; do not reconstruct a pool by joining
+   quota freshness, and `next_up` (the configured default model's verdict only;
+   `routingEvidence` carries model-scoped recent refusals and last service);
+   do not reconstruct a pool by joining
    `doctor`, `quota`, and profile-list responses yourself. `available/passed`
    on the exact named row describes its last observation; check its age before
    relying on it for account selection. `unknown/not_run` or

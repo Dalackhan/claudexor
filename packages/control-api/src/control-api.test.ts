@@ -33,6 +33,8 @@ import { projectRuntimeDir, sha256 } from "@claudexor/util";
 import { createRevertAnchorFromPatchOrNull } from "@claudexor/workspace";
 import {
   requiredActionsFor,
+  ControlQuotaResponse,
+  ControlQuotaFreshnessResponse,
   SCHEMA_VERSION,
   validateRunFactsInvariants,
   type ControlSetupJob,
@@ -1382,18 +1384,18 @@ describe("DaemonControlApiServer", () => {
       expect(body.runs).toHaveLength(2);
       // Only the 2 paged terminal records are fingerprinted, and each terminal
       // fingerprint short-circuits to delivery_state + the retention tombstone
-      // + the kept-envelope pointer (adoption/discard move it): 6 total, not
+      // + continuation sources and the kept-envelope pointer: 8 total, not
       // 6 records x 13 paths.
-      expect(runListFingerprintProbeCountForTests()).toBe(6);
+      expect(runListFingerprintProbeCountForTests()).toBe(8);
     });
 
     const running = [pagedRunRecord(0, "running", runDir)];
     await withDaemonServer(pagedDaemon(running), async (base) => {
       resetRunListFingerprintProbeCountForTests();
       await fetchRunList(base);
-      // An active run keeps the full 13-path fingerprint (events + final/* land
+      // An active run keeps all 18 paths (events + final/* land
       // while live), so it must NOT be short-circuited.
-      expect(runListFingerprintProbeCountForTests()).toBe(13);
+      expect(runListFingerprintProbeCountForTests()).toBe(18);
     });
   });
 
@@ -1445,6 +1447,78 @@ describe("DaemonControlApiServer", () => {
       };
       expect(detail.summary.outputReadyState).toBe("diagnostic");
       expect(detail.primaryOutput).toMatchObject({ kind: "diagnostic", path: "tombstone.yaml" });
+    });
+  });
+
+  it("projects the compact process-scope outcome into the run detail, and null when the artifact is absent (INV-144)", async () => {
+    const { daemon, record } = fakeDaemon();
+    await withDaemonServer(daemon, async (base) => {
+      const before = (await (
+        await apiFetch(`${base}/runs/run-d1`, { headers: { authorization: `Bearer ${token}` } })
+      ).json()) as { summary: { processScope: unknown } };
+      expect(before.summary.processScope).toBeNull();
+      writeFileSync(
+        join(record.runDir as string, "final", "process_scope.yaml"),
+        stringifyYaml({
+          marker: `CLAUDEXOR_RUN_SCOPE_${"a".repeat(32)}`,
+          coverage: "marker+capture",
+          census: "ok",
+          census_failure: null,
+          restricted: true,
+          ended: [{ pid: 4711, start_token: "ps:Mon Oct 12 14:00:00 2026" }],
+          survivors: [{ pid: 4712, start_token: "ps:Mon Oct 12 14:00:01 2026" }],
+          unreadable: [],
+          reused_groups: [],
+          settled: false,
+          completeness: "not_provable",
+          completeness_reason: "macOS hides platform-binary environments",
+        }),
+      );
+      const after = (await (
+        await apiFetch(`${base}/runs/run-d1`, { headers: { authorization: `Bearer ${token}` } })
+      ).json()) as { summary: { processScope: Record<string, unknown> | null } };
+      expect(after.summary.processScope).toEqual({
+        settled: false,
+        coverage: "marker+capture",
+        completeness: "not_provable",
+        census: "ok",
+        survivors: 1,
+        unreadable: 0,
+      });
+    });
+  });
+
+  it("keeps processScope null while the run is still running even when the artifact already exists (INV-144)", async () => {
+    const { daemon, record } = fakeDaemon();
+    Object.assign(record, { state: "running" });
+    writeFileSync(
+      join(record.runDir as string, "final", "process_scope.yaml"),
+      stringifyYaml({
+        marker: `CLAUDEXOR_RUN_SCOPE_${"a".repeat(32)}`,
+        coverage: "marker",
+        census: "ok",
+        census_failure: null,
+        restricted: false,
+        ended: [],
+        survivors: [],
+        unreadable: [],
+        reused_groups: [],
+        settled: true,
+        completeness: "complete",
+        completeness_reason: null,
+      }),
+    );
+    await withDaemonServer(daemon, async (base) => {
+      const live = (await (
+        await apiFetch(`${base}/runs/run-d1`, { headers: { authorization: `Bearer ${token}` } })
+      ).json()) as { summary: { state: string; processScope: unknown } };
+      expect(live.summary.state).toBe("running");
+      expect(live.summary.processScope).toBeNull();
+      Object.assign(record, { state: "succeeded" });
+      const done = (await (
+        await apiFetch(`${base}/runs/run-d1`, { headers: { authorization: `Bearer ${token}` } })
+      ).json()) as { summary: { processScope: { settled: boolean } | null } };
+      expect(done.summary.processScope?.settled).toBe(true);
     });
   });
 
@@ -2031,11 +2105,14 @@ describe("DaemonControlApiServer", () => {
       updated_at: now,
     };
     let registration: unknown;
+    let registrations = 0;
     const services: DaemonControlApiOptions["services"] = {
       listProjects: async () => ({ projects: [project] }),
       registerProject: async (input) => {
         registration = input;
-        return project;
+        registrations += 1;
+        // The producer's created fact: the first root registration created it.
+        return registrations === 3 ? project : { ...project, created: registrations === 1 };
       },
       relinkProject: async (id, root) => ({ ...project, id, root, updated_at: now }),
     };
@@ -2060,8 +2137,26 @@ describe("DaemonControlApiServer", () => {
           body: JSON.stringify({ root: firstRoot }),
         });
         expect(registered.status).toBe(200);
-        expect(await registered.json()).toMatchObject({ id: "prj-1", root: firstRoot });
+        expect(await registered.json()).toMatchObject({
+          id: "prj-1",
+          root: firstRoot,
+          created: true,
+        });
         expect(registration).toMatchObject({ root: firstRoot, clientId: "control-api" });
+        const existing = await apiFetch(`${base}/projects`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+          body: JSON.stringify({ root: firstRoot }),
+        });
+        expect(await existing.json()).toMatchObject({ id: "prj-1", created: false });
+        // A producer that omits the fact is a contract failure, never a default.
+        const unstated = await apiFetch(`${base}/projects`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+          body: JSON.stringify({ root: firstRoot }),
+        });
+        expect(unstated.status).toBe(500);
+        expect(await unstated.json()).toMatchObject({ code: "invalid_service_response" });
 
         const listed = await apiFetch(`${base}/projects`, {
           headers: { authorization: `Bearer ${token}` },
@@ -9135,7 +9230,8 @@ describe("DaemonControlApiServer", () => {
       };
       expect(body.primaryOutput?.kind).toBe("diagnostic");
       expect(body.primaryOutput?.text).toContain("Auth failed");
-      expect(body.failure).toEqual(failure);
+      // A record written before per-try attribution decodes with an empty list.
+      expect(body.failure).toEqual({ ...failure, poolAttempts: [] });
     });
 
     const cancelledAsk = fakeDaemon();
@@ -10118,6 +10214,7 @@ describe("DaemonControlApiServer", () => {
           root,
           created_at: now,
           updated_at: now,
+          created: true,
         };
       },
     };
@@ -11558,6 +11655,115 @@ describe("DaemonControlApiServer", () => {
           refreshes += 1;
           refreshBodies.push(input);
           return response;
+        },
+      },
+    );
+  });
+
+  it("accepts direct constraint freshness reads without discovery and validates the selected strict shape", async () => {
+    const { daemon } = fakeDaemon();
+    const legacy = ControlQuotaResponse.parse(
+      JSON.parse(
+        readFileSync(
+          "apps/macos/ClaudexorKit/Tests/ClaudexorKitTests/Fixtures/control-quota-response.json",
+          "utf8",
+        ),
+      ),
+    );
+    const projected = ControlQuotaFreshnessResponse.parse({
+      ...legacy,
+      snapshots: legacy.snapshots.map((snapshot) => ({
+        ...snapshot,
+        constraints: snapshot.constraints.map((constraint) => ({
+          ...constraint,
+          freshness: "fresh",
+        })),
+      })),
+    });
+    const reads: unknown[] = [];
+    let refreshes = 0;
+    let wrongShape = false;
+    await withDaemonServer(
+      daemon,
+      async (base) => {
+        const get = (path: string) =>
+          apiFetch(`${base}${path}`, { headers: { authorization: `Bearer ${token}` } });
+        // No discovery request precedes the direct opt-in read.
+        const opted = await get("/quota?view=constraint_freshness");
+        expect(opted.status).toBe(200);
+        const payload = await opted.json();
+        expect(ControlQuotaFreshnessResponse.parse(payload)).toEqual(projected);
+        expect(() => ControlQuotaResponse.parse(payload)).toThrow();
+        const plain = await get("/quota");
+        expect(plain.status).toBe(200);
+        expect(ControlQuotaResponse.parse(await plain.json())).toEqual(legacy);
+        expect(reads).toEqual([{ view: "constraint_freshness" }, undefined]);
+        for (const query of [
+          "view=",
+          "view=future",
+          "view=constraint_freshness&view=constraint_freshness",
+          "view=constraint_freshness&unrelated=1",
+        ]) {
+          const rejected = await get(`/quota?${query}`);
+          expect(rejected.status).toBe(400);
+        }
+        expect(reads).toHaveLength(2);
+        expect(refreshes).toBe(0);
+        // Advertisement remains available independently of the read; the
+        // refresh operation keeps its resources-only selector.
+        const catalog = await get("/operations");
+        const { operations } = (await catalog.json()) as typeof OPERATION_CATALOG;
+        expect(operations.find((operation) => operation.id === "get:quota")).toMatchObject({
+          responseSchema: "ControlQuotaQueryResponse",
+          mutability: "read_only",
+          parameters: [
+            expect.objectContaining({
+              name: "requestKind",
+              location: "query",
+              enum: ["text", "image"],
+            }),
+            expect.objectContaining({ name: "model", location: "query" }),
+            expect.objectContaining({
+              name: "view",
+              location: "query",
+              enum: ["resources", "constraint_freshness"],
+            }),
+          ],
+        });
+        expect(operations.find((operation) => operation.id === "post:quota")).toMatchObject({
+          parameters: [expect.objectContaining({ name: "view", enum: ["resources"] })],
+        });
+        // A service must honor negotiation, never silently downgrade or leak
+        // the new shape to a strict legacy consumer.
+        wrongShape = true;
+        for (const path of ["/quota", "/quota?view=constraint_freshness"]) {
+          const invalid = await get(path);
+          expect(invalid.ok).toBe(false);
+          expect(await invalid.json()).not.toHaveProperty("snapshots");
+        }
+        for (const [path, body] of [
+          ["/quota", { view: "constraint_freshness" }],
+          ["/quota?view=constraint_freshness", {}],
+        ] as const) {
+          const post = await apiFetch(`${base}${path}`, {
+            method: "POST",
+            headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          expect(post.status).toBe(400);
+        }
+        expect(refreshes).toBe(0);
+      },
+      undefined,
+      {
+        quota: async (input) => {
+          reads.push(input);
+          const opted = input?.view === "constraint_freshness";
+          return opted !== wrongShape ? projected : legacy;
+        },
+        refreshQuota: async () => {
+          refreshes += 1;
+          return legacy;
         },
       },
     );

@@ -1,5 +1,41 @@
 # @claudexor/synthesis
 
+## 4.2.0
+
+### Patch Changes
+
+- @claudexor/arbitration@4.2.0
+
+## 4.1.1
+
+### Patch Changes
+
+- @claudexor/arbitration@4.1.1
+
+## 4.1.0
+
+### Patch Changes
+
+- @claudexor/arbitration@4.1.0
+
+## 4.0.1
+
+### Patch Changes
+
+- @claudexor/arbitration@4.0.1
+
+## 4.0.0
+
+### Patch Changes
+
+- @claudexor/arbitration@4.0.0
+
+## 3.25.1
+
+### Patch Changes
+
+- @claudexor/arbitration@3.25.1
+
 ## 3.25.0
 
 ### Patch Changes

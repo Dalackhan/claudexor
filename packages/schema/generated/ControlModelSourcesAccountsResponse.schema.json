@@ -38,6 +38,68 @@
               "accountCatalog": {
                 "type": "boolean",
                 "const": true
+              },
+              "imageGeneration": {
+                "type": "object",
+                "properties": {
+                  "models": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/definitions/ControlModelSourcesAccountsResponse/properties/sources/items/properties/label"
+                    },
+                    "description": "Presence hint from the adapter's recorded client source, never a refusal list: another explicit id is forwarded unchanged."
+                  },
+                  "modelsProvenance": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S",
+                    "description": "Where the presence hint comes from (a pinned upstream client constant, not a provider catalog)."
+                  },
+                  "inputMimes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "image/png",
+                        "image/jpeg",
+                        "image/webp"
+                      ]
+                    }
+                  },
+                  "maxInputImages": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "0 means generation only."
+                  },
+                  "maxInputImagesProvenance": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S",
+                    "description": "What the bound is: the upstream tool's own edit cap, not a proven provider maximum."
+                  },
+                  "supportedOptions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "size",
+                        "quality",
+                        "background",
+                        "n"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "models",
+                  "modelsProvenance",
+                  "inputMimes",
+                  "maxInputImages",
+                  "maxInputImagesProvenance",
+                  "supportedOptions"
+                ],
+                "additionalProperties": false,
+                "description": "Add-only: present when this source declares image generation/edit operations."
               }
             },
             "required": [

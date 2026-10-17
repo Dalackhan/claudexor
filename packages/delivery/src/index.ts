@@ -93,18 +93,19 @@ export interface DeliverOptions {
   message?: string;
   prBodyFile?: string;
   /** The caller knows this patch carries a binary payload with secret-like
-   * bytes (a blob-only finding is invisible to a text scan of the patch). */
+   * bytes, or one it could not inspect (a blob-only finding is invisible to a
+   * text scan of the patch). */
   secretLikeBinary?: boolean;
 }
 
 /**
  * INV-062: `pr` is the one delivery mode that sends bytes off this machine
- * (push to origin + PR). A patch with secret-like text or a secret-like binary
- * payload is never published; local `apply` / `branch` / `commit` stay allowed
- * because those bytes are already on this machine.
+ * (push to origin + PR). A patch with secret-like text or a binary payload that
+ * is secret-like or could not be inspected is never published; local `apply` /
+ * `branch` / `commit` stay allowed because those bytes are already on this machine.
  */
 export const PR_SECRET_LIKE_REFUSAL =
-  "refusing 'pr' delivery: the patch contains secret-like strings and would be pushed to a remote. Apply, branch or commit it locally, or remove the strings and re-run.";
+  "refusing 'pr' delivery: the patch contains secret-like strings or binary content that could not be inspected, and would be pushed to a remote. Apply, branch or commit it locally, or remove that content and re-run.";
 
 function refusesPublishing(patch: string, options: DeliverOptions): boolean {
   return (

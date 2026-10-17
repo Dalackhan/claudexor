@@ -11,7 +11,7 @@ changing Claudexor.
 | Surface | Current role | Stability |
 |---|---|---|
 | CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, retry, run-again, apply, decision, review), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
-| Daemon and control API | Local durable queue, Agent runs, caller-owned model operations, artifacts, SSE events, settings, harness status, secrets metadata, apply, and run control. | Stable contract: endpoints and DTOs per `docs/reference/endpoints.json` + generated schemas (add-only fields). Loopback + bearer token only. |
+| Daemon and control API | Local durable queue, Agent runs, caller-owned model and image operations, artifacts, SSE events, settings, harness status, secrets metadata, apply, and run control. | Stable contract: endpoints and DTOs per `docs/reference/endpoints.json` + generated schemas (add-only fields). Loopback + bearer token only. |
 | MCP server | Exposes Claudexor tools to MCP clients. | Stable contract: the tool set with input/output schemas. Tool list follows the implementation, not old docs. |
 | ACP server | Lets compatible editors or agents talk to Claudexor as a local agent surface. | Experimental (may change in minors, disclosed in the CHANGELOG). |
 | Host plugins | User-global Claude Code, Codex, Cursor, and OpenCode integrations managed by `claudexor plugin`. | Experimental file layout (regenerate with `claudexor plugin repair all`). Installs owned local files/config only; host enablement can still require reload/manual action. |
@@ -32,6 +32,20 @@ reading alone does not acknowledge custody. See
 [Caller-owned model operations](ARCHITECTURE.md#caller-owned-model-operations)
 for lifecycle, retention, continuation and capacity semantics, and the
 [feature ledger](FEATURES.md) for transport and acceptance limitations.
+
+For images, discover `requestKind=image` on the create operation and the
+source's `imageGeneration` facet in the accounts view. The query value is the
+string `image`; the create descriptor's description names the separate generated
+payload contracts. Upload an
+[`ImageCallRequest`](../packages/schema/generated/ImageCallRequest.schema.json),
+then recover and acknowledge the
+[`ImageCallResult`](../packages/schema/generated/ImageCallResult.schema.json) through the same operation
+identity and whole-result digest. Decode images into caller-owned files before
+ACK; keep base64 out of model text and make viewing or sending a separate action.
+The [image contract](ARCHITECTURE.md#image-generation-and-editing) owns request,
+quota, provenance and uncertainty semantics. Live qualification is one real-adapter
+generate and edit on one managed account, made before the SQL store; the
+[feature ledger](FEATURES.md) lists the rest.
 
 Selected-account discovery can negotiate `includeAdmission=true` with an exact
 `requestedModel`. Its `admission` reports the source's inventory-absence policy
@@ -158,7 +172,8 @@ The public [Ouroboros runtime pin](https://github.com/razzant/ouroboros/blob/our
 is a working example of that exact-version, exact-build, and checksum contract.
 
 The host owns install location, daemon config root, process lifecycle, and
-rollback. Start, handshake, and stop must address the same config root/socket.
+compatible rollback/recovery. Start, handshake, and stop must address the same
+config root/socket; an older runtime cannot bypass the migrated store's semantic floor.
 Portable extraction alone is not a platform-support claim: Windows support
 also requires a native extract, exact-Node probe, isolated daemon handshake,
 and graceful-stop smoke; individual harness and login capabilities keep their
@@ -280,8 +295,8 @@ files. Every product route is under `/v2`: clients first `POST /v2/handshake`,
 then send `X-Claudexor-Protocol-Major: 3`; incompatible or missing negotiation
 returns a typed `426`. `GET /v2/operations` is the runtime operation catalog,
 and unversioned product aliases do not exist.
-`GET /v2/quota` returns every independently reported vendor-owned quota window
-with provenance and freshness; `POST /v2/quota` requests a live refresh and
+`GET /v2/quota` returns recognised vendor-owned windows with provenance and
+freshness (Codex: codex/default and image_gen; unknown buckets are not constraints); `POST /v2/quota` requests a live refresh and
 fails explicitly when no official refresher is available. Missing usage stays
 unknown and an elapsed reset marks data stale rather than locally setting it to
 zero. Each snapshot also carries a derived `availability` projection (`state`,
@@ -292,7 +307,9 @@ available and is disclosed separately, so consumers never aggregate raw
 constraints themselves. `POST /v2/quota` accepts an optional `{"model": …}`
 body to compute `state` against the model the caller intends to spend
 (case-insensitive alias containment in either direction). The CLI projection
-is `claudexor quota [--refresh] --json`.
+is `claudexor quota [--refresh] --json`. Request-kind availability selection is
+HTTP-only (`requestKind` on GET/POST quota); CLI and MCP retain text-default
+availability. JSON retains raw image constraints; CLI text has only vendor labels.
 Typed account resources are opt-in: request `view=resources` on either quota
 operation, or on `GET /v2/credential-profiles` with `snapshot=true`. Detect the query
 parameter in the operation catalog. The rich quota response adds `resources`, with
@@ -302,6 +319,19 @@ The CLI equivalent is `claudexor quota --resources --refresh --profile claude/wo
 Amounts preserve decimal strings, units and nullable provider scale/currency; failed
 reads retain stale values rather than inventing zero. Render reset descriptions and
 contextual diagnostic details instead of raw native scope/reason identifiers.
+Per-window freshness is a separate GET-only opt-in: `GET /v2/quota` with query
+`view=constraint_freshness` returns `ControlQuotaFreshnessResponse`, the legacy shape
+with a required `freshness` (`fresh`, `stale` or `unknown`) on every constraint, so an
+elapsed five-hour reset no longer stales a weekly window that is still current. Snapshot
+`freshness`, observation times, usage, availability and routing are unchanged, and the
+read never refreshes quota. The legacy Codex `reset_credits` row carries the freshness
+of its resets facet. Discovery is optional (the GET quota `view` enum lists
+`constraint_freshness`); validate the whole response as either that shape or strict
+legacy, and reject partial or mixed metadata. A 3.24 engine ignores the selector and
+returns legacy data, whose snapshot freshness then applies to every window. 3.25.0 and
+3.25.1 answer HTTP 400; one plain GET is then the compatible fallback. Never fall back
+after other statuses, transport errors or malformed payloads, and never use POST for
+this read.
 
 `POST /v2/account-resets` accepts `{target, offer_id, grant_id?}` and requires an
 Idempotency-Key. The receipt separates provider outcome from readback freshness;
@@ -366,7 +396,17 @@ cursor. A quota marker or a rejected/lost cursor invalidates the quota and
 and wait for an explicit Accounts Refresh rather than automatically fetching a
 new snapshot. The engine-default API-key fallback can appear as the native
 `next_up` route, but it never becomes an account row or changes the account
-count.
+count. `next_up` in either listing is the configured default model's verdict,
+never a forecast for another model.
+
+`GET /v2/accounts/routing-evidence` is the additive, read-only Accounts
+evidence: the live pre-progress refusal marks and each registered account's last
+service per requested model (most recent first), strict and query-free, with no
+probe and no quota refresh. Clients negotiate it through the operation catalog
+(`get:accounts.routing-evidence`) and keep the legacy listings unchanged. An
+engine without it answers 404, which first-party clients treat as no new data;
+any other failure leaves the listing authoritative with one diagnostic. Last
+service is a routing observation, never a quota or authentication verdict.
 
 `GET /v2/run-applicability` takes an absolute `repoRoot` query and returns the
 live Workspace Git status plus the engine-owned in-place/isolated run-shape
@@ -445,6 +485,18 @@ null), or `null` — also the meaning of an absent key from an older engine —
 when no vendor-typed evidence exists. Display the code beside the message as a
 fact; never branch on its value or map it to a remedy, so codes a vendor adds
 later flow through with no release on either side.
+The failure's `poolAttempts` (on `summary.failure`, the run detail, the run list
+and MCP run results) lists every failed execution try in order, each with its account row,
+requested model, phase, typed category and its own redacted error text, so a
+pool failure names each account's refusal rather than only the last one. The
+failure record of a run blocked by review or checks carries it too. A
+work-state veto (input required or work incomplete) and a cancellation write no
+failure record of their own (a cancellation keeps only a prepared record that
+carries capture facts, re-labelled `cancelled` with the same message and list):
+their earlier failed tries ride the terminal event (`pool_attempts`) and the
+summary. It is
+diagnostic evidence: classification, retry and routing never read it, and a
+record from an older engine decodes with an empty list.
 Web/tool evidence is projected from the engine-owned
 `final/telemetry.yaml`; runs that predate it report `available: false`. Unknown
 quota or spend remains unknown; do not render missing values as `$0`. The optional
@@ -495,8 +547,10 @@ and a finite `interaction_timeout_ms` lets an unanswered question decline
 benignly; `null` disables only that automatic expiry. Answers, cancellation,
 outer run deadlines, terminal cleanup, and daemon restart still release the
 wait. Pending and resolved interaction projections are
-fsynced in the run's journal partition; daemon restart terminalizes unresolved
-questions instead of presenting a stale prompt as live.
+committed in the run's partition generation; daemon restart terminalizes
+unresolved questions instead of presenting a stale prompt as live. Storage
+acknowledgement and power-loss barriers follow the
+[engine-store contract](ARCHITECTURE.md#sqlite-engine-store).
 
 Live messages into a RUNNING attempt are the separate `POST /v2/runs/:id/messages`
 verb (protocol major stays 3; clients discover the route by its row in
@@ -597,7 +651,10 @@ the mutability matrix, run-control keys), and the read-only recovery tools
 view, including freshness and `next_up` state — the default read is the
 retained readiness observation, with its check time, composed with current
 quota and registry facts; `fresh: true` opts into the expensive atomic snapshot,
-which honors account/route rate-limit cooldowns and retained legacy vendor floors),
+which honors account/route rate-limit cooldowns and retained legacy vendor floors;
+the additive `routingEvidence` carries the model-scoped recent refusals and last
+service, absent for an older engine, and a failed evidence read adds one
+`routingEvidenceProblem` while the listing stays authoritative),
 `claudexor_runs`, `claudexor_inspect`, `claudexor_run_status`,
 `claudexor_run_result`, `claudexor_run_cancel`,
 `claudexor_run_interactions`, `claudexor_answer_interaction`,
@@ -729,6 +786,41 @@ modes) run `node scripts/cursor-itest.mjs`; the real-harness battery covers
 (phases 10-12, filterable via `CLAUDEXOR_BATTERY_PHASES=10,11,12`). Use `claudexor doctor` for Codex/Claude/Cursor/
 OpenCode harness availability and smoke status.
 
+### Externally owned host integrations
+
+An embedding application can register its existing stable runtime command and
+complete data root when installing or repairing a host plugin:
+
+```bash
+claudexor plugin install all --host-binding-json '{"schemaVersion":1,"command":["/opt/example/bin/managed-claudexor"],"configDir":"/var/lib/example/claudexor","daemonOwner":"external"}'
+```
+
+`command` is an absolute executable followed by optional prefix arguments, not a
+shell expression. The application owns selection of its current CLI and Node;
+Claudexor adds no runtime updater or locator. The existing plugin ledger retains
+this binding per host. Install/repair, including `--force` from another CLI or
+root, keeps it. A complete owned MCP source can recover a lost ledger, disclosed
+in the receipt; a surviving ledger rebuilds a missing source. When neither
+contains the binding, register it explicitly instead of guessing another root.
+An explicit new binding changes the selected command/root. Generated host caches
+still require the host's normal reload or reinstall from that canonical source.
+
+The ordinary full MCP and acting CLI attach only to that application's daemon.
+Absence returns `daemon_unavailable` without creating a root/token, launching a
+replacement or triggering authentication. Recovery-only admission stays visible;
+recovery reads remain available. Operator `daemon start`, `stop` and
+`rotate-token` refuse with `daemon_lifecycle_external`; the owning application's
+own lifecycle entrypoints remain available. A custom root alone does not select
+external ownership: standalone installations retain ordinary startup behavior.
+
+MCP, CLI fallback examples, plugin doctor and Claude statusline share the command,
+root and ownership projection. Shell examples use POSIX syntax or explicitly
+named PowerShell syntax on Windows. The manifest retains its actual generator
+version. Dynamic launches validate binding format `1` rather than an exact
+runtime version, so the stable command can follow an application runtime update.
+Unknown formats refuse with `host_binding_unsupported`. Fixed-runtime plugins
+keep their existing exact-version skew check.
+
 ### Portable Agent Skill and host packages
 
 `plugins/copilot` owns the canonical portable `skills/claudexor/SKILL.md` and
@@ -743,7 +835,7 @@ npm install -g claudexor
 copilot plugin install razzant/claudexor:plugins/copilot
 ```
 
-The portable path supports macOS and Linux with Node.js 20.19 or newer. Windows
+The portable path supports macOS and Linux with Node.js 24.15 or newer. Windows
 is not supported. Copilot owns installation, caching, enable/disable, update,
 and uninstall for this plugin; `claudexor plugin install` does not add a fifth
 managed Copilot host. Generated Claude Code, Codex, Cursor, and OpenCode
@@ -1295,11 +1387,34 @@ Known traps (class → CURRENT rule → pin):
 
 ## Storage
 
-Project runs write under the external per-project namespace
-`~/.claudexor/v3/projects/<project-sha256>/runs/<run_id>/`; the target repository's
-`.claudexor/` remains user-owned config. No-project Ask runs use a synthetic cwd
-and write artifacts under `~/.claudexor/v3/runs/`. See `docs/ARCHITECTURE.md` for
-the full current layout.
+One `daemon/engine.sqlite` under the selected config root owns command,
+project, thread and event state. Project run artifacts retain the external
+`~/.claudexor/v3/projects/<project-sha256>/runs/<run_id>/` namespace; the target
+repository's `.claudexor/` remains user-owned config. No-project Ask uses a
+synthetic cwd and writes artifacts under `~/.claudexor/v3/runs/`. An explicitly
+bound host data root keeps its own location.
+
+The 4.0 migration requires Node 24.15.0 or newer with supported bundled SQLite.
+Desktop application 4.0 is required before engine 4.0; the existing updater
+keeps the working engine and requests the app update first. Protocol major
+remains 3, but that alone does not make an older finite-only capacity decoder
+compatible. An explicit existing `max_concurrent: N` remains a global cap across
+model and non-model jobs; omission now has no finite ceiling. See
+[the admission contract](ARCHITECTURE.md#6-main-execution-paths).
+
+The first startup imports the old journal with recovery-only admission and
+visible status progress. It preserves original ids, request keys, epochs and
+sparse cursors, then retains the original journal as `journal-legacy/`. Account
+and credential bytes are not relocated or deleted by this storage migration.
+Unreplayed upload keys still depend on the preserved
+`resource-store/idempotency/` directory; removing it can change a later replay.
+The data-root floor prevents an older engine reopening migrated state: use a
+compatible forward fix, not an automatic rollback or legacy reimport. Logical
+partition recovery and whole-store physical recovery remain distinct. See
+[Legacy import and recovery](ARCHITECTURE.md#legacy-import-and-recovery) for
+publication order and diagnostic export limits, and the
+[event-stream contract](ARCHITECTURE.md#event-streaming-contract-snapshot-then-subscribe)
+for retained-stream changes.
 
 ## Stability Rules
 
@@ -1366,6 +1481,8 @@ subscription sessions are always preferred.
 | Variable | Owner | Effect |
 |---|---|---|
 | `CLAUDEXOR_CONFIG_DIR` | util | Relocates the whole config/state root (default `~/.claudexor/v3`; tests and CI use a disposable absolute path). |
+| `CLAUDEXOR_DAEMON_OWNER` | CLI | Explicit `standalone` (default) or `external` lifecycle; external requires an absolute root. See [external host integrations](#externally-owned-host-integrations). |
+| `CLAUDEXOR_HOST_BINDING_VERSION` | plugins / mcp-server | Declared dynamic binding format, independently of the manifest's generator version; see [external host integrations](#externally-owned-host-integrations). |
 | `CLAUDEXOR_BUILD_SHA` | util | Build-time stamp of the engine's git commit SHA (packaging sets it); without it a dev checkout reads `git rev-parse HEAD` and packaged builds report `unknown`. Reported in the handshake build identity. |
 | `CLAUDEXOR_DISABLE_STORED_SECRETS` | secrets | Ignore v2 file-stored secret refs entirely (hermetic runs; native sessions still work). |
 | `CLAUDEXOR_CODEX_BIN` / `CLAUDEXOR_CLAUDE_BIN` / `CLAUDEXOR_CURSOR_BIN` / `CLAUDEXOR_OPENCODE_BIN` / `CLAUDEXOR_AGY_BIN` / `CLAUDEXOR_COPILOT_BIN` | adapters | Explicit vendor CLI binary when PATH discovery is not enough. |
@@ -1373,6 +1490,9 @@ subscription sessions are always preferred.
 | `CLAUDEXOR_CODEX_MODEL` | codex adapter | Default model override for the codex route. |
 | `CLAUDEXOR_CODEX_NATIVE_HOME` / `CLAUDEXOR_CLAUDE_NATIVE_DIR` | adapters | Explicit Claudexor-owned Codex profile or Claude native config directory overrides. |
 | `CLAUDEXOR_PROFILE_LOCATOR` | engine → adapter `continuity` (internal, never a child env) | The registry `isolation_locator` of the credential profile whose store holds (or will hold) a native session, named by the engine on the EnvMap it hands to the adapter's `continuity.locate` / `continuity.move`; the adapter maps it onto its own vendor store variable. Users never set it. |
+| `CLAUDEXOR_RUN_SCOPE_<id>` | orchestrator / daemon (internal child env) | The run's process-scope marker (`CLAUDEXOR_RUN_SCOPE_<32 hex>=1`), minted before the first launch and carried into every harness child of the run (it survives `clean` inheritance, which also forwards an enclosing host's markers of the same grammar). At the run's terminal and at the next daemon start after a crash, every live process still carrying it — plus the groups and descendants the daemon recorded — is ended by measured identity before the run's terminal is published, and the outcome is disclosed in `final/process_scope.yaml` (best-effort evidence: when that write fails the verdict is still published and the run has no record) (on macOS the census reads the environments only of processes no older than the scope, selected by `ps` elapsed time so that both sides come from the same clock at the same moment; a process older than the run cannot carry its marker; a backward wall-clock step of more than a minute during the run can hide a marker-only member) (INV-144; `completeness` is `complete` only on Linux when the census read every same-uid environment, `not_provable` on macOS and Windows or after an unreadable or deadline-bound census). `GET /v2/runs/:id` always carries `summary.processScope`: the compact record once the run is terminal and the record is readable and valid, otherwise an explicit `null` that means unknown, never clean (the run is still live, the record is absent — a run that predates it or whose write failed — or it is unreadable or invalid); engines that predate the field omit the key, which is equally unknown, and the generated JSON Schema lists the property as optional (it declares a default of `null`) although this engine always sends it. The list projection (`GET /v2/runs`) always leaves `processScope` null — read the detail. A host that must act while the daemon is dead may read `daemon/run-scopes.json` (`{ "schema_version": 1, "entries": [ ... ] }`; per entry `run_id`, `marker`, `state` (`open` \| `unresolved`), `opened_at` (ISO time: the floor the daemon uses while no lstart birth exists), `scope_start` (lstart text or null), `root_groups[{pgid, leader_pid, leader_birth \| null, leader_identity?}]` — `leader_identity` is the daemon's opaque kernel birth token, comparable only by the daemon's own identity helper — and `captured[{pid, pgid, birth}]`; births in the C-locale `ps -o lstart=` spelling. A host without the identity helper, when `leader_birth` is null: a live process with `pid == pgid` cannot be verified as the recorded leader, so skip that group; when no process with `pid == pgid` is alive, the group's remaining members born at or after the floor belong to the scope, because the kernel never hands out a pid that is still a live process-group id) and end recorded members by measured identity. Users never set it. |
+| `CLAUDEXOR_HOME_SCOPED` | orchestrator / review (internal child env) | `1` when the harness runs under a scoped native-state HOME (delegated, read-only and reviewer sessions). A fact for the model, not containment. |
+| `CLAUDEXOR_OPERATOR_HOME` | orchestrator / review (internal child env) | The operator's own home directory, captured from the daemon's unscoped env before HOME is rebased, so a scoped session knows where host caches live instead of searching for them. Set only together with `CLAUDEXOR_HOME_SCOPED`; `PLAYWRIGHT_BROWSERS_PATH` is exported alongside when the operator's Playwright cache exists and no explicit value (including `0`) was set. |
 | `CLAUDEXOR_CLAUDE_KEYCHAIN_BRIDGE` | Claude adapter (internal child env) | Marker for the capability-declared macOS Keychain bridge in a disposable Claude-only HOME (`ready` / `unavailable`). Users never set it; generic scoped homes and other harnesses do not receive it (INV-067). |
 | `CLAUDEXOR_RAWAPI_BASE_URL` / `CLAUDEXOR_RAWAPI_KEY` / `CLAUDEXOR_RAWAPI_MODEL` | raw-api adapter | OpenAI-compatible endpoint, key, and model for the raw-API route. |
 | `CLAUDEXOR_OPENROUTER_BASE_URL` / `CLAUDEXOR_OPENROUTER_MODEL` | openrouter route | Base URL and default model for the built-in OpenRouter raw-API instance (key: `OPENROUTER_API_KEY`). |
@@ -1384,14 +1504,15 @@ subscription sessions are always preferred.
 | `CLAUDEXOR_REMOTE_RUNTIME` | remote runtime wrapper / core | Internal `1` marker set by signed remote-runtime wrappers. It adds the app-owned remote vendor CLI directory to harness discovery ahead of inherited PATH entries; users do not set it. |
 | `CLAUDEXOR_DOCTOR_TTL_MS` / `CLAUDEXOR_DOCTOR_NON_OK_TTL_MS` | doctor | Cache TTLs for ok / non-ok doctor probes. |
 | `CLAUDEXOR_CLI_PATH` / `CLAUDEXOR_NODE_PATH` | plugins | Paths baked into generated host-plugin MCP configs (set by the installer, rarely by hand). |
-| `CLAUDEXOR_PLUGIN_VERSION` | mcp-server | Set by generated host configs; a mismatch with the CLI version is a hard `mcp serve` refusal (`plugin_artifact_skew`) whose message names `claudexor plugin repair all`. |
-| `CLAUDEXOR_ROOT_MODE` | plugins / mcp-server | Provenance marker (`explicit`) the installer stamps ALONGSIDE a serialized `CLAUDEXOR_CONFIG_DIR` only for an operator-chosen non-default root; its absence next to a frozen non-default root is treated as legacy skew and refused. Default-root installs serialize neither. Never set by hand. |
-| `CLAUDEXOR_MANAGED` | plugins | Ownership marker the installer writes into generated host MCP configs (never set by hand). |
+| `CLAUDEXOR_PLUGIN_VERSION` | mcp-server | Set by fixed-runtime host configs; a mismatch with the CLI version is a hard `mcp serve` refusal (`plugin_artifact_skew`) whose message names `claudexor plugin repair all`. |
+| `CLAUDEXOR_ROOT_MODE` | plugins / mcp-server | Provenance marker (`explicit`) alongside an operator-chosen or externally owned `CLAUDEXOR_CONFIG_DIR`; its absence next to a frozen non-default root is treated as legacy skew and refused. Standalone default-root installs serialize neither. |
+| `CLAUDEXOR_MANAGED` | plugins | Generated-artifact ownership marker; does not select daemon lifecycle ownership. |
 | `CLAUDEXOR_DELEGATION_PARENT_RUN_ID` / `CLAUDEXOR_DELEGATION_REPO_ROOT` / `CLAUDEXOR_DELEGATION_DEPTH` / `CLAUDEXOR_DELEGATION_MAX_SUBRUNS` / `CLAUDEXOR_DELEGATION_BUDGET` | mcp-server (delegation belt) | Injected by the daemon into the `agent --delegate` belt process (`claudexor mcp serve-belt`); carry the parent run id, the original normalized user-project root, nesting depth (belt refuses depth>0), the per-parent sub-run cap, and the resolved parent budget used to bind children to one live daemon-owned paid-budget authority. The bound root prevents a child from falling into the parent harness envelope or being redirected by a raw tool argument. These bootstrap values seed a conservative process-local refusal ledger so the belt can fail closed between daemon responses; daemon family accounting remains the authoritative cap, every child reports its own spend, and the parent reports the aggregate. Never set by hand. |
 | `CLAUDEXOR_DELEGATION_PROCESSING_PREFERENCE` / `CLAUDEXOR_DELEGATION_WORKSPACE_KIND` / `CLAUDEXOR_DELEGATION_SCOPE_PATHS` | orchestrator / mcp-server (delegation belt) | Injected captured Processing preference, workspace kind and JSON array of selected relative paths. The belt carries them into child requests with the parent's bound project; omission preserves the legacy request. These are internal transport fields, never user-set overrides. |
 | `CLAUDEXOR_REVIEWER_TIMEOUT_MS` | config | Per-reviewer timeout override for review panels. |
 | `CLAUDEXOR_REVIEW_WAVE_ID` | release review | Operator-generated UUID identifying one release review wave; each operator reviewer artifact's metadata must carry it, and the sealed release attestation refuses mixed or sequential wave artifacts. |
 | `CLAUDEXOR_HARNESS_INACTIVITY_TIMEOUT_MS` | config | Inactivity window before a silent harness stream is failed (not a wall-clock cap). |
 | `CLAUDEXOR_TRANSIENT_RETRY_MAX` / `CLAUDEXOR_TRANSIENT_RETRY_INITIAL_DELAY_MS` / `CLAUDEXOR_TRANSIENT_RETRY_MAX_DELAY_MS` | config | Transient-error retry budget and backoff for harness launches. |
-| `CLAUDEXOR_MAX_CONCURRENT` / `CLAUDEXOR_MAX_PARALLEL_CANDIDATES` / `CLAUDEXOR_MAX_DEEP_SCAN_WIDTH` / `CLAUDEXOR_MAX_COUNCIL_MEMBERS` | config | Process-local overrides for the four startup-frozen concurrency caps; values must be finite positive safe integers (Council must be at least 2). |
+| `CLAUDEXOR_MAX_CONCURRENT` / `CLAUDEXOR_MAX_CONCURRENT_NON_MODEL_JOBS` / `CLAUDEXOR_MAX_CONCURRENT_MODEL_OPERATIONS` | config | Startup-frozen global and per-class admission limits: positive safe integer or `unlimited`. Omission has no implicit finite ceiling; an explicit global cap includes both classes. |
+| `CLAUDEXOR_MAX_PARALLEL_CANDIDATES` / `CLAUDEXOR_MAX_DEEP_SCAN_WIDTH` / `CLAUDEXOR_MAX_COUNCIL_MEMBERS` | config | Startup-frozen strategy caps: finite positive safe integers (Council at least 2), independently of unlimited admission. |
 | `CLAUDEXOR_CODEX_PRICE_INPUT` / `CLAUDEXOR_CODEX_PRICE_OUTPUT` / `CLAUDEXOR_CODEX_PRICE_CACHED` | codex adapter | Explicit estimate rates (USD per 1M tokens). Every used input, output, or cached-input category needs its own rate; otherwise Codex cost stays unknown. No model-name or generic tariff fallback. |

@@ -96,6 +96,23 @@ describe("Cursor status coordinator (#363)", () => {
     expect(h.calls).toHaveLength(3);
   });
 
+  it("expires a fractional upper age at reuse and last-positive boundaries", async () => {
+    const h = harness([{ kind: "authenticated" }, TIMED_OUT, TIMED_OUT]);
+    const fresh = await h.coordinator.status(rowA());
+    h.clock.now = T0 + CURSOR_STATUS_REUSE_MS - 1.2;
+    expect(await h.coordinator.status(rowA())).toEqual(fresh);
+    expect(h.calls).toHaveLength(1);
+    h.clock.now = T0 + CURSOR_STATUS_REUSE_MS - 0.2;
+    expect(await h.coordinator.status(rowA())).toMatchObject({
+      kind: "unknown",
+      lastPositive: { ageMs: CURSOR_STATUS_REUSE_MS },
+    });
+    expect(h.calls).toHaveLength(2);
+    h.clock.now = T0 + CURSOR_STATUS_LAST_POSITIVE_MS - 0.2;
+    expect(await h.coordinator.status(rowA())).toEqual(TIMED_OUT);
+    expect(h.calls).toHaveLength(3);
+  });
+
   it("an unanswered probe is never cached, never a logout and never a pass", async () => {
     const h = harness([TIMED_OUT, TIMED_OUT, { kind: "authenticated" }]);
     // No positive answer was ever seen: unknown is not positive proof.

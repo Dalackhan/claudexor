@@ -1,6 +1,6 @@
 import type { ArtifactStore, RunPaths } from "@claudexor/artifact-store";
 import type { BudgetLedger } from "@claudexor/budget";
-import { EventLog } from "@claudexor/event-log";
+import { EventLog, type TerminalPersistenceHook } from "@claudexor/event-log";
 import type { ModeKind, QuotaSnapshot, RunEvent, TaskContract } from "@claudexor/schema";
 import { redactSecrets, safeInvoke } from "@claudexor/util";
 import { writeContinuationSources } from "@claudexor/workspace";
@@ -12,6 +12,7 @@ import { announcedRunContext, type AnnouncedRunContext } from "./runTerminalCont
 interface RunEventLogInput {
   threadId?: string;
   onEventPersist?: (event: RunEvent) => void;
+  onTerminalPersist?: TerminalPersistenceHook;
   onEvent?: (event: RunEvent) => void;
 }
 
@@ -35,7 +36,7 @@ export function createRunEventLog(
   taskId: string,
   input: RunEventLogInput,
 ): EventLog {
-  return new EventLog(
+  const log = new EventLog(
     eventsPath,
     runId,
     taskId,
@@ -43,6 +44,8 @@ export function createRunEventLog(
     input.threadId,
     input.onEvent,
   );
+  if (input.onTerminalPersist) log.setTerminalPersistence(input.onTerminalPersist);
+  return log;
 }
 
 /**
@@ -82,7 +85,13 @@ function announcePreparedProjectGitInitialization(input: RunInput, log: EventLog
 export function beginAnnouncedRun(
   start: RunAnnouncementInput,
   announce: (context: AnnouncedRunContext) => void,
-): { store: ArtifactStore; paths: RunPaths; log: EventLog; ledger: BudgetLedger } {
+): {
+  store: ArtifactStore;
+  paths: RunPaths;
+  log: EventLog;
+  ledger: BudgetLedger;
+  runContext: AnnouncedRunContext;
+} {
   const { input, contract, quotaSnapshots, store, authority, runId, taskId, mode, phase } = start;
   const paths = store.createRun(runId);
   const log = createRunEventLog(paths.eventsPath, runId, taskId, input);
@@ -101,14 +110,13 @@ export function beginAnnouncedRun(
     log.emit("run.created", { mode, prompt: redactSecrets(start.prompt) });
     return preparedLedger;
   });
-  announce(
-    announcedRunContext(
-      { log, store, paths, runId, taskId, mode, phase },
-      ledger,
-      () => authority?.hasParent(runId) === true,
-    ),
+  const runContext = announcedRunContext(
+    { log, store, paths, runId, taskId, mode, phase },
+    ledger,
+    () => authority?.hasParent(runId) === true,
   );
+  announce(runContext);
   safeInvoke(input.onRunStart, { runId, taskId, runDir: paths.root });
   announcePreparedProjectGitInitialization(input, log);
-  return { store, paths, log, ledger };
+  return { store, paths, log, ledger, runContext };
 }

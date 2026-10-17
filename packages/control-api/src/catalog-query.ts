@@ -3,6 +3,7 @@ import {
   ControlCredentialProfilesResponse,
   ControlCredentialProfilesSnapshotResponse,
   ControlCredentialProfilesResourcesResponse,
+  type ControlQuotaReadRequest,
 } from "@claudexor/schema";
 
 export interface HarnessListQuery {
@@ -54,5 +55,13 @@ export function parseRunApplicabilityQuery(url: URL): { repoRoot: string } {
 export function resourceViewQuery(url: URL): "resources" | undefined {
   const view = singleQuery(url, "view");
   if (view !== undefined && view !== "resources") throw new Error("view must be resources");
+  return view;
+}
+
+/** GET-only quota read selector; POST refresh keeps resourceViewQuery. */
+export function quotaReadViewQuery(url: URL): ControlQuotaReadRequest["view"] {
+  const view = singleQuery(url, "view");
+  if (view !== undefined && view !== "resources" && view !== "constraint_freshness")
+    throw new Error("view must be resources or constraint_freshness");
   return view;
 }

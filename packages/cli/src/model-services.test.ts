@@ -1,17 +1,15 @@
+import { sqlFixture } from "../../daemon/src/store/test-support/sql-fixture.js";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DurableJournal } from "@claudexor/journal";
 import {
-  CommandStore,
   CredentialUnusableLedger,
   DaemonClient,
   DaemonServer,
   ModelSubstitutionLedger,
   QuotaRegistry,
-  ResourceStore,
 } from "@claudexor/daemon";
 import { createCodexAdapter, createCodexModelAdapter } from "@claudexor/harness-codex";
 import {
@@ -62,10 +60,9 @@ async function fixture(
   } = {},
 ) {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "cx-ms-")));
-  const journal = new DurableJournal({ rootDir: join(root, "journal"), partition: "global" });
-  const store = new CommandStore(journal);
-  const commands = { current: () => store };
-  const quota = new QuotaRegistry(journal);
+  const sql = await sqlFixture(root);
+  const commands = sql.graph.commands;
+  const quota = new QuotaRegistry(sql.graph.globalEvents);
   const unusable = new CredentialUnusableLedger();
   const clock = { now: Date.now() };
   const substitutions = new ModelSubstitutionLedger(() => new Date(clock.now));
@@ -73,8 +70,7 @@ async function fixture(
   const served: Record<string, string | null> = {};
   // Accounts whose terminal response ran out of room rather than completing.
   const incomplete = new Set<string>();
-  let resourceStore: ResourceStore | undefined;
-  const resources = vi.fn(() => (resourceStore ??= new ResourceStore(join(root, "resources"))));
+  const resources = vi.fn(() => sql.graph.resources);
   const profiles = ["a", "b"].map((id) =>
     CredentialProfile.parse({
       profile_id: id,
@@ -161,6 +157,7 @@ async function fixture(
   const client = new DaemonClient(socket, "fixture-control");
   const services = createModelServices({
     commands,
+    resourceQueries: commands.queries,
     resources,
     client,
     quota: () => quota,
@@ -195,7 +192,7 @@ async function fixture(
   cleanups.push(async () => {
     services.close();
     await server.stop();
-    journal.close();
+    await sql.close();
     rmSync(root, { recursive: true, force: true });
   });
   const run = async (account: ModelCallRequest["account"] = { mode: "auto" }) => {
@@ -212,10 +209,14 @@ async function fixture(
       ),
     );
     const started = await services.routes.createModelOperation(ref, randomUUID());
-    await vi.waitFor(async () =>
-      expect(["queued", "running"]).not.toContain(
-        (await services.routes.getModelOperation(started.id)).state,
-      ),
+    // Dispatch waits on the store's durable barrier (one flusher pass, 200 ms cadence);
+    // vitest's 1 s default is too tight for that on a contended host.
+    await vi.waitFor(
+      async () =>
+        expect(["queued", "running"]).not.toContain(
+          (await services.routes.getModelOperation(started.id)).state,
+        ),
+      { timeout: 10_000 },
     );
     return services.routes.getModelOperation(started.id);
   };
@@ -424,8 +425,10 @@ describe("production model service composition", () => {
       undefined,
       true,
     );
-    await vi.waitFor(async () =>
-      expect((await f.services.routes.getModelOperation(started.id)).state).toBe("succeeded"),
+    await vi.waitFor(
+      async () =>
+        expect((await f.services.routes.getModelOperation(started.id)).state).toBe("succeeded"),
+      { timeout: 10_000 },
     );
     const result = ModelCallResult.parse(
       JSON.parse((await f.services.routes.readModelResult(started.id)).bytes.toString()),

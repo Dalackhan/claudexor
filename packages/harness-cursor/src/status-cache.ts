@@ -131,7 +131,7 @@ export function createCursorStatusCoordinator(options: {
   const livePositive = (key: string, withinMs: number) => {
     const entry = positives.get(key);
     if (!entry) return null;
-    const ageMs = Math.max(0, monotonicMs() - entry.atMonotonicMs + clockUncertaintyMs);
+    const ageMs = Math.ceil(Math.max(0, monotonicMs() - entry.atMonotonicMs + clockUncertaintyMs));
     if (ageMs < withinMs) return { entry, ageMs };
     if (ageMs >= lastPositiveMs) positives.delete(key);
     return null;

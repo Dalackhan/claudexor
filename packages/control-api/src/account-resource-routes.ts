@@ -1,17 +1,20 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   ControlAccountResourcesResponse,
+  ControlAccountRoutingEvidenceResponse,
+  ControlQuotaFreshnessResponse,
   ControlQuotaResponse,
+  ControlQuotaReadRequest,
   ControlQuotaRefreshRequest,
   ControlAccountResetRequest,
   ControlAccountResetResponse,
 } from "@claudexor/schema";
 import type { DaemonControlApiOptions } from "./daemon-server.js";
 import type { OperationDraft } from "./operation-draft.js";
-import { resourceViewQuery } from "./catalog-query.js";
-import { assertOnlyQueryParams } from "./query.js";
+import { quotaReadViewQuery, resourceViewQuery } from "./catalog-query.js";
+import { assertOnlyQueryParams, singleQuery } from "./query.js";
 import { requiredIdempotencyKey } from "./run-start.js";
-import { queryParam } from "./operation-parameters.js";
+import { queryParam, QUOTA_READ_PARAMETERS } from "./operation-parameters.js";
 
 const parameters = [
   queryParam({
@@ -20,7 +23,26 @@ const parameters = [
     description: "Opt in to typed account resources alongside quota.",
   }),
 ];
+const readParameters = [
+  ...QUOTA_READ_PARAMETERS,
+  queryParam({
+    name: "view",
+    enum: ["resources", "constraint_freshness"],
+    description:
+      "Opt in to typed account resources alongside quota, or to per-constraint freshness from raw snapshot evidence, observation TTL, and each window's own reset; omitted preserves the legacy shape. Does not refresh quota.",
+  }),
+];
 export const ACCOUNT_RESOURCE_OPERATION_DRAFTS: OperationDraft[] = [
+  {
+    method: "GET",
+    path: "/v2/accounts/routing-evidence",
+    mutability: "read_only",
+    requestSchema: null,
+    responseSchema: "ControlAccountRoutingEvidenceResponse",
+    responseKind: "json",
+    summary:
+      "Read live model-scoped refusal marks and the durable last-served order; no probe or quota refresh.",
+  },
   {
     method: "GET",
     path: "/v2/credential-profiles",
@@ -48,7 +70,7 @@ export const ACCOUNT_RESOURCE_OPERATION_DRAFTS: OperationDraft[] = [
     requestSchema: null,
     responseSchema: "ControlQuotaQueryResponse",
     responseKind: "json",
-    parameters,
+    parameters: readParameters,
   },
   {
     method: "POST",
@@ -83,7 +105,7 @@ export const ACCOUNT_RESOURCE_OPERATION_DRAFTS: OperationDraft[] = [
 interface Context {
   services?: Pick<
     NonNullable<DaemonControlApiOptions["services"]>,
-    "quota" | "refreshQuota" | "createAccountReset" | "accountReset"
+    "accountRoutingEvidence" | "quota" | "refreshQuota" | "createAccountReset" | "accountReset"
   >;
   readBody: (req: IncomingMessage) => Promise<unknown>;
   json: (res: ServerResponse, status: number, body: unknown) => void;
@@ -105,16 +127,41 @@ export async function handleAccountResourceRoute(
   res: ServerResponse,
 ): Promise<boolean> {
   try {
+    if (method === "GET" && path === "/accounts/routing-evidence") {
+      assertOnlyQueryParams(url, []);
+      const payload = await required(ctx.services?.accountRoutingEvidence)();
+      ctx.json(res, 200, ControlAccountRoutingEvidenceResponse.parse(payload));
+      return true;
+    }
     if ((method === "GET" && path === "/quota") || (method === "POST" && path === "/quota")) {
-      assertOnlyQueryParams(url, ["view"]);
-      const view = resourceViewQuery(url);
-      const schema = view ? ControlAccountResourcesResponse : ControlQuotaResponse;
+      assertOnlyQueryParams(url, method === "GET" ? ["view", "requestKind", "model"] : ["view"]);
+      const view = method === "GET" ? quotaReadViewQuery(url) : resourceViewQuery(url);
+      const input =
+        method === "GET"
+          ? ControlQuotaReadRequest.parse({
+              ...(view ? { view } : {}),
+              ...(singleQuery(url, "requestKind") !== undefined
+                ? { requestKind: singleQuery(url, "requestKind") }
+                : {}),
+              ...(singleQuery(url, "model") !== undefined
+                ? { model: singleQuery(url, "model") }
+                : {}),
+            })
+          : undefined;
+      const schema =
+        view === "resources"
+          ? ControlAccountResourcesResponse
+          : view === "constraint_freshness"
+            ? ControlQuotaFreshnessResponse
+            : ControlQuotaResponse;
       const payload =
         method === "GET"
-          ? await required(ctx.services?.quota)(view ? { view } : undefined)
+          ? await required(ctx.services?.quota)(
+              input && Object.keys(input).length ? input : undefined,
+            )
           : await required(ctx.services?.refreshQuota)({
               ...ControlQuotaRefreshRequest.parse(await ctx.readBody(req)),
-              ...(view ? { view } : {}),
+              ...(view === "resources" ? { view } : {}),
             });
       ctx.json(res, 200, schema.parse(payload));
       return true;

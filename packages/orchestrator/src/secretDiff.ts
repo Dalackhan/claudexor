@@ -2,7 +2,12 @@ import { join } from "node:path";
 import type { ArtifactStore } from "@claudexor/artifact-store";
 import { AnswerAssembly, summarizeDiffPaths } from "@claudexor/core";
 import type { HarnessEvent, WorkspaceEnvelope } from "@claudexor/schema";
-import { createRevertAnchorFromPatchOrNull, type WorkspaceManager } from "@claudexor/workspace";
+import {
+  createRevertAnchorFromPatchOrNull,
+  incompleteWorkspaceCapture,
+  type WorkspaceManager,
+  type CapturedWorkspaceDiff,
+} from "@claudexor/workspace";
 import { sensitiveResourcePolicy, sha256 } from "@claudexor/util";
 import { candidateOutputSecretRisk, rasterLinksInMarkdown } from "./candidateOutputs.js";
 import {
@@ -13,29 +18,29 @@ import {
   type SecretLikeFinding,
 } from "./persistedPatch.js";
 
-/** The candidate's changes could not be observed at all. This is the ONLY
- * capture-time refusal left: secret-like content is never one (INV-062). */
-export interface CaptureRefusal {
-  disposition: "discarded" | "manual_cleanup";
-  detail: string;
-  /** Failure phase; a directory result keeps its sensitive-resource phase. */
-  phase?: "workspace" | "artifact_security";
+import { preserveCaptureSource, type CaptureRefusal } from "./captureRefusal.js";
+export {
+  captureInspectionActions,
+  captureRefusalNextActions,
+  type CaptureRefusal,
+} from "./captureRefusal.js";
+
+/** Shared by post-try attribution and final-only capture. Errors remain workspace
+ * evidence, allowing answer assembly and observed cost to finish normally. */
+export async function captureCandidateDiff(
+  wsm: WorkspaceManager,
+  envelope: WorkspaceEnvelope,
+): Promise<CapturedWorkspaceDiff> {
+  try {
+    return await wsm.captureDiff(envelope);
+  } catch (error) {
+    return incompleteWorkspaceCapture(error);
+  }
 }
 
-export function recordCaptureRefusal(
-  refusal: CaptureRefusal | undefined,
-  errors: string[],
-  existingError: boolean,
-): boolean {
-  if (!refusal) return existingError;
-  errors.push(refusal.detail);
-  return true;
-}
-
-export function captureRefusalNextActions(refusal: CaptureRefusal): string[] {
-  return refusal.disposition === "manual_cleanup"
-    ? ["Inspect the changed files in the project folder directly", "Retry the run"]
-    : ["Retry the run"];
+/** An incomplete observation is unknown, never an empty exact patch. */
+export function capturedDiff(capture: CapturedWorkspaceDiff | undefined): string | undefined {
+  return capture?.captureIncomplete ? undefined : (capture?.diff ?? "");
 }
 
 /** Answer assembly that also counts secret-like matches in answer material
@@ -120,32 +125,20 @@ export async function captureCandidateWorkspace(input: {
   inPlace: boolean;
   /** Project root owning the private exact patch object store. */
   projectRoot: string;
+  holder: { runId: string; runDir: string };
   answerText?: string;
   answerMatches: number;
+  /** Reuse a post-try refusal instead of repeating the same oversized capture. */
+  incompleteCapture?: CapturedWorkspaceDiff;
 }): Promise<CandidateCapture> {
   const { wsm, envelope, inPlace } = input;
-  let captured;
-  try {
-    captured = await wsm.captureDiff(envelope);
-  } catch (error) {
-    const scratchCleanupUnproven =
-      error instanceof Error && Object.prototype.hasOwnProperty.call(error, "cleanupError");
-    return refused(
-      inPlace || scratchCleanupUnproven ? "manual_cleanup" : "discarded",
-      scratchCleanupUnproven
-        ? "candidate output capture failed and private scratch cleanup could not be proven; manual cleanup of Claudexor temporary state is required"
-        : inPlace
-          ? "candidate output could not be captured; the changed files are untouched and need direct inspection"
-          : "uncaptured isolated candidate output was discarded with the candidate envelope",
-    );
-  }
+  const captured = input.incompleteCapture ?? (await captureCandidateDiff(wsm, envelope));
   if (captured.captureIncomplete) {
-    return refused(
-      inPlace ? "manual_cleanup" : "discarded",
-      inPlace
-        ? "candidate output could not be captured as a complete patch; the changed files are untouched and need direct inspection"
-        : "uncaptured isolated candidate output was discarded with the candidate envelope",
-    );
+    return {
+      diff: "",
+      captureRefusal: preserveCaptureSource({ ...input, error: captured.captureFailure }),
+      ...(!inPlace ? { exactBytesRetainedAt: envelope.worktree_path } : {}),
+    };
   }
   const media = candidateOutputSecretRisk({
     worktreePath: envelope.worktree_path,
@@ -183,10 +176,6 @@ export async function captureCandidateWorkspace(input: {
     ...(secretLike ? { secretLike } : {}),
     ...(retained ? { exactBytesRetainedAt: envelope.worktree_path } : {}),
   };
-}
-
-function refused(disposition: CaptureRefusal["disposition"], detail: string): CandidateCapture {
-  return { diff: "", captureRefusal: { disposition, detail } };
 }
 
 /**

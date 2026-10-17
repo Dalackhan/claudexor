@@ -26,6 +26,7 @@ vi.mock("./setup-login-capability.js", () => ({
   effectiveSetupLoginCapability: vi.fn(async () => null),
 }));
 
+import { createAccountEvidence } from "@claudexor/daemon";
 import { controlServices } from "./control-services.js";
 
 function services(create: (...args: unknown[]) => unknown) {
@@ -52,6 +53,7 @@ function services(create: (...args: unknown[]) => unknown) {
     undefined as never,
     undefined as never,
     (() => quota) as never,
+    createAccountEvidence(),
     () => [],
   );
 }

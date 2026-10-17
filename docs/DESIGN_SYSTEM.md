@@ -572,7 +572,8 @@ frequency and volume are. The contracts:
     "active" account — an unpinned run routes through the quota-aware pool of
     enabled ready accounts, an unpinned thread stays sticky on its own
     account, and `next-up` is the server-computed INFORMATIONAL pool verdict
-    from `accountPools`, not an auto-default the user can set), and a
+    of the configured default model from `accountPools`, badged
+    "Next up · default model", not an auto-default the user can set), and a
     confirmed Remove (trash) on EVERY row that deletes the binding plus any
     Claudexor-owned state or managed secret
     (`DELETE /v2/credential-profiles/:harness/:id`; success is provable —
@@ -608,6 +609,22 @@ frequency and volume are. The contracts:
     scoped to one model does not mark the whole row failed; the engine applies it
     when computing `next_up` for the configured model. No second auth indicator
     or additional client-side readiness calculation is introduced.
+
+    When the operation catalog advertises `get:accounts.routing-evidence`, a
+    row adds at most two quiet detail lines from that separate read:
+    "Recent refusal · <model>, …" (caution) for its live pre-progress refusal
+    marks and "Last served · <model> · <age>; …" for its latest service per
+    requested model, the harness default labelled "default model". They are
+    ordering evidence, not readiness: they never change the status dot, the
+    Enabled control or the row order. The evidence is held apart from the
+    profile rows, so an Enabled PATCH keeps it; an engine without the read shows
+    nothing new; a failed read shows one caption notice and never hides or fails
+    the rows. Only the newest read of a location publishes (an older one
+    answering later, with evidence or a failure, changes nothing), and a
+    credential mutation fences the reads begun before it and reads again. Ages
+    are English and locale-independent. The API-key route
+    disclosure names the scope: "the next unpinned default-model run uses the
+    API-key route".
 
     Do not globally rename generic `Automatic`: the unpinned route may use the
     policy API-key fallback, which is not an account row.

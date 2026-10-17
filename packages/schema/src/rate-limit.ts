@@ -1,3 +1,4 @@
+import { QuotaRequestKind } from "./quota.js";
 import { z } from "zod/v3";
 import { Id } from "./primitives.js";
 
@@ -6,6 +7,7 @@ export const RateLimitSignal = z.object({
   constraint_id: Id.optional().describe(
     "Vendor-owned rate-window identity, when the adapter can map it from a typed field.",
   ),
+  applies_to_request_kinds: z.array(QuotaRequestKind).min(1).optional(),
   applies_to_models: z
     .array(Id)
     .nullable()

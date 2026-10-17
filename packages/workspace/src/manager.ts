@@ -8,7 +8,7 @@ import type {
   WorkspaceKind,
 } from "@claudexor/schema";
 import { WorkspaceEnvelope as WorkspaceEnvelopeSchema } from "@claudexor/schema";
-import { runCaptureRaw, WorkspaceError } from "@claudexor/core";
+import { WorkspaceError } from "@claudexor/core";
 import { ensureDir, newId, nowIso, projectRuntimeDir } from "@claudexor/util";
 import { ensureLaneHomeEnv, type LaneHomeEnv } from "./lanes.js";
 import { ensureHarnessHome, harnessHomeEnv } from "./harness-home.js";
@@ -24,12 +24,8 @@ import {
   liveEnvelopeCustody,
   writeEnvelopeCustody,
 } from "./envelope-custody.js";
-import {
-  excludePlainDiffPathPrefix,
-  plainDiffFlaggedBinaries,
-  relativizePlainDiffHeaders,
-  snapshotLegacyDirectoryBaseline,
-} from "./plain-diff.js";
+import { snapshotLegacyDirectoryBaseline } from "./plain-diff.js";
+import { capturePlainDiff } from "./plain-diff-capture.js";
 import {
   CLAUDE_BRIDGE_BASENAME,
   bridgeCreatedMarkerMatches,
@@ -60,6 +56,7 @@ export interface CapturedWorkspaceDiff {
   /** The capture could not observe the candidate's changes at all (no legacy
    * baseline, a failed `diff`): an honest capture refusal, never "no changes". */
   captureIncomplete: boolean;
+  captureFailure?: Error;
 }
 
 export interface CreateEnvelopeOptions {
@@ -364,57 +361,15 @@ export class WorkspaceManager {
         return {
           diff: captured.patch,
           binarySecretPaths: captured.binarySecretPaths,
-          captureIncomplete: false,
+          captureIncomplete: captured.captureIncomplete,
+          captureFailure: captured.captureFailure,
         };
       }
       // Non-git fallback: diff the best-effort cpSync baseline against the live
       // tree. Missing or failed capture is an INCOMPLETE capture, never a safe
       // no-change result.
       const baseline = join(this.envelopeBase(env.task_id, env.attempt_id), "baseline");
-      if (!existsSync(baseline)) return incomplete;
-      try {
-        const r = await runCaptureRaw(
-          "diff",
-          [
-            "-ruN",
-            "-x",
-            ".git",
-            "-x",
-            "node_modules",
-            "-x",
-            "__pycache__",
-            "-x",
-            ".venv",
-            "-x",
-            "venv",
-            baseline,
-            env.repo_root,
-          ],
-          { timeoutMs: 120_000 },
-        );
-        if (r.code !== 0 && r.code !== 1) return incomplete;
-        // Relativize the header paths to the git-style a/<rel> b/<rel> shape.
-        // Downstream consumers (diffstat, protected-path/risk gating) match
-        // REPO-RELATIVE globs like `test/**`; absolute `/…/repo/test/x`
-        // headers would silently bypass every one of them.
-        const fullDiff = relativizePlainDiffHeaders(r.stdout, baseline, env.repo_root);
-        const relativized = artifactRelative
-          ? excludePlainDiffPathPrefix(fullDiff, artifactRelative)
-          : fullDiff;
-        const CAP = 200_000;
-        return {
-          diff:
-            relativized.length > CAP
-              ? relativized.slice(0, CAP) + "\n... [diff truncated]\n"
-              : relativized,
-          // Binary stubs are inspected over the COMPLETE captured text, before
-          // it is projected into the bounded artifact.
-          binarySecretPaths: plainDiffFlaggedBinaries(relativized, env.repo_root),
-          captureIncomplete: false,
-        };
-      } catch {
-        return incomplete;
-      }
+      return capturePlainDiff(baseline, env.repo_root, artifactRelative);
     }
     // Exclude the envelope-local generated CLAUDE.md bridge (INV-113) from the
     // candidate patch — by EXACT path, and only when BOTH conditions hold: (1)
@@ -442,12 +397,16 @@ export class WorkspaceManager {
     return {
       diff: captured.patch,
       binarySecretPaths: captured.binarySecretPaths,
-      captureIncomplete: false,
+      captureIncomplete: captured.captureIncomplete,
+      captureFailure: captured.captureFailure,
     };
   }
 
   async diff(env: WorkspaceEnvelope): Promise<string> {
-    return (await this.captureDiff(env)).diff;
+    const captured = await this.captureDiff(env);
+    if (captured.captureIncomplete)
+      throw captured.captureFailure ?? new WorkspaceError("Workspace diff capture is incomplete");
+    return captured.diff;
   }
 
   /** Directory work products retain full files, independently of diff previews. */

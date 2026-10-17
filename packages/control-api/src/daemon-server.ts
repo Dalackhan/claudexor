@@ -1,6 +1,6 @@
 import { handleAccountResourceRoute } from "./account-resource-routes.js";
+import { projectProcessScope } from "./run-detail-scope.js";
 import { ControlAccountResetRequest } from "@claudexor/schema";
-import { readThreadCommands } from "./command-reads.js";
 import { recoverInterruptedOutput } from "./retained-output.js";
 import { recordedExecutionRoot } from "./run-delivery-state.js";
 import * as exactPatch from "./run-exact-patch.js";
@@ -22,7 +22,7 @@ import {
   validateApplyGate,
   verifyAndDeliver,
 } from "@claudexor/delivery";
-import { lastSeqInFile } from "@claudexor/event-log";
+import { lastRunEventSeq } from "@claudexor/event-log";
 import { isVanishedErrno, safeArtifactPath, safeArtifactRoot } from "./artifact-paths.js";
 import { TERMINAL_STATES } from "./sse-shared.js";
 import { readFilesWorkProduct } from "./files-work-product.js";
@@ -50,7 +50,12 @@ import {
   timelineEvents,
 } from "./run-timeline.js";
 import { projectTurnRunCards } from "./thread-projection.js";
-import { projectSession, projectThread, projectTurn } from "./thread-projection.js";
+import {
+  projectSession,
+  projectThread,
+  projectThreadList,
+  projectTurn,
+} from "./thread-projection.js";
 import {
   handleThreadTurnCreate,
   handleThreadTurnRetry,
@@ -116,10 +121,11 @@ import {
   lruGet,
   lruSet,
   parseRunListQuery,
+  summarizeRunPage,
   selectRunListPage,
   type RunListQuery,
 } from "./run-list.js";
-import { summaryFingerprint } from "./run-list-fingerprint.js";
+import { summaryFingerprint, type RunListFingerprint } from "./run-list-fingerprint.js";
 export {
   resetRunListFingerprintProbeCountForTests,
   runListFingerprintProbeCountForTests,
@@ -173,6 +179,7 @@ import {
   ControlSettingsSnapshot,
   ControlSettingsUpdateRequest,
   ControlQuotaRefreshRequest,
+  type ControlQuotaReadRequest,
   ControlAccountPoolsResponse,
   ControlAccountsMigrationRollbackRequest,
   ControlAccountsMigrationRollbackResponse,
@@ -194,7 +201,6 @@ import {
   ControlThreadTurnRequest,
   ControlThreadUpdateRequest,
   ControlThreadDetail,
-  ControlThreadListResponse,
   DecisionRecord,
   Id,
   ModeKind,
@@ -216,9 +222,9 @@ import {
   TestCommandInvocation,
   WorkProduct,
 } from "@claudexor/schema";
-
 import { resolveControlProtocol, type ControlServingMode } from "./control-protocol.js";
 import { readControlRequestBody } from "./request-body.js";
+import { withControlHttpTimeouts } from "./http-server-options.js";
 import {
   assertNoInlineSecretValues,
   errorCode,
@@ -241,6 +247,8 @@ export interface DaemonControlApiOptions {
   /** Issue #165 D5 admission snapshot; absent embedders always serve normal. */
   servingMode?: () => ControlServingMode;
   bus?: { subscribe(listener: (event: { run_id: string }) => void): () => void };
+  /** Internal storage fact; a committed terminal may still need its file effects. */
+  terminalFilesPending?: (runIdOrCommandId: string) => boolean;
   services?: DeliveryCommandServices &
     Partial<ModelRouteServices> &
     Partial<ResourceRouteServices> &
@@ -284,7 +292,7 @@ export interface DaemonControlApiOptions {
       journalEvents?: (partition: string, afterCursor?: string) => Promise<unknown>;
       settings?: () => Promise<unknown>;
       updateSettings?: (patch: unknown) => Promise<unknown>;
-      quota?: (input?: { view?: "resources" }) => Promise<unknown>;
+      quota?: (input?: ControlQuotaReadRequest) => Promise<unknown>;
       createAccountReset?: (input: {
         request: ControlAccountResetRequest;
         idempotencyKey: string;
@@ -295,6 +303,7 @@ export interface DaemonControlApiOptions {
         input?: ControlQuotaRefreshRequest & { view?: "resources" },
       ) => Promise<unknown>;
       accountPools?: () => Promise<unknown>;
+      accountRoutingEvidence?: () => Promise<unknown>;
       rollbackAccountsMigration?: (input: unknown) => Promise<unknown>;
       credentialProfiles?: (input?: { snapshot?: boolean; view?: "resources" }) => Promise<unknown>;
       runApplicability?: (input: { repoRoot: string }) => Promise<unknown>;
@@ -558,7 +567,7 @@ export class DaemonControlApiServer {
     const host = this.opts.host ?? "127.0.0.1";
     const port = this.opts.port ?? 0;
     await new Promise<void>((resolve, reject) => {
-      this.server = createServer((req, res) => this.onRequest(req, res));
+      this.server = withControlHttpTimeouts(createServer((req, res) => this.onRequest(req, res)));
       this.server.once("error", reject);
       this.server.listen(port, host, () => resolve());
     });
@@ -678,9 +687,7 @@ export class DaemonControlApiServer {
     );
   }
 
-  private readBody(req: IncomingMessage): Promise<unknown> {
-    return readControlRequestBody(req);
-  }
+  private readBody = readControlRequestBody;
 
   private onRequest(req: IncomingMessage, res: ServerResponse): void {
     const tracked: Promise<void> = this.handle(req, res)
@@ -846,7 +853,7 @@ export class DaemonControlApiServer {
       if (!rec) return this.json(res, 404, { error: "no such run" });
       // Fence order: cursor FIRST, every projection (pending interactions
       // included) after it — see the detailFor doc comment.
-      const lastSeq = rec.runDir ? lastSeqInFile(join(rec.runDir, "events.jsonl")) : 0;
+      const lastSeq = rec.runDir ? lastRunEventSeq(join(rec.runDir, "events.jsonl")) : 0;
       const parentRunId = rec.runId ?? rec.id;
       // Addressed child read: the daemon selects this parent's direct children
       // before it projects, so parent detail never pays for the params of every
@@ -943,20 +950,10 @@ export class DaemonControlApiServer {
       const svc = this.opts.services?.listThreads;
       if (!svc)
         return this.json(res, 501, { error: "threads are not supported by this engine build" });
-      const { threads, problems } = await svc();
-      const runs = await readThreadCommands(this.opts.daemon, threads);
-      const blocked = new Set(
-        runs.filter((r) => this.runNeedsAttention(r)).map((r) => r.runId ?? r.id),
-      );
       return this.json(
         res,
         200,
-        ControlThreadListResponse.parse({
-          threads: threads.map((t) =>
-            projectThread(t, blocked.has((t as { head_run_id?: string | null }).head_run_id ?? "")),
-          ),
-          problems: problems ?? [],
-        }),
+        await projectThreadList(this.opts.daemon, await svc(), (r) => this.runNeedsAttention(r)),
       );
     }
 
@@ -2028,7 +2025,7 @@ export class DaemonControlApiServer {
       res,
       200,
       ControlRunListResponse.parse({
-        runs: page.map((r) => this.summarizeRunOrDiagnostic(r)),
+        runs: await summarizeRunPage(page, (r) => this.summarizeRunOrDiagnostic(r)),
         nextCursor,
         hasMore,
       }),
@@ -2088,6 +2085,7 @@ export class DaemonControlApiServer {
    * OR a non-overridable D-16 work_state needs-input veto. Inbox/head surfaces
    * fold both so a needs_input run still surfaces as needing the operator. */
   private runNeedsAttention(rec: DaemonRunRecord): boolean {
+    if (rec.state !== "succeeded") return false;
     const arb = safeReadStructuredArtifact(rec, "arbitration/decision.yaml", DecisionRecord);
     const facts = runOutcomeFacts(rec, arb, readFailure(rec), winnerWorkStateFor(rec));
     if (!facts) return false;
@@ -2198,7 +2196,7 @@ export class DaemonControlApiServer {
 
   private readonly summaryCache = new Map<
     string,
-    { fingerprint: string; summary: ControlRunSummary }
+    { fingerprint: RunListFingerprint; summary: ControlRunSummary }
   >();
 
   /**
@@ -2210,9 +2208,9 @@ export class DaemonControlApiServer {
   private static readonly SUMMARY_CACHE_MAX = 1_000;
 
   private summarizeRunCached(rec: DaemonRunRecord): ControlRunSummary {
-    const fingerprint = summaryFingerprint(rec);
     const hit = lruGet(this.summaryCache, rec.id);
-    if (hit && hit.fingerprint === fingerprint) return hit.summary;
+    const fingerprint = summaryFingerprint(rec, hit?.fingerprint);
+    if (hit && hit.fingerprint.value === fingerprint.value) return hit.summary;
     const summary = summarizeRun(rec);
     // QA-052: LRU-bounded eviction (oldest entry drops) instead of the old
     // wholesale clear at the guard, so a large retained set never pays a full
@@ -2635,7 +2633,7 @@ function detailFor(
   // that cursor would never see it). A pre-projection cursor errs the other
   // way: an in-between event is both reflected AND replayed, which clients
   // absorb (event application is reconciled against the newer snapshot).
-  const lastSeq = cursor ?? (rec.runDir ? lastSeqInFile(join(rec.runDir, "events.jsonl")) : 0);
+  const lastSeq = cursor ?? (rec.runDir ? lastRunEventSeq(join(rec.runDir, "events.jsonl")) : 0);
   const failure = readFailure(rec);
   const decision = safeReadStructuredArtifact(rec, "arbitration/decision.yaml", DecisionRecord);
   const operatorDecisionRaw = operator
@@ -2674,6 +2672,7 @@ function detailFor(
       ...summary,
       outcomeFacts,
       waitingOnUser: pendingInteractions.length > 0,
+      processScope: projectProcessScope(rec, summary.state),
     },
     children,
     runFacts,

@@ -49,10 +49,12 @@ export interface BudgetDenial {
 
 /** The `writeFailure` argument object for a budget mapping — one builder so the
  * five mode terminals do not each re-spell the phase/category/code/route/actions
- * mapping inline (keeps the orchestrator god-file from absorbing it). */
+ * mapping inline (keeps the orchestrator god-file from absorbing it). The budget
+ * remedy leads; `followUps` keep evidence the budget does not explain (a kept
+ * capture source) inspectable without a contradicting retry. */
 export function budgetFailureRecord(
   mapping: BudgetFailureMapping,
-  opts: { eventRefs?: string[]; runDir?: string } = {},
+  opts: { eventRefs?: string[]; runDir?: string; followUps?: readonly string[] } = {},
 ): {
   phase: string;
   category: string;
@@ -71,7 +73,7 @@ export function budgetFailureRecord(
     harnessId: mapping.harnessId,
     attemptId: mapping.attemptId,
     safeMessage: mapping.safeMessage,
-    nextActions: mapping.nextActions,
+    nextActions: [...mapping.nextActions, ...(opts.followUps ?? [])],
     ...(opts.eventRefs ? { eventRefs: opts.eventRefs } : {}),
     ...(opts.runDir ? { runDir: opts.runDir } : {}),
   };

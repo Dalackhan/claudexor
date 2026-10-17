@@ -1,5 +1,6 @@
 import { z } from "zod/v3";
 import { ControlQuotaResponse } from "./quota.js";
+import { ControlQuotaFreshnessResponse } from "./quota-read.js";
 
 import { AccountTarget } from "./account-target.js";
 export { AccountTarget } from "./account-target.js";
@@ -104,9 +105,12 @@ export const ControlAccountResourcesResponse = ControlQuotaResponse.extend({
   resources: z.array(AccountResourceSnapshot),
 }).strict();
 export type ControlAccountResourcesResponse = z.infer<typeof ControlAccountResourcesResponse>;
+/** Whole-response union of every strict quota read shape. A caller validates
+ * the complete payload; a partial view is never stripped down to legacy. */
 export const ControlQuotaQueryResponse = z.union([
   ControlQuotaResponse,
   ControlAccountResourcesResponse,
+  ControlQuotaFreshnessResponse,
 ]);
 export const ControlAccountResetRequest = z
   .object({

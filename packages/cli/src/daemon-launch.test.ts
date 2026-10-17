@@ -65,6 +65,18 @@ describe("bounded caller-side daemon launch adapter", () => {
     expect(base).toEqual({ HOME: "/tmp/home", KEEP_ME: "yes" });
   });
 
+  it("sheds an inherited run scope marker but keeps an installation marker and every other key (both directions)", () => {
+    const run = `CLAUDEXOR_RUN_SCOPE_${"a".repeat(32)}`;
+    const install = `OURO_INSTALL_SCOPE_${"b".repeat(32)}`;
+    const base = { HOME: "/tmp/home", [run]: "1", [install]: "1", KEEP_ME: "yes" };
+    const env = daemonLaunchEnvironment(base, CLI_DAEMON_LAUNCH_SOURCES.ensureDaemon);
+    expect(run in env).toBe(false);
+    expect(env[install]).toBe("1");
+    expect(env["KEEP_ME"]).toBe("yes");
+    expect(env["HOME"]).toBe("/tmp/home");
+    expect(base[run]).toBe("1"); // the caller env is not mutated
+  });
+
   it("retains stderr after the parent-side data handler observes it", async () => {
     const stream = new PassThrough();
     const capture = capturePreAuthorityStderr(stream);

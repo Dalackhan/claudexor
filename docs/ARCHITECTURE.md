@@ -201,78 +201,19 @@ at every wire boundary.
 - `packages/artifact-store`, `packages/event-log`: run artifact tree and
   append-only event log writers.
 - `packages/control-api`: loopback HTTP/SSE facade over daemon and run artifacts.
-- `packages/journal`: the checksummed append-only journal primitive
-  (frame codec, fsync ACK discipline) that the daemon's durable state rides on.
-  The fsync-before-ACK discipline is kernel-proven on POSIX only: win32
-  directory-entry flushes are tolerated to fail (`fsyncDirectory`), so a Windows
-  crash can resurrect a completed append's intent file and recovery will then
-  discard that acknowledged frame (disclosed, loud in the journal record).
-  When a validated pending append needs truncation on Windows, recovery uses a
-  temporary non-append descriptor verified against the canonical writer's file
-  identity. It closes that descriptor after truncate/fsync and before removing
-  the intent; ordinary writes retain their append descriptor and ACK discipline.
-  Replay is a positional frame-at-a-time read over the descriptor with bounded
-  buffers: the journal file is never loaded whole, the read-only preparation
-  fingerprint streams the same bytes through its content hash, and memory is
-  proportional to the retained record set rather than the file. A caller may
-  supply a `fold` (`JournalFold`: per-record drop / single-holder slot /
-  multi-holder group / retire verdicts, applied in sequence order); the journal
-  stays generic and never decides what is dead. The fold runs at replay and at
-  background compaction, so `records()` is the retained set while epoch, next
-  sequence, and hash chain always come from the last frame on disk, even when
-  that frame was folded away. Compacted snapshots keep their gzip framing but
-  replay logical records one at a time; a snapshot may be a chain of several
-  `journal.compacted_snapshot` frames whose records carry their original `seq`
-  (`count <= logicalSpan`, chunks cut by logical bytes so each fits the frame
-  payload cap), and the legacy dense single-frame layout still decodes. Replay
-  bounds decompressed output per frame. A maintenance pass that cannot produce
-  a smaller file returns a typed decline (`aborted`, `below_threshold`, `empty`,
-  `capacity`, `no_reclaim`) and leaves the existing frames untouched, so a large
-  valid history remains readable and startup stays ready. Library constructor
-  and prepared-activation triggers remain synchronous by default; a journal
-  constructed with a fold never uses the lossless single-frame writer at all:
-  threshold compaction is skipped and an explicit `compact()` call is refused,
-  because that legacy snapshot would let an older engine read the folded set
-  as a complete history. A fold implies the deferred seq-preserving background
-  path. The daemon
-  opts into deferred maintenance and streams compaction after normal admission;
-  see the lifecycle section below. Projection reads select exact record types
-  before payload copying; every read sees the retained set, and sequence
-  numbers and cursors are the original ones.
-- `packages/daemon`: durable local queue (Unix socket on POSIX, named pipe on win32) and journal projections for commands, projects, and threads.
-  Project projections select their own record types; run-event history is validated
-  once per projection creation through its descriptor. Direct RunEventStore
-  construction still validates by default. Preparation and post-open activation
-  retain their content/path identity checks; required replay still performs
-  synchronous work proportional to the retained record set (the file is read
-  frame by frame, never whole), while automatic compaction runs separately
-  after admission. A command's params are immutable after
-  acceptance: only `command.accepted` carries them, every `command.updated`
-  frame omits them, and replay merges the accepted params back (legacy
-  full-record updates replay unchanged). Every partition replays and compacts
-  through the daemon's fold policy (`journal-fold-policy.ts`), which decides
-  what a partition may forget: a command keeps its acceptance and its latest
-  update; a prune tombstone forgets both, retires the pruned runs' journaled
-  events, and survives as the latest tombstone per root set so crash-GC keeps
-  those project roots (model-operation receipts are never pruned); a finished
-  run keeps only its terminal event; a resolved question forgets its request
-  and resolution together (answering an already-resolved question after a
-  restart reports `not_found` rather than `already_resolved` — both
-  non-delivery statuses; within one process life `already_resolved` is
-  unchanged); duplicate acceptance, terminal or request frames survive the
-  fold until their pair or prune tombstone retires the whole group, so replay
-  validation refuses them as loudly as on an unfolded journal; quota keeps the
-  latest projection marker and, per
-  subject, the latest scoped prepare and the latest upsert (adjacency on disk
-  still decides which pair commits; at most one stale prepare frame per subject
-  survives); thread pings keep the latest revision; setup saves are kept whole
-  and a terminal save forgets the job's log lines; everything else — and
-  anything the policy cannot classify — is kept. Startup memory therefore
-  follows the retained set, not the file.
+- `packages/daemon`: the durable local queue (Unix socket on POSIX, named pipe
+  on Windows), its in-process facade client, and one SQLite engine store for
+  commands, projects, threads and logical event ledgers. SQL state tables are
+  the projections; addressed queries hydrate only selected bodies. The existing
+  quota and setup reducers replay selected SQL event rows. The importer alone
+  uses the read-only frame/intent reader under `store/legacy-journal/`; writable
+  journal serving and compaction are retired. The frozen legacy implementation
+  remains test-only. See [SQLite engine store](#sqlite-engine-store) for commit,
+  retention, migration and recovery semantics.
 - `packages/cli`: thin command surface plus local host-integration lifecycle
   (`claudexor plugin`) for generated Claude Code/Codex/Cursor/OpenCode
   skill/MCP artifacts and commands; portable distributions live under `plugins/`. Plugin
-  lifecycle state is user-level local setup state, not a schema/control-api
+  lifecycle state is user-level local setup state, not a control-api
   contract.
 - `packages/claudexor`: the bare-name npm bin wrapper — `claudexor` and
   `claudexord` bins that import `@claudexor/cli`'s explicit entry exports;
@@ -285,7 +226,8 @@ at every wire boundary.
   Tasks stabilize, MCP returns a durable run handle and exposes explicit
   status/result/cancel/interaction tools; it does not hold a tool call open or
   advertise Tasks. MCP persistent-thread create/turn pass an optional caller key
-  to the daemon's existing idempotent journal; read projects its thread detail
+  to the daemon's existing idempotent command authority; read projects its
+  thread detail
   without starting a run or a daemon. ACP uses the official TypeScript SDK at stable protocol v1;
   its session IDs are daemon thread IDs and list/load/resume/close/prompt/cancel
   all project the same `/v2` thread authority. ACP images and embedded resources
@@ -307,6 +249,17 @@ Host integrations are generated translational artifacts: Claude Code, Codex,
 Cursor, and OpenCode files point at the local CLI/MCP server and carry ownership
 markers for safe repair/uninstall. They do not route work or duplicate
 orchestration logic.
+
+The schema-owned `ExternalHostBinding` is optional local integration state in
+the existing plugin `HostState` ledger. `plugin-runtime.ts` projects one argv
+prefix and environment into MCP, shell fallbacks, doctor and Claude statusline.
+An installed canonical MCP source addresses its ledger even when repair runs
+from another CLI/root; host caches remain host-owned copies. `daemon-owner.ts`
+validates explicit lifecycle ownership, and `ensureDaemon` attaches before
+token/root creation when ownership is external. The same existing connection
+retains recovery-only mode. Delegate lineage is independent of this connection
+policy. Registration and compatibility are documented under
+[externally owned host integrations](INTEGRATIONS.md#externally-owned-host-integrations).
 
 ### External-orchestrator workspaces and native access
 
@@ -799,7 +752,7 @@ Codex owns one native
 `app-server --stdio` JSON-RPC child per Claudexor run. The adapter keeps the run
 active while a native turn, active goal continuation, or run-owned background
 terminal exists. Native thread/turn ids are control handles, not durable engine
-truth; the daemon journal remains authoritative. Stop pauses an active goal,
+truth; the engine store remains authoritative. Stop pauses an active goal,
 interrupts the exact stored turn id, terminates only background terminals whose
 item ids were observed in that run, verifies quiescence, then reaps app-server.
 Finality belongs to the ROOT thread (`app-server-threads.ts`): Codex may spawn
@@ -824,7 +777,23 @@ becoming finality; the terminal discloses `subagent_threads`. After the root
 turn completed, "thread settled" is re-checked on any notification and, in
 silence, after the poll interval. A sub-agent's failed command therefore stays
 tool-warning evidence beside the root's delivered final instead of escalating
-through the deliverable-less tool-error exception.
+through the deliverable-less tool-error exception. On normal shutdown, an explicit
+completed root answer with settled lifecycle and no other failure survives the
+Windows-only whole-tree proof limitation. Its unchanged `termination_unconfirmed`
+payload records uncertainty separately from answer text; empty survivors prove no
+death. Other unresolved reasons, observed survivors and cancellation remain errors.
+After stopping the process, drained root system errors, failed or interrupted
+completions and new root turns invalidate the candidate answer even when POSIX
+cleanup confirmed death. Child-thread lifecycle frames never invalidate it.
+An inherited pipe has a bounded post-exit drain: complete frames already read
+are delivered, while forced closure is disclosed as `payload.output_drain:
+"truncated"` on the terminal event of Codex, the shared CLI loop and ACP (a
+gate marks its stored output `output_truncated`); output written after the
+closure is never read. The bounded reader then suppresses only that closure
+(`ERR_STREAM_PREMATURE_CLOSE`): a frame that breaks its size or UTF-8 limits,
+any other stream error and a callback failure stay failures. Pipe closure
+proves no descendant death; whole-run scope settlement and its separate
+receipt still follow.
 Native in-turn retry notices use the existing nonterminal `api_retry` status;
 their wire mapping is documented in INTEGRATIONS' Harness Stream Reference.
 Adapters without a verified prompt transport retain their vendor-specific path.
@@ -979,7 +948,7 @@ silently authenticate with a host login).
 
 Run params are validated before daemon enqueue. Inline `env`, `secrets`,
 `api_key`, `token`, `password`, or similar fields are rejected, so daemon
-run requests never turn the command journal into a secret store. Secret-setting
+run requests never turn the command store into a secret store. Secret-setting
 endpoints bypass command persistence and write only to the secret store.
 
 Scoped harness homes/config dirs live outside worktree `tree/`, so `git add -A`
@@ -1014,7 +983,7 @@ use those helpers and keep their own visible-terminal policy.
 ### Account resources and explicit resets
 
 `QuotaRegistry` also owns independently observed balances, spending, reset inventory
-and diagnostics. Versioned resource observations share the existing global journal;
+and diagnostics. Versioned resource observations share the global SQL event ledger;
 quota windows keep their strict schema and their existing admission/supersession owner.
 Resource facets carry a successful observation time, a separate last attempt, source,
 and freshness. A missing or failed facet preserves its last known value as stale;
@@ -1025,7 +994,7 @@ codes retain provenance while their detail explains the state, including false/u
 These resources do not enable paid usage or change routing policy.
 
 The operation catalog advertises `view=resources` on quota and atomic Accounts
-reads. Without it, quota responses keep the strict legacy representation, including
+reads. Without a view selector, quota responses keep the strict legacy representation, including
 the historical Codex reset-credit label at the serializer boundary. A refresh body
 may select one exact `target` (harness and profile id), including a named default
 or a disabled portable profile. It uses the existing refresh coordinator and pacing
@@ -1038,13 +1007,15 @@ The internal observation's `resets_resolved_ids` names programs authoritatively 
 in that cycle, including explicit null from that program's reader. An omitted or
 malformed body is unresolved. Merge drops resolved-absent offers and retains unread
 ones without inventing an error; retaining any unread offer keeps the single facet
-clock stale. Coverage is not a public snapshot field. The journal stores the merged
+clock stale. Coverage is not a public snapshot field. The event ledger stores the merged
 complete row and replay installs it, while legacy partial rows still merge as deltas.
 
-`POST /v2/account-resets` is a direct control operation backed by `CommandStore`,
+`POST /v2/account-resets` is a direct control operation backed by the command store,
 independent of inference queue capacity. Its required Idempotency-Key binds the exact
 request, canonical native account fingerprint, selected grant/program and native request
-id before dispatch. Keep the original body and key through an HTTP timeout, even if no
+id before dispatch. The native reset starts only after `flushed()` covers that
+intent; an unavailable barrier returns the retained `unavailable` receipt without
+native I/O. Keep the original body and key through an HTTP timeout, even if no
 receipt id arrived. `GET /v2/account-resets/:id` reads the durable receipt. Outcome and
 resource readback are independent: confirmed reset survives failed readback. Codex
 same-key `already_redeemed` confirms its operation; Claude `already_used` does not.
@@ -1116,7 +1087,9 @@ downgrade window (the row is the authority; its Enabled PATCH updates the
 mirror). The supported downgrade path is the engine's own rollback —
 `POST /v2/accounts-migration/rollback` / `claudexor profiles
 rollback-migration` — run BEFORE installing an older engine whose
-canonicalizers refuse the native locator. `claudexor auth login <harness>` is
+canonicalizers refuse the native locator. That account-registration rollback
+cannot undo the SQL engine-store migration or lower its semantic floor.
+`claudexor auth login <harness>` is
 bootstrap sugar: it ensures the `<harness>-default` row (claude/codex on their
 native dirs; cursor on an isolated file-store dir) and signs into it; a
 cancelled or failed login keeps the cold row with its Sign-in affordance.
@@ -1144,17 +1117,17 @@ the status invocation they already need; no credential file is read, no raw
 status output is persisted, and no extra subprocess is launched for identity.
 
 The orchestrator is the ONE resolve owner. There is no user-settable "Active"
-account — enabling/disabling a row is the only routing control. The
+account: enabling/disabling a row is the only routing control. The
 per-harness EFFECTIVE account is resolved by the owner-locked order (INV-135):
-(1) an explicit per-run/per-thread pin (`credentialProfileId`) is STRICT — an
-unknown/disabled/harness-mismatched id is a typed refusal before spawn, a
-fresh exhausted quota window refuses typed (`subscription_window_exhausted`
-with its reset time), and a pin never silently rotates. (2) An unpinned
-THREAD turn stays on its durable bound account — the daemon derives the
-binding from the thread's own lane evidence (latest live session, else lane
-checkpoint, per harness) and hands it to the run as `threadAccountBindings`;
-a binding whose row became disabled/deleted/revoked/exhausted moves to a pool
-sibling with a typed `route.account.lane_switch` disclosure, never silently.
+(1) an explicit per-run/per-thread pin (`credentialProfileId`) is STRICT: an
+unknown/disabled/harness-mismatched id is a typed refusal before spawn, a fresh
+exhausted quota window refuses typed (`subscription_window_exhausted` with its
+reset time), and a pin never silently rotates. (2) An unpinned THREAD turn stays
+on its durable bound account, which the daemon derives from the thread's own lane
+evidence (latest live session, else lane checkpoint, per harness) and hands to
+the run as `threadAccountBindings`; a binding whose row became
+disabled/deleted/revoked/exhausted moves to a pool sibling with a typed
+`route.account.lane_switch` disclosure, never silently.
 (3) Otherwise the quota-aware POOL of enabled+ready subscription rows selects
 the account (`route.account.pool_selected`); "ready" is fresh readiness except
 a Cursor row's bounded last positive status answer after a timed-out probe
@@ -1162,76 +1135,93 @@ a Cursor row's bounded last positive status answer after a timed-out probe
 descending, unknown/stale quota after known-positive headroom but before
 exhausted (stale quota never authorizes routing), deterministic profile-id
 tie-break; a row under an observed live block (a reactive vendor-limit
-cooldown or spent window — the A4 reader) ranks exhausted with its release
+cooldown or spent window: the A4 reader) ranks exhausted with its release
 instant. Two live observations add one ordering key among the selectable rows:
 a marked row ranks after every other selectable row for that requested model,
 a row's newest mark counts, oldest mark first, and a mark never excludes a row
 or makes the pool exhausted. Model operations pass a model-substitution
 observation (see [Caller-owned model operations](#caller-owned-model-operations));
 Agent Runs, reviewer seats and the `next_up` projection pass a pre-progress
-refusal observation. That observation is recorded when an unpinned try on a
-subscription row reported a typed `started` session and then ended in the
-structural rotation branch's own evidence (a terminal non-transient death with
-no agent progress, no deliverable and no mutation) without a typed vendor limit,
-which is already a cooldown; an adapter's own pre-spawn refusal and an explicit
-pin never record one, and the vendor's wording is never read. It is keyed by
-harness, row and requested model (the harness default model is its own key),
-lives in daemon memory for one hour, and clears when a later try on that row and
-model makes agent progress or ends cleanly, or on a credential-generation
-change. A try binds its row's credential generation before it spawns, so an
-outcome arriving after such a change neither records nor clears a mark; while
-a login of that harness holds its credential-mutation window the generation is
-no number at all, so a try bound before or inside the window never records or
-clears one (#363). When
-the default route is not ready and no registered row admits a
-lane, the lane refusal names every row with its own observed readiness
-(`<harness> has no ready account (<row>: <detail>; …)`) instead of the default
-route's doctor advice, so login advice appears only where a row's probe
-positively reported logged-out; `next_up` names unready rows the same way. An
-empty or exhausted pool is a TYPED TERMINAL
-(`route.account.pool_exhausted`, then `credential_pool_exhausted` with the
-pool's earliest known reset — owner Q3=A): an unpinned run under `auto` or
-explicit `subscription` waits for a window instead of silently taking the
-paid route. Only the EXPLICIT `api_key` preference opts the exhausted pool
-onto the paid API-key route (billing classifies it `managed_api_key`; the
-adapter's typed key refusal is the backstop) — the same principle as the
-kind-aware `limit_action: auto`, which resolves a metered subject to `fail`:
-`auto` never silently spends money. Harnesses with NO registered rows keep
-the legacy default-subject ladder (unmigrated stores); an excluded legacy
-login (`native_credentials_enabled: false`) can only be served by the
-explicitly-requested paid route — nothing ever silently falls back INTO a
-disabled login. The resolved row
-becomes the typed `credential_profile` on every `HarnessRunSpec` the run
-builds and keys the lane's read-only home, so the resolution flows to the
-spec, preflight, continuity, and session recording. An explicit profile is
-STRICT in the adapter — exactly the row's transport or a typed error event,
-never a fallback to
-default credentials (claude: config-dir login / stored token non-bare / stored
-key; codex: scoped `CODEX_HOME` login / scoped key `auth.json`; cursor: scoped
-file-store HOME login / namespaced key; opencode, copilot, raw-api:
-secret-ref keys only). Adapters stamp
-`credential_profile_id` beside `credential_route` on stream events so quota
-and retry evidence stays profile-attributable, and the run's `auth_route`
-receipt carries `profile_id`; Control API projects it as `authRoute.profileId`
-without re-deriving it. Vendor sessions record the profile they were
-created under (the attempt's session capsule, `session-capsule.json`); a
-session has one holder row at a time. History lookup uses the full
-`(harness_id, profile_id)` identity for source, target and capsule relocation;
-a disabled holder remains readable for transfer, independently of dispatch
-admission. The engine boundary re-verifies every
-cached session against the RESOLVED account, and a pool switch either MOVES
-the session file into the next row's store through the adapter's
-`continuity` (claude, codex) and resumes it there, or starts a fresh vendor
-session with a continuation packet. `claudexor profiles login
-<harness> <id>` runs the vendor login with the named binding's exact scoped
+refusal observation, recorded when an unpinned try on a subscription row reported
+a typed `started` session and then ended in the structural rotation branch's own
+evidence (a terminal non-transient death with no agent progress, deliverable or
+mutation) without a typed vendor limit, which is already a cooldown. An adapter's
+own pre-spawn refusal and an explicit pin never record one, and the vendor's
+wording is never read. It is keyed by harness, row and requested model (the
+harness default model is its own key), lives in daemon memory for one hour, and
+clears when a later try on that row and model makes agent progress or ends
+cleanly, or on a credential-generation change. A try binds its row's credential
+generation before it spawns, so an outcome after such a change neither records
+nor clears a mark; while a login of that harness holds its credential-mutation
+window the generation is no number at all, so a try bound before or inside the
+window never records or clears one (#363). Among selectable rows that are
+otherwise equal with unknown headroom, the row that most recently SERVED the
+requested model ranks first, before the profile-id tie-break (INV-135). Service
+uses the predicate that clears a mark — typed agent progress or an error-free
+delivery — judged per try against the row the try bound before it spawned. The
+vendor's model label is never compared with the request (aliases and picker
+labels answer under resolved names), so a substituted model still counts as
+service of the requested one; a try whose own events name another row or a
+non-subscription route serves nothing and retracts the fact it wrote. The fact
+lives in the engine store's `account_last_service` table: one current row per
+harness, account, requested-model key and credential-binding digest (kind,
+secret name, locator, creation time — a rename or Enabled toggle keeps it),
+ordered by an acceptance sequence the single writer allocates, never by the
+wall clock. The credential-generation changes that void a row's other evidence
+delete its facts after the generation moved; a failed delete is logged and
+leaves at most a stale preference. An Enabled PATCH, even one that changes
+nothing, voids the same verdicts and moves the same generation, so a try bound
+before it records nothing after it, but it keeps the binding's facts. Agent Runs (both lanes) produce it; run
+admission, reviewer resolution, the `next_up` projection and a model
+operation's Auto account choice read it once per ranking; model operations
+never produce it. The daemon builds one
+account-evidence graph per engine-store lifetime, injected into every reader and
+writer: global recovery keeps it and closing the store retires it. A credential
+changed outside Claudexor's lifecycle keeps its preference; each reader's own
+negative evidence (Agent pre-progress refusal or model substitution) can demote
+the row, as above. When the default route is not ready
+and no registered row admits a lane, the refusal names every row with its own
+observed readiness (`<harness> has no ready account (<row>: <detail>; …)`)
+instead of the default route's doctor advice, so login advice appears only where
+a row's probe positively reported logged-out; `next_up` names unready rows the
+same way. An empty or exhausted pool is a TYPED TERMINAL (`route.account.pool_exhausted`,
+then `credential_pool_exhausted` with the pool's earliest known reset; owner
+Q3=A): an unpinned run under `auto` or explicit `subscription` waits for a window
+instead of silently taking the paid route. Only the EXPLICIT `api_key` preference
+moves the exhausted pool onto the paid API-key route (billed as
+`managed_api_key`; the adapter's typed key refusal is the backstop), the same
+principle as kind-aware `limit_action: auto` resolving a metered subject to
+`fail`: `auto` never silently spends money. Harnesses with NO registered rows keep
+the legacy default-subject ladder (unmigrated stores); an excluded legacy login
+(`native_credentials_enabled: false`) can only be served by the explicitly
+requested paid route, so nothing silently falls back INTO a disabled login. The resolved row becomes
+the typed `credential_profile` on every `HarnessRunSpec` the run builds and keys
+the lane's read-only home, so the resolution flows to spec, preflight, continuity
+and session recording. An explicit profile is STRICT in the adapter: exactly the
+row's transport or a typed error event, never default credentials (claude:
+config-dir login / stored token non-bare / stored key; codex: scoped `CODEX_HOME`
+login / scoped key `auth.json`; cursor: scoped file-store HOME login / namespaced
+key; opencode, copilot, raw-api: secret-ref keys only). Adapters stamp
+`credential_profile_id` beside `credential_route` on stream events so quota and
+retry evidence stays profile-attributable; the run's `auth_route` receipt carries
+`profile_id`, projected by the Control API as `authRoute.profileId` without
+re-derivation. Vendor sessions record the profile they were created under (the
+attempt's `session-capsule.json`), one holder row at a time. History lookup uses
+the full `(harness_id, profile_id)` identity for source, target and capsule
+relocation, and a disabled holder stays readable for transfer independently of
+dispatch admission. The engine boundary re-verifies every cached session against
+the RESOLVED account; a pool switch either MOVES the session file into the next
+row's store through the adapter's `continuity` (claude, codex) and resumes it, or
+starts a fresh vendor session with a continuation packet. `claudexor profiles login
+<harness> <id>` runs the vendor login in the named binding's exact scoped
 environment: codex rides the SAME durable device-code setup job as the default
-login (D-17); Cursor runs the vendor command in this terminal through a
-`client_pty` setup job and the existing `setup attach` owner. Claude/AGY keep
-their direct scoped terminal flow (see the profile-login note under
+login (D-17), Cursor runs the vendor command in this terminal through a
+`client_pty` setup job and the `setup attach` owner, and Claude/AGY keep their
+direct scoped terminal flow (see the profile-login note under
 [Design constraints](#design-constraints)).
-Credential custody remains an effective platform fact, so a scoped
-HOME may select Claudexor-owned vendor state without representing a separate
-OS-user credential.
+Credential custody stays an effective platform fact: a scoped HOME
+may select Claudexor-owned vendor state without representing a separate OS-user
+credential.
 
 Removal is daemon-owned and mirrors registration: `DELETE
 /v2/credential-profiles/:harness/:id` (CLI `claudexor profiles remove`)
@@ -1257,7 +1247,7 @@ MIGRATED row additionally retires its legacy aliases — the null quota
 subject, the `<harness>-default` lane homes, and the migration record — in
 the same lifecycle operation, so deletion
 cannot leave a route that fails on the next turn or resurrect a session if the
-id is recreated. Dependent journal
+id is recreated. Dependent partition-state
 invalidation happens before registry removal; any unhealthy project partition
 returns typed 409/recovery-required, leaving the profile retryable.
 
@@ -1270,8 +1260,12 @@ account row or count. Accounts are SYMMETRIC: the
 listing (`GET /v2/credential-profiles`, `claudexor profiles`) projects every
 credential row with its `enabled` flag (the only routing
 control) plus the additive `accountPools` key — the per-harness pool
-authority whose `next_up` verdict says who an unpinned run would route to
-next, computed by the same routing owner. Its `kind` is
+authority whose `next_up` verdict says who an unpinned run of the configured
+default model would route to next, computed by the same routing owner; it is
+never a forecast for another model. The separate read-only
+`GET /v2/accounts/routing-evidence` carries the live refusal marks and the
+last-served facts of the registered rows, each scoped to its requested model,
+and leaves the legacy listings unchanged. Its `kind` is
 `profile | api_key_route | none`. The pool authority is also served alone by
 `GET /v2/account-pools`, whose catalog presence is the unified-accounts
 feature marker old clients detect. The legacy `harnessAccounts` key stays on
@@ -1366,7 +1360,44 @@ headroom-plus-cooldown check. When no
 target survives (all spent/excluded/wrong-kind), the engine emits typed
 `route.profile.rotation_exhausted` with each rejected profile's reason and
 headroom or cooldown evidence (with its earliest known release instant); the
-UI surfaces the exhaustion instead of implying a switch. Exhaustion is also a
+UI surfaces the exhaustion instead of implying a switch. Inside an attempt the
+event also names each candidate's own failed tries (`attempt_failures`) and the
+ordered list of every failed try (`pool_attempts`). Every terminal that is not
+a clean completion, decided by its actual outcome axes, publishes that one
+list across all of the run's attempts (a best-of synthesis included):
+failure terminals (candidate, convergence, read-only chain and deep scan,
+including those after review, arbitration, final verification or delivery, a
+delivered report that still fails, the run's own Delegate child-drain or
+post-drain budget failure, and a terminal-facts preparation failure); D8
+blocks with a succeeded lifecycle (review blocked, checks failed, work-state
+veto); and cancellations. It rides the `RunFailure` field `poolAttempts` in
+`final/failure.yaml` where the terminal writes one, and `pool_attempts` on its
+`run.failed` or `run.blocked` event, with one rendering appended to
+`safeMessage`, `summary.md` and the returned summary: per try its row, requested
+model, phase (`pre_start`, `pre_progress`, `after_progress`), typed category and
+its own redacted error text. A cancellation keeps the cancel as its own
+statement, and the list never mints a failure record. A cancel that lands after
+the strategy's last checkpoint is decided at the terminal commit, which states
+it the same way: both summaries are rewritten, and a block or failure record the
+replaced verdict wrote is removed, unless it carries capture facts: that record
+stays under the cancellation's own category and this same statement (see the
+capture contract). A block's own check, review or work-state cause is never a row. Only a physical try has a row: a selected
+successor whose own model, processing or billing preparation failed before its
+send was admitted, a cancelled or budget-stopped try and a request refusal have
+none, while an adapter that fails on entry keeps one. A try's row is recorded
+before workspace capture; a cancel or deadline that lands during that capture
+still stops the attempt with no successor, probe or retry, while the try's own
+pre-progress refusal observation (#363), judged on the captured workspace, is
+still recorded. An attempt rebuilt after a
+post-stream failure, continued by its one-shot continuation, or a synthesis
+that threw after its tries while the run went on, keeps every earlier try. An
+Ask attempt (chain step or deep-scan explorer) owns its tries' rows from launch
+until its record joins the list, as an Agent attempt does, so a step that throws
+after its tries settled (rotation's next lane home, finishing the attempt) still
+names them, once; only a persistence or process failure inside a still-running
+try can end the run before that try's row is recorded. A row deleted mid-run keeps its entry. Classification, retry and rotation
+never read it; records written before the field existed decode with an empty
+list. Exhaustion is also a
 TYPED terminal: a reactive rotation-eligible failure with nowhere to go
 terminalizes the attempt on `credential_pool_exhausted` (category
 `harness_unavailable` — nothing malfunctioned) only when the triggering
@@ -1407,24 +1438,24 @@ route and successful-contact evidence as account admission.
 
 `CredentialGeneration`, extracted from the existing pre-progress ledger, is the
 shared managed-lifecycle authority. Dispatch captures subject, effective route,
-requested model, generation and ordering. Both recording and success clearing
-respect that binding: old-generation results cannot affect a newer login, and
-a success from an older dispatch cannot erase a newer dispatch's refusal. A
-negative observation made after the last successful contact remains meaningful
-even when it comes from a session that started earlier. The ledger retains
-negative observation boundaries within its existing memory and expiry bounds,
-including after a success hides the current refusal. A later-arriving concurrent
-refusal therefore cannot restore only an incomplete part of that evidence.
-Readiness suppresses the merged refusal only when one real successful contact
-covers both its dispatch order and actual observation time. Successful contacts
-that cover different boundaries remain separate until one actual contact covers
-them both; combining their maxima would fabricate a recovery that never happened.
-The bounded collection counts retained contacts, not only account keys.
-An actual observed model is required to heal a model-scoped refusal; the request
-is not proof of which model was served. Credential mutation windows still make
-observations ineligible while the vendor may be changing the store. External
-native changes not observed by that lifecycle remain a limitation until a
-covering vendor observation or expiry; this is not a token-change detector.
+requested model, generation and ordering, and both recording and success
+clearing respect that binding: old-generation results cannot affect a newer
+login, and a success from an older dispatch cannot erase a newer dispatch's
+refusal. A negative observation made after the last successful contact stays
+meaningful even from a session that started earlier. The ledger keeps negative
+observation boundaries within its memory and expiry bounds, including after a
+success hides the current refusal, so a later-arriving concurrent refusal cannot
+restore only part of that evidence. Readiness suppresses the merged refusal only
+when one real successful contact covers both its dispatch order and observation
+time; contacts covering different boundaries stay separate until one actual
+contact covers both, because combining their maxima would fabricate a recovery
+that never happened. The bounded
+collection counts retained contacts, not only account keys. Only an observed
+model heals a model-scoped refusal; the request does not prove which model was
+served. Credential mutation windows still make observations ineligible while the
+vendor may be changing the store. External native changes not observed by that
+lifecycle remain a limitation until a covering vendor observation or expiry; this
+is not a token-change detector.
 
 The pure `composeCredentialProfileEvidence` owner combines local readiness,
 applicable hard refusals and authenticated quota evidence for admission, catalog,
@@ -1442,17 +1473,17 @@ authentication recovery receipt.
 
 Hard credential evidence, soft pool ordering, quota windows and poll pacing stay
 separate. The bound native observer is the single quota intake owner; projected
-run events never write a second profile-less observation. Numeric measurements and
-explicit cooldowns from an already-running session remain observable through an
-unrelated managed login or a mutation window. The generation fence governs auth
+run events never write a second profile-less observation. Numeric measurements
+and explicit cooldowns from an already-running session stay observable through an
+unrelated managed login or a mutation window: the generation fence governs auth
 refusal and recovery, not whether an ongoing session may report its quota. Run
-refusals never become poller `auth_revoked` absences and never retire last-known
-numeric quota. A native session already running when the same profile is signed
-into another identity can still report the old identity's numbers under its bound
-profile; full-reader reconciliation remains authoritative for that changed store.
-This preserved session limitation can temporarily affect quota ranking, but those
-passive numbers do not certify authentication. Raw model operations retain their
-separate dispatch-generation check for their single terminal cooldown observation.
+refusals never become poller `auth_revoked` absences or retire last-known numeric
+quota. A session already running when its profile is signed into another identity
+can still report the old identity's numbers under that profile; full-reader
+reconciliation stays authoritative for the changed store, and those passive
+numbers may briefly affect ranking but never certify authentication. Raw model
+operations keep a separate dispatch-generation check for their single
+terminal cooldown observation.
 A profile-level refusal does not suppress quota discovery:
 the Claude poller retains its existing present-token rejection memo, so external
 replacement remains discoverable. The hard ledger is non-durable, expires within
@@ -1559,38 +1590,65 @@ owns that copy.
 Every public CLI mode (`ask`, `plan`, `agent`) and the
 interactive REPL enters through the managed daemon and `/v2`; the CLI starts it
 when needed and fails loudly if it cannot. There is no second in-process CLI
-run/thread authority. The daemon remains the single scheduler and journal
+run/thread authority. The daemon remains the single scheduler and SQL row
 writer while the mode pipelines below retain their distinct mutability.
-The daemon admits `runtime.max_concurrent` regular jobs per data root (default
-24). Agents and model operations share this pool; internal candidate and review
-processes are not additional daemon jobs. The same startup snapshot owns
-`runtime.max_parallel_candidates` (default 4 active best-of candidates or scouts),
-`runtime.max_deep_scan_width` (default 8 scouts), and `runtime.max_council_members`
-(default 4 distinct members, minimum 2). These settings accept safe integers
-without a product upper ceiling. They limit capacity, not the requested work:
-request widths and their defaults remain separate. Same-thread turns stay
-serialized; nested Delegate retains its eight-child, depth-one, single-overflow
-contracts. Raising regular capacity does not change those contracts or quotas.
+The existing queue distinguishes `model` operations from `non_model` jobs
+(Ask, Plan, Agent, maintenance and other commands). Admission has three axes:
+`runtime.max_concurrent` is a GLOBAL cap across both classes;
+`runtime.max_concurrent_non_model_jobs` and
+`runtime.max_concurrent_model_operations` constrain their respective classes.
+Each accepts a positive safe integer or `unlimited`. An absent key has no
+implicit finite ceiling, including for library embedders; `0`, negatives,
+fractions, unsafe integers and `null` are invalid. A previously saved finite
+`max_concurrent` or explicit embedder `maxConcurrent` keeps its global meaning.
+It is never silently converted to an Agent-only limit or discarded as an old default.
 
-Set the four keys under `runtime` in the user-global `config.yaml` (the selected
-`CLAUDEXOR_CONFIG_DIR`), or use the corresponding environment overrides in
+One queue and runner lifecycle remain. The scheduler selects the next eligible
+job when another class or thread is blocked, preserving ordinary eligible order
+and existing Delegate-child precedence. Same-thread turns stay serialized;
+Delegate retains its eight-child, depth-one, single-overflow contract under both
+class and global saturation. Compact queued/active identities carry only the id,
+class, thread and Delegate fact; admission never scans retained command history.
+Every runner, including a model's route preparation, dispatch and result
+settlement, remains in total activity and the shutdown/replacement drain.
+Cancelling a running operation does not release its permit before settlement.
+
+Strategy width remains independent: `runtime.max_parallel_candidates` defaults
+to 4 active best-of candidates or scouts, `runtime.max_deep_scan_width` to 8
+scouts, and `runtime.max_council_members` to 4 distinct members (minimum 2).
+These three settings remain finite positive safe integers. Removing an admission
+ceiling does not change requested strategy widths, account quotas or provider
+retry policy, and it is not a physical resource guarantee or an automatic governor.
+
+All six keys live in user-global `config.yaml` (the selected
+`CLAUDEXOR_CONFIG_DIR`); their environment overrides are listed in
 [INTEGRATIONS](INTEGRATIONS.md#environment-reference). Environment wins over YAML.
-Caps are read once at startup; changing the file never resizes or preempts live
-work. `GET /v2/settings` and `settings show` report `runtime.concurrency` with
-configured values resolved from YAML and the current process environment,
-startup-frozen effective values, and `restartRequired`. An older engine omits
-this block; clients must not substitute defaults. Daemon status health reports
-effective `capacity`. Runtime keys remain file/environment settings, not writable
-through `POST /v2/settings`. Use managed replacement after work drains to apply
-changes. An environment change outside the running process is visible only at
-its next launch.
+Caps and their source are captured once at startup. Config changes do not resize,
+preempt or cancel running work. Settings and CLI report `runtime.concurrency`
+configured/effective values, source (`default`, `config`, `environment`,
+`embedder`, or unknown when a reader lacks evidence), and `restartRequired`.
+`default` identifies absence; a saved or environment `unlimited` is explicit.
+An older engine's missing class/source fields remain unknown, never zero or 24.
+The independent strategy widths remain present even when admission is unlimited.
 
-Unrelated settings writes omit newly materialized concurrency defaults, while
-explicit YAML keys survive (including values equal to defaults). For rollback
-to an engine predating these keys, remove the explicit concurrency keys from
-YAML first; older strict parsers reject them. Environment-only overrides do not
-introduce unknown YAML keys. Library embedders omitting `DaemonServer` capacity
-retain the historical twelve-job fallback.
+Daemon status preserves total `active`, `queue` and `running`, adds class counts
+under `admission`, and reports effective `capacity`. A model operation's optional
+`admission` is a synchronous observation of that exact job: queued/active and
+known global-limit, class-limit, busy-thread or stopping blockers. It is not a
+provider-dispatch claim or a durable receipt. After runner settlement the live
+admission observation is null; older engines omit the field. The CLI control-service
+projection reads it alongside the current operation state without another poller.
+
+Runtime caps remain file/environment settings, not writable through
+`POST /v2/settings`. Unrelated settings writes preserve absent keys and every
+explicit value, including old 24 and explicit unlimited. Use managed replacement
+after work drains to adopt changed caps; external environment changes are visible
+only at next launch. The number-or-unlimited payload requires a compatible client;
+protocol major 3 alone does not make a finite-only decoder compatible. Updating
+first-party clients is coordinated with the engine release: engine 4.0 requires
+application 4.0. The existing `appUpdateRequired` path keeps the old working
+engine until the app is updated; no numeric sentinel hides unlimited from an
+old client.
 
 `claudexor doctor`, `models`, and `auth status` are also thin projections of the
 daemon's typed `/v2/harnesses` and `/v2/harnesses/:id/models` readiness services;
@@ -1681,7 +1739,7 @@ not to an unobserved whole source tree. Null preimages mean proven absence;
 `unknown` cannot authorize overwriting an existing target. Copied inputs remain
 available for fresh verification, and new outputs outside the initial selection
 are retained. The artifact endpoint streams exact manifest-referenced bytes;
-bounded previews are not delivery payloads. Apply uses the existing journal,
+bounded previews are not delivery payloads. Apply uses the existing command authority,
 target mutation lease, verifier and per-file preimage checks against the original
 source root. File contents, modes, directory entries and symlink targets retain
 their filesystem meaning; special entries or unsupported filesystem operations
@@ -1873,268 +1931,291 @@ the actual account's chosen variant. Result/event Processing receipts separate
 request, submission and observation; sessions may remain mixed or unknown.
 
 Existing catalog endpoints provide an opt-in `view=accounts` declared in the
-operation catalog. The view includes every enabled compatible account, its
-availability/problem, and its own catalog/provenance/observation time. One failed
-account does not erase siblings. Manifest hints and cached observations never
-acquire a new provider timestamp. Explicit profile selection narrows only that
-account. Execution still performs its independent current readiness and model
-admission. Legacy queries retain their strict pre-existing response shape.
+operation catalog. It includes every enabled compatible account with its
+availability/problem and its own catalog, provenance and observation time; one
+failed account does not erase siblings, and manifest hints or cached observations
+never acquire a new provider timestamp. Explicit profile selection narrows only
+that account, execution keeps its own current readiness and model admission, and
+legacy queries keep their strict response shape.
 
 The operation descriptor's `view` parameter is the negotiation marker. Raw
 `/v2/model-sources` metadata is enriched only with `view=accounts`, including
-`processingPreferences` and `accountCatalog`; Agent capability rows expose their
-supported contract separately. Account model responses carry `source` or
-`harnessId`, `accounts` and `partial`. Each row keeps `credentialProfileId`,
+`processingPreferences`, `accountCatalog` and a source's structural
+`imageGeneration` facet (absent means no image operations); Agent capability rows
+expose their contract separately. Account model responses carry `source` or
+`harnessId`, `accounts` and `partial`; each row keeps `credentialProfileId`,
 `availability`, `problem` and a nullable catalog. A missing catalog sets
-`partial:true`; a quota-blocked account may still have a readable inventory.
-Catalog union is for discovery, not an inference entitlement or a maximum
-capacity assembled from different accounts. A network failure remains unknown,
-not proof of absent authentication. Native array-only inventories have no
-observation receipt and therefore use a null observation time; manifest hints
-remain identified as manifest data.
+`partial:true`, and a quota-blocked account may still have a readable inventory.
+Catalog union serves discovery, not an inference entitlement or a capacity
+assembled from different accounts. A network failure stays unknown, not proof of
+absent authentication. Native array-only inventories have no observation receipt
+and use a null observation time; manifest hints stay identified as manifest data.
 
 ### Caller-owned model operations
 
-Live model enumeration is qualified by the adapter's declared credential routes.
-A declared producer is used only on a known supported route; otherwise existing
-manifest truth applies. Codex account enumeration is native-session-specific,
-so API-key and unscoped legacy queries retain their manifest source instead of
-borrowing a subscription catalog. A failed supported live inventory remains
-unverifiable; it never falls back to a convenient manifest to admit a model.
-Where the harness declared absences advisory, an unverifiable answer — and a
-manifest miss — instead sends the explicit model to the vendor unchanged
-(above). Authenticated raw sources separately declare `inventoryAbsence` on `ModelAdapter`:
-omitted means authoritative, while Codex declares advisory. A successfully read
-catalog that lacks an explicit model therefore permits the exact Codex request;
-failed catalog acquisition remains a typed failure. Auth and model-scoped quota
-still participate in account selection. An authoritative miss retains its own
-cause; a pool containing model/general unavailability never inherits a quota-only
-reset promise from other accounts.
+#### Image generation and editing
+
+`ImageCallRequest`, uploaded with `purpose: "model"`, uses `requestKind=image`
+(omitted stays text). Kind joins stored parameters and same-key identity; the
+existing command, queue, flush barrier, custody and whole-digest ACK serve both
+kinds, without another scheduler or resource purpose. Request/result schemas own
+verbatim edit bytes, explicit options, requested/observed model, unknown cash and
+usable images beside rejected siblings. Rejected or absent images mean a failed
+command with a ready result; viewing/sending remain caller actions. Codex image
+model ids are hints, not entitlement or an allowlist: explicit models pass unchanged,
+without the text catalog. The shared resolver selects source/model/account apart
+from the conversation model; only fresh confirmed auth refusal revokes the bound
+credential generation. Subscription never falls back to API. The adapter records
+its wire anchor/bounds, sniffs magic bytes without decoding and derives a turn-id
+header from the operation id, claiming no provider deduplication.
+
+Large edits parse twice and validate base64 on the daemon thread; near-cap requests
+can delay other clients. Admission quota refusal is `subscription_window_exhausted`;
+provider image exhaustion is `image_generation_limit_reached`. Aggregate byte limits
+use `image_request_too_large`/`image_response_too_large`; an oversized individual
+edit image returns `invalid_request`.
+
+Live model enumeration is qualified by the adapter's declared credential routes:
+a declared producer is used only on a known supported route, otherwise manifest
+truth applies. Codex account enumeration is native-session-specific, so API-key
+and unscoped legacy queries keep their manifest source instead of borrowing a
+subscription catalog. A failed supported live inventory stays unverifiable and
+never falls back to a convenient manifest to admit a model; under advisory
+absences, an unverifiable answer or manifest miss sends the explicit model
+unchanged (above). Authenticated raw sources declare
+`inventoryAbsence` on `ModelAdapter`: omitted means authoritative, while Codex
+declares advisory, so a successfully read catalog lacking an explicit model
+permits the exact Codex request and failed catalog acquisition stays a typed
+failure. Auth and model-scoped quota still participate in account selection. An
+authoritative miss keeps its own cause; a pool containing model/general
+unavailability never inherits a quota-only reset promise from other accounts.
 
 Claude's producer is the prompt-free `initialize` handshake of the installed
 `claude` binary (`harness-claude/src/model-probe.ts`): one stdin frame, the
 picker rows of the `control_response` (`value`, `displayName`, `resolvedModel`),
-exit on EOF, never `--model` (the CLI echoes it as a row), `--setting-sources
-""` and `--strict-mcp-config` (no hooks, no settings echo), model-override env
+exit on EOF, never `--model` (the CLI echoes it as a row), `--setting-sources ""`
+and `--strict-mcp-config` (no hooks or settings echo), model-override env
 scrubbed. Scopes (owner decision 2026-09-24): a `config_dir_login` profile is
-probed under its own config dir and keychain bridge, an `api_key` /
-`oauth_token` profile with its own credential in the env var its runs use
-under a scratch HOME (cache keyed by profile id, never by a secret), so the
-account view carries the account's own rows; the unscoped listing runs
-credential-free under a scratch HOME with non-essential traffic off and
-describes the binary alone. The probe resolves the binary exactly as the spawn
-layer does (a caller's PATH patch replaces the normalized PATH). Rows carry `origin` (`live`: the
-picker selectors and their resolutions as pinnable exact ids; `hint`: the frozen
-`CLAUDE_KNOWN_MODELS` ids appended so presence never shrinks below the manifest)
-and `resolved_model` (diagnostic; the row id is what travels). The answer is
-total: any failure yields the hint rows alone, and the registry then reports
-the list as `source: manifest` with its frozen `verifiedAgainst` stamp rather
-than a live `api` claim. One cached single-flight capture per (scope, binary
-identity — realpath, inode, size, mtime; `harnessBinaryIdentity` in core) lives
-an hour, a failure a minute, so an in-place CLI update is re-read without a
-daemon restart. The `--help` effort memo is keyed by the same identity and
-follows a run's PATH patch the same way, as do the readonly-flag probe and the
-`--version` read behind the snapshot-trust gate, so every question about "the
-binary this run executes" is asked of that binary. Two stated bounds: the memo
-is one slot (a patched run alternating with host-keyed callers re-reads
-`--help`, one bounded spawn per alternation), and a relative entry in a patch
-PATH is resolved as the daemon sees it, so a binary reachable only through a
-project-relative entry falls back to the snapshot ladder.
+probed under its own config dir and keychain bridge, an `api_key`/`oauth_token`
+profile with its own credential in its runs' env var under a scratch HOME (cache
+keyed by profile id, never a secret), so the account view carries the account's
+own rows; the unscoped listing runs credential-free under a scratch HOME with
+non-essential traffic off and describes the binary alone. The probe resolves the
+binary exactly as the spawn layer does (a caller's PATH patch replaces the
+normalized PATH). Rows carry `origin` (`live`: picker selectors and their
+resolutions as pinnable exact ids; `hint`: the frozen `CLAUDE_KNOWN_MODELS` ids
+appended so presence never shrinks below the manifest) and diagnostic
+`resolved_model` (the row id travels). The answer is total: any failure yields the
+hint rows alone, reported as `source: manifest` with its frozen `verifiedAgainst`
+stamp, not a live `api` claim. One cached single-flight capture per scope and
+binary identity (realpath, inode, size, mtime; `harnessBinaryIdentity` in core)
+lives an hour, a failure a minute, so an in-place CLI update is re-read without a
+daemon restart. The `--help` effort memo, the readonly-flag probe and the
+`--version` read behind the snapshot-trust gate use the same identity and follow
+a run's PATH patch, so every question about "the binary this run executes" asks
+that binary. Two stated bounds: the memo is one slot (a patched run alternating
+with host-keyed callers re-reads `--help`, one bounded spawn per alternation),
+and a relative patch PATH entry resolves as the daemon sees it, so a binary
+reachable only through a project-relative entry falls back to the snapshot ladder.
 
 The engine also accepts one raw model generation independently of Agent Runs.
 `ModelAdapter` in core and the model-operation schemas define caller-owned
 messages, function tools, tool choice, generation options, account selection,
 native continuation and the observed result. The caller keeps its system prompt,
-conversation, tool execution and cognitive loop. No Run, Thread, plan, workspace,
-review loop, model fallback or internal compaction is created for this capability.
+conversation, tool execution and cognitive loop; no Run, Thread, plan, workspace,
+review loop, model fallback or internal compaction is created.
 
-The Codex transport lives in `harness-codex`. It uses a selected managed ChatGPT
-profile, the official CLI for an expired-token refresh, and the raw account's
-model catalog. Server discovery varies with the client version the caller
-declares; a missing row does not prove a minimum-version or entitlement refusal.
-The transport declares ITS OWN verified level,
-`CODEX_HTTP_CLIENT_VERSION` (`http-client-version.ts`), raised to the installed
-Codex CLI's version when that is newer and never below the constant — not the
-managed-installer pin, which is a different fact (a release that only moves
-the installer must never decide which models an account can see). The account
-view carries the declared `clientVersion` and its source per catalog. Selected-account
-discovery can negotiate `includeAdmission=true` with `requestedModel` to obtain
-those version facts and `admission: {requestedModel, inventoryAbsence}`. This permits
-an attempt, without adding a synthetic model row or claiming successful generation.
-Without the opt-in the legacy query keeps its exact shape. The constant moves together with a recorded catalog
-fixture pair (`fixtures/models-http-*.json`) whose shared rows must stay
-identical. In-process refresh work is serialized by canonical managed home;
-cancelled callers cannot release another caller past a still-live refresh. Each
-caller rereads current authorization. Selection hands its exact-profile catalog
-to this operation's invocation, which rechecks the current account fingerprint;
-no catalog or credentials are cached across operations. Unknown fingerprints
-retain fresh discovery and cannot authorize native continuation reuse.
-Its single inference POST follows a durable dispatch receipt. Exact JSON bytes
-stream with Content-Length. `request-delivery.ts` observes public callbacks on
-the existing dispatcher; its lazy `dispatcher-accessor.cts` preserves native
-cold initialization, proxy, TLS and pool ownership. Positive connector or
-incomplete-upload proof yields `transport_not_delivered`; full handoff or
-unobserved transport stays unknown. `ModelOperations` refines the terminal to
-`not_started` only after publishing proof, retaining the attempted-send timestamp
-and route. Crash/publication failure stays unknown. No adapter retry is added.
-The caller's canonical instruction messages retain their roles and ordered text
-parts in Ouroboros history. Codex's provider-specific wire projection maps each
-canonical `system` message to the high-priority `developer` role because this
-subscription backend rejects `system` messages in `input`; existing
-`developer`, `user`, `assistant` and tool messages keep their roles and order.
-Callers that intentionally provide both canonical `system` and `developer` roles
-should expect those two roles to share the provider's `developer` level on this
-route; the canonical distinction remains available in the caller's history.
-The separate string-valued `instructions` field is always empty on this route,
-and its field limit remains distinct from the model's token capacity.
-Responses SSE is translated structurally, including image blocks, original tool
-IDs and complete native output items. Unknown model/window/usage/cash remains
-unknown; `maxOutputTokens` and `temperature` are explicit unsupported options,
-not silently dropped. CLI compaction percentages do not reduce catalog capacity.
-Other installed harnesses remain Agent capabilities, not raw model sources.
+The Codex transport in `harness-codex` uses a selected managed ChatGPT profile,
+the official CLI for an expired-token refresh and the raw account's model
+catalog. Discovery varies with the declared client version, so a missing row
+proves no minimum-version or entitlement refusal. The transport declares ITS OWN
+verified level, `CODEX_HTTP_CLIENT_VERSION` (`http-client-version.ts`), raised to
+a newer installed Codex CLI and never below the constant; the managed-installer
+pin is a different fact (moving the installer must never decide which models an
+account sees). The account view carries each catalog's declared `clientVersion` and
+source. Selected-account discovery can negotiate `includeAdmission=true` with
+`requestedModel` for those facts and `admission: {requestedModel,
+inventoryAbsence}`, which permits an attempt without a synthetic model row or
+generation claim; the legacy query keeps its exact shape. The
+constant moves with a recorded catalog fixture pair (`fixtures/models-http-*.json`)
+whose shared rows must stay identical. Refresh work is serialized per canonical
+managed home; a cancelled caller cannot release another past a still-live
+refresh, and each caller rereads current authorization. Selection hands its
+exact-profile catalog to the invocation, which rechecks the account fingerprint; no catalog or credentials are cached across operations, and an
+unknown fingerprint keeps fresh discovery and cannot authorize native
+continuation reuse.
+Its single inference POST follows a committed dispatch receipt and a completed
+`flushed()` barrier. A barrier failure or cancellation while the adapter still
+waits inside that callback sends nothing and keeps `not_started` with the attempt
+stamp and route; once the callback returns, an uncertain outcome stays unknown.
+Exact JSON bytes stream with Content-Length. `request-delivery.ts` observes public
+callbacks on the existing dispatcher; its lazy `dispatcher-accessor.cts` preserves
+native cold initialization, proxy, TLS and pool ownership. Positive connector or
+incomplete-upload proof yields `transport_not_delivered`, and `ModelOperations`
+refines the terminal to `not_started` only after publishing that proof, keeping
+the attempted-send stamp and route; full handoff, unobserved transport, crash and
+publication failure stay unknown, and no adapter retry is added.
+Canonical instruction messages keep their roles and ordered text parts in
+Ouroboros history. Because this subscription backend rejects `system` messages in
+`input`, Codex's wire projection maps each canonical `system` message to the
+high-priority `developer` role; existing `developer`, `user`, `assistant` and tool
+messages keep their roles and order. Callers that provide both canonical `system`
+and `developer` roles share the provider's `developer` level on this route; the
+caller's history keeps the distinction. The string-valued
+`instructions` field is always empty here, and its field limit is distinct from
+the model's token capacity. Responses SSE is translated structurally, including
+image blocks, original tool IDs and complete native output items. Unknown
+model/window/usage/cash stays unknown; `maxOutputTokens` and `temperature` are
+explicit unsupported options, not silently dropped, and CLI compaction percentages
+do not reduce catalog capacity. Other installed harnesses remain Agent
+capabilities, not raw model sources.
+
+Catalog `inputModalities` is declared metadata (the `ModelCatalogEntry` field
+states its semantics), not an admission gate: a text-only list or a missing model
+row never stops a request on modality grounds. User and tool image blocks and
+replayable native continuations are serialized and sent exactly as for any model, and the
+provider's own answer decides. The declaration does not prove that a given image
+reached or was understood by the model.
 
 The optional top-level `nativeContinuation` carries live transport state in the
-same private request/result resources, separately from historical assistant
+same private request/result resources, apart from historical assistant
 `codex.responses.v1` output items. Omission preserves stateless result shapes;
 null starts an empty caller-owned turn. `codex.turn.v1` binds the first successful
 `x-codex-turn-state` response header to the actual source, profile, account and
-model. Matching calls replay it unchanged, even if a later body is incomplete;
-changed or unknown route identity starts empty without refusing generation.
-The caller retains it through tools, steering and compaction within a live turn,
-then clears it at a new turn or cold restart. There is no daemon state map,
-checkpoint token, automatic retry, or token in public receipts and usage fields.
+model; matching calls replay it unchanged even after an incomplete body, and
+changed or unknown route identity starts empty without refusing generation. The
+caller keeps it through tools, steering and compaction within a live turn and
+clears it at a new turn or cold restart; there is no daemon state map, checkpoint
+token, automatic retry, or token in public receipts and usage.
 
 Historical assistant `codex.responses.v1` items replay only under the exact
-account, profile and model that produced them, so the binding stays truthful
-when the vendor answers a request with another model. A turn the same account
-served with another or an undisclosed model is not replayed: it is sent through
-its canonical content and tool calls, with the original tool IDs. A message that has nothing
-to send that way, a changed or unknown account, and a continuation whose format
-or payload shape is wrong still refuse with `invalid_continuation` before
-dispatch. The projection carries the caller's canonical content and tool calls,
-so an assistant turn's native item boundaries, phases and encrypted arguments do
-not survive it; the original payload stays in the caller's own history.
-The live transport continuation is bound to the model the terminal response
-named, so a turn another model answered is not replayed under the requested
-model either, and an unknown model leaves it unbound.
+account, profile and model that produced them, so the binding stays truthful when
+the vendor answers with another model. A turn the same account served with
+another or an undisclosed model is sent through its canonical content and tool
+calls with the original tool IDs instead. A message with nothing to send that way,
+a changed or unknown account, or a continuation of the wrong format or payload
+shape refuses with `invalid_continuation` before dispatch. That projection drops
+an assistant turn's native item boundaries, phases and encrypted arguments; the
+original payload stays in the caller's history. The live transport continuation
+binds to the model the terminal response named, so a turn another model answered
+is not replayed under the requested model, and an unknown model leaves it unbound.
 
 `ModelOperations` uses the existing daemon command store, idempotency lookup,
-queue capacity, cancellation and terminal boundary. Models and Agents share the
-regular slots described in [Main Execution Paths](#6-main-execution-paths); a
-running model generation occupies one until it settles or is cancelled. Model commands do not appear
-as Agent Runs. The journal contains content hashes and resource references, not
-the full conversation. A model-purpose upload uses `ResourceStore`'s atomic
-finalization; its contents are not filtered for secret-like text, and it cannot
-be resolved as an ordinary Agent attachment. Engine authorization never enters
-the model payload. This narrow content boundary is INV-062, not a general bypass.
+queue capacity, cancellation and terminal boundary. Model runners use their class
+limit and any explicit global limit described in [Main Execution Paths](#6-main-execution-paths);
+their permit stays occupied until runner settlement, including cancellation, but
+not while awaiting a client's result-digest ACK, and they are not Agent Runs. The command store holds content hashes and resource references, not the
+conversation. A model-purpose upload uses `ResourceStore`'s atomic finalization;
+its contents are not filtered for secret-like text, and it cannot resolve as an
+ordinary Agent attachment. Engine authorization never enters the model payload.
+This narrow content boundary is INV-062, not a general bypass.
 
 Result GET returns exact digest-bound bytes without acknowledging them. A client
-accepts custody before ACK; a lost local reply is recovered using the same
+accepts custody before ACK and recovers a lost local reply through the same
 operation identity. Request bytes are released at terminal state, response bytes
-after ACK, and unacknowledged responses after 30 days from readiness. Existing
-maintenance reclaims crash residue. Redundant uploads on an idempotent create are
-released without touching another live command's input. Compact model receipts
-and idempotency bindings are excluded from Agent history age/cap pruning, so an expired or
-acknowledged result cannot accidentally trigger another generation. A provider
-refusal, an operation that never dispatched and an unknown outcome after engine
-death are separate facts. A crash after response bytes are published but before
-the command's terminal journal commit retains an unknown outcome; uncommitted
-bytes cannot certify a completed response and are reclaimed as crash residue.
+after ACK and unacknowledged responses 30 days after readiness; existing
+maintenance reclaims crash residue. A recorded response expiry stays the release
+timestamp through delayed cleanup and restart, while an ordinary ACK uses its
+actual release time. Redundant uploads on an idempotent create are released
+without touching another live command's input. Compact model receipts and
+idempotency bindings are excluded from Agent history age/cap pruning, so an
+expired or acknowledged result cannot trigger another generation. A provider
+refusal, a never-dispatched operation and an unknown outcome after engine death
+are separate facts. A crash after response bytes are published but before the
+terminal SQL commit keeps an unknown outcome; uncommitted bytes cannot certify a
+completed response and are reclaimed as crash residue.
 
-Callers may request `captureEffortEvidence=true` on the existing model-operation
-POST, discovered through its query descriptor, to retain the adapter's typed
+Callers may request `captureEffortEvidence=true` on the model-operation POST,
+discovered through its query descriptor, to retain the adapter's typed
 `effortResolution` receipt. Omission and false strip only that field before
 immutable result publication, preserving strict legacy result bytes. The literal
-true choice is captured in command parameters and idempotency identity: rejoining
-the same operation retains it, and changing it under the same key conflicts.
-GET still returns the stored bytes and their original digest for ACK; it performs
-no projection. This choice never changes the inference request, real provider
-`appliedOptions`, dispatch or generation count. Historical results remain unchanged.
+true choice is part of command parameters and idempotency identity: a rejoin keeps
+it, and changing it under the same key conflicts. GET returns the stored bytes and
+original digest for ACK without projection. The choice never changes the
+inference request, real provider `appliedOptions`, dispatch or generation count;
+historical results are unchanged.
 
 Callers may independently request `captureFailureEvidence=true` on the same POST,
-discovered through that operation's query descriptor. Omission and false
-retain the legacy command identity and strict result shape; true is bound to the
-same idempotency key and cannot change during a create rejoin. This is transport
-evidence intent, not a provider generation option.
-For failed, incomplete or locally rejected processing, the optional private
-`failureEvidence` in `ModelCallResult` contains every byte returned to the reader,
-encoded reversibly, plus the original exception, causes and aggregate members. SSE, non-success
-inference HTTP bodies and post-dispatch fetch errors share the same capture owner.
-An absent response contributes zero body bytes. `bodyComplete` means observed
-reader EOF, independently of provider terminal framing; an unreceived suffix is
-never claimed captured. Successful completed results carry no duplicate wire.
-The evidence follows the existing result resource, GET, ACK and expiry; only
-compact structural diagnostics enter the problem, journal and status.
-For a failed or unknown stream, compact problem context also carries
-`timeToFirstChunkMs`, `lastChunkAfterResponseMs`, `silenceMs`, and
-`largestSilenceMs` when the reader saw bytes. `lastEventAfterResponseMs` and
-`eventSilenceMs` independently measure the last parsed SSE event: a later comment
-heartbeat or unfinished frame advances only the chunk clock. First-chunk,
-last-chunk and last-event offsets start at response headers, not request dispatch.
-These are measurements, not an idle watchdog or retry signal; a missing
-terminal frame remains `transport_unknown` and the existing custody/no-blind-
-retry rule stays authoritative.
+discovered through its query descriptor. Omission and false keep the legacy
+command identity and strict result shape; true is bound to the idempotency key
+and cannot change during a create rejoin. It is transport evidence intent, not a
+generation option. For failed, incomplete or locally rejected processing,
+the optional private `failureEvidence` in `ModelCallResult` holds every byte
+returned to the reader, encoded reversibly, plus the original exception, causes
+and aggregate members. SSE, non-success inference HTTP bodies and post-dispatch
+fetch errors share one capture owner. An absent response contributes zero body
+bytes. `bodyComplete` means observed reader EOF, independently of provider
+terminal framing; an unreceived suffix is never claimed captured. Successful
+completed results carry no duplicate wire. The evidence follows the existing
+result resource, GET, ACK and expiry; only compact structural diagnostics enter
+the problem, event ledger and status.
+For a failed or unknown stream whose reader saw bytes, compact problem context
+also carries `timeToFirstChunkMs`, `lastChunkAfterResponseMs`,
+`silenceMs` and `largestSilenceMs`; `lastEventAfterResponseMs` and
+`eventSilenceMs` measure the last parsed SSE event, so a later comment heartbeat
+or unfinished frame advances only the chunk clock. All offsets start at response
+headers, not request dispatch. They are measurements, not an idle watchdog or
+retry signal: a missing terminal frame stays `transport_unknown` under the
+existing custody/no-blind-retry rule.
 Coherent provider terminal facts precede message conversion: unusable completed
-or incomplete output retains its provider outcome and usage, with null message,
+or incomplete output keeps its provider outcome and usage, with null message,
 `response_rejected`, `response_received` dispatch and failed operation lifecycle.
-Provider failures retain their typed problem even when irrelevant output is
+Provider failures keep their typed problem even when irrelevant output is
 malformed. A caller must distinguish this known rejection from unknown dispatch;
-neither result authorizes an engine retry or a never-sent/free claim.
+neither authorizes an engine retry or a never-sent/free claim.
 
 An opted-in advisory request may return `processing_unavailable` with context
-`generationStarted: false`, `processingFallback: "standard"`, and
-`processingRefusal: "capacity" | "unsupported"`. This is restricted to a
-non-success HTTP response: HTTP 429 `resource_unavailable` on submitted Flex,
-or HTTP 400 `unsupported_parameter` for `service_tier` on submitted Fast/Flex.
-An explicit native `serviceTier`
-override never becomes an advisory fallback. The operation still records the
-physical send and `response_received`; the proof concerns generation, not
-dispatch. The caller may create a separate Standard request and reservation.
-No engine retry is introduced, and generic auth/quota failures, timeouts,
-unknown outcomes or failures inside a response stream provide no such proof.
+`generationStarted: false`, `processingFallback: "standard"` and
+`processingRefusal: "capacity" | "unsupported"`, only for a non-success HTTP
+response: HTTP 429 `resource_unavailable` on submitted Flex, or HTTP 400
+`unsupported_parameter` for `service_tier` on submitted Fast/Flex. An explicit
+native `serviceTier` override never becomes an advisory fallback. The operation
+still records the physical send and `response_received`: the proof concerns
+generation, not dispatch, and a Standard follow-up is the caller's separate
+request and reservation. No engine retry is added; generic auth/quota failures,
+timeouts, unknown outcomes and in-stream failures provide no such proof.
 
 The operation catalog and generated endpoint reference below are the wire SSOT.
 Account Auto reuses the existing compatible pool, preferring the prior suitable
-profile; explicit pin never rotates. Any typed catalog refusal excludes that
-account from the remaining selection epoch and hands selection to the next
-candidate, while an explicit pin still refuses with that same typed refusal.
-A failed quota observation feeds that same pool's existing quota owner, without
-a second retry planner or account store. Cooldown evidence is written only when
-the vendor itself named a reset time or a retry delay; a refusal that carries
-neither creates no cooldown, rather than a block until an invented time.
-Pool refusal is projected from typed per-account causes: an all-quota pool is
+profile; an explicit pin never rotates. A typed catalog refusal excludes that
+account for the rest of the selection epoch and hands selection to the next
+candidate, while a pin refuses with that same typed refusal. A failed quota
+observation feeds the pool's existing quota owner, with no second retry planner
+or account store. Cooldown evidence is written only when the vendor named a reset
+time or retry delay; a refusal carrying neither creates no cooldown rather than a
+block until an invented time. Pool refusal is projected
+from typed per-account causes: an all-quota pool is
 `subscription_window_exhausted`, an all-authentication pool is `auth_required`,
-and a mixed, unknown, empty or disabled pool remains unavailable with its compact
-`poolCause` evidence. The generic `credential_pool_exhausted` code alone does not
-prove quota exhaustion. Legacy selected-account catalog reads obey the same current quota admission
+and a mixed, unknown, empty or disabled pool stays unavailable with compact
+`poolCause` evidence; `credential_pool_exhausted` alone does not prove quota
+exhaustion. Legacy selected-account catalog reads obey the same current quota admission
 without starting a generation. The opt-in account view enumerates enabled
 inventories separately, as described [above](#processing-and-account-catalogs).
 
 A terminal response may disclose a model other than the requested one, with no
 error and nothing in the account's quota. The result then carries the optional
-`modelMismatch` fact (`requested`, `observed`). It is set only for a completed or
-incomplete response whose observed model is known and differs by exact id;
-outcome, message, usage and custody are unchanged, and the engine neither
-retries nor discards the generation. Accepting it or creating another operation
-is the caller's decision. The same composition point records a
+`modelMismatch` fact (`requested`, `observed`), set only for a completed or
+incomplete response whose known observed model differs by exact id; outcome,
+message, usage and custody are unchanged, and the engine neither retries nor
+discards the generation. Accepting it or creating another operation is the
+caller's choice. The same composition point records a
 `ModelSubstitutionObservation` in the daemon's in-memory
 `ModelSubstitutionLedger`: bounded, newest-wins per account and requested model,
-kept for 30 minutes (observation retention, not a vendor reset time), never
-cleared by a later success, voided with the credential generation at the
-unusable ledger's call sites, and never recorded while a login of that harness
-holds its credential-mutation window (#363). While one is live, Auto selection for that
-requested model ranks the account after every other selectable account, oldest
-observation first, so a fully marked pool takes turns. The observation never
-excludes an account or exhausts a pool, and a pin or a usable preferred account
-is resolved before it. Agent Runs do not pass it.
+kept 30 minutes (observation retention, not a vendor reset time), never cleared
+by a later success, voided with the credential generation at the unusable
+ledger's call sites, and never recorded while a login of that harness holds its
+credential-mutation window (#363). While one is live, Auto selection for that
+model ranks the account after every other selectable account, oldest observation
+first, so a fully marked pool takes turns; it never excludes an account or
+exhausts a pool, and a pin or usable preferred account resolves first. Agent Runs
+do not pass it.
 
 Catalog `provenance: "provider_http"` means the adapter read and validated a
-successful upstream HTTP catalog response at `observedAt`. Reusing that catalog
-preserves its original time; other provenance values, including historical
-diagnostic strings, do not certify provider contact. The control API forwards
-these adapter-owned fields without turning loopback reachability into upstream
-evidence. Catalog failure returns the existing typed problem, never a refreshed
-timestamp on an earlier successful catalog.
+successful upstream HTTP catalog response at `observedAt`; reuse keeps that time.
+Other provenance values, including historical diagnostic strings, certify no
+provider contact. The control API forwards these adapter-owned fields without
+turning loopback reachability into upstream evidence, and catalog failure returns
+the typed problem, never a refreshed timestamp on an earlier catalog.
 
 The daemon is the durable scheduler. `DaemonServer` requires an injected durable
 command authority and has no in-memory command-record fallback. The HTTP control API is a live viewport and
@@ -2176,7 +2257,13 @@ percent-encoding in the path with a typed `400 malformed_request_path` (never a
 `500`), projects request-schema violations into structured `fieldErrors`
 (JSON Pointer → messages) with a single-line human summary rather than a raw
 validator dump, and validates the per-run SSE cursor as a nonnegative integer
-`seq` before opening the stream.
+`seq` before opening the stream. Its HTTP server keeps idle keep-alive sockets
+for 65 s (longer than clients' idle-reuse windows, such as httpx's 5 s, which
+would otherwise race the server's close), allows 66 s for request headers, and
+does not bound the receipt of a request body, so a large upload during a busy
+period is not cut; none of these limits applies to responses or SSE streams.
+Once stopping, it closes each kept-alive socket as soon as its response finishes,
+so the longer keep-alive window never delays shutdown.
 
 An admitted continuation whose predecessor record or run directory disappears
 before execution fails with `continuation_predecessor_unavailable` (404, not
@@ -2186,8 +2273,22 @@ The authenticated read-only `GET /v2/daemon/status` exposes daemon health and
 current memory facts (heap used/limit, RSS, external bytes, effective heap args),
 plus the first normal-admission snapshot. It is also available in recovery-only
 mode, where admission memory is null until normal admission has opened. Sampling
-does not force GC or traverse retained commands; job counts use store sizes.
-The protocol handshake remains unchanged. No memory thresholds affect admission.
+does not force GC or materialize retained commands; total job count comes from
+SQL and active/queued counts come from the existing live runner lifecycle.
+`loop` carries the last completed ten-second window of event-loop facts: delay
+p50/p99/max from `monitorEventLoopDelay` (sampled at 10 ms, so an idle loop's
+p50 sits near 10 ms, and reset every window), the `eventLoopUtilization` busy
+share, and the GC pauses a `PerformanceObserver` saw (count, total, longest).
+It is null until the first window completes; a stalled loop rolls its window
+late, so `windowMs` grows with the stall. `claudexor daemon status` prints the
+same window as one line. The status route reaches the daemon in process, so it
+answers while the loop is merely slow. The protocol handshake remains unchanged.
+The `store` facts report flusher state, interval, last barrier and lag, WAL bytes,
+open obligations, busy waits, request-thread COMMIT timing since the store opened
+([SQLite engine store](#sqlite-engine-store)), integrity and current import
+progress. A field is null when its owner cannot observe it; pending integrity is
+not a successful check.
+No memory, loop or store measurements impose automatic admission thresholds.
 
 <!-- BEGIN GENERATED ENDPOINTS (node scripts/gen-endpoints-doc.mjs; do not edit by hand) -->
 - `GET /healthz`
@@ -2195,6 +2296,7 @@ The protocol handshake remains unchanged. No memory thresholds affect admission.
 - `POST /v2/account-resets`
 - `GET /v2/account-resets/:id`
 - `POST /v2/accounts-migration/rollback`
+- `GET /v2/accounts/routing-evidence`
 - `GET /v2/agent-capabilities`
 - `GET /v2/credential-profiles`
 - `POST /v2/credential-profiles`
@@ -2286,12 +2388,19 @@ The protocol handshake remains unchanged. No memory thresholds affect admission.
 
 Endpoint semantics beyond the inventory:
 
-Local daemon RPC timeouts retain the ten-second transport bound and answer
-`503 daemon_busy`; connection failures, closed sockets and invalid responses
-answer `503 daemon_unavailable`. Both are retryable and preserve an unknown
-mutation outcome. Daemon-authored refusals keep their status, code, safe context
-and required actions through RPC and HTTP, including continuation chain heads.
-Request validation remains a typed 400; transport does not retry automatically.
+The control API, model operations and harness maintenance run inside the
+daemon process and reach its RPC dispatcher in process (`DaemonLocalClient`):
+there is no socket round trip and no transport timer, so a busy event loop makes
+such a call slow rather than failed. Params, results and problems keep the
+socket's JSON value semantics, and both transports rebuild problems through one
+projection. Socket clients (the CLI, the stdio bridges, runtime replacement and
+the startup transport proof, which dials the socket itself) keep the ten-second
+transport bound: a timeout answers `503 daemon_busy`; connection failures, closed
+sockets and invalid responses answer `503 daemon_unavailable`. Both are retryable
+and preserve an unknown mutation outcome. Daemon-authored refusals keep their
+status, code, safe context and required actions through RPC and HTTP, including
+continuation chain heads. Request validation remains a typed 400; transport does
+not retry automatically.
 
 - `POST /v2/runs` with `continueFrom: <runId>` continues a terminal run of this
   daemon — stopped, limited, cancelled, interrupted or finished — as a new
@@ -2386,7 +2495,7 @@ Request validation remains a typed 400; transport does not retry automatically.
   workspaces, above). It also carries sticky routing — `primaryHarness` and
   `eligibleHarnesses` — that its turns inherit; `PATCH /v2/threads/:id` renames /
   archives a thread (title + open/closed state) and switches the sticky
-  routing. Its optional `folder` label is daemon-owned and journaled with the
+  routing. Its optional `folder` label is daemon-owned and persisted with the
   thread; the client derives folder sections from those labels rather than
   keeping a second local folder store. A PATCH that changes only `folder` is
   filing, not activity: it keeps the thread's `updatedAt`, so the list order
@@ -2430,7 +2539,7 @@ Request validation remains a typed 400; transport does not retry automatically.
   Ask/Plan turn can run inside the lane home purge deletes; trash and restore
   delete nothing and never refuse a busy thread. What purge deletes and keeps
   is listed here once; DESIGN_SYSTEM (the Delete Now dialog) and the FEATURES
-  row refer to it. Purge journals the `purged` state first, which takes the
+  row refer to it. Purge commits the `purged` state first, which takes the
   thread out of every listing, then deletes the thread's own directories: the
   isolated worktree, with any changes never applied to the project, and its
   `claudexor/thread-*` branch, and every lane home (the per-thread HOME of its
@@ -2444,7 +2553,8 @@ Request validation remains a typed 400; transport does not retry automatically.
   whose rows it could all decode; a repeated purge or the next disk-retention
   pass (below) finishes the cleanup, and nothing makes a partially deleted
   thread restorable again. Purge does not erase the
-  conversation: the thread and turn records stay in the journal, run trees
+  conversation: thread, turn, session and checkpoint rows and original prompt
+  bodies stay in the engine store, run trees
   follow the run retention below, native sessions that a route keeps outside
   the lane home stay in the agent's own storage (Agent turns, and Codex
   config-dir login profiles and Antigravity, which keep sessions in the
@@ -2478,15 +2588,9 @@ Request validation remains a typed 400; transport does not retry automatically.
 - Run-level `POST /v2/runs/:id/retry` is Exact Retry for any settled run: it
   creates a new command/turn, links `retryOf`, reuses the immutable original
   request, and performs fresh normalization/preflight. Retained terminal
-  product commands are bounded twice — by the age/cap rule (the newest 500 and
-  anything younger than 30 days survive) and by a code constant on their
-  serialized params (256 MiB, pruned oldest first regardless of age;
-  needs-decision runs and model receipts are exempt, and delivery commands —
-  which carry a copy of the applied run's params — keep their own age/cap
-  policy and neither count against nor are pruned by the byte budget) —
-  applied at normal
-  admission and after every terminal, so on a heavy install Exact Retry of the
-  oldest, largest prompts can end before the 30-day window. `GET
+  product commands follow the global age/cap policy and continuation exemptions
+  in [SQLite engine store](#sqlite-engine-store). There is no separate prompt-byte
+  budget that shortens Exact Retry's retained-command lifetime. `GET
   /v2/runs/:id/run-again` instead returns an editable draft and explicitly
   lists server-owned fields omitted from that draft. The CLI projects these as
   `claudexor retry` and `claudexor run-again`. Durable idempotent replay is
@@ -2504,7 +2608,7 @@ Request validation remains a typed 400; transport does not retry automatically.
   in the existing problem context, with the preflight error separately retained
   when that second lookup failed. Neither failure proves no prior acceptance.
   If no command was
-  accepted, a replay may reuse its one journaled runless turn only while that
+  accepted, a replay may reuse its one persisted runless turn only while that
   turn is still the conversation tail; the recovery boundary refuses a
   historical orphan before enqueue. Already accepted commands remain valid and
   bind in daemon command order even when later turn bubbles exist. If command
@@ -2544,11 +2648,12 @@ Request validation remains a typed 400; transport does not retry automatically.
   `nextActions`, and the vendor's own typed failure, when the harness keeps one,
   rides `failure.vendorFailure` as opaque evidence that carries no remedy.
 - `POST /v2/runs/:id/decision` records a typed operator decision on a blocked run:
-  `accept_risk` / `override_needs_human` append an auditable patch-hash-bound
-  record to the owning global/project journal before ACK. The run artifact
+  `accept_risk` / `override_needs_human` commit the auditable patch-hash-bound
+  decision and its idempotency binding in the owning partition generation before
+  ACK. The run artifact
   `arbitration/operator_decision.yaml` is only a compatibility projection for
-  artifact-only CLI reads; the apply gate reads journal authority. A same-key
-  replay reads that journal authority before the thread's current idle gate and
+  artifact-only CLI reads; the apply gate reads the stored decision. A same-key
+  replay reads that stored authority before the thread's current idle gate and
   repeats the lookup inside the serialized mutation to close a concurrent-record
   race;
   `accept_clean_patch` delivers; `rerun_with_feedback` enqueues a follow-up;
@@ -2574,11 +2679,17 @@ Request validation remains a typed 400; transport does not retry automatically.
   inserts/prunes with no duplicates or omissions. Ordering, `state` filtering,
   and page slicing all happen on raw records BEFORE any summary is materialized,
   so per-run artifact fingerprint/projection work is bounded by page size rather
-  than total retained records; a terminal run's fingerprint further short-circuits
-  to file identities for only the mutable `delivery_state.yaml` overlay and the
-  retention-owned `tombstone.yaml` transition (all other artifacts are frozen once
-  the run is terminal). The bare parameterless call stays valid — it now yields the
-  newest 200 with a cursor to page the rest.
+  than total retained records. Each summary yields with `setImmediate` before
+  the next. The LRU remembers file identities for delivery, tombstone, continuation
+  sources, every local/ancestor retained-envelope pointer and its addressed custody
+  file, plus ancestor roots/tombstones (GC can reclaim an ancestor without a
+  pointer). Unchanged polls only stat that set; any dependency change rebuilds it.
+  Active runs also track mutable artifacts, including the task contract and
+  structured-output conformance receipt; terminal artifacts are otherwise frozen.
+  The bare call returns the newest 200 with a cursor to page the rest.
+- `GET /v2/threads` projects every thread in store order and validates the response
+  once. Its inbox bit resolves only head command ids (batches of 1000), then reads
+  attention artifacts only for succeeded heads, including operator decisions.
 - Retained-command RPC reads require one strict addressed selector: a job/run
   `id`, a set of `ids`, `turnId`, `threadId` (optionally active only), `threadIds`,
   active commands, direct Delegate children, transitive Delegate descendants,
@@ -2591,11 +2702,11 @@ Request validation remains a typed 400; transport does not retry automatically.
   include their direct Delegate children for turn cards, even when the child
   has no thread id. A page crosses RPC
   with at most `limit+1` records; HTTP keeps its existing summary and cursor
-  contract. Reference/metadata scans remain O(N), separate from journal replay
-  memory. The transitive cancellation cascade stays uncapped; traversal runs
-  inside the daemon before serialization. Continuation preflight reads only the
-  predecessor and forward chain, while the authoritative synchronous enqueue
-  check still uses all records immediately before durable acceptance.
+  contract. SQL uses addressed indexes and bounded keyset pages before projection.
+  The transitive cancellation cascade stays uncapped; traversal runs inside the
+  daemon before serialization. Continuation preflight and synchronous enqueue
+  inspect the addressed predecessor and successor chain before acceptance,
+  without materializing retained command history.
 - `claudexor settings show|set` is a thin client of `GET|POST /v2/settings`.
   Validation, persistence, cache invalidation, and the returned effective
   `ControlSettingsSnapshot` come from the daemon; the CLI has no second config
@@ -2744,18 +2855,20 @@ In the daemon composition root, the lifecycle-significant events — `run.create
 (journaled with the prompt's sha256 digest and byte length in place of the
 prompt text), `interaction.requested`, `interaction.answered`,
 `interaction.timeout`, `output.ready` and the terminal
-`run.completed|run.failed|run.blocked` — are also appended to the run's owning
-global/project journal partition before live bus publication. Per-token
+`run.completed|run.failed|run.blocked` — also commit to the SQL event ledger of
+its global/project partition generation before live bus publication. Per-token
 `harness.event` deltas and every other progress event reach only the per-run
-`events.jsonl` and the in-process bus, so scoped journal streams replay the run
-LIFECYCLE after restart, never token-level progress. A journal sink failure for a
-journaled event fails the producer/run instead of being swallowed as a live-only
-gap; an event outside the journaled set is never a sink failure.
+`events.jsonl` and the in-process bus, so scoped event streams replay the run
+LIFECYCLE after restart, never token-level progress. Failure to commit a retained
+lifecycle event fails its producer/run instead of being swallowed as a live-only
+gap; progress outside that set does not enter the SQL sink.
 `GET /v2/runs/:id` returns the snapshot together with `lastSeq` — the highest seq
-already reflected in that snapshot — so a client subscribes to
+already reflected in that snapshot, read from the live writer's in-memory counter
+or, for a finished run, from the log's last line (a full scan only when that line
+cannot decide) — so a client subscribes to
 `GET /v2/runs/:id/events` with `Last-Event-ID: <lastSeq>` and applies deltas with
 no gaps and no duplicates. The per-run stream replays from the run's
-`events.jsonl` — the one complete per-run event record; the journal partition
+`events.jsonl` — the one complete per-run event record; the SQL event ledger
 holds only the lifecycle subset above, so it can restore a run's terminal tail
 but never rebuild the full stream — (old pre-seq fixture lines fall back to
 line-number ids) and is
@@ -2765,15 +2878,17 @@ fallback; `output.ready` is guaranteed to precede the terminal
 has applied the terminal event provably has the output. The EventLog's
 once-only terminal-preparation hook also builds and validates the immutable
 `RunFacts` receipt in memory and embeds that exact object in the terminal
-journal event. Terminal commit order is: owning partition journal, atomic
-telemetry/`final/run_facts.yaml` projection, per-run `events.jsonl`, then
-best-effort live publication. An observer that has seen the terminal event can
-therefore fetch the exact validated receipt rather than racing terminalization.
-A failure before journal acceptance leaves no terminal authority and may use
-the safety-net retry. A local failure after journal acceptance preserves the
-typed `terminal_recovery_required` signal; the daemon immediately (or on
-restart) validates the journal payload, repairs a missing/torn receipt and
-per-run terminal tail, and terminalizes the command from that same `RunFacts`.
+event. One SQL transaction commits the command result, immutable `run_terminal`
+event, scoped event copies and a `pending` terminal-files obligation. The file
+owner then materializes telemetry, `final/run_facts.yaml` and the per-run terminal
+line before best-effort live publication. A file error leaves the SQL terminal
+and its obligation intact; immediate reconciliation or startup retries those
+same file effects without another generation or a second terminal authority.
+The obligation becomes `materialized` only after every effect completed, then
+is removed after its registered generation passes the flusher barrier. Per-run
+SSE does not emit `end` while it is `pending`, even if a terminal line is already
+present in the file. An absent or materialized obligation permits the existing
+file/terminal end rule. There is no separate terminal-recovery flag.
 Once a terminal commits, EventLog refuses every later terminal or engine emit
 for that run; post-terminal control audit events continue the monotonic file
 sequence.
@@ -2811,19 +2926,23 @@ Cancellation wins only until the synchronous terminal commit starts. An abort
 observed before the terminal barrier replaces the prepared outcome with
 cancellation facts while retaining the independent checks/review/no-change/
 work-state evidence already established for the run. Once a terminal has
-committed to the owning journal, Cancel is a NO-OP: the committed terminal
+committed to the engine store, Cancel is a NO-OP: the committed terminal
 wins, a later abort cannot rewrite the durable result, EventLog refuses every
 later terminal emit, and the daemon keeps reporting the committed outcome.
 The `aborted -> cancelled` mapping survives only as the daemon's fail-closed
 fallback classification for a malformed runner result with no recognized
 lifecycle.
 
-`GET /v2/global/events` and `GET /v2/projects/:id/events` replay the durable
-global or project journal partition and then tail it. Their `Last-Event-ID`
-values are opaque, partition-scoped cursors: a cursor from another partition or
-epoch is rejected so the client can re-snapshot that scope. The API does not
-claim a total order across partitions. There is no live-only compatibility
-multiplex in v2.
+`GET /v2/global/events` and `GET /v2/projects/:id/events` read the retained SQL
+event rows for the current partition generation. Live delivery uses that same
+retained set: a row superseded before a poll is not delivered. The protocol-3
+`ControlJournalEvent` shape and opaque `{v,p,e,s}` cursor encoding are unchanged;
+import preserves original epochs and sparse sequences, including a folded-away
+last frame. A foreign partition/epoch or ahead sequence is rejected with 409 and
+`resnapshot`. The API claims no total order across partitions and has no separate
+live-only stream. `thread.entities_upserted` is state in tables, not a streamed
+event. Model/account-reset event copies expire after 30 days; their command
+receipts remain retained independently.
 
 The global partition additionally carries `thread.head.updated` — a
 content-free invalidation ping `{thread_id, project_id, revision}` emitted on
@@ -2843,35 +2962,21 @@ lost" when the stream ends without a terminal event.
 
 ### Daemon lifecycle (signals, orphans, crash GC)
 
-Directory terminal facts require a reader that supports the files-result
-contract. The new reader retains compatibility with earlier state and requests;
-the 3.10.5 reader cannot reopen a journal containing these terminal facts for
-normal service. Returning to an older binary after using the new feature is
-therefore not a supported rollback of that state. Keep journals and results
-intact and recover with a compatible newer reader. A pre-update backup must not
-automatically replace later work. This boundary uses the existing runtime version
-floor and recovery plane; it adds no alternate journal or compatibility shim.
-
-The folded journal is the same kind of boundary. Once this engine has served a
-root, its partitions may hold seq-preserving multi-frame snapshots
-(`count < logicalSpan`), `command.updated` frames without params, digest-only
-quota markers and replay-folded history. The 3.11.0 reader decodes a folded
-snapshot as a record-count mismatch and enters the recovery plane loudly, and
-it would replay a params-less update as a record without params; neither is a
-supported rollback of that state. The root-authority semantic floor is the
-enforcement: the first successful serve of the release that ships the fold
-advances the floor to that version, after which the older engine refuses the
-root typed (`root_authority_floor_regression`) — no second mechanism. A first
-start on a legacy (unfolded) journal folds at replay, so its startup memory
-already follows the retained set; the first background compaction rewrites the
-partition file at that start when the folded replay retired at least a
-threshold's worth of bytes, and otherwise after a threshold of new bytes.
+The engine-store migration is forward-fix only. Before publishing imported SQL
+state, startup advances the existing root-authority semantic floor to the
+running engine version. Older engines then refuse that root with
+`root_authority_floor_regression`.
+Keep preserved journals, SQL evidence and run artifacts; an older backup must
+not automatically replace later work. Logical partition recovery and physical
+whole-store recovery are described under
+[Legacy import and recovery](#legacy-import-and-recovery), and a complete
+pre-upgrade backup under [Upgrade backup and restore](#upgrade-backup-and-restore).
 
 Every shutdown trigger — SIGTERM/SIGINT, the `claudexor.shutdown` socket RPC,
 a startup failure — enters ONE state machine (`DaemonRuntimeShutdown
-.beginShutdown(reason)`): abort in-flight runs, complete their journaled
-terminal transitions, close the journal, under a shared bounded escalation
-ladder (hung-stop deadline, then a post-stop leaked-handle sweep, every rung
+.beginShutdown(reason)`): abort in-flight runs, complete their committed
+terminal transitions, await storage/worker cleanup and close the SQL store under
+one shared bounded escalation ladder (hung-stop deadline, then a post-stop leaked-handle sweep, every rung
 disclosed in the log). Awaiting-user interactive login runners are the one
 exemption: the shutdown drain does NOT signal them (a detached Terminal login
 survives an ordinary daemon bounce and is reconciled on the next start;
@@ -2906,7 +3011,7 @@ contender cannot quarantine a live successor. Acquisition is the only
 quarantine mutator and tombstones have no automatic GC.
 
 Above the per-socket lease sits a PERSISTENT root authority for the shared
-data root. Before any journal work the daemon validates/installs a permanent
+data root. Before any store or import work the daemon validates/installs a permanent
 barrier at the canonical default writer address: the lease directory carries
 `root-authority-v2.json` and no top-level owner record, so a pre-fix claimant's
 owner parse fails closed forever (it can neither adopt nor quarantine the
@@ -2921,94 +3026,23 @@ and fail-closed: the writer protocol epoch (foreign epochs refused) and the
 semantic-version floor of the last runtime that PROVED it could serve
 (strictly lower versions refused; equal versions contend normally). The
 barrier survives clean shutdown and is never automatically removed. Startup
-itself is two-stage: after authority, the journal is prepared READ-ONLY (scan/
-verdict, no truncation), the socket + Control API come up serving
-`recovery_only` — health, handshake, shutdown, and the `/recovery/*` surface
-stay reachable while every product route/RPC is refused with a typed
-`daemon_recovery_only` 503 — and only after transport is provably up does the
-daemon revalidate every read-only preparation, and only on all-green advance
-the floor, run destructive recovery (activation truncation, crash GC,
-orphan/debris sweeps, retention), and open normal admission. A root
-with a recovery-needed partition keeps the floor unchanged and destructive
-work off, staying online recovery-only instead of dying dark — the control
-API binds for that plane even under `CLAUDEXOR_NO_CONTROL_API=1`, and a
-successful `/recovery/*` quarantine re-runs the admission completion in
-process, so the daemon transitions to normal serving without a restart. The handshake
-discloses `servingMode` (`normal`/`recovery_only`; absent means a pre-fix
-daemon, treated as normal); the macOS app maps `recovery_only` to its
-existing Connecting loop — no adoption, no hydration, no reconciliation, no
-fallback launch — until admission opens.
+first acquires that authority and binds/proves the real socket and
+Control API with product admission closed. Health, handshake, status, shutdown
+and recovery remain reachable in `recovery_only`; product operations receive
+`daemon_recovery_only`. Only then may the storage owner open or import SQL and
+complete recovery/admission duties. The current global generation must be ready;
+a logically damaged project generation stays isolated while healthy projects
+serve. Physical corruption closes product admission for the whole store.
+Recovery access overrides `CLAUDEXOR_NO_CONTROL_API=1` when needed. A successful
+explicit recovery rebinds the existing SQL/quota/setup owners and re-runs the
+same admission completion in process. The handshake retains `servingMode`;
+the app waits in its existing Connecting flow during import/recovery and does
+not launch a fallback daemon.
 
-Automatic journal compaction is cancellable maintenance after normal admission.
-Every daemon-owned JournalManager opts into `deferCompaction` and requests an
-attempt after its generation opens or recovers. A process-local pending set and
-one in-flight promise serialize global and project partitions and coalesce
-repeated requests — a request that arrives during a generation's own flight
-runs one more pass after it, and a failed or declined pass never condemns the
-generation; new partitions use the same callback. Maintenance is edge-triggered
-on GROWTH: a crossing is a threshold of bytes appended since the last completed
-pass over the data — an install moves that baseline to the installed size, a
-capacity or no-reclaim decline and a FAILED pass (an unwritable staging
-directory, an ENOSPC window) to the size they settled at, and an immediate
-below-threshold, empty or aborted decline moves nothing — so a partition whose
-retained set alone exceeds the threshold (model receipts kept forever, retained
-params up to the byte cap) is compacted once per threshold of new bytes, never
-on every append, and a partition that declined re-runs only after a threshold
-of new bytes. Under a fold the replay at open is itself the first completed
-pass — the baseline starts at the file size minus what the fold retired while
-replaying — so a restart on an already-compacted partition above the threshold
-does not rewrite it to reclaim nothing, while a legacy partition whose replay
-retires a threshold's worth is compacted on its first start. The journal's `onCompactionThreshold` hook fires at most once
-per crossing after an append and is re-armed when a pass completes — install,
-typed decline or a failed pass — so a long-lived daemon that dedupes in-flight
-requests hears
-about every new crossing (and never after the journal is closed). Every pass ends in one daemon-log line that also lands in the startup
-diagnostics record: `journal.records_retired` (`retainedCount`, `retiredCount`,
-`retiredBytes` beside the byte counts, plus the replay-time retirement the
-generation folded away at open) or `journal.compaction_declined` with its
-typed reason and bounds (`compressedBytes`, plus the `cap` that fired for a
-capacity decline). Both lines end with the process memory (`rssMb`,
-`heapUsedMb`, `externalMb`), as does the normal-admission line in the startup
-diagnostics, so the retained-set memory class is observable on every install.
-Below-threshold and empty passes stay silent, and no control-API field carries
-this yet. There is no maintenance job, persisted
-retry state, or manual upkeep requirement. The threshold value is unchanged;
-its meaning is growth since the last pass.
-
-`compactInBackground({stagingDir, signal?})` captures an immutable logical prefix,
-applies the journal's `fold` to it, streams the retained records through
-asynchronous gzip into a chain of seq-preserving snapshot frames, then re-encodes
-the acknowledged tail against the new physical hash chain with its original
-sequence numbers. The boundary it publishes against is disk state (next sequence,
-chain hash, file bytes), not the in-memory entry count, because a fold at replay
-makes the two differ. Preparation writes one private candidate under
-`daemon/journal-compaction/`, outside the partition directory. Appends continue
-through the existing intent/fsync-before-ACK writer. Publication catches up every
-acknowledged batch, validates the current writer/file identity and generation,
-and uses the same short close/rename/reopen installer as synchronous compaction.
-The retained working set, every sequence number and the current epoch survive
-this background rewrite, so live journal cursors keep their suffix without a
-compaction-induced resnapshot; records the supplied fold judged dead are gone
-from the file, and the receipt reports `retainedCount`, `retiredCount` and
-`retiredBytes` beside the byte counts.
-
-Rollback rule: a runtime from before seq-preserving snapshots decodes a folded
-snapshot (`count < logicalSpan`) as a record-count mismatch and enters the
-recovery plane loudly; it never reads a partial world. A snapshot whose chunks
-each hold exactly their span still decodes there, because the extra `seq`
-field is ignored and the tail frames chain by sequence. Returning to such a
-runtime after a fold has run is therefore not a supported rollback of that
-state; the root-authority version floor enforces it.
-
-The public `compact()` still returns a receipt or null immediately and creates a
-new epoch on success; default library construction/activation keeps that behavior.
-Explicit synchronous compaction cancels any background candidate before proceeding.
-Close, quarantine and generation replacement likewise prevent late publication.
-Shutdown fences and aborts maintenance at its synchronous start and drains candidate
-cleanup before journals close. Capacity/no-reclaim results are typed declines that
-preserve the original file, while uncertain installation follows the existing
-recovery-required path. Record serialization and the final filesystem metadata
-operations remain synchronous; this is not a hard realtime latency guarantee.
+SQLite checkpoints, retained-row pruning and the existing maintenance worker
+replace writable journal compaction; their ownership and durability are defined
+below. Startup memory/loop/store measurements remain observations, not an
+automatic resource governor.
 
 Termination, local and remote runtime replacement, and the real-harness
 battery consume the same strict owner classification. They recheck the exact
@@ -3022,22 +3056,32 @@ but cleanup succeeds only after the main lease is physically absent.
 Stdio bridges (`mcp serve`/`acp
 serve`) bound their life to their host's with a reparent watchdog — a dead
 host whose pipe stays open (inherited fds) no longer leaves an idle bridge.
-No-project command state, setup, and the project registry
-are frames in the checksummed global journal. Each registered project's commands,
-threads, turns, and vendor-session cache live in `project:<stable-project-id>`;
-one corrupt project partition does not make healthy projects unreadable. The
-socket returns an enqueue ACK only after append + `fsync`. Create idempotency is
-scoped by client, partition, operation, and key. A restart maps every accepted
-nonterminal command to `interrupted_unknown`; mutating commands are never
-auto-replayed.
+No-project command state, setup and the project registry use the current global
+SQL generation. Each registered project's commands, threads, turns and sessions
+use `project:<stable-project-id>` with its own generation. Enqueue commits before
+ACK; process-crash durability and the separate power-loss barrier are defined in
+[SQLite engine store](#sqlite-engine-store). Create keys keep their exact client,
+partition, operation and key digest, additionally scoped by owner and generation.
+Restart interrupts accepted nonterminal commands; it never automatically replays
+a mutating command or provider generation.
 The deliberately empty-on-v2-start registry is global. `GET/POST /v2/projects`
 list/register canonical local roots and
-`POST /v2/projects/:id/relink` moves an existing stable project id.
+`POST /v2/projects/:id/relink` moves an existing stable project id. A
+registration answer carries `created`: true only when that registration made the
+project, false when the root was already registered; an `Idempotency-Key` replay
+repeats its retained answer across restart and import, so a
+caller can tell a project it created from one it merely found (`claudexor
+project register` prints `created` or `existing`). Each project
+discloses its nesting relations with other registered roots (`inside` /
+`contains`, never a refusal); the list computes them for the whole registry in
+one pass, each root checked only against its own registered ancestors.
 `DELETE /v2/projects/:id` retires a project — it removes the registry entry and
-ARCHIVES the project's journal partition (renamed out of the active journal
-tree, never deleted, the same non-destructive move the quarantine path uses),
-leaving run artifacts to normal GC and disclosing all of that in a typed
-receipt. It is refused with a typed `409` while any non-purged thread or
+archives its current partition generation through a SQL status/visibility
+transition, retaining its rows and leaving run artifacts to normal GC. The typed
+receipt's `archivedPartitionPath` is the logical locator
+`partition:<name>@<epoch>`, not a filesystem path. Registering the same root
+after archive creates a new project id and generation. Removal is refused with
+a typed `409` while any non-purged thread or
 live/queued run still references the project. The live/queued-run fence is a
 SNAPSHOT, disclosed as such in the receipt (`activeRunCheck: "snapshot"`): the
 active-run root set is read once through the in-process command activity
@@ -3074,9 +3118,9 @@ run candidates are judged, so the runs only it referenced become ordinary
 unreferenced candidates. A thread with a queued or running turn is kept for a
 later pass and disclosed in `errors[]`, as is a failed purge; a dry run purges
 nothing and previews those threads' runs as unreferenced. Before that, the
-pass FINISHES PURGES whose directory cleanup failed after the journal commit:
+pass FINISHES PURGES whose directory cleanup failed after the store commit:
 every purged thread whose isolated worktree or lane home is still on disk goes
-through the same owner again (it journals nothing new and deletes what is
+through the same owner again (it commits no new purge and deletes what is
 left); a cleanup that fails again is disclosed in `errors[]` and retried by the
 next pass, and a dry run only lists them. The receipt's `purged_threads` names
 the purged (or would-be-purged) expired trash and `purge_leftovers` the
@@ -3103,7 +3147,7 @@ spawn. Nothing removes a kept envelope automatically: a successor adopting it
 one. Discard releases the kept tree; a later accepted continuation starts from
 the project base. Command pruning also exempts retained holders and successor commands
 while their predecessor record remains in the kept set, preserving the
-continuation handle and its single-successor claim across journal compaction.
+continuation handle and its single-successor claim across retained-event pruning.
 After a predecessor is pruned, its successor becomes eligible on a later pass.
 The crash sweep never treats a kept envelope as an orphan (its auth is
 stripped again, and a missing holder pointer is rebuilt from authoritative
@@ -3113,7 +3157,9 @@ start from the project base even if their predecessor holds a retained envelope;
 they do not adopt or retain it. In-place runs and race/synthesis/review envelopes
 keep their ordinary lifecycle.
 While running it snapshots its live harness child process groups to
-`daemon/pids.json`; the NEXT startup reaps recorded orphans that survived a
+`daemon/pids.json` (checked every two seconds, written asynchronously and only
+when the set of children changed; shutdown waits for that write before its final
+synchronous snapshot); the NEXT startup reaps recorded orphans that survived a
 crash (pid liveness + command-name recycling guard) and sweeps workspace
 debris under daemon-known project roots. The reap is not a stop proof: it sends
 SIGTERM to each recorded group, deletes the record, and only schedules SIGKILL
@@ -3124,7 +3170,90 @@ terminalized as `interrupted` (`resumable.cause: host_restart`, with its
 that workspace keeps it and reconciles quiescence itself before refreshing or
 reusing it. An in-run cancel reaps its own process tree and discloses any
 unconfirmed death as `termination_unconfirmed` on the harness's completion
-event. The sweep covers orphaned envelopes (with their
+event. Independently of that cancel ladder, every run owns a process SCOPE
+(INV-144): `run()` mints a `CLAUDEXOR_RUN_SCOPE_<id>=1` marker and records it in
+`daemon/run-scopes.json` before the first launch; every harness spec env of the
+run carries it, as does every deterministic gate the run launches — candidate
+gates, its final verification and adoption (`gateSpecsFromContract` binds it;
+nothing is ended per command); a `clean` env also forwards an enclosing host's
+grammar-shaped markers; the same pids tick takes one asynchronous process-table snapshot and
+records each live harness root's descendants (pid, group, birth) into the run's
+entry, after the root's own group (pgid and the leader's measured identity)
+was recorded synchronously the moment it was registered — its `lstart` birth
+is added once a table read confirms the same leader before and after the
+read, and the scope floor is `opened_at` until a birth is known. Every announced run holds its terminal event (the
+deferred-terminal mechanism) until the whole-run barrier has ended the scope's
+members by measured identity — environment-marker members (`ps -E` on macOS,
+read only for processes no older than the scope after a cheap `pid,etime`
+listing — elapsed time rather than a start timestamp, so both sides come from
+the same clock at the same moment and zones or DST cannot hide a member; a
+minute of slack absorbs small backward wall-clock steps, and a larger one
+during the run can hide a marker-only member (recorded groups and captured
+descendants do not use the filter); a failed listing falls back to the full
+read, and `ps -p` exiting 1 counts as "every selected pid vanished" only with
+nothing on stderr —
+`/proc/<pid>/environ` on Linux), members of recorded process groups under the
+pgid-reuse rule and recorded descendants, TERM then a bounded KILL, each signal
+after a fresh birth read (a member is the same process by its kernel birth even
+after it moved to another process group; signalling a whole group still requires
+its recorded leader in that group) — and attempted to write `final/process_scope.yaml` (what was
+ended, what survived, what was unreadable, which recorded groups were skipped
+as reused, `completeness`, and `incomplete` when the single settlement
+deadline expired first — one absolute budget that starts when the daemon's
+custodian enters settlement for the run, also bounds the run's own pending
+seed refinement and never waits for another run's seeds; scanning and
+signalling stop at that moment — no read starts after it, never a late signal); only then is the terminal published — also on the path where a
+delegated child drain failed (the record step is the barrier's `finally`) — so a
+host that sees the terminal in the SQL command state or on the SSE stream already
+finds the settlement done and, when the write succeeded, the record on disk. The
+write is best-effort evidence, not a gate: a write failure, or an outcome that
+fails its schema, is swallowed, the verdict is published unchanged, and that run
+has no record. Recording is attempted once, without a second write or retry.
+`GET /v2/runs/:id` projects the record compactly as `summary.processScope`,
+which an engine that has the field always sends: the compact object for a
+terminal run whose record is readable and valid, otherwise an explicit `null`
+that means unknown, never clean — the run is not terminal yet (even when the
+artifact already exists), the record is absent (a run that predates it, or whose
+write failed), or it is unreadable or invalid. The run list leaves it a constant
+`null`; read the detail. Engines that predate the field omit the key, which is
+equally unknown; the generated JSON Schema lists the property as optional (it
+declares a default of `null`), although this engine always sends it. The reap
+never changes the verdict. The next start settles or discloses entries whose owning daemon is no
+longer live BEFORE this sweep and never touches a marker absent from the index.
+Limits are disclosed, never failures: Windows has no environment census
+(`tree_only`, and such entries are retired after disclosure); on macOS SIP
+hides Apple platform-binary environments, so a system binary started in the
+background by a shell that exited before any capture cannot be ruled out —
+`completeness` is `not_provable` there even when settled, and `complete` only
+on Linux when every census source succeeded and every same-uid process
+environment was readable (another uid cannot inherit our environment through
+ordinary spawn and is not counted; a setuid binary is a disclosed residual).
+An unreadable same-uid or unknown-uid discovery candidate is not a known scope
+member and receives no signal. Once known members settle, that discovery
+uncertainty limits completeness without forcing `settled` false; a host may
+release its copy under the known-member settlement policy while disclosing
+`not_provable`. Unsupported or failed census, surviving known members and
+unknown receipts do not certify that release.
+A host cancel that arrives during the settlement barrier does not rewrite a
+completed run as cancelled: the cancellation decision is frozen when the
+strategy's terminal is held.
+`daemon/run-scopes.json` is a stable contract a host may read directly when
+the daemon is dead. Its compact schema, in the field names the daemon writes:
+`{ "schema_version": 1, "entries": [ ... ] }`; per entry `run_id`, `marker`,
+`state` (`open` | `unresolved`), `opened_at` (ISO time: the floor the daemon
+uses while no `lstart` birth exists), `scope_start` (`lstart` text or null),
+`root_groups[{pgid, leader_pid, leader_birth | null, leader_identity?}]`
+(`leader_identity` is the daemon's opaque kernel birth token, comparable only
+by the daemon's own identity helper; `leader_birth` is filled once a table
+read confirmed the same leader) and `captured[{pid, pgid, birth}]`; every
+birth is `ps -o lstart=` text under the C locale in local time
+(`Mon Oct 12 14:08:47 2026`, 1 s resolution) and is only ever compared with
+another `lstart` reading, never with the identity token. A host without the
+identity helper follows this rule when `leader_birth` is null: a live process
+with `pid == pgid` cannot be verified as the recorded leader, so the host
+skips that group; when no process with `pid == pgid` is alive, the group's
+remaining members born at or after the floor belong to the scope (the kernel
+does not hand out a pid that is still a live process-group id). The sweep covers orphaned envelopes (with their
 seeded-credential homes), dead per-attempt `claudexor/<task>/<attempt>`
 branches, leaked `claudexor/verify-*` branches, and stale
 `claudexor-ro-*`/`claudexor-verify-*` tmp dirs. Envelopes whose creating
@@ -3148,6 +3277,229 @@ on exotic filesystems is tolerated at startup (the win32 named pipe is not a
 filesystem entry, so no chmod applies there; the bearer token remains the auth
 gate on every platform).
 
+### SQLite engine store
+
+`packages/daemon/src/store/` is the single production persistence owner for each
+daemon data root. `SqlDaemonStorage` opens it after transport proof and supplies
+the complete SQL graph. Structural store ports expose domain methods, addressed
+queries and global pruning; they do not select a storage mode. The existing
+scheduler, runner, cancellation and setup lifecycle use those ports. Quota and
+setup retain their established reducers over selected logical `EventLedger`
+rows. The old writable journal graph is retired, with the historical decoder
+kept only for cold import and an independent frozen copy kept for tests.
+
+- One database `engine.sqlite` per daemon data root, opened through the
+  `EngineStore` adapter: `node:sqlite` is imported lazily — on the request
+  thread when a store opens and inside each worker when it starts — so the
+  daemon package itself loads on a Node without that module, and the open
+  proves the bundled SQLite is at least 3.51.3 (the WAL-reset corruption fix)
+  or refuses typed (`engine_runtime_unsupported`) before store bytes are touched;
+  the file's
+  application id and schema version are checked before any write
+  (`store_schema_unsupported`); the connection pragmas are applied and read
+  back. The request thread is the single row writer: a mutation is a
+  synchronous transaction (BEGIN IMMEDIATE … COMMIT, ROLLBACK in `finally`,
+  asynchronous bodies refused) under WAL `synchronous=NORMAL`. Return/ACK means
+  committed and durable across an engine process crash or kill, not power loss
+  or kernel panic: recent commits can be lost until a completed flusher barrier.
+  Provider generation and native account-reset I/O await `flushed()` before the
+  external effect.
+  Bodies up to 64 KiB live inline in the `blob` table; larger bodies are
+  content-addressed files under the resource store, written in the same tick
+  as the owning transaction.
+- Schema version 2 adds the INV-135 `account_last_service` table to the
+  version-1 DDL in place; no other row changes. Opening the store applies it
+  automatically, before startup advances the root-authority floor, and the
+  adoption is one-way like the rest of this store's forward-fix migrations: no
+  downgrade path is promised. An engine that serves only version 1 — including
+  an older build of the same release version, which the semantic floor cannot
+  tell apart — refuses the upgraded file with `store_schema_unsupported` before
+  any write.
+- The flusher worker owns the power-loss barrier. Every 200 ms it fsyncs each
+  directory registered since the previous pass, reads `data_version`, runs a
+  PASSIVE checkpoint for space, and — whenever anything was committed since
+  its last proven barrier — issues one explicit fsync of the WAL file (an
+  F_FULLFSYNC on macOS, also a device-wide barrier for `O_DSYNC` file data
+  handed to the drive before it). The barrier is never derived from a
+  checkpoint result, and a freshly started or restarted worker treats its
+  first pass as dirty. Every connection that can checkpoint — the writer and
+  the flusher; the serving maintenance connection is read-only and never
+  checkpoints — sets `checkpoint_fullfsync`, so the checkpoint that completes a backfill
+  syncs WAL → database → reuse in order and database pages become durable
+  there, not through the WAL fsync;
+  the writer's `wal_autocheckpoint` of 4000 pages (about 16 MiB) is the
+  trigger threshold of that checkpoint, not a physical bound: under a pinned
+  reader (a maintenance integrity check or export, a long statement) or a
+  large transaction the WAL keeps growing and resets once the reader
+  releases, after which `journal_size_limit` truncates the file; the first
+  such checkpoint after a long pinned read copies the accumulated backlog in
+  one longer stop on the request thread. The writer's automatic checkpoint
+  runs inside a COMMIT call once the WAL reaches the threshold, and a COMMIT
+  that restarts the WAL syncs the new WAL header, so `synchronous=NORMAL`
+  removes the per-commit WAL sync, not every native sync on the request thread.
+  The request thread itself calls no
+  Node storage-sync primitive: external files use `O_DSYNC` on POSIX and
+  libuv's write-through open flag on Windows, where Node does not export the
+  POSIX constant. The temp is renamed and its directory goes to the flusher via
+  `registerExternal`. Registrations and `flushed()` waiters carry monotonic
+  generations; a pass acknowledges every generation it received before it
+  started, a dead worker rejects its earlier waiters typed
+  (`store_flush_unavailable`, retryable) and is restarted with its
+  unacknowledged registrations replayed.
+- Obligations (`effect_obligation`) are rows created in the same transaction
+  as the decision whose file effects they protect (terminal files, blob
+  publication, archive/purge/quarantine steps). The row stays `pending` until
+  the owner has performed every effect and materializes it, recording the
+  generation of the last registration in `materialized_g`; only a barrier
+  covering that generation deletes it. Startup replays every open row through
+  an idempotent per-kind handler, so their count is unfinished work, never
+  history.
+- Blob files are collected through that same rule: only after the barrier of
+  the latest transaction that changed a reference to the digest, by a
+  single-flight per-digest handler that re-checks newer changes and every
+  reverse index in one synchronous section before unlinking and deleting the
+  file-mode `blob` row. The maintenance worker — its own
+  read-only connection, never the flusher's thread — runs the integrity check
+  after admission and on request, exports a consistent snapshot copy, and
+  enumerates orphan candidates (blob files, temp files and upload parts older
+  than the process start that no row in its snapshot owns); every removal is
+  decided on the request thread by one rule: the main thread records the
+  generation of every committed change to a file's owner rows, the unlink
+  waits for the barrier covering the latest one and, in a single synchronous
+  section, retries if the owner moved, keeps if an owner exists, else unlinks.
+  `EngineStore` owns this generation map; blob helpers, obligation completion
+  and maintenance share it automatically, including when constructed separately.
+- Retention applies the existing fold verdicts as SQL retire/slot/group/drop
+  operations. Slot and group deletions name the partial indexes `event_slot`
+  and `event_group`, so each is an addressed `(pid, key)` lookup whose cost
+  depends on the rows it actually removes, not on the partition's other
+  history, during appends and cold import; retention query-plan tests pin those
+  plans. Thread/turn/session/checkpoint state is kept in tables and is never
+  age-pruned; thread-entity snapshots consume sequence but are not event rows.
+  Resolved interactions remain resolved across restart until command pruning.
+  Model/account-reset stream copies have a 30-day lifetime independently of
+  their retained command receipts. Command rows carry a `kind` set once at accept
+  (`commandKind`) and a `live` flag for the served generations; the bounded
+  prune uses one default global cap of 500 terminal product/delivery/maintenance
+  commands and admits victims only after 30 days. Exempt and younger commands
+  can keep the total above that cap. Each pass selects at most 100 oldest
+  eligible victims through keyset pages over a partial
+  index, with needs-decision rows outside the candidate index and continuation/
+  retained-envelope exemptions checked once per candidate. Remaining excess is
+  handled on later passes; model and account-reset receipts are exempt. No
+  separate 256 MiB prompt budget shortens this lifetime. Journal
+  cursors keep their encoding and map onto the current partition generation;
+  a stale epoch or an ahead sequence is refused with the same 409
+  `journal_cursor_invalid` and `resnapshot` as today.
+- Facts for the daemon status (measurements, never verdicts): `flush_lag_ms`,
+  the last barrier time, `wal_bytes`, flusher state and counters,
+  `busy_waits`, `commit`, `obligations_open`, the integrity verdict, and the
+  importer's phase/current partition/partition and byte progress. CLI daemon
+  status consumes that progress and the COMMIT summary; unavailable facts stay
+  null and a pending integrity check is not reported as passed.
+  `commit` covers the request thread's `transaction()` COMMIT calls since this
+  store opened (a new store, including an in-process replacement, starts
+  again): attempts, failures, and the last and longest duration on a monotonic
+  clock at microsecond resolution. Only the native COMMIT call is timed, so a
+  WAL header sync or checkpoint SQLite runs inside it is included, while BEGIN,
+  the body, error mapping, ROLLBACK, open-time schema setup and the flusher's
+  later barrier are not. It is one lifetime summary, not aligned with the
+  event-loop window; a long COMMIT is evidence of where the request thread
+  waited, not proof of a disk cause. Before any COMMIT the counts are 0 and
+  the durations null; a store that is not open reports null, and older
+  engines omit the field.
+
+Typed refusals of the core: `engine_runtime_unsupported`,
+`store_schema_unsupported`, `store_flush_unavailable`, `store_full` (ENOSPC
+or SQLITE_FULL), `store_corrupt`, `store_busy` (the busy timeout is a fuse;
+hitting it is the `busy_waits` fact). The store workers travel inside the
+single-file daemon bundle: the bundle is their worker entry and the embedded
+worker modules self-start on `workerData`, while the daemon's direct-entry
+check ignores worker threads.
+
+#### Legacy import and recovery
+
+The supported engine runtime is Node 24.15.0 or newer with bundled SQLite at
+least 3.51.3. Unsupported SQLite/module availability is refused before opening
+the data store. Protocol major remains 3; the application floor for engine 4.0
+is application 4.0 because older finite-only decoders cannot read unlimited
+capacity. The existing updater requests the app update and keeps the working
+older engine until then.
+
+On first startup without `engine.sqlite`, an existing `journal/` is imported by
+the maintenance worker into `engine.sqlite.import` while transports serve
+`recovery_only` with progress. That worker is the sole connection/writer of the
+temporary database; progress crosses worker messages, not a second reader.
+It uses the existing read-only frame/intent parser under `store/legacy-journal/`
+and the domain row reducers, preserves ids, exact idempotency digests, original
+epoch/sequence/time and disk chain state, and compares the imported retained
+records/state before publication. A valid pending append contributes only the
+validated prefix before its recorded intent; unexplained damage retains evidence and marks its logical
+partition recovery-required. Unknown records remain explicit `unclassified`
+evidence. Interrupted imports resume from verified partition receipts with source
+fingerprints and integrity checks; source journals are never repaired in place.
+
+Publication closes the sole writer, proves no import WAL remains, explicitly
+syncs the database, advances the semantic floor, renames the database and
+preserves `journal/` as `journal-legacy/` (a distinct archive name on collision),
+then syncs the parent directory before service. An existing `engine.sqlite`
+takes precedence over legacy import, including after a crash between these steps. A new
+empty root creates a fresh SQL store through the same transport/admission owner.
+The import can take minutes and materializes one legacy partition at a time;
+steady startup still replays retained quota/setup events, not all command history.
+
+Historical `resource-store/idempotency/<digest>.json` files remain authoritative
+for unreplayed upload keys. SQL probes only the requested digest on an enabled
+miss and adopts that binding in the same mutation; startup never scans this
+large directory. The persisted presence flag disables the fallback when absent.
+Bindings expire 30 days after a resource's known release/expiry, never from a
+guessed file timestamp. Manually removing the historical directory can turn a
+later replay into a missing result or a new upload. Retiring serving code does
+not delete legacy journals, account/credential stores or these key files.
+
+Logical archive/quarantine changes status and generation visibility without
+deleting the old rows. A global-generation replacement hides the old project
+registry and its generations together; uploads keep their independent pid0
+scope. Logical recovery exports a consistent SQL snapshot with its referenced
+external bodies. Its manifest discloses excluded upload `.part` files, legacy
+upload idempotency-key files not yet adopted into SQL, and per-run event logs,
+run artifacts and setup operational artifacts; those remain at their existing
+locations. Physical corruption instead uses the existing `engine-state`
+recovery target: its raw database/WAL/SHM export is diagnostic evidence, not a
+complete restorable backup. Explicit whole-store quarantine closes storage and
+archives the database files with `resource-store/` (bodies, uploads and legacy
+keys) under the same recovery artifact before creating a fresh store. The new
+store's GC cannot delete archived bodies; its empty resource directory inherits
+no old upload replay authority. Accounts, runs and `journal-legacy/` stay in
+place. The same idempotent recovery operation resumes before ordinary startup
+selection; it never reimports legacy state or replaces newer work automatically.
+This migration is forward-fix only.
+
+#### Upgrade backup and restore
+
+Store migrations are one-way. There is no in-place downgrade, and selecting an
+older runtime (an executable-pointer rollback) does not restore data: an older
+engine can serve recovery only with `store_schema_unsupported` when startup
+stopped after the migration but before the floor advanced. After the advance,
+`root_authority_floor_regression` refuses startup before any transport binds. No built-in
+command takes a complete backup; logical and diagnostic exports are not one.
+
+A complete pre-upgrade backup is taken while the daemon and every other writer
+are stopped, as an independent copy that preserves owners and modes and
+contains no hard links. For the default layout it covers all of `~/.claudexor`
+and `~/.cache/claudexor`. For an explicit `CLAUDEXOR_CONFIG_DIR` it covers the
+complete config root, `~/.cache/claudexor`, every externally referenced
+Claudexor-owned store and, for the desktop app, `~/.claudexor/runtime`.
+
+To return to it, stop the daemon, move the newer state aside and keep it
+untouched, restore the backup to its original absolute paths, and start a
+matching pre-upgrade build compatible with the backup's recorded floor; starting
+a newer build can simply migrate the restored data again. The root-authority marker
+grants authority only as a regular, singly linked file owned by the running
+user with private permissions. A copy restored at another path is not a
+supported restore. Work created after the backup is not included, and restored
+credentials may be stale and need sign-in again.
+
 ### Interactive runs (waiting_on_user)
 
 Harnesses with the `interactive` capability (Claude Code via its bidirectional
@@ -3155,11 +3507,11 @@ stream-json control protocol) can raise typed user questions mid-run; the
 orchestrator OFFERS the interaction channel only to routes whose manifest
 declares `interactive`. The
 engine emits `interaction.requested` (questions, options, nullable timeout deadline),
-parks ONLY that attempt, and the daemon journals the pending projection in the
-run's global or `project:<id>` partition before exposing it via
+parks ONLY that attempt, and the daemon commits the pending interaction and its
+event in the run's global or `project:<id>` partition generation before exposing it via
 `GET /v2/runs/:id` (`pendingInteractions`, `summary.waitingOnUser`). Answers
 arrive via `POST /v2/runs/:id/interactions/:id/answer` and are delivered into the
-live session only after the resolution is journaled (`interaction.answered`).
+live session only after the resolution is committed (`interaction.answered`).
 TTY delivery uses the same exact choice grammar as plan questions; it never
 coerces a numeric prose prefix or multiple picks for a single-choice question.
 After daemon restart an unresolved question becomes interrupted rather than
@@ -3178,7 +3530,7 @@ summary may carry `waitingOnUser:true`, but it does not own the question body;
 the macOS client therefore performs a coalesced fresh child-detail read even
 when that child had been hydrated earlier, renders the answer against the child
 interaction's canonical `runId`, and exposes a truthful retry if the detail read
-fails. Answer delivery remains the same journal-first child endpoint above; no
+fails. Answer delivery remains the same commit-before-delivery child endpoint above; no
 parent-side proxy or app-local interaction state is introduced.
 
 `/v2/setup/jobs` (create / status / snapshot / events / cancel / reconcile / extend)
@@ -3198,7 +3550,7 @@ setup does not duplicate them as jobs. Jobs expose a required typed phase, coars
 `timed_out` and `interrupted_unknown`), deadline, and typed terminal outcome.
 `GET /v2/setup/jobs` accepts schema-validated `harness`, `action`, `active`, and
 `limit` filters. Setup SSE carries complete authoritative job snapshots from the
-global journal. Each event has an opaque cursor plus the exact request-relative
+global SQL event ledger. Each event has an opaque cursor plus the exact request-relative
 `previousCursor`; global sequence gaps are valid, while a broken cursor chain,
 duplicate/regressive frame, malformed payload, or EOF without terminal evidence
 requires a resnapshot.
@@ -3237,12 +3589,12 @@ tees output so the operator sees the URL/one-time code, and persists a bounded
 ANSI-stripped tail so the daemon can disclose the real failure cause (e.g. the
 ChatGPT "Allow device code login" toggle being off).
 
-**Transient login disclosure (journal-is-authority, INV-062):** the one-time
+**Transient login disclosure (event-store authority, INV-062):** the one-time
 `userCode` and every captured sign-in URL ride ONLY a transient
 `runner-devicecode.json` sidecar the runner writes and a read-time overlay on
 `ControlSetupJobSnapshot` / `ControlSetupJobEvent`; they are NEVER fields of
-the journaled `ControlSetupJob`, never logged, and never written to the durable
-result receipt (the journal records only THAT something was disclosed, via the
+the durable `ControlSetupJob`, never logged, and never written to the durable
+result receipt (the event ledger records only THAT something was disclosed, via the
 `awaiting_user` transition). The sidecar is removed on terminalization so the
 disclosure stops projecting. Snapshot/event schemas accept the overlay for any
 active login job in `awaiting_user` — codex app-server flows carry a
@@ -3252,7 +3604,7 @@ active login job in `awaiting_user` — codex app-server flows carry a
 `url_disclosure_with_input`, the user's pasted completion value arrives via
 `POST /v2/setup/jobs/:id/input`, rides a one-shot transient
 `runner-input.json` sidecar to the vendor CLI's stdin under the same
-never-journaled rule, and a second submission conflicts instead of replacing
+transient-only rule, and a second submission conflicts instead of replacing
 the first. Stateful UI clients replace the overlay from each authoritative frame,
 retain it only across a bounded same-job Extend/reconnect transition, and clear
 it on Cancel, detach, terminal/non-awaiting state, final stream loss, or poll
@@ -3291,7 +3643,7 @@ persists a vendor token or credential file. Apart from the bounded, ANSI-strippe
 FAILED codex login persists, vendor output is not copied into durable logs, and the Terminal fallback stays open on the result until the
 operator presses Return. The daemon fsyncs an immutable executable/argv
 authorization and one-use permit before the detached runner may spawn. The
-runner's hash-bound result is journaled before verification. For a
+runner's hash-bound result is committed as a setup event before verification. For a
 DEFAULT-store login, exit zero enters a fresh, source-targeted native probe
 followed by an isolated same-harness capability smoke over the normal adapter
 stream; only the exact `vendor_native` / `native_session` route may pass.
@@ -3315,10 +3667,10 @@ sixty-second paste window) has that shorter deadline published as fixed, and
 Extend refuses it with a typed 409 until a delivered code replaces it with the
 bounded exchange grace. For engine-owned deadlines Extend adds 15 minutes
 without a cumulative limit. For a deferred `client_pty` attach, the
-journaled job deadline remains the mutable authority across extensions; the
+persisted job deadline remains the mutable authority across extensions; the
 immutable manifest instead seals a 10-second permit window measured from the
 actual runner start, and the daemon refuses to issue that permit after the
-journaled deadline. Duplicate create for the SAME target store
+persisted deadline. Duplicate create for the SAME target store
 (default, or one profile) returns the same active action instead of launching
 a second Terminal; a create naming a DIFFERENT target while a login is active
 refuses with a typed 409, and a conflicting active mutating
@@ -3368,11 +3720,11 @@ becomes `interrupted_unknown` and is never auto-replayed. Terminal outcomes dist
 recorded group empty without a result; `cancelled_on_restart` describes that
 evidence during restart reconciliation.
 
-The checksummed, fsync-before-ACK global journal is the only setup lifecycle and
-event authority. Per-job `0700` directories under the daemon data root contain
+The global SQL event ledger is the only setup lifecycle and event authority;
+the existing setup reducer and lifecycle binding consume that generation. Per-job `0700` directories under the daemon data root contain
 only runner manifest/state/result/permit/launcher artifacts. There is no
 per-job `job.json`, `events.jsonl`, metadata snapshot, or imported v1 registry.
-Corrupt journal state fails closed; operational artifacts cannot reconstruct or
+Unreadable setup state fails closed; operational artifacts cannot reconstruct or
 override lifecycle truth.
 
 Every endpoint is loopback + bearer-token guarded. Apply endpoints read
@@ -3399,7 +3751,7 @@ are disclosed run evidence that never blocks the selected deliverable, while a
 winner missing its review evidence record blocks exactly like an escalated
 one. The human decision is a typed server action:
 `POST /v2/runs/:id/decision` records `accept_risk` / `override_needs_human` as an
-auditable, patch-hash-bound record in the owning journal. The single-owner
+auditable, patch-hash-bound record in the owning partition generation. The single-owner
 Control API apply gate reads that authority; the mirrored
 `arbitration/operator_decision.yaml` remains a compatibility projection for
 artifact readers. `accept_clean_patch` delivers through `verifyAndDeliver` and
@@ -3466,7 +3818,7 @@ decision before apply. Per-run approvals never narrow this list.
 Before a mutating turn starts, the daemon promotes an `in_place` project thread
 with configured project protected paths one-way into the existing persistent
 isolated-thread workspace. The promotion, worktree path/base, and invalidation
-of native sessions from the former live cwd are one durable journal mutation;
+of native sessions from the former live cwd are one engine-store mutation;
 the next lane receives the bounded continuation packet. The run can finish and
 produce a patch without changing the project tree, while the existing typed
 thread Apply decision remains the only delivery authority. A direct agent
@@ -3539,7 +3891,7 @@ key" — reuse the key to read the recorded verdict. Reasons come from adapter
 and registry state only, never from vendor prose (INV-049). The payload of
 every `message.*` row is `{message_id, attempt_id?, harness_id?, outcome?,
 reason?, live_input?, native_turn_id?, text_sha256, text_bytes, text, title}`;
-the journaled copy in the owning partition drops `text` (like the
+the retained SQL event copy in the owning partition drops `text` (like the
 `run.created` prompt digest), the per-run `events.jsonl` keeps it, and the
 timeline shows it as the row detail.
 
@@ -3676,7 +4028,7 @@ fence (Bible INV-113); an unlisted mutation path is a release blocker:
    the fresh verifier and any push (INV-062). Delivery reuses
    `verifyAndDeliver` with a fresh
    verifier and exact target preimage. Success advances the persistent thread
-   branch and watermark with journaled thread state.
+   branch and watermark with committed thread state.
 5. **Automatic git init** — a NON-GIT project folder is initialized before a
    Git-backed mutating run shape crosses its boundary (`git init`, deterministic
    baseline commit). This includes the first mutating isolated-thread turn and
@@ -3804,19 +4156,20 @@ comes from `budget.paid_budget_per_run`. A single root ledger grants leases to
 planner, candidates, synthesis, and review, and settles
 observed spend even when work errors. Every route carries cost knowledge
 (`exact | estimated | unknown`), billing knowledge, source, and provenance.
-Ordinary included-subscription token valuation is telemetry, not a cash debit — estimated OR
-exact, for candidates and each reviewer route. It is projected BESIDE cash on
-`ControlBudgetSnapshot` (`valuationUsd` + `valuationKnowledge`, also on the MCP
-read result), so proven included ordinary work reads as exact `$0` cash with a
-non-null valuation; an unknown valuation stays null, never a fabricated `$0`.
-Codex's token-only usage remains unpriced unless explicit
-`CLAUDEXOR_CODEX_PRICE_INPUT`, `_OUTPUT`, and `_CACHED` rates cover every used
-token category. Model names never imply a fallback tariff. Included ordinary subscription cash remains exact zero independently of that optional
+Ordinary included-subscription token valuation (estimated or exact, for
+candidates and each reviewer route) is telemetry, not a cash debit. It is
+projected BESIDE cash on `ControlBudgetSnapshot` (`valuationUsd` +
+`valuationKnowledge`, also on the MCP read result), so proven included ordinary
+work reads as exact `$0` cash with a non-null valuation; an unknown valuation
+stays null, never a fabricated `$0`. Codex's token-only usage stays unpriced
+unless explicit `CLAUDEXOR_CODEX_PRICE_INPUT`, `_OUTPUT` and `_CACHED` rates cover
+every used token category; model names never imply a fallback tariff, and
+included ordinary subscription cash stays exact zero regardless of that optional
 valuation. Premium native processing is separately qualified before ranking and
-reservation; verified login alone cannot prove inclusion. Observed amount basis
-is independent: vendor list prices are valuation, while unknown cash or credit
+reservation; verified login alone cannot prove inclusion. Observed amount basis is
+independent: vendor list prices are valuation, while unknown cash or credit
 consumption stays unknown. Current native transports expose no authoritative
-paid-credit debit amount; the engine never invents one from token prices or a
+paid-credit debit amount, and the engine never invents one from token prices or a
 session-level Fast setting.
 Persisted routing cost averages carry a cost-evidence generation in the existing
 metrics file. Older unclassified costs are read as unknown while duration,
@@ -3863,140 +4216,175 @@ proven-zero route. It NEVER recommends authentication/setup for a budget cause,
 and it warns that an unchanged Exact Retry replays the immutable cap. Surfaces
 choose remediation from the typed `code`, never by parsing the message.
 
-Quota is typed and vendor-owned, never inferred from model prose. Constraints carry
-exact `applies_to_models` and optional producer-declared `applies_to_model_prefixes`.
-Without either scope they are vendor-wide. AGY's named Gemini and Claude/GPT groups
-declare their known prefixes once, so new IDs in those families retain their limits;
-unknown families receive no invented group. Display and budget consume that contract.
-Routing, pacing, and profile headroom consume that same applicability predicate,
-so a saturated Fable-only window cannot cool an explicit Opus run. Codex rollout
-`token_count.rate_limits` preserves every reported window as an independent
-constraint with usage, duration, reset, provenance, and freshness. The global
-journal is authority; an elapsed reset marks a snapshot stale and requests a
-refresh, never locally invents zero usage. Unknown usage remains `null`.
-One exhaustive schema-owned trait registry classifies every source along four
-independent axes: vendor-authenticated credential evidence, the primary harness
-whose missing observation creates refresh demand, whether a top-level
-refresher produces it, and full-inventory versus incremental-window replacement. Refresh demand is computed per enabled credential
-subject. Display and routing evaluate freshness at the actual current time:
-absent an earlier reset boundary, a snapshot is still fresh exactly five
-minutes after observation and becomes stale only after that boundary.
-Background demand additionally looks through
-the next existing 60-second poll tick, so a matching primary snapshot whose TTL
-or reset boundary is due by that deadline (including equality) no longer
-satisfies demand. Typed absence is still a successful, displayable observation,
-but retains soft demand under exponential pacing; reactive rollout/retry and
-status-line evidence remains available to display and routing without triggering
-or satisfying primary demand. The poll lifecycle is a single-flight sweep paced PER VENDOR LANE:
-each vendor with a registered refresher owns an independent
-completion-anchored exponential RETRY backoff (15-minute ceiling) that
-advances after partial/absence outcomes and resets when credential or
-routability state changes, so one vendor's unsatisfiable subject never pins a
-sibling vendor's refresh cadence. The retry ladder paces subjects that produced
-no evidence and never postpones RENEWAL: a lane whose satisfied primary
-evidence is due by the next poll tick runs even mid-ladder — whether that
-evidence came from the lane's own cycle, an explicit foreground refresh, or an
-ingested harness event — so a revoked, never-logged-in, or failing sibling
-cannot hold the healthy subjects of its own vendor past their five-minute
-freshness — they renew on the last tick before expiry exactly like a lane with
-no absent subject, and a vendor window reset that falls within the next tick of
-the cycle that observed it is picked up on that tick. A subject's poll rate-limit floor is never bypassed. An absence-only lane keeps
-the pure ladder, and a lane whose last satisfied subject disappears continues
-at the rung it has earned. Every refresher of a cycle is told whether the cycle
-is an explicit foreground refresh or a paced background poll, so a source may
-re-present on request a credential it otherwise leaves alone. A typed `rate_limited` poll absence
-arms a subject-and-route floor in the same pacer/store. A bare 429 has unknown vendor
-bucket scope: policy holds the observed subject and known token-identical aliases,
-while unrelated accounts continue serially at their normal cadence. Token hashes
-are transient alias evidence, never persisted. Missing Retry-After uses that
-subject's existing exponential ladder. Foreground refresh respects these floors;
-`refresh_skipped.subject` names individual omissions. Old vendor-wide persisted
-floors remain in force until their recorded deadlines. A credential change clears
-soft demand backoff, not an existing rate-limit floor. Poll pacing is not inference
-quota and is never journaled as an exhausted window. Failed or suppressed refreshes remain explained alongside stale data:
-refresh-gap absences (`refresh_failed`, `rate_limited`,
-`probe_skipped_rate_limited`, `poll_paced`) are silenced only by a FRESH
-full-source snapshot under the existing coverage rule; a new incremental
-window cannot hide a failed full refresh. A paused subject lacking fresh
-cover and a stored absence is stated as a
-derived `poll_paced` row (a live projection, never journaled), so an
-exhaustion reader that skips stale snapshots stays fail-open instead of
-promoting a stale spent window into "window exhausted". A registry-owned
-credential generation fences a provider cycle after validation and before its
-first journal, memory, absence, marker, response, or cursor write. A foreground
-caller from a newer generation waits for obsolete work to retire, then all such
-callers coalesce into one current-generation cycle; an obsolete poll cannot
-restore removed evidence or satisfy a post-login refresh. Within one cycle the
-selected refreshers run concurrently, validate every fulfilled snapshot and absence
-before the first write, then fold in declaration order so first-claim and marker
-semantics remain deterministic; each refresher's per-account vendor calls stay
-serial. Both `/v2/quota` and the atomic Accounts response decorate snapshots
-with the same server-owned model-aware availability projection. Raw journal
-records and projection signatures remain undecorated, and clients never promote
-a model-scoped exhausted window into an account-wide percentage or block.
-A refresh journals a subject's snapshot only when its evidence changed
-(everything except `observed_at`; a freshness flip counts): an unchanged
-re-observation keeps the fresh observation time in memory, and the projection
-marker still publishes it. After a restart a replayed snapshot therefore
-carries the observation time of its last journaled change until the first
-admission poll (immediate on arm, then every 60 s) re-observes it — it may read
-stale, or past the 24-hour window drop out of the projection, for up to one poll
-interval. The marker's `projection_signature` is the sha256 digest of the
-projection (snapshots plus absences), compared only for equality. A later recognized
-primary observation reconciles old reactive constraints at the registry write owner.
-The observation witness and changed reactive snapshots commit in one journal batch,
-even for timestamp-only re-observation. Reversed arrival uses the same witness;
-a delayed old refusal cannot revive a retired block. Request-start timestamps keep
-an older in-flight poll from erasing a newer refusal. A generic unclassified block
+Quota is typed, vendor-owned, never inferred from prose. Exact `applies_to_models`
+and producer-declared `applies_to_model_prefixes` scope models. Without either,
+model scope is vendor-wide. Independent `applies_to_request_kinds` defaults to text and image.
+Codex maps codex/default to text, image_gen to image; full reads and rollout
+`token_count.rate_limits` omit unrecognised buckets rather than invent applicability.
+Notifications retain unknown buckets as diagnostic payloads, not constraints.
+An image 429 reset supplies image-scoped `codex_image_response` for that credential
+generation until its reset or a newer matching full window. Image admission uses
+image scope; Agent/text admission, run pressure and Accounts summaries stay text,
+while raw image windows remain visible and labelled. AGY declares Gemini and
+Claude/GPT prefixes once: new family IDs inherit limits, unknown families no group.
+Display, budget, routing, pacing and profile headroom share applicability; a spent
+Fable window cannot cool Opus. Each recognised Codex window retains usage, duration,
+reset, provenance and freshness. The global event ledger is authority. Elapsed
+reset marks stale and requests refresh, never zeroes usage; unknown stays `null`.
+The exhaustive schema trait registry classifies sources on four independent axes:
+vendor-authenticated credential evidence, primary harness whose absence demands
+refresh, top-level refresher production, and full-inventory versus incremental
+replacement. Refresh demand is per enabled credential subject. Display/routing use
+current-time freshness: without an earlier reset, fresh through exactly five minutes,
+stale only afterwards.
+Passive consumers can request `GET /v2/quota` with `view=constraint_freshness`
+directly; discovering the GET quota operation's `view` enum in `/v2/operations`
+is optional and must not block a passive read. The 3.24 engine
+ignores the selector and returns its legacy shape; 3.25.0 and 3.25.1 reject it
+with HTTP 400 (`view must be resources`). The strict
+`ControlQuotaFreshnessResponse` adds required `constraints[].freshness` (`fresh`,
+`stale` or `unknown`) from the raw snapshot's freshness and observation time, the
+same five-minute TTL (stale only after 300000ms) and only that constraint's reset
+(stale at or after reset). Raw stale/unknown stay so, null resets add no expiry,
+null usage stays null, and evidence observed before an account reset cutoff is
+stale for every window, as for the aggregate. An expired 5h window therefore does
+not stale a still-fresh weekly sibling in this display projection. The historical
+Codex `reset_credits` label is not a quota window: it carries the freshness of the
+resets facet its count was read from, or `unknown` under an unknown snapshot.
+Snapshot freshness stays the conservative aggregate; no usage, reset, observation
+time or availability is rewritten, and elapsed resets never imply refill. The
+read uses existing pruning rules without refresh or event writes. The legacy GET,
+POST refresh (whose `view` stays `resources` only), Accounts responses, raw
+schemas, routing and refresh demand keep their contract. Supporting engines reject
+empty, unknown and repeated `view`; the catalog's `ControlQuotaQueryResponse` is a
+union of the strict whole-response shapes (legacy, `resources`,
+`constraint_freshness`). A direct caller accepts only a fully valid explicit or
+legacy response; missing nested freshness in valid legacy data keeps conservative
+snapshot freshness and never implies independent freshness or refill. Malformed or
+partial explicit metadata, including mixed explicit/legacy constraints or
+snapshots, is rejected without stripping metadata or silently downgrading. Only an
+engine's explicit HTTP 400 for the selector permits one plain-GET fallback with a
+strict legacy response check; transport failures, HTTP 500/other statuses and
+malformed successful payloads do not. Neither the direct read nor that fallback
+triggers provider refresh.
+Background demand also looks through the next 60-second poll tick, so a matching
+primary snapshot whose TTL or reset boundary is due by then (including equality)
+no longer satisfies demand. Typed absence is a successful, displayable
+observation that keeps soft demand under exponential pacing; reactive
+rollout/retry and status-line evidence stays available to display and routing
+without triggering or satisfying primary demand. The poll lifecycle is a
+single-flight sweep paced PER VENDOR LANE: each vendor with a registered refresher
+owns an independent completion-anchored exponential RETRY backoff (15-minute
+ceiling) that advances after partial/absence outcomes and resets when credential
+or routability state changes, so one vendor's unsatisfiable subject never pins a
+sibling vendor's cadence. The ladder paces subjects that produced no evidence and
+never postpones RENEWAL: a lane whose satisfied primary evidence (from its own
+cycle, an explicit foreground refresh or an ingested harness event) is due by the
+next tick runs even mid-ladder, so a revoked, never-logged-in or failing sibling
+cannot hold its vendor's healthy subjects past their five-minute freshness; they
+renew on the last tick before expiry like a lane with no absent subject, and a
+vendor window reset within the next tick of the observing cycle is picked up on
+that tick. A subject's poll rate-limit floor is never bypassed. An absence-only
+lane keeps the pure ladder, and a lane whose last satisfied subject disappears
+continues at its earned rung. Every refresher learns whether the cycle is an
+explicit foreground refresh or a paced background poll, so a source may
+re-present on request a credential it otherwise leaves alone. A typed
+`rate_limited` poll absence arms a subject-and-route floor in the same
+pacer/store. A bare 429 has unknown vendor bucket scope: policy holds the
+observed subject and known token-identical aliases while unrelated accounts
+continue serially at their normal cadence; token hashes are transient alias
+evidence, never persisted. Missing Retry-After uses the subject's exponential
+ladder. Foreground refresh respects these floors, and `refresh_skipped.subject`
+names individual omissions. Old vendor-wide persisted floors stay in force until
+their recorded deadlines. A credential change clears soft demand backoff, not a
+rate-limit floor. Poll pacing is not inference quota and is never stored as an
+exhausted window. Failed or suppressed refreshes stay explained beside stale data: refresh-gap
+absences (`refresh_failed`, `rate_limited`, `probe_skipped_rate_limited`,
+`poll_paced`) are silenced only by a FRESH full-source snapshot under the
+coverage rule, so a new incremental window cannot hide a failed full refresh. A
+paused subject lacking fresh cover and a stored absence is stated as a derived
+`poll_paced` row (a live projection, never a stored event), so an exhaustion
+reader that skips stale snapshots stays fail-open instead of promoting a stale
+spent window into "window exhausted". A registry-owned credential generation
+fences a provider cycle after validation and before its first event, memory,
+absence, marker, response or cursor write. A foreground caller from a newer
+generation waits for obsolete work to retire, then such callers coalesce into one
+current-generation cycle; an obsolete poll cannot restore removed evidence or
+satisfy a post-login refresh. Within one cycle the selected refreshers run
+concurrently, validate every fulfilled snapshot and absence before the first
+write, then fold in declaration order so first-claim and marker semantics stay
+deterministic; each refresher's per-account vendor calls stay serial. `/v2/quota` and the atomic Accounts response decorate snapshots with the
+same server-owned model-aware availability projection; stored event records and
+projection signatures stay undecorated, and clients never promote a model-scoped
+exhausted window into an account-wide percentage or block. A refresh persists a
+subject's snapshot only when its evidence changed (all but `observed_at`; a
+freshness flip counts): an unchanged re-observation keeps the
+fresh observation time in memory, and the projection marker still publishes it.
+After a restart a replayed snapshot therefore carries the observation time of its
+last persisted change until the first admission poll (immediate on arm, then
+every 60 s) re-observes it, so for up to one poll interval it may read stale or,
+past the 24-hour window, drop out of the projection. The marker's
+`projection_signature` is the sha256 digest of the projection (snapshots plus
+absences), compared only for equality. A later recognized
+primary observation reconciles old reactive constraints at the registry write owner;
+its witness and changed reactive snapshots commit in one SQL event transaction, even
+for timestamp-only re-observation. Reversed arrival uses the same witness, so a
+delayed old refusal cannot revive a retired block, and request-start timestamps
+keep an older in-flight poll from erasing a newer refusal. A generic unclassified block
 can yield to a successful response without measured windows (usage stays unknown),
-while independently identified/scoped windows need matching measured replacement.
+while independently identified or model-scoped windows need matching measured
+replacement; a Codex refusal's text scope limits what it blocks, not which read
+retires it.
 This permits purchased or vendor-granted early resets without waiting for an obsolete
 timer. Malformed Codex responses never become successful empty observations.
 
-Native Claude `rate_limit_event` measurements and Codex's existing execution
-app-server `account/rateLimits/updated` notifications use incremental sources
-`claude_rate_limit_event` and `codex_app_server_event`. They produce ordinary
-singleton-window snapshots with independent observation time and freshness.
-`quotaSnapshotIdentity` in schema includes subject, route, source and, for these
-sources, the stable vendor window identity, duration and applicability, including
-normalized model-prefix sets. Empty prefix sets preserve existing identities. Percent,
-reset instant and observation time do not change identity. Registry, budget cache
-and journal fold/replay share that key; control projections derive `snapshot_id`
-for Swift instead of making the UI duplicate source policy. Full-reader sources
-continue replacing their complete inventory. Incremental observations neither
-refresh siblings nor satisfy full-inventory demand; fresh applicable values keep
-the existing ranking/headroom meaning, and missing windows stay unknown.
+Native Claude `rate_limit_event` measurements and Codex's execution app-server
+`account/rateLimits/updated` notifications use incremental sources
+`claude_rate_limit_event` and `codex_app_server_event`: ordinary singleton-window
+snapshots with independent observation time and freshness. For these sources
+`quotaSnapshotIdentity` adds the stable vendor window identity, duration and
+applicability, including normalized model-prefix sets, to subject, route and
+source; empty prefix sets keep existing identities, and percent, reset instant
+and observation time never change identity. Registry, budget cache and event
+retention/replay share that key; control projections derive `snapshot_id` for
+Swift so the UI does not duplicate source policy. Full-reader sources still
+replace their complete inventory. Incremental observations neither refresh
+siblings nor satisfy full-inventory demand; fresh applicable values keep the
+ranking/headroom meaning, and missing windows stay unknown.
 
-Incremental snapshots use `quota.window.observed` in the same global journal,
-with window slots grouped by subject for removal and compaction. Older readers
-ignore that record rather than consuming a fabricated primary/cooldown snapshot.
-The existing full-source rollback representation remains unchanged.
+Incremental snapshots use `quota.window.observed` in the global event ledger,
+with window slots grouped by subject for removal and retention. Historical records
+keep their typed shape; the importer fabricates no primary/cooldown snapshot for
+them.
 
 A newer authenticated full read can supersede an older incremental observation
-of the same measured window, duration, applicability, account and route. The
-registry writes its full witness and `quota.window.superseded` atomically in
-the existing journal, then removes that exact effective window. Its cutoff
-survives later full-inventory replacement, display aging and compaction, so an
-old delayed event cannot resurrect a cleared limit. Newer partial evidence is
-admitted again; equal timestamps remain conservative. Missing or unmeasured
-windows do not supersede known limits. Subject removal clears observations
-and cutoffs together. Older rollback readers ignore the new record and may
-conservatively retain old window evidence under their earlier semantics.
-Unknown native applicability is retained as numerical diagnostic evidence rather
-than turned into an account-wide restriction. An overage name does not identify
-an additional model family. Numeric source units are translated by each adapter:
-Claude stream utilization is a ratio; Codex `usedPercent` is a percentage.
+of the same measured window, duration, applicability, account and route: the
+registry writes its full witness and `quota.window.superseded` in one SQL event
+transaction, then removes that exact effective window. Its cutoff survives later
+full-inventory replacement, display aging and event retention, so an old delayed
+event cannot resurrect a cleared limit. A window recorded before request-kind
+scope applies to both kinds; a measured replacement declaring a kind retires it
+only with the same id, model scope and identical duration (unknown matches only
+unknown), including the rollout `primary` → `codex:primary` mapping, and
+explicit text and image scopes never retire each other.
+Newer partial evidence is admitted again; equal timestamps stay conservative.
+Missing or unmeasured windows never supersede known limits, and subject removal
+clears observations and cutoffs together.
+Unknown native applicability stays numerical diagnostic evidence, never an
+account-wide restriction, and an overage name identifies no additional model
+family. Each adapter translates numeric units: Claude stream utilization is a
+ratio, Codex `usedPercent` a percentage.
 
-Runtime-update rollback remains backward-readable: a scoped snapshot — or one
-whose source postdates v3.2.0's strict enum (`cursor_rate_limit`) — is first
-prepared under a typed record that an older engine ignores, then committed by
-the established upsert using an explicit v3.2.0 field allowlist with the
-nearest v3.2.0 source label in the base. The journal
-appends that pair under one recovery intent and one fsync, so replay retains
-both records or neither. Current engines apply the exact scope and true source
-only when the
-matching base follows; v3.2.0 replays that base conservatively as account-wide.
-A background cycle uses the same vendor refresher sweep; an explicit foreground
+Historical quota payloads remain readable: a scoped snapshot, or one whose
+source postdates v3.2.0's strict enum (`cursor_rate_limit`), is first prepared
+under a typed record an older engine ignores, then committed by the established
+upsert with an explicit v3.2.0 field allowlist and the nearest v3.2.0 source label
+in the base, which omits image-only windows rather than widening them to text.
+Imported journal pairs keep their adjacency and new pairs commit in one SQL event
+transaction; current reducers apply the exact scope and true source only when the
+matching base follows. This encoding does not let an older engine open a migrated
+SQL root; the semantic floor and forward-fix rule still apply.
+A background cycle uses the same vendor refresher sweep; explicit foreground
 refresh runs all eligible subjects. Paused subjects return last-known data with
 `refresh_skipped` subject identity and deadline; only a legacy broad floor skips
 the whole vendor lane. Join semantics are asymmetric: a
@@ -4012,7 +4400,7 @@ projection.
 tie-breaker. Credential transport alone never proves a route free. Typed rate
 limits that reject or block a run create cooldowns. A Claude rejection whose
 typed `rateLimitType` proves an Opus or Sonnet family carries that same model
-scope into both the live ledger and durable journal; generic or unknown
+scope into both the live projection and persistent event ledger; generic or unknown
 rejections remain account-wide. Advisory Claude `allowed_warning` heartbeats do
 not create cooldowns. Unknown quota remains eligible and is never rendered as
 full headroom.
@@ -4030,36 +4418,34 @@ remediation, never a re-auth/harness-wait prompt — rather than
 `harness_unavailable`.
 
 Routing rationale: pool ordering records a typed `RouteRankingRationale` ONCE as
-run evidence (`RunTelemetry.routing_rationale`), not an event — the ordered pool,
+run evidence (`RunTelemetry.routing_rationale`), not an event: the ordered pool,
 the ids dropped by `paid_fallback`/cooldown, the decisive `reason`
 (`subscription_entitlement_first` / `lowest_incremental_cash` / `quality_tier` /
 `expiring_quota_slack` / `all_incremental_cash_unknown` / `declared_order`), and a
-per-candidate `{billing_knowledge, incremental_cost_usd, eligible}` tuple. The
-rationale is axis-aligned with the ranker, so it can never disagree with the order
-actually taken. Mode-qualified billing evidence takes priority over ordinary
-auth-route evidence: verified included ordinary service proves
-`subscription_entitlement`, so that route survives
-`paid_fallback: never` and ranks with a real economy tuple instead of reading as
-unknown/paid. Surfaces project the rationale verbatim (run detail) and never
-reconstruct the order from prose. A named account's ordinary billing evidence
-requires vendor-backed verification: an authenticated adapter response, or the
-existing exact-profile full-reader vendor observation over a passing local probe.
-Numeric quota expiry does not erase the fact or time of that authenticated contact;
-a newer applicable refusal still overrides it.
-Local store presence alone and stale local readiness do not prove subscription
-entitlement. Passive window notifications alone do not establish that proof.
-Default-store doctor evidence applies only to a profile-less route. The admission
-probe is reused for ranking and the initial reservation. Each physical dispatch
-reads its actual account's current verification again, including when the account
-ID is unchanged, and re-admits it against the existing budget lease and
-paid-fallback policy. This includes inline continuity summaries, rotation and runs
+per-candidate `{billing_knowledge, incremental_cost_usd, eligible}` tuple. It is
+axis-aligned with the ranker, so it can never disagree with the order taken.
+Mode-qualified billing evidence outranks ordinary auth-route evidence: verified
+included ordinary service proves `subscription_entitlement`, so that route
+survives `paid_fallback: never` and ranks with a real economy tuple instead of
+reading as unknown/paid. Surfaces project the rationale verbatim (run detail) and
+never reconstruct the order from prose. A named account's ordinary billing
+evidence needs vendor-backed verification: an authenticated adapter response, or
+the exact-profile full-reader vendor observation over a passing local probe.
+Numeric quota expiry does not erase the fact or time of that contact; a newer
+applicable refusal still overrides it. Local store presence, stale local
+readiness and passive window notifications alone do not prove subscription
+entitlement, and default-store doctor evidence applies only to a profile-less
+route. The admission probe is reused for ranking and the initial reservation.
+Each physical dispatch rereads its actual account's current verification, even
+for an unchanged account ID, and re-admits it against the budget lease and
+paid-fallback policy, including inline continuity summaries, rotation and runs
 without Processing controls. A newer vendor observation is not frozen to the
-initial selection; a valid positive reservation estimate remains independent of
+initial selection; a valid positive reservation estimate stays independent of
 billing verification. A Plan refused before any physical send releases its lease
-and retains the typed policy cause; started work without cost evidence stays unknown. A policy
-refusal is a configuration failure, separate from a monetary-cap or provider
-failure. The ranking rationale remains the
-original selection evidence; the execution receipt names the account that ran.
+and keeps the typed policy cause; started work without cost evidence stays
+unknown. A policy refusal is a configuration failure, separate from a
+monetary-cap or provider failure. The ranking rationale stays the original
+selection evidence; the execution receipt names the account that ran.
 A deep-scan swarm reserves n>1 subscription
 scouts under a finite cap against the per-run estimate floor (mirroring the
 candidate loop), so later scouts are not refused for lacking a per-attempt cash
@@ -4191,7 +4577,7 @@ remains primary on success. The retained filename never participates in accepted
 plan/deliverable discovery. If storage fails, the original terminal cause stays
 in force and a best-effort status names the preservation failure. Control detail
 can reconstruct only the addressed interrupted run lacking a committed terminal
-from surviving events, without changing its lifecycle, journal or RunFacts. Lists
+from surviving events, without changing its lifecycle, command record or RunFacts. Lists
 and startup do not scan old logs; intentional retention remains authoritative.
 
 Cancelled Git candidates retain their patch and actual execution-tree effects
@@ -4441,6 +4827,8 @@ events.jsonl
 context/task.yaml
 context/context_pack.yaml?
 attempts/aNN/attempt.yaml       (Agent candidate evidence)
+attempts/aNN/answer.md?         (selected answer, even if capture failed)
+attempts/<envelope-attempt>/retained-envelope.json? (inspection-source address)
 attempts/pNN/council-input.yaml? (Council planner input evidence)
 council/draft-<harness>.md?
 council/membership.yaml?
@@ -4525,9 +4913,10 @@ cross-axis contradictions before persistence: examples include a succeeded
 plan without a deliverable, merge/reviewer roles inflating the planner count,
 configured tests presented as both `not_configured` and passed, or required
 actions that disagree with the terminal outcome. The orchestrator sanitizes
-and validates this object once, embeds that exact value at
-`RunTelemetry.run_facts` as a compatibility copy, then writes the standalone
-file last as the canonical commit marker. `GET /v2/runs/:id` (`runFacts`),
+and validates this object once. The terminal event carries that exact value;
+the terminal-files owner projects it into `RunTelemetry.run_facts` and the
+standalone receipt through its obligation after the SQL terminal commit.
+`GET /v2/runs/:id` (`runFacts`),
 terminal CLI JSON/JSON-stream output, artifact-only `inspect --json`, MCP
 structured results, and ACP `_meta.claudexor` expose the same parsed object
 without a second redaction or independent projection. A missing receipt retains legacy-run compatibility; a receipt that
@@ -4594,7 +4983,7 @@ macOS UI/UX SSOT. This section keeps only the engine-facing facts.
   `/v2/harnesses/:id/models`), root-scoped Git applicability
   (`/v2/run-applicability`), Accounts/quota (`/v2/credential-profiles`,
   `/v2/quota`), setup jobs (`/v2/setup/jobs`), settings and secrets
-  (`/v2/settings`, `/v2/secrets`), and journal recovery
+  (`/v2/settings`, `/v2/secrets`), and partition/engine-state recovery
   (`/v2/recovery/partitions/:id` and validate/export/quarantine actions). The
   plan lifecycle rides the normal thread/turn endpoints — a `plan` run surfaces
   typed open questions, and an Implement turn carries `planRunId`; there is no
@@ -4621,8 +5010,9 @@ macOS UI/UX SSOT. This section keeps only the engine-facing facts.
   and the narrow `delegatedFromRunId` child link. The exact composer and run-row
   presentation is defined in [`DESIGN_SYSTEM.md`](DESIGN_SYSTEM.md).
 - Attachments use a daemon-owned resource pipeline. `/v2/uploads` streams bytes
-  to an external temporary file; finalize fsyncs, hashes, deduplicates the blob,
-  atomically publishes it, and returns an immutable resource ID. `/v2/runs` and
+  to an external write-through temporary file; finalize binds the request,
+  hashes and publishes immutable digest-bound bytes through the engine store's
+  publication obligation, and returns the resource ID. `/v2/runs` and
   thread turns accept only resource IDs. Each adapter declares exact MIME classes,
   finite byte/count limits and a native transport in
   `capability_profile.attachment_inputs`; every explicitly selected lane must
@@ -4839,7 +5229,7 @@ overrides are identified, not silently replaced by a managed copy. Existing
 Windows recipe limits remain.
 
 `harness-maintenance-service.ts` exposes `/v2/maintenance/harnesses` and the
-maintenance operation routes through existing CommandStore admission, queue,
+maintenance operation routes through existing command admission, queue,
 idempotency, cancellation and retention. Blocking work runs in a custodied CLI
 child. Before-version and target evidence precede mutation; failures, interruption
 and unconfirmed termination retain their real effects without automatic replay or
@@ -4906,7 +5296,9 @@ resources the release gates smoke-tested while the archive itself needs no
 POSIX symlink semantics.
 `release/runtime-min-app-version.json` is the tracked `minAppVersion` floor
 (validated `<=` the release version by `scripts/verify-version-parity.mjs`), the
-app-vs-engine skew guard.
+app-vs-engine skew guard. Engine 4.0 requires application 4.0. An older app
+reports `appUpdateRequired` and keeps its current working engine; updating the
+app supplies the compatible decoder and Node before engine activation.
 
 **Host-owned embedding.** A non-app host reuses this SAME release archive; the
 existing signed manifest remains its upstream publication authority. There is
@@ -4923,8 +5315,9 @@ closure smoke; POSIX consumers using local harness install must provide both
 `<node-root>/lib/node_modules/npm/bin/npm-cli.js` (Windows: `node.exe` and its
 adjacent `node_modules\npm\bin\npm-cli.js`), with no ambient-PATH npm
 fallback. The root package's
-`engines.node >=20.19.0` promise covers the npm distribution and does not by
-itself prove a release-built `--target=node22` closure on Node 20. The pin also
+supported runtime floor is Node 24.15.0, and the store checks bundled SQLite
+3.51.3 or newer before opening data. A supported version declaration alone is
+not proof of a release-built closure; embedders retain exact-toolchain smoke evidence. The pin also
 carries protocol major 3, separate daemon and CLI entrypoints, expected archive
 size, and the accepted `{version,buildSha,sha256}`. The signed
 `runtime-manifest.json` is the
@@ -5013,7 +5406,7 @@ download the closure from the release CDN asset URL → sha256-verify against th
 signed manifest → FULL unpack to `versions/<version>/` → re-verify → strip
 `com.apple.quarantine` (after hash verification) → probe-start the unpacked
 daemon with the app-bundled Node via `claudexord --probe` (prints
-`{version,buildSha}` and exits without binding a socket or opening the journal) →
+`{version,buildSha}` and exits without binding a socket or opening the store) →
 require that exact pair to equal the signed manifest → claim one process-session
 lifecycle lease shared with steady daemon reconciliation before the first async
 install step → advisory idle probe (cheap early deferral) → daemon-atomic
@@ -5024,12 +5417,25 @@ refuses without stopping; the request names the freshly observed serving
 version/build SHA and writer-lease owner) → identity-proven termination
 confirmation with no-successor proof (never a raw kill) → ATOMIC `current.json`
 swap (write a temp file + a single rename, inside a `flock` over the whole
-check-then-swap critical section) → relaunch → handshake-verify the new engine
-identity against the signed manifest → rollback to `last-known-good.json` on
-activation failure while that reader remains compatible with the retained state,
-accepting recovery only when its exact identity returns. After a feature writes
-new terminal facts an older reader cannot understand, recovery retains that state
-and uses a compatible newer runtime, as described in the daemon lifecycle section.
+check-then-swap critical section) → relaunch → handshake-verify the new engine's
+exact identity against the signed manifest and its normal product admission →
+rollback to `last-known-good.json` when the relaunched engine has another
+identity or never answers, while that reader remains compatible with the
+retained state, accepting recovery only when its exact identity returns with
+normal admission. Every startup answers `recovery_only` before admission opens,
+so the bounded poll waits through it. If the exact new engine answered in
+recovery mode and normal readiness was not confirmed by the deadline, it is not
+rolled back, even if it stopped answering: it may already hold state the previous
+reader cannot open. It stays selected with the historical recovery observation
+and unconfirmed readiness reported. A previous engine answering only in recovery
+mode after a rollback is a failed recovery, not a rollback. Handshake `ok` remains the
+connectivity/protocol verdict: the app still waits in Connecting against a
+recovery-only engine, and identity-bound stop and reconciliation still name it.
+After a feature writes
+new terminal facts or publishes the SQL store an older reader cannot understand,
+recovery retains that state and uses a compatible newer runtime. A last-known-good
+pointer cannot bypass the data root's semantic floor, as described in the daemon
+lifecycle section.
 Rollback authority comes from the same launcher selection: current.json's exact
 `{version,engineSha}` for an installed closure or the app-signed bundled script's
 stamped probe. If that authority is unavailable, installation refuses before it
@@ -5083,7 +5489,11 @@ the closure.
   GET the latest release manifest (`api.github.com`, ETag-cached) → verify the
   signature fail-closed → compare `version` to the running engine and gate on
   `minAppVersion` → surface "Update available → vX.Y.Z" with an Install action.
-  There is no background update timer.
+  The last install attempt's historical outcome stays visible above any later
+  Install and "View release" offer. A selected engine, including one observed
+  only in recovery mode, retires its offer; a recovery-only install clears the
+  stale serving identity so a re-check uses the selected runtime pointer until
+  normal connection adopts an identity. There is no background update timer.
 - **Build-sha stamping (QA-002).** `build-engine-resources.sh` stamps `CLAUDEXOR_BUILD_SHA`
   into the esbuild daemon and CLI bundles via `--define`, and
   `build-runtime-closure.mjs` embeds the SAME sha in the manifest and refuses to
@@ -5166,7 +5576,7 @@ code touching one of these areas must honor it or change it explicitly here.
   `--json` exactly-one-object contract, and the retired `run` verb stays
   retired.
 - Vendor-owned quota snapshots and typed rejecting rate-limit cooldowns persist
-  in the checksummed global journal through `QuotaRegistry`; routing reads that
+  in the global SQL event ledger through `QuotaRegistry`; routing reads that
   cross-run authority rather than rediscovering pressure independently in each
   run. Codex uses its app-server. Claude subscription windows arrive from the
   `oauth/usage` endpoint as the PRIMARY source (since 2.1): the daemon's
@@ -5232,7 +5642,7 @@ code touching one of these areas must honor it or change it explicitly here.
   output with no parseable block is an `unverified` readiness. No shape fails
   the plan run.
 - Startup crash GC sweeps orphaned envelopes only under project roots recorded
-  in the daemon command journal; envelopes created by CLI/MCP/ACP runs
+  in the command store and retained root metadata; envelopes created by CLI/MCP/ACP runs
   in roots the daemon never saw are reclaimed only by their own process. For a
   caller-owned `execution.workspaceRoot` recorded by a delegated command (global
   or project partition), it disposes only Claudexor's envelope scratch under that
@@ -5254,10 +5664,69 @@ code touching one of these areas must honor it or change it explicitly here.
   baseline, a failed `diff`), Claudexor records a capture refusal: a sanitized
   `manual_cleanup` receipt in phase `workspace`, with nothing rolled back; it
   never substitutes an empty diff and asks reviewers to trust the live tree.
-  The non-Git text diff is bounded to 200 kB, and the saved copy and its match
-  counts are built from that bounded projection.
+  All `runCaptureRaw` callers share a combined stdout/stderr buffer policy of
+  256 MiB (not an RSS bound): capture, delivery/revert Git and reviewer inventory
+  reads refuse larger output. Oversized binary inspection withholds that payload
+  from saved copies without discarding an already complete compressed patch;
+  `pr` refuses it like a secret-like finding (one refusal names both causes),
+  while local apply, branch and commit deliver its exact bytes. Overflow,
+  spawn/I/O or scratch-cleanup failure becomes typed workspace evidence,
+  including budget/stream, primary cause, cleanup and any available
+  incomplete-drain facts. Thread apply refuses an incomplete capture with 409
+  and these facts in problem `context.captureFailure`; its delivery journal
+  replays that context. Completed answers are saved per attempt and observed
+  spend survives both post-try and final-only refusal. The failed post-try
+  capture is reused; a new native try resets it.
+  Isolated sources survive disposal and startup sweeping in existing durable
+  envelope custody, with auth stripped. Eligible daemon singletons retain their
+  continuation pointer; other sources have distinct
+  `attempts/<envelope-attempt>/retained-envelope.json` addresses and are for manual
+  inspection, not automatic continuation or already-applied live results.
+  File GC and command pruning keep these addresses, like the continuation
+  pointer, until explicit discard. Only these destructive owners read strictly:
+  an absent or stale address and released custody read as nothing held, while
+  an unreadable or invalid pointer or custody record (not only an unreadable
+  attempts directory) keeps its run and is reported (GC `errors[]`, daemon log);
+  explicit discard reports that failure and releases nothing, never only the
+  readable sources. Projections keep tolerating the same addresses.
+  Capture receipts/actions name the execution root, also after the own remedy
+  of a budget terminal, a leading Delegate failure (its record carries the typed
+  capture facts as well) or a convergence cancellation; such terminals keep
+  their cause and publish no exact patch (live effects keep their capture-refused
+  record, in race cancellation too, so the public result never reads as
+  `not_applied` while the tree already changed). A race cancellation writes no
+  failure record: an isolated source it leaves in retained custody is named
+  only by attempt evidence. A budget terminal the ledger
+  settled on the same attempt (stream hard cap, exact overshoot, unverifiable
+  cash) outranks that attempt's capture failure in race and convergence: the
+  shared classifier names the budget cause and remedy first and the capture
+  facts and inspection actions follow. A live race capture failure shares the
+  isolated lane's no-working-candidate terminal, so a recorded budget denial or
+  a unanimous typed refusal leads there too, as in convergence. A cancellation
+  that wins late (during a
+  Delegate parent's child drain, or a drain that fails after it) re-labels a
+  prepared failure record that carries capture facts as the cancellation's own
+  (category `cancelled`, its summary, no typed code) instead of removing it, so
+  those facts and the inspection/manual-cleanup actions stay on the public
+  failure surface; a record without capture facts is removed as before. A child
+  drain that fails without a cancellation leads with its own typed failure and
+  keeps such a record's capture facts, with its actions as follow-ups. An
+  inspection-only source's root is in
+  attempt evidence (`capture_refusal.sourceRoot`); its measured size is only in
+  that envelope's `continuation-custody.json`, not the singleton
+  `retainedEnvelope` UI.
+  Durability requires this custody schema: an older engine can reject the new
+  inspection field and reclaim its source on downgrade. Capture results do not
+  promise preservation across that rollback; export kept work before it.
+  Non-Git text is projected to 200,000 characters while draining, with binary
+  inspection beyond that preview. A clipped preview carries explicit incomplete
+  capture and cannot enter exact apply/revert/digest/synthesis; the live source
+  remains available. Complete small previews retain their existing behavior.
+  Explicit directory file-manifest capture is separate: its refusal carries no
+  typed capture facts, so the late-cancel and drain rules above do not keep it.
+  No truncated exact Git patch is delivered. Cursor NDJSON frames remain uncapped.
 - Isolated-thread worktrees are pinned by persistent `claudexor/thread-*`
-  branches. Journal SHA is a checked cache; successful apply advances the
+  branches. The stored SHA is a checked cache; successful apply advances the
   branch, and explicit trash/restore/purge owns its retention lifecycle.
 - Explicit reviewer panels accept only proven routes: an unprofiled/default
   entry requires doctor-OK readiness, while a profiled entry requires its exact
@@ -5293,7 +5762,7 @@ code touching one of these areas must honor it or change it explicitly here.
   `profiles login --json` refuses before preparing or starting a login.
   Codex retains its durable device-code flow; GUI/non-interactive login uses
   the existing setup API.
-- The setup journal owns the credential-mutation window from durable permit
+- The setup event ledger owns the credential-mutation window from durable permit
   through terminal verification. A hash-bound runner result or a positively
   empty recorded process group establishes the command's end. Fresh profile
   verification runs while the window remains open; terminalization closes it.
@@ -5314,7 +5783,7 @@ code touching one of these areas must honor it or change it explicitly here.
   they can show an intermediate observation until close. Model-operation substitution callbacks and default/API-key unusable callbacks
   also use the dispatch-bound managed generation. Descendants outliving a valid runner
   receipt remain outside the command-completion proof. An unreadable bound
-  journal reads open; restart alone proves no closure. The hold is per harness,
+  setup store reads open; restart alone proves no closure. The hold is per harness,
   not a blanket admission ban. A genuinely unconfirmed group still needs the
   existing proof-based reconciliation.
 - The Cursor CLI requests cancellation on Ctrl-C, SIGHUP and SIGTERM. A lost

@@ -1,5 +1,6 @@
 import { z } from "zod/v3";
 import { HarnessRequestRefusal } from "./harness-input.js";
+import { HarnessFailureCategory } from "./telemetry.js";
 
 /**
  * The typed run-failure contract, split out of `control.ts` for the reason the
@@ -79,9 +80,69 @@ export const VendorFailureEvidence = z
   );
 export type VendorFailureEvidence = z.infer<typeof VendorFailureEvidence>;
 
+/** Capture evidence is separate from native harness failure and never inferred from prose. */
+export const WorkspaceCaptureFailure = z.object({
+  code: z.enum([
+    "capture_output_exceeded",
+    "capture_output_incomplete",
+    "capture_preview_truncated",
+    "capture_failed",
+  ]),
+  message: z.string(),
+  causeCode: z.string().optional(),
+  bufferBudgetBytes: z.number().int().nonnegative().optional(),
+  stream: z.enum(["stdout", "stderr"]).optional(),
+  drain: z.literal("truncated").optional(),
+  cleanup: z.object({ code: z.string().nullable(), message: z.string() }).optional(),
+});
+export type WorkspaceCaptureFailure = z.infer<typeof WorkspaceCaptureFailure>;
+
+/** One actual execution try that ended in an error, attributed to the account it
+ * ran on. Diagnostic evidence only: retry, rotation and routing never read it,
+ * and a selected successor that never started has no row. */
+export const PoolAttemptFailure = z
+  .object({
+    harnessId: z.string().min(1).describe("Harness the try ran on."),
+    profileId: z
+      .string()
+      .nullable()
+      .describe("Account row the try ran on; null = the harness default route."),
+    profileDisplayName: z
+      .string()
+      .nullable()
+      .describe("The row's display name at try time (redacted); null for the default route."),
+    requestedModel: z
+      .string()
+      .nullable()
+      .describe("Model the try asked for; null = the harness default model."),
+    attemptId: z.string().min(1).describe("Attempt the try belongs to."),
+    tryIndex: z.number().int().nonnegative().describe("Zero-based try index within the attempt."),
+    observedAt: z
+      .string()
+      .datetime({ offset: true })
+      .describe("When the try's first error was observed."),
+    phase: z
+      .enum(["pre_start", "pre_progress", "after_progress"])
+      .describe(
+        "How far the try got: before a typed session start, after start but before agent progress, or after progress.",
+      ),
+    category: HarnessFailureCategory.describe(
+      "Typed failure category of the try; untyped errors are unknown_harness_error.",
+    ),
+    error: z
+      .string()
+      .describe("The try's own error text with its original wording and whitespace, redacted."),
+    vendorFailure: VendorFailureEvidence.nullable().describe(
+      "The vendor's own typed failure for this try, when the adapter attached one.",
+    ),
+  })
+  .describe("Per-try account attribution of a failed execution try (diagnostic evidence only).");
+export type PoolAttemptFailure = z.infer<typeof PoolAttemptFailure>;
+
 export const RunFailure = z
   .object({
     requestRefusal: HarnessRequestRefusal.optional(),
+    captureFailure: WorkspaceCaptureFailure.optional(),
     phase: z.string().default("unknown").describe("Pipeline phase where the failure happened."),
     category: z
       .enum([
@@ -146,6 +207,12 @@ export const RunFailure = z
       .default(null)
       .describe(
         "The vendor's own typed failure for the attempt this record speaks for, or null when no vendor-typed evidence exists (every harness without such a channel, and any unreadable record). Facts only: carries no remedy.",
+      ),
+    poolAttempts: z
+      .array(PoolAttemptFailure)
+      .default([])
+      .describe(
+        "Every failed execution try in order, each with its own account and error text; empty when no try failed (and for records written before this field existed).",
       ),
     nextActions: z.array(z.string()).default([]).describe("Suggested operator next actions."),
   })

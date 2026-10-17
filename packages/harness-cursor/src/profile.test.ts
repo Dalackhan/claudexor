@@ -166,6 +166,40 @@ describe("Cursor config-dir credential profiles (INV-135)", () => {
     expect(plain).toMatchObject({ availability: "unknown", verification: "not_run" });
   });
 
+  it.each([95_000, 95_000.2])(
+    "projects a producer age of %s as integer stale evidence",
+    async (rawAge) => {
+      let clock = 0;
+      let calls = 0;
+      const coordinator = createCursorStatusCoordinator({
+        monotonicMs: () => clock,
+        mutating: () => false,
+        probe: async () =>
+          ++calls === 1
+            ? { kind: "authenticated" }
+            : {
+                kind: "unknown",
+                timedOut: true,
+                error: "timeout",
+              },
+      });
+      const runtime = { nativeAuthOk: coordinator.status, resolveProfileSecret: () => null };
+      expect(await probeCursorCredentialProfile(profile(), runtime)).toMatchObject({
+        verification: "passed",
+      });
+      clock = rawAge;
+      const status = await probeCursorCredentialProfile(profile(), runtime);
+      expect(status).toMatchObject({
+        verification: "not_run",
+        stale_basis: "last_positive_after_timeout",
+        stale_age_ms: Math.ceil(rawAge),
+      });
+      expect(Number.isInteger(status.stale_age_ms)).toBe(true);
+      expect(status.stale_age_ms).toBeGreaterThanOrEqual(rawAge);
+      expect(calls).toBe(2);
+    },
+  );
+
   it("a route check rides a timeout's last positive only when its caller admits it (#363)", async () => {
     const runtime = {
       nativeAuthOk: async () => timedOutWithLastPositive,

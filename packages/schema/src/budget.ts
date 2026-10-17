@@ -1,3 +1,4 @@
+import { QuotaRequestKind } from "./quota.js";
 import { z } from "zod/v3";
 import { BillingKnowledge, CostKnowledge } from "./auth.js";
 import { Id, Intent } from "./primitives.js";
@@ -191,6 +192,7 @@ export const BudgetObservation = z
       ),
     usd: z.number().optional().describe("Observed spend in USD, for spend observations."),
     constraint_id: z.string().optional(),
+    applies_to_request_kinds: z.array(QuotaRequestKind).min(1).optional(),
     applies_to_models: z
       .array(Id)
       .nullable()

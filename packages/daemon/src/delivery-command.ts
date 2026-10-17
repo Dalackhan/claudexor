@@ -1,8 +1,8 @@
-import { newId, nowIso, safeProblemMessage } from "@claudexor/util";
-import type { CommandStore } from "./command-store.js";
+import { newId, nowIso, safeProblemContext, safeProblemMessage } from "@claudexor/util";
+import type { CommandStorePort } from "./store-contracts.js";
 
 export function beginDeliveryCommand(
-  store: CommandStore,
+  store: CommandStorePort,
   params: unknown,
   input: { key: string; client: string; operation: string; request: unknown },
 ) {
@@ -21,7 +21,7 @@ export function beginDeliveryCommand(
 }
 
 export function completeDeliveryCommand(
-  store: CommandStore | undefined,
+  store: CommandStorePort | undefined,
   id: string,
   result: unknown,
 ): void {
@@ -30,17 +30,20 @@ export function completeDeliveryCommand(
 }
 
 export function failDeliveryCommand(
-  store: CommandStore | undefined,
+  store: CommandStorePort | undefined,
   id: string,
   error: unknown,
 ): void {
   if (!store) throw new Error(`delivery authority lost command ${id}`);
   const value = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  const context = safeProblemContext(value["context"]);
   store.update(id, {
     state: "failed",
     // This command store is the durable journal authority; redact before append.
     error: safeProblemMessage(error),
     errorCode: typeof value["code"] === "string" ? value["code"] : undefined,
+    // A replay answers the same typed recovery facts as the first refusal.
+    ...(Object.keys(context).length > 0 ? { errorContext: context } : {}),
     result: {
       status: typeof value["status"] === "number" ? value["status"] : 500,
       code: typeof value["code"] === "string" ? value["code"] : null,

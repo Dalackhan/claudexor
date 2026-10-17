@@ -1,5 +1,79 @@
 # @claudexor/review
 
+## 4.2.0
+
+### Patch Changes
+
+- @claudexor/budget@4.2.0
+- @claudexor/config@4.2.0
+- @claudexor/context@4.2.0
+- @claudexor/core@4.2.0
+- @claudexor/schema@4.2.0
+- @claudexor/util@4.2.0
+- @claudexor/workspace@4.2.0
+
+## 4.1.1
+
+### Patch Changes
+
+- @claudexor/budget@4.1.1
+- @claudexor/config@4.1.1
+- @claudexor/context@4.1.1
+- @claudexor/core@4.1.1
+- @claudexor/schema@4.1.1
+- @claudexor/util@4.1.1
+- @claudexor/workspace@4.1.1
+
+## 4.1.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/schema@4.1.0
+  - @claudexor/core@4.1.0
+  - @claudexor/budget@4.1.0
+  - @claudexor/config@4.1.0
+  - @claudexor/context@4.1.0
+  - @claudexor/workspace@4.1.0
+  - @claudexor/util@4.1.0
+
+## 4.0.1
+
+### Patch Changes
+
+- @claudexor/budget@4.0.1
+- @claudexor/config@4.0.1
+- @claudexor/context@4.0.1
+- @claudexor/core@4.0.1
+- @claudexor/schema@4.0.1
+- @claudexor/util@4.0.1
+- @claudexor/workspace@4.0.1
+
+## 4.0.0
+
+### Patch Changes
+
+- Updated dependencies [2fbf7c9]
+  - @claudexor/schema@4.0.0
+  - @claudexor/util@4.0.0
+  - @claudexor/config@4.0.0
+  - @claudexor/budget@4.0.0
+  - @claudexor/context@4.0.0
+  - @claudexor/core@4.0.0
+  - @claudexor/workspace@4.0.0
+
+## 3.25.1
+
+### Patch Changes
+
+- @claudexor/budget@3.25.1
+- @claudexor/config@3.25.1
+- @claudexor/context@3.25.1
+- @claudexor/core@3.25.1
+- @claudexor/schema@3.25.1
+- @claudexor/util@3.25.1
+- @claudexor/workspace@3.25.1
+
 ## 3.25.0
 
 ### Patch Changes

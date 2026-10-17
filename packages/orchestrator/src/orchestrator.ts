@@ -4,6 +4,12 @@ import {
   threadContextPointer,
 } from "./prompt-framing.js";
 import { requestRefusalFailure } from "./runTerminalResults.js";
+import {
+  openRunScopeCustody,
+  scopedRouteContext,
+  scopedSpecEnv,
+  type RunScopeCustodian,
+} from "./runScope.js";
 import { delegationBeltFor } from "./delegationBelt.js";
 import {
   bindProcessingAdmission,
@@ -18,7 +24,11 @@ import {
   failedCandidatesResult,
   failAfterCandidates,
 } from "./candidateTerminals.js";
-import { existsSync } from "node:fs";
+import {
+  deepScanFailureResult,
+  readOnlyChainFailureResult,
+  type ReadonlyAttempt,
+} from "./readonlyTerminals.js";
 import {
   effectiveAuthPreference,
   observeNativeSessionEvent,
@@ -38,6 +48,11 @@ import {
 } from "./continuity-terminal.js";
 import { openContinuity } from "./continue-from.js";
 import { accountPoolRows } from "./account-pool.js";
+import {
+  PoolAttemptEvidence,
+  terminalPoolAttempts,
+  withPoolAttempts,
+} from "./pool-attempt-evidence.js";
 import type { PreProgressRefusalMemory } from "./pre-progress-refusal.js";
 import { writeRunTelemetryArtifact } from "./runTelemetryWriter.js";
 import {
@@ -74,7 +89,6 @@ import {
   isWorkingCandidate,
   partitionCandidates,
   toCandidateEvidence,
-  unanimousDeclaredFailure,
 } from "./candidateEvidence.js";
 import { capabilityIntents } from "@claudexor/gateway";
 import {
@@ -206,7 +220,6 @@ import {
   failTerminally,
   guardAnnouncedRun,
   writeFailure,
-  attemptVendorFailure,
   cancelReasonFromSignalToken,
 } from "./runTerminals.js";
 import { type BudgetDenial, budgetFailureRecord, classifyBudgetFailure } from "./budgetFailure.js";
@@ -277,10 +290,8 @@ import {
 import { newAttemptOutputMarkers } from "./attemptOutputMarkers.js";
 import * as delegateFailure from "./delegationFailure.js";
 import * as secretDiff from "./secretDiff.js";
-import { dominantHarnessFailureCategory, harnessFailureNextActions } from "./harnessFailure.js";
 import {
   finalizeAttempt,
-  readOnlyNoSuccessTerminal,
   unrecoveredToolErrorFailure,
   webEvidenceFailure,
 } from "./attemptFinalize.js";
@@ -297,16 +308,12 @@ import {
 } from "./continuation.js";
 import { interactionChannelFor } from "./interaction.js";
 import { liveAttempt, type LiveAttemptContext, type LiveAttemptHook } from "./live-input.js";
-import { gateSpecsFromContract, renderTestsEvidence } from "./contract-gates.js";
+import { finalVerifyRun, gateSpecsFromContract, renderTestsEvidence } from "./contract-gates.js";
 import { buildTaskContract } from "./task-contract-builder.js";
+import { prepareReviewEvidenceDir, recordReviewEvidenceCleanup } from "./reviewEvidence.js";
 import { ArtifactStore, type RunPaths } from "@claudexor/artifact-store";
-import type { EventLog } from "@claudexor/event-log";
-import {
-  buildContextPack,
-  rawContextForEnvelope,
-  preflightEvidence,
-  writeEvidencePacket,
-} from "@claudexor/context";
+import type { EventLog, TerminalPersistenceHook } from "@claudexor/event-log";
+import { buildContextPack, rawContextForEnvelope, writeEvidencePacket } from "@claudexor/context";
 import {
   WorkspaceManager,
   captureRawPatchEnvelope,
@@ -319,8 +326,6 @@ import {
 import {
   blockedDecisionOverride,
   finalVerifyBlocks,
-  finalVerifyPatch,
-  finalVerifyFiles,
   verifyAndDeliverFiles,
   verifyAndDeliver,
 } from "@claudexor/delivery";
@@ -401,6 +406,12 @@ export interface OrchestratorDeps {
   reviewerEfforts?: Partial<Record<ProviderFamily, EffortHint>>;
   /** Startup-frozen regular/strategy concurrency caps from the daemon owner. */
   runtimeConcurrencyCaps?: RuntimeConcurrencyCaps;
+  /**
+   * Durable per-run process custody (the daemon's scope index). Absent: in-process
+   * custody only — minted, carried and reaped at the barrier, nothing survives a
+   * daemon crash (`runScope.ts`).
+   */
+  runScopes?: RunScopeCustodian;
 }
 
 /**
@@ -566,8 +577,8 @@ export interface RunInput {
   onContinuityResolved?: (turnId: string, disclosure: ContinuityDisclosureResult) => void;
   /** Best-effort live sink for every RunEvent, called after durable persistence. */
   onEvent?: (event: RunEvent) => void;
-  /** Durable RunEvent sink owned by the daemon journal; failures fail the run. */
   onEventPersist?: (event: RunEvent) => void;
+  onTerminalPersist?: TerminalPersistenceHook;
   /** In-process sink for the full per-harness event stream (richer than RunEvent). */
   onHarnessEvent?: (event: HarnessEvent) => void;
   /** Called once when the run id/dir are known, before any harness work begins. */
@@ -623,6 +634,9 @@ export interface RunInput {
    * ignored knob instead of silently dropping it.
    */
   maxTurns?: number | null;
+  /** Internal provenance: the run's process-scope marker, minted by `run()` before the
+   * first launch and carried in every harness `spec.env`. Never set by a caller. */
+  runScopeMarker?: string;
 }
 
 /** Context handed to RunInput.onInteraction for one pending question. */
@@ -831,40 +845,55 @@ export class Orchestrator {
       this.routingRationaleByRun.delete(settledRunId);
       this.deps.delegationBudgetAuthority?.releaseRun(settledRunId);
     };
+    // Process custody (owner 1A, #449; `runScope.ts`): the marker is minted and
+    // recorded BEFORE the first launch, rides every spec env (`scopedSpecEnv`),
+    // and every announced run HOLDS its terminal until the barrier has ended
+    // what still carries it. The reap never changes the verdict.
+    const custody = await openRunScopeCustody(this.deps.runScopes, runId);
+    resolved = { ...resolved, runScopeMarker: custody.marker };
     try {
       return await guardAnnouncedRun(
         resolved.signal,
         (announce) => {
+          const announced = custody.announced(announce);
           switch (mode) {
             case "ask":
               // `--deep-scan` widens the answer into the bounded multi-scout
               // research sweep with synthesis (the old `audit --swarm`/`explore`).
               return resolved.deepScan
-                ? this.runDeepScan(resolved, announce)
-                : this.runAsk(resolved, announce);
+                ? this.runDeepScan(resolved, announced)
+                : this.runAsk(resolved, announced);
             case "agent":
               // Engine strategies are FLAGS on agent (v0.9 collapse): `--until-clean`
               // and `--attempts` select the convergence loop; `--n` selects the race
               // width; `--create` switches the candidate intent to create_from_scratch.
-              if (resolved.untilClean) return this.runConvergence(resolved, mode, null, announce);
+              if (resolved.untilClean) return this.runConvergence(resolved, mode, null, announced);
               if (resolved.attempts !== undefined && resolved.attempts !== null) {
-                return this.runConvergence(resolved, mode, resolved.attempts, announce);
+                return this.runConvergence(resolved, mode, resolved.attempts, announced);
               }
-              return this.runRace({ ...resolved, n: resolved.n ?? 1 }, mode, announce);
+              return this.runRace({ ...resolved, n: resolved.n ?? 1 }, mode, announced);
             case "plan":
-              return this.runPlan(resolved, announce);
+              return this.runPlan(resolved, announced);
           }
         },
-        async ({ runId }) => {
-          const authority = this.deps.delegationBudgetAuthority;
-          if (!authority?.hasParent(runId)) return;
-          authority.beginParentClose(runId);
-          await authority.waitForChildren(runId);
+        // The whole-run barrier: drain delegated children, then end the run's
+        // process scope and record its outcome before ANY terminal is flushed
+        // (a child-drain rejection keeps its error). Bounded by the reap deadline.
+        ({ runId }) =>
+          custody.barrier(async () => {
+            const authority = this.deps.delegationBudgetAuthority;
+            if (!authority?.hasParent(runId)) return;
+            authority.beginParentClose(runId);
+            await authority.waitForChildren(runId);
+          }),
+        // Single per-run terminalization hook: the custody fallback for a path
+        // that never reached the barrier, then release per-run engine state
+        // (the delegated-child drain authority is released only AFTER
+        // settlement) on EVERY terminal.
+        async (settledRunId) => {
+          await custody.record();
+          releaseRunState(settledRunId);
         },
-        // Single per-run terminalization hook: release the routing-rationale map
-        // entry on EVERY terminal (incl. a run that died before its telemetry
-        // writer ran, which is the leak this closes).
-        releaseRunState,
       );
     } catch (error) {
       // A durable startup sink may refuse `run.created` before the strategy can
@@ -875,6 +904,8 @@ export class Orchestrator {
         this.deps.delegationBudgetAuthority?.releaseRun(runId);
       }
       throw error;
+    } finally {
+      await custody.settleUnannounced();
     }
   }
 
@@ -2203,7 +2234,11 @@ export class Orchestrator {
         adapter: this.deps.registry.get(harnessId),
         credentialProfile: sessionFields.credential_profile,
         authPreference: sessionFields.auth_preference ?? "auto",
-        laneEnv: this.laneHomeEnvFor(runInput, harnessId, profileId) ?? {},
+        laneEnv:
+          scopedSpecEnv(
+            runInput.runScopeMarker,
+            this.laneHomeEnvFor(runInput, harnessId, profileId) ?? {},
+          ) ?? {},
         envInheritance: envInheritance(this.config(runInput.repoRoot)),
         signal: runInput.signal,
         processing,
@@ -2318,6 +2353,9 @@ export class Orchestrator {
      * operator's real home while the record still claimed scoped state. */
     harnessHome: ScopedHarnessHome,
     observedPaths = new Set<string>(),
+    /** The caller's, like `harnessHome`: its catch keeps the tries' accounts.
+     * REQUIRED, so no caller can drop them by omission again. */
+    poolEvidence: PoolAttemptEvidence,
   ): Promise<CandidateRun> {
     const adapter = routed.adapter;
     const knobs = this.routeSpecKnobs(routed, contract, modelHint, effortHint);
@@ -2383,6 +2421,9 @@ export class Orchestrator {
     if (routed.browserRequirement.effective && artifactRelativeDir === null) {
       throw new Error("browser artifact ownership marker was not persisted");
     }
+    // The run's scope marker rides every spec env (plus the host facts when the
+    // HOME is scoped), added AFTER the lane/profile home so that patch is kept.
+    const scopedEnv = scopedSpecEnv(runInput?.runScopeMarker, harnessHome.env);
     let spec = HarnessRunSpec.parse({
       session_id: newId("ses"),
       intent,
@@ -2421,7 +2462,7 @@ export class Orchestrator {
       ...(inPlaceEnvelope && sessionFields?.resume_session_id
         ? { resume_session_id: sessionFields.resume_session_id }
         : {}),
-      ...(harnessHome.env ? { env: harnessHome.env } : {}),
+      ...(scopedEnv ? { env: scopedEnv } : {}),
       raw_context_packet: rawContextPacket,
       stream_deltas: streamDeltas,
     });
@@ -2474,6 +2515,7 @@ export class Orchestrator {
     let beltFailureDisclosed = false;
     const errors: string[] = [];
     let answer = new secretDiff.CountedAnswerAssembly();
+    let currentCapture: Awaited<ReturnType<WorkspaceManager["captureDiff"]>> | undefined;
     const retryPolicy = transientRetryPolicy(this.config(contract.repo.root));
     // QA-024: the delegation belt is the ONLY engine-owned extra MCP server
     // injected into an agent lane (the browser MCP rides its own field), so its
@@ -2507,11 +2549,13 @@ export class Orchestrator {
         harnessHome,
         workOrder: prompt,
         firstPrompt: spec.prompt,
+        poolEvidence,
       }),
       { spec, continuation: runInput?.continuation, store, telemetry },
     ));
     try {
       for (let nativeTry = 0; !signal?.aborted; nativeTry += 1) {
+        currentCapture = undefined;
         // A3 per-try isolation: neither output nor progress markers leak across tries.
         if (nativeTry > 0) {
           answer = new secretDiff.CountedAnswerAssembly();
@@ -2531,9 +2575,8 @@ export class Orchestrator {
           ? AbortSignal.any([signal, attemptAbort.signal])
           : attemptAbort.signal;
         activeSessionId = runSpec.session_id;
-        continuity.beginTry(runSpec, nativeTry, attemptAbort);
         // #363: bound before the spawn — a credential change mid-try voids it.
-        const refusal = this.credentials.bindPreProgressRefusal(adapter.id, runSpec);
+        const refusal = continuity.beginTry(runSpec, nativeTry, attemptAbort);
         const transientStart = telemetry.transientFailures.length;
         const rateLimitStart = telemetry.rateLimits.length;
         let rawPatch: RawGitPatchEnvelope | null = null;
@@ -2661,29 +2704,41 @@ export class Orchestrator {
         // #31: the centralized retry gate reads the classified `retryable` verdict.
         const sawRetryable = newTransients.some((f) => f.retryable);
         const sawTypedLimit = telemetry.rateLimits.length > rateLimitStart;
-        if (directory) await captureDirectory();
-        const currentDiff = directory ? "" : await wsm.diff(envelope);
-        const workspaceUnchanged = directory
-          ? directoryCapture.files?.noChanges === true
-          : currentDiff.trim().length === 0;
-        const deliverableEmpty = workspaceUnchanged && answer.text().length === 0;
-        const delivered = !harnessErrored && !deliverableEmpty && !signal?.aborted;
-        this.credentials.noteTryServed(refusal, telemetry.outputMarkers, delivered);
-        const verdict = await continuity.afterTry({
-          runSpec,
-          nativeTry,
+        const tryFacts = {
           harnessErrored,
+          originalError: errors[0],
           budgetStopped: streamBudgetDenied,
           aborted: signal?.aborted === true,
           requestRefused: Boolean(telemetry.requestRefusal),
           newTransients,
+          markers: telemetry.outputMarkers,
+        };
+        // Its account row first: an infrastructure failure below never erases it.
+        continuity.settleTry(tryFacts);
+        if (directory) await captureDirectory();
+        currentCapture = directory
+          ? undefined
+          : await secretDiff.captureCandidateDiff(wsm, envelope);
+        const currentDiff = secretDiff.capturedDiff(currentCapture);
+        const workspaceUnchanged = directory
+          ? directoryCapture.files?.noChanges === true
+          : currentDiff?.trim().length === 0;
+        const deliverableEmpty = workspaceUnchanged && answer.text().length === 0;
+        const delivered = !harnessErrored && !deliverableEmpty && !signal?.aborted;
+        this.credentials.noteTryServed(refusal, telemetry.outputMarkers, delivered);
+        const verdict = await continuity.afterTry({
+          ...tryFacts,
+          // A cancel or deadline that landed during capture still stops the
+          // attempt; the try's own facts above stay its evidence.
+          stopped: signal?.aborted === true,
+          runSpec,
+          nativeTry,
           sawTypedLimit,
           sawRetryable,
           answer,
           rawDeliverableEmpty: deliverableEmpty,
           workspaceDiffNonEmpty: !workspaceUnchanged,
-          currentDiff,
-          markers: telemetry.outputMarkers,
+          ...(currentDiff === undefined ? {} : { currentDiff }),
           lastLimit: telemetry.rateLimits.at(-1) ?? null,
           refusal,
           telemetry,
@@ -2705,8 +2760,15 @@ export class Orchestrator {
       signal?.removeEventListener("abort", onAbort);
     }
     // A pool-exhausted terminal is rotation's verdict, not the transient
-    // machinery's — no `route.transient.exhausted` rides along with it.
-    if (harnessErrored && !poolExhausted && !processingRefusal && !telemetry.requestRefusal) {
+    // machinery's, and a stopped run exhausted no retries: no
+    // `route.transient.exhausted` rides along with either.
+    if (
+      harnessErrored &&
+      !poolExhausted &&
+      !processingRefusal &&
+      !telemetry.requestRefusal &&
+      !signal?.aborted
+    ) {
       emitTransientExhausted(
         (t, p) => log?.emit(t, p),
         adapter.id,
@@ -2735,9 +2797,10 @@ export class Orchestrator {
       : await secretDiff.captureCandidateWorkspace({
           ...{ wsm, envelope, inPlace: inPlaceEnvelope, projectRoot: store.repoRoot },
           ...{ answerText, answerMatches: answer.secretLikeMatches() },
+          holder: { runId: paths.runId, runDir: paths.root },
+          incompleteCapture: currentCapture?.captureIncomplete ? currentCapture : undefined,
         });
     const { diff, captureRefusal } = captured;
-    harnessErrored = secretDiff.recordCaptureRefusal(captureRefusal, errors, harnessErrored);
     const deliverableEvidence =
       diff.trim().length > 0 || Boolean(answerText) || directoryHasOutput(directoryCapture.files);
     // Cancelled attempts skip gates: running a 600s-per-gate suite delays the ack
@@ -2752,7 +2815,7 @@ export class Orchestrator {
     }
     const gates = gateSignalAborted
       ? []
-      : await runGates(gateSpecsFromContract(contract), {
+      : await runGates(gateSpecsFromContract(contract, runInput?.runScopeMarker), {
           cwd: envelope.worktree_path,
           env: wsm.envFor(envelope),
           signal,
@@ -2797,7 +2860,8 @@ export class Orchestrator {
     if (finalized.outcomeClass === "contract_failure" && unwrapped.contractViolation)
       errors.push(`work_report contract: ${unwrapped.contractViolation}`);
     const deliverablePresent = finalized.deliverablePresent;
-    const errored = harnessErrored || webBlocked;
+    if (captureRefusal) errors.push(captureRefusal.detail);
+    const errored = harnessErrored || webBlocked || captureRefusal !== undefined;
     const resumable = await continuity.finish({
       runSpec: spec,
       errored,
@@ -2807,6 +2871,7 @@ export class Orchestrator {
       workState: finalized.workState,
     });
     setAttemptOutcome(telemetry, {
+      captureFailed: captureRefusal !== undefined,
       deliverablePresent,
       gatesPassed: gates.length > 0 ? gatesPassed(gates) : null,
       harnessErrored,
@@ -2920,6 +2985,7 @@ export class Orchestrator {
       harnessHome: ScopedHarnessHome | null;
       workOrder: string;
       firstPrompt: string;
+      poolEvidence?: PoolAttemptEvidence;
     },
   ): ConstructorParameters<typeof InRunContinuity>[0] {
     const repoRoot = contract.repo.root;
@@ -2953,10 +3019,13 @@ export class Orchestrator {
               spec.model_hint ?? null,
             )
           : Promise.resolve(new Set<string>()),
+      bindRefusal: (spec, producer) =>
+        this.credentials.bindPreProgressRefusal(adapter.id, spec, producer),
       rotationObservations: (spec, transients, refusal) =>
         this.credentials.rotationObservations(adapter, spec, transients, refusal),
       emit: (type, payload) => log?.emit(type, payload),
       route: routed,
+      poolEvidence: lane.poolEvidence,
       newSessionId: () => newId("ses"),
       thread: runInput?.threadId
         ? {
@@ -2983,7 +3052,7 @@ export class Orchestrator {
     const mutatingRun = isMutatingAccess(contract.access.effective_profile);
     const planBrief = verifiedPlanBrief(input);
     const quotaSnapshots = this.quotaSnapshotPreflight();
-    const { store, paths, log, ledger } = beginAnnouncedRun(
+    const { store, paths, log, ledger, runContext } = beginAnnouncedRun(
       {
         input,
         contract,
@@ -3186,6 +3255,7 @@ export class Orchestrator {
     }
 
     const runsBySlot = new Array<CandidateRun | undefined>(slots.length);
+    runContext.attempts = () => runsBySlot.filter((run): run is CandidateRun => run !== undefined);
     // D-16d: one-shot continuation budget shared across the concurrent candidate
     // slots (parity with the read-only chain's single counter). Claimed
     // synchronously (check-then-increment with no await between), so two slots
@@ -3249,8 +3319,9 @@ export class Orchestrator {
       );
       let envelope: WorkspaceEnvelope | undefined;
       // Declared OUTSIDE the try so the catch below can state what the attempt
-      // actually ran under, not merely that it stopped.
+      // actually ran under, not merely that it stopped — and on which accounts.
       let harnessHome: ScopedHarnessHome | undefined;
+      const tried = new PoolAttemptEvidence(adapter.id, slot.attemptId);
       try {
         log.emit("harness.started", {
           harness_id: adapter.id,
@@ -3321,6 +3392,8 @@ export class Orchestrator {
           undefined,
           undefined,
           harnessHome,
+          undefined,
+          tried,
         );
         ledger.settle(
           slot.lease.lease_id,
@@ -3404,6 +3477,7 @@ export class Orchestrator {
                 continuation_of: run.attemptId,
               });
               const contLeaseId = contLease.lease?.lease_id ?? "";
+              const contTried = new PoolAttemptEvidence(adapter.id, contAttemptId);
               try {
                 const contRun = await this.runCandidateInEnvelope(
                   slot.routed,
@@ -3451,6 +3525,8 @@ export class Orchestrator {
                   undefined,
                   packet.pointerLine ?? undefined,
                   harnessHome,
+                  undefined,
+                  contTried,
                 );
                 ledger.settle(
                   contLeaseId,
@@ -3489,6 +3565,8 @@ export class Orchestrator {
                   error: safeErrorMessage(err),
                 });
               }
+              // Whichever attempt speaks names both attempts' failed tries, in order.
+              effectiveRun.poolAttempts = [...(run.poolAttempts ?? []), ...contTried.snapshot()];
             } else {
               ledger.cancel(contLease.lease?.lease_id ?? "");
               log.emit("run.continuation.denied", {
@@ -3553,6 +3631,7 @@ export class Orchestrator {
             knobs.model,
           ),
           infraPhase,
+          poolAttempts: tried.snapshot(),
           // Keep a TYPED pre-spawn refusal (spent quota window + its reset)
           // alive past this catch; `message` alone would force the terminal to
           // read prose back out.
@@ -3569,19 +3648,42 @@ export class Orchestrator {
     };
     await runParallelCandidates(slots, this.deps.runtimeConcurrencyCaps, runSlot);
     const runs: CandidateRun[] = runsBySlot.filter((r): r is CandidateRun => r !== undefined);
+    // From here `runs` is the lane's one attempt collection (a synthesis that
+    // returns joins it); a synthesis that threw first leaves only its tries.
+    let thrownSynthesis: ContinuityTerminalFacts | null = null;
+    const history = (): readonly ContinuityTerminalFacts[] =>
+      thrownSynthesis ? [...runs, thrownSynthesis] : runs;
+    runContext.attempts = history;
     // Fail-closed terminal: a delegated mutating run whose attempts state
     // neither historical proof nor deliberate absence refuses instead of passing.
     assertDelegatedEvidence(input.delegated === true, candidateAccess, runs);
+    // One candidate-terminal context for every race terminal below; its
+    // telemetry writer reads the live roster, so a later synth attempt counts.
+    const raceTerminal = {
+      store,
+      paths,
+      log,
+      runId,
+      taskId,
+      mode,
+      ledger,
+      runs,
+      writeTelemetry: () =>
+        this.writeRunTelemetry(
+          store,
+          paths,
+          contract,
+          runId,
+          taskId,
+          mode,
+          candidateRoster(runs),
+          null,
+        ),
+    };
     const cancelledRaceResult = () =>
       cancelledCandidatesResult({
-        store,
-        paths,
-        log,
-        runId,
-        taskId,
-        mode,
-        ledger,
-        runs,
+        ...raceTerminal,
+        attempts: history(),
         git:
           input.workspaceKind !== "directory"
             ? {
@@ -3595,17 +3697,6 @@ export class Orchestrator {
               }
             : undefined,
         signal: input.signal,
-        writeTelemetry: () =>
-          this.writeRunTelemetry(
-            store,
-            paths,
-            contract,
-            runId,
-            taskId,
-            mode,
-            candidateRoster(runs),
-            null,
-          ),
       });
 
     // Revert divergence fence for the single-candidate in-place path: the
@@ -3636,38 +3727,35 @@ export class Orchestrator {
 
     const failedDelegation = delegateFailure.dominantRaceCandidateFailure(runs);
     if (failedDelegation) {
-      const failure = delegateFailure.candidateFailureTerminal(failedDelegation, "race");
       await disposeReviewEnvelopes();
-      if (mutatingRun && failedDelegation.files) {
-        await publishDirectoryCandidate({
-          files: failedDelegation.files,
-          store,
-          paths,
-          taskId,
-          attemptId: failedDelegation.attemptId,
-          harnessId: failedDelegation.harnessId,
-          facts: makeOutcomeFacts("failed", { noChanges: failedDelegation.files.noChanges }),
-          log,
+      const failedOutput: Parameters<typeof delegateFailure.persistFailedCandidateOutput>[0] = {
+        ...{ store, log, paths, execRoot, preTurnSha, taskId, mode, run: failedDelegation },
+        live:
+          input.inPlace === true &&
+          input.workspaceKind !== "directory" &&
+          failedDelegation.reviewCwd === execRoot,
+        postTurnSha: earlyPostTurnSha,
+        kind: input.create === true ? "new_repo" : "patch",
+      };
+      // A live candidate whose capture failed (no Delegate failure) ends in the
+      // shared no-working-candidate terminal, as in the isolated race and
+      // convergence: a recorded budget denial, a budget terminal the ledger
+      // settled (stream hard cap, exact overshoot, unverifiable cash) or a
+      // unanimous typed refusal leads, its live receipt carries the same facts,
+      // and the capture facts and inspection actions follow. Any other dominant
+      // capture failure joins it only under a settled budget terminal.
+      if (
+        delegateFailure.candidateFailureKind(failedDelegation) === "capture" &&
+        (failedOutput.live || ledger.terminal() !== null)
+      )
+        return failedCandidatesResult({
+          ...raceTerminal,
+          budgetDenial,
+          ...(mutatingRun ? { liveCapture: failedOutput } : {}),
         });
-      } else if (mutatingRun && input.workspaceKind !== "directory") {
-        await delegateFailure.persistFailedInPlaceWorkProduct({
-          ...{ store, log, paths, execRoot, preTurnSha, taskId, mode },
-          live: input.inPlace === true && failedDelegation.reviewCwd === execRoot,
-          run: failedDelegation,
-          postTurnSha: earlyPostTurnSha,
-          kind: input.create === true ? "new_repo" : "patch",
-        });
-      }
-      this.writeRunTelemetry(
-        store,
-        paths,
-        contract,
-        runId,
-        taskId,
-        mode,
-        candidateRoster(runs),
-        null,
-      );
+      const failure = delegateFailure.candidateFailureTerminal(failedDelegation, "race");
+      if (mutatingRun) await delegateFailure.persistFailedCandidateOutput(failedOutput);
+      raceTerminal.writeTelemetry();
       return failTerminally(
         log,
         store,
@@ -3678,7 +3766,7 @@ export class Orchestrator {
         failure.phase,
         failure.error,
         ledger.spend(),
-        failure.metadata,
+        { ...failure.metadata, attempts: runs },
       );
     }
 
@@ -3703,28 +3791,7 @@ export class Orchestrator {
     const workingRuns = partitionCandidates(runs).working;
     if (workingRuns.length === 0) {
       await disposeReviewEnvelopes();
-      return failedCandidatesResult({
-        store,
-        paths,
-        log,
-        runId,
-        taskId,
-        mode,
-        ledger,
-        runs,
-        budgetDenial,
-        writeTelemetry: () =>
-          this.writeRunTelemetry(
-            store,
-            paths,
-            contract,
-            runId,
-            taskId,
-            mode,
-            candidateRoster(runs),
-            null,
-          ),
-      });
+      return failedCandidatesResult({ ...raceTerminal, budgetDenial });
     }
 
     // QA-025: only announce that review STARTED when the panel will actually
@@ -3778,15 +3845,13 @@ export class Orchestrator {
         taskId,
         input.signal,
         this.reservationEstimateUsd(input),
+        false,
+        input.runScopeMarker,
       );
     } catch (err) {
       // Review preflight/evidence failures end TERMINALLY with artifacts —
       // never as an escaped throw that orphans the run dir.
-      return failAfterCandidates(
-        { log, store, paths, runId, taskId, mode, ledger, runs },
-        "review",
-        err,
-      );
+      return failAfterCandidates(raceTerminal, "review", err);
     } finally {
       // Review preflight failures must not leak candidate worktrees.
       await disposeReviewEnvelopes();
@@ -3822,6 +3887,7 @@ export class Orchestrator {
       });
       if (lease.granted) {
         let envelope: WorkspaceEnvelope | undefined;
+        const synthTried = new PoolAttemptEvidence(synthRouted.adapter.id, "synth");
         try {
           const plan = buildSynthesisPlan(evidences);
           const synthesisInput = buildFileBackedSynthesisInput({
@@ -3890,6 +3956,8 @@ export class Orchestrator {
             synthesisInput.content,
             undefined,
             synthHome,
+            undefined,
+            synthTried,
           );
           ledger.settle(
             lease.lease?.lease_id ?? "",
@@ -3923,6 +3991,8 @@ export class Orchestrator {
                 taskId,
                 input.signal,
                 this.reservationEstimateUsd(input),
+                false,
+                input.runScopeMarker,
               );
               evidences.push(...synthEvidence);
               workingRuns.push(run);
@@ -3935,26 +4005,22 @@ export class Orchestrator {
                 mode,
                 paths.root,
                 candidateStatuses(runs),
-                () =>
-                  this.writeRunTelemetry(
-                    store,
-                    paths,
-                    contract,
-                    runId,
-                    taskId,
-                    mode,
-                    candidateRoster(runs),
-                    null,
-                  ),
+                raceTerminal.writeTelemetry,
                 ledger.spend(),
                 input.signal,
                 store,
+                undefined,
+                undefined,
+                history(),
               );
             }
           } finally {
             await disposeReviewEnvelopes();
           }
         } catch (err) {
+          // Not yet in `runs`: the run goes on, so its tries' accounts stay in the history.
+          if (!runs.some((run) => run.attemptId === "synth"))
+            thrownSynthesis = { poolAttempts: synthTried.snapshot() };
           ledger.settle(
             lease.lease?.lease_id ?? "",
             AC.attemptFailureCost(err, "synthesis-error").settlement,
@@ -3981,11 +4047,7 @@ export class Orchestrator {
       });
     } catch (err) {
       // Arbitration throws end terminally with artifacts, never as an orphan.
-      return failAfterCandidates(
-        { log, store, paths, runId, taskId, mode, ledger, runs },
-        "arbitration",
-        err,
-      );
+      return failAfterCandidates({ ...raceTerminal, attempts: history() }, "arbitration", err);
     }
     log.emit("arbitration.completed", {
       winner: result.decision.winner,
@@ -4054,9 +4116,7 @@ export class Orchestrator {
       facts.review !== "blocked" &&
       !input.signal?.aborted
     ) {
-      finalVerify = winnerRun.files
-        ? await finalVerifyFiles(winnerRun.files, undefined, gateSpecsFromContract(contract), log)
-        : await finalVerifyPatch(execRoot, winnerRun, gateSpecsFromContract(contract), log);
+      finalVerify = await finalVerifyRun(execRoot, winnerRun, contract, log, input);
       finalVerifyFailed = finalVerifyBlocks(finalVerify);
       if (finalVerifyFailed) facts = { ...facts, checks: "failed", reason: "checks_failed" };
     }
@@ -4071,6 +4131,9 @@ export class Orchestrator {
     });
     store.writeYaml(join(paths.arbitrationDir, "pairwise.yaml"), result.pairwise);
     const decisionPath = join(paths.arbitrationDir, "decision.yaml");
+    // Every attempt's failed tries by the FINAL outcome (delivery below can
+    // still fail the checks); a review or check block is not an account failure.
+    const racePool = () => terminalPoolAttempts(facts, history());
     if (winnerRun) {
       for (const path of materializeWinnerOutputs({
         attemptDir: join(paths.attemptsDir, winnerRun.attemptId),
@@ -4106,7 +4169,7 @@ export class Orchestrator {
             execRoot,
             winnerRun.files,
             {},
-            gateSpecsFromContract(contract),
+            gateSpecsFromContract(contract, input.runScopeMarker),
             (freshVerify) =>
               finalVerifyBlocks(freshVerify)
                 ? (freshVerify.reason ?? "final verify failed before directory race adoption")
@@ -4176,7 +4239,7 @@ export class Orchestrator {
               execRoot,
               winnerRun.diff,
               { mode: "apply", protectedApply: true },
-              gateSpecsFromContract(contract),
+              gateSpecsFromContract(contract, input.runScopeMarker),
               (freshVerify) => {
                 finalVerify = freshVerify;
                 return finalVerifyBlocks(freshVerify)
@@ -4265,14 +4328,17 @@ export class Orchestrator {
       }
       store.writeText(
         join(paths.finalDir, "summary.md"),
-        renderSummary(
-          runId,
-          mode,
-          { ...result.decision, facts },
-          evidences,
-          synth.reason,
-          actualReviewVerified,
-          secretDiff.secretLikeSummaryLine(winnerRun.secretLike),
+        withPoolAttempts(
+          renderSummary(
+            runId,
+            mode,
+            { ...result.decision, facts },
+            evidences,
+            synth.reason,
+            actualReviewVerified,
+            secretDiff.secretLikeSummaryLine(winnerRun.secretLike),
+          ),
+          racePool(),
         ),
       );
       // summary.md is a DIAGNOSTIC artifact only (V8/PLAN addendum 2): it no
@@ -4312,18 +4378,27 @@ export class Orchestrator {
     // (applyable, no_changes, or not-verified) is an honest completion.
     const needsDecisionTerminal = facts.review === "blocked" || facts.checks === "failed";
     const isFailureTerminal = facts.lifecycle !== "succeeded" || needsDecisionTerminal;
+    const pool = racePool();
     if (deliveryFailureReason && !finalVerifyFailed) {
-      writeFailure(store, paths, deliveryRefusalFailure(deliveryFailureReason, paths.root));
+      const refused = deliveryRefusalFailure(deliveryFailureReason, paths.root);
+      writeFailure(store, paths, {
+        ...refused,
+        safeMessage: withPoolAttempts(refused.safeMessage, pool),
+        poolAttempts: pool,
+      });
     } else if (finalVerifyFailed) {
       writeFailure(store, paths, {
         phase: "verification",
         // RunFailure.category is a closed enum; "validation" is the honest
         // bucket (the winner failed re-validation on a fresh base).
         category: "validation",
-        safeMessage:
+        safeMessage: withPoolAttempts(
           finalVerify?.applied_cleanly === null
             ? `final verify ERRORED before proving the patch against a clean base: ${finalVerify?.reason ?? "verify infrastructure error"}`
             : `final verify failed: ${finalVerify?.reason ?? (finalVerify?.gates_passed === false ? "deterministic gates failed on the fresh verify tree" : "unknown")}`,
+          pool,
+        ),
+        poolAttempts: pool,
         runDir: paths.root,
         nextActions:
           finalVerify?.applied_cleanly === null
@@ -4355,11 +4430,15 @@ export class Orchestrator {
               : "internal",
         harnessId: winnerRun?.errored ? winnerRun.harnessId : undefined,
         attemptId: winnerRun?.errored ? winnerRun.attemptId : undefined,
-        safeMessage: needsHuman
-          ? `review escalated to a human decision: ${result.decision.why_winner}`
-          : needsDecisionTerminal
-            ? `review blocked before apply: ${result.decision.why_winner}`
-            : result.decision.why_winner,
+        safeMessage: withPoolAttempts(
+          needsHuman
+            ? `review escalated to a human decision: ${result.decision.why_winner}`
+            : needsDecisionTerminal
+              ? `review blocked before apply: ${result.decision.why_winner}`
+              : result.decision.why_winner,
+          pool,
+        ),
+        poolAttempts: pool,
         rawDetailRef: winnerRun?.errored
           ? `attempts/${winnerRun.attemptId}/attempt.yaml`
           : undefined,
@@ -4381,7 +4460,7 @@ export class Orchestrator {
       if (!winnerRun) {
         store.writeText(
           join(paths.finalDir, "summary.md"),
-          `# Run ${runId} (${mode})\n\n- Lifecycle: ${facts.lifecycle}${facts.reason ? ` (${facts.reason})` : ""}\n- Phase: arbitration\n\n${result.decision.why_winner}\n`,
+          `# Run ${runId} (${mode})\n\n- Lifecycle: ${facts.lifecycle}${facts.reason ? ` (${facts.reason})` : ""}\n- Phase: arbitration\n\n${withPoolAttempts(result.decision.why_winner, pool)}\n`,
         );
         log.emit("output.ready", {
           kind: "summary",
@@ -4399,6 +4478,8 @@ export class Orchestrator {
         lifecycle: facts.lifecycle,
         facts,
         reason: facts.reason,
+        // A work-state veto is still a block: it keeps the earlier refusals.
+        ...(pool.length > 0 ? { pool_attempts: pool } : {}),
         ...resumableTerminal(store, paths, winnerRun ? [winnerRun] : runs, isFailureTerminal),
       });
     } else if (facts.lifecycle === "succeeded") {
@@ -4407,6 +4488,7 @@ export class Orchestrator {
       log.emit("run.blocked", {
         lifecycle: facts.lifecycle,
         facts,
+        pool_attempts: pool,
         ...resumableTerminal(store, paths, runs, isFailureTerminal),
         phase:
           deliveryFailureReason && !finalVerifyFailed
@@ -4422,6 +4504,7 @@ export class Orchestrator {
         facts,
         reason: facts.reason,
         phase: "arbitration",
+        pool_attempts: pool,
         failure_ref: "final/failure.yaml",
         ...resumableTerminal(store, paths, runs, isFailureTerminal),
       });
@@ -4435,7 +4518,7 @@ export class Orchestrator {
       facts,
       winner: result.decision.winner,
       runDir: paths.root,
-      summary: result.decision.why_winner,
+      summary: withPoolAttempts(result.decision.why_winner, pool),
       candidates: candidateStatuses(runs),
       decisionPath,
       reviewVerified: actualReviewVerified,
@@ -4484,7 +4567,7 @@ export class Orchestrator {
    * panel settles (resolve OR reject).
    */
   private reviewScoped(
-    input: Omit<Parameters<typeof reviewCandidate>[0], "env">,
+    input: Parameters<typeof reviewCandidate>[0],
   ): ReturnType<typeof reviewCandidate> {
     return reviewCandidate({
       ...input,
@@ -4510,6 +4593,7 @@ export class Orchestrator {
     signal?: AbortSignal,
     reservationEstimateUsd?: number,
     reviewUnchanged = false,
+    runScopeMarker?: string,
   ): Promise<CandidateEvidence[]> {
     return reviewCandidateRuns(
       {
@@ -4527,64 +4611,20 @@ export class Orchestrator {
         signal,
         reservationEstimateUsd,
         reviewUnchanged,
+        runScopeMarker,
       },
       {
         prepareReviewEvidenceDir: this.prepareReviewEvidenceDir.bind(this),
-        recordReviewEvidenceCleanup: this.recordReviewEvidenceCleanup.bind(this),
+        recordReviewEvidenceCleanup,
         reviewScoped: this.reviewScoped.bind(this),
         config: this.config.bind(this),
       },
     );
   }
 
-  private prepareReviewEvidenceDir(sourceDir: string, _candidateCwd: string): string {
-    // Evidence is an external runtime artifact. ReviewEngine builds a separate
-    // reviewer workspace and copies the packet there; writing/copying it into
-    // the candidate tree would contaminate the Git diff and, worse, overwrite a
-    // user-owned path with the same name.
-    if (!existsSync(sourceDir)) {
-      throw new Error(`review evidence preflight failed for ${sourceDir}: source packet missing`);
-    }
-    return this.requireReviewEvidence(sourceDir);
-  }
-
-  private requireReviewEvidence(dir: string): string {
-    const result = preflightEvidence(dir);
-    if (result.ok) return dir;
-    const missing = result.missing.length ? `missing=${result.missing.join(",")}` : "";
-    const empty = result.empty.length ? `empty=${result.empty.join(",")}` : "";
-    throw new Error(
-      `review evidence preflight failed for ${dir}: ${[missing, empty].filter(Boolean).join(" ")}`,
-    );
-  }
-
-  private cleanupReviewEvidenceDir(
-    _candidateEvidenceDir: string,
-    _candidateCwd: string,
-  ): Record<string, string> | null {
-    // No candidate-tree packet exists in v2; external runtime retention is
-    // governed by the artifact/journal lifecycle rather than best-effort rm.
-    return null;
-  }
-
-  private recordReviewEvidenceCleanup(
-    store: ArtifactStore,
-    metadataPath: string,
-    attemptId: string,
-    candidateEvidenceDir: string,
-    candidateCwd: string,
-  ): void {
-    const cleanupMetadata = this.cleanupReviewEvidenceDir(candidateEvidenceDir, candidateCwd);
-    if (!cleanupMetadata) return;
-    try {
-      store.writeYaml(metadataPath, {
-        ...cleanupMetadata,
-        attempt_id: attemptId,
-      });
-    } catch {
-      // Cleanup telemetry must not mask the review/revalidation failure that
-      // triggered best-effort cleanup.
-    }
+  /** The instance method is the seam tests stub to make evidence setup fail. */
+  private prepareReviewEvidenceDir(sourceDir: string, candidateCwd: string): string {
+    return prepareReviewEvidenceDir(sourceDir, candidateCwd);
   }
 
   private async runConvergence(
@@ -4599,7 +4639,7 @@ export class Orchestrator {
     const contract = this.buildContract(input, taskId, mode);
     const planBrief = verifiedPlanBrief(input);
     const quotaSnapshots = this.quotaSnapshotPreflight();
-    const { store, paths, log, ledger } = beginAnnouncedRun(
+    const { store, paths, log, ledger, runContext } = beginAnnouncedRun(
       {
         input,
         contract,
@@ -4778,6 +4818,8 @@ export class Orchestrator {
 
     let lastFindings: ReviewFinding[] = [];
     let lastRun: CandidateRun | null = null;
+    const convergenceRuns: CandidateRun[] = [];
+    runContext.attempts = () => convergenceRuns;
     let actualReviewVerified = false;
     let lastFinalReviewClean = false;
     // Honest apply-state for in-place convergence: the attempts mutate the LIVE
@@ -4882,6 +4924,7 @@ export class Orchestrator {
         const effectiveWeb = this.discloseWebUpgrade(log, routed, knobs.webPolicy, attemptId);
         let run: CandidateRun;
         let harnessHome: ScopedHarnessHome | undefined;
+        const tried = new PoolAttemptEvidence(adapter.id, attemptId);
         try {
           harnessHome = this.harnessHomeFor(wsm, envelope, routed, input);
           log.emit("harness.started", {
@@ -4935,6 +4978,7 @@ export class Orchestrator {
             undefined,
             harnessHome,
             observedPaths,
+            tried,
           );
           ledger.settle(
             lease.lease?.lease_id ?? "",
@@ -4999,6 +5043,7 @@ export class Orchestrator {
             errored: true,
             costEstimated: failureCost.estimated,
             errors: [message],
+            poolAttempts: tried.snapshot(),
             ...(declared.code ? { declaredFailure: declared } : {}),
             telemetry: createAttemptTelemetry(
               knobs.webPolicy,
@@ -5020,6 +5065,7 @@ export class Orchestrator {
           }
         }
         lastRun = run;
+        convergenceRuns.push(run);
         // Fail-closed twin of the candidate lane's gate: this loop terminalizes
         // per attempt, so the proof is spent per attempt.
         assertDelegatedEvidence(input.delegated === true, convergenceAccess, [run]);
@@ -5038,6 +5084,15 @@ export class Orchestrator {
 
         // Cancellation/deadline keeps priority over a belt failure finalized concurrently.
         if (input.signal?.aborted || processingBudgetDenial) break;
+        // When this attempt's capture failed (and no Delegate failure leads), a
+        // budget terminal the ledger settled on it (stream hard cap, exact overshoot,
+        // unverifiable cash) outranks that capture failure and its typed refusal
+        // (race parity): the budget-aware finalizer below names the budget cause and
+        // remedy first, with the capture facts, source and inspection actions after.
+        if (delegateFailure.candidateFailureKind(run) === "capture" && ledger.terminal()) {
+          exhausted = true;
+          break;
+        }
         if (
           run.telemetry.requestRefusal ||
           run.telemetry.effortResolution?.resolution === "rejected"
@@ -5045,26 +5100,12 @@ export class Orchestrator {
           break;
         if (delegateFailure.candidateFailureKind(run)) {
           const failure = delegateFailure.candidateFailureTerminal(run, "convergence");
-          if (run.files) {
-            await publishDirectoryCandidate({
-              files: run.files,
-              store,
-              paths,
-              taskId,
-              attemptId,
-              harnessId: run.harnessId,
-              facts: makeOutcomeFacts("failed", { noChanges: run.files.noChanges }),
-              log,
-            });
-          } else if (input.workspaceKind !== "directory") {
-            await delegateFailure.persistFailedInPlaceWorkProduct({
-              ...{ store, log, paths, execRoot, preTurnSha, taskId, mode },
-              live: input.inPlace === true,
-              run,
-              kind: input.create === true ? "new_repo" : "patch",
-              attempts: attempt,
-            });
-          }
+          await delegateFailure.persistFailedCandidateOutput({
+            ...{ store, log, paths, execRoot, preTurnSha, taskId, mode, run },
+            live: input.inPlace === true && input.workspaceKind !== "directory",
+            kind: input.create === true ? "new_repo" : "patch",
+            attempts: attempt,
+          });
           this.writeRunTelemetry(
             store,
             paths,
@@ -5085,7 +5126,7 @@ export class Orchestrator {
             failure.phase,
             failure.error,
             ledger.spend(),
-            failure.metadata,
+            { ...failure.metadata, attempts: convergenceRuns },
           );
         }
         if (input.workspaceKind === "directory" && run.captureRefusal) {
@@ -5098,6 +5139,7 @@ export class Orchestrator {
             runId,
             taskId,
             runs: [run],
+            attempts: convergenceRuns,
             writeTelemetry: () =>
               this.writeRunTelemetry(
                 store,
@@ -5146,6 +5188,7 @@ export class Orchestrator {
               input.signal,
               this.reservationEstimateUsd(input),
               true,
+              input.runScopeMarker,
             );
             if (!evidence) throw new Error("Convergence review produced no evidence");
             lastFindings = evidence.findings;
@@ -5182,7 +5225,17 @@ export class Orchestrator {
               log,
             });
           return failAfterCandidates(
-            { log, store, paths, runId, taskId, mode, ledger, runs: [run] },
+            {
+              log,
+              store,
+              paths,
+              runId,
+              taskId,
+              mode,
+              ledger,
+              runs: [run],
+              attempts: convergenceRuns,
+            },
             "review",
             err,
           );
@@ -5324,12 +5377,13 @@ export class Orchestrator {
         facts = decision.facts;
       }
     }
-    if (lastRun?.files)
+    // Captured files decide noChanges; an incomplete capture leaves it unknown.
+    if (lastRun?.files || lastRun?.captureRefusal)
       facts = {
         ...facts,
-        noChanges: lastRun.files.noChanges,
+        noChanges: lastRun.files?.noChanges ?? null,
         reason:
-          facts.reason === "no_changes" && lastRun.files.noChanges !== true ? null : facts.reason,
+          facts.reason === "no_changes" && lastRun.files?.noChanges !== true ? null : facts.reason,
       };
     // A budget terminal turns a succeeded lifecycle into a failed one (D8).
     const convBudgetTerminal = ledger.terminal();
@@ -5340,6 +5394,22 @@ export class Orchestrator {
         review_requested: contract.review_requested,
       });
     }
+    // The shared classifier owns a budget terminal's cause and remedy: a
+    // processing re-admission denial, or the ledger's settled terminal once it
+    // stopped the loop over an incomplete capture (the capture facts and
+    // inspection actions follow it in the failure record).
+    const convBudgetMapping =
+      processingBudgetDenial ||
+      (convBudgetTerminal && lastRun?.captureRefusal && isBudgetTerminal(facts.reason))
+        ? classifyBudgetFailure({ denial: processingBudgetDenial, terminal: convBudgetTerminal })
+        : null;
+    if (
+      convBudgetMapping &&
+      facts.lifecycle === "failed" &&
+      isBudgetTerminal(facts.reason) &&
+      facts.reason !== convBudgetMapping.reason
+    )
+      facts = { ...facts, reason: convBudgetMapping.reason };
     // A reviewer escalation to a human forces the REVIEW axis to blocked.
     const needsHuman = lastFindings.some((f) => f.severity === "NEEDS_HUMAN" && isBlocking(f));
     if (needsHuman && facts.lifecycle === "succeeded" && facts.review !== "blocked") {
@@ -5360,13 +5430,13 @@ export class Orchestrator {
       facts.review !== "blocked" &&
       !input.signal?.aborted
     ) {
-      convFinalVerify = lastRun.files
-        ? await finalVerifyFiles(lastRun.files, undefined, gateSpecsFromContract(contract), log)
-        : await finalVerifyPatch(execRoot, lastRun, gateSpecsFromContract(contract), log);
+      convFinalVerify = await finalVerifyRun(execRoot, lastRun, contract, log, input);
       if (finalVerifyBlocks(convFinalVerify))
         facts = { ...facts, checks: "failed", reason: "checks_failed" };
     }
     const convNeedsDecision = facts.review === "blocked" || facts.checks === "failed";
+    // Every attempt's failed tries by the actual outcome; a block is not an account failure.
+    const convPool = terminalPoolAttempts(facts, convergenceRuns);
     if (decision) {
       // Shared honesty owner (same as the race path): a needs-decision terminal
       // overrides the persisted decision; final_verify is recorded either way.
@@ -5399,16 +5469,13 @@ export class Orchestrator {
         reviewAllowsApply(facts) &&
         facts.checks !== "failed" &&
         !workStateVetoes(facts);
-      if (lastRun.files) {
-        await publishDirectoryCandidate({
-          files: lastRun.files,
-          store,
-          paths,
-          taskId,
-          attemptId: lastRun.attemptId,
-          harnessId: lastRun.harnessId,
-          facts,
-          log,
+      if (lastRun.files || lastRun.captureRefusal) {
+        // An incomplete capture has no exact patch: never publish an empty one.
+        await delegateFailure.persistFailedCandidateOutput({
+          ...{ store, log, paths, execRoot, preTurnSha, taskId, mode, facts, run: lastRun },
+          live: input.inPlace === true && input.workspaceKind !== "directory",
+          kind: input.create === true ? "new_repo" : "patch",
+          attempts: attempt,
         });
       } else {
         const savedPatch = secretDiff.persistFinalPatch(store, paths.finalDir, lastRun);
@@ -5458,7 +5525,7 @@ export class Orchestrator {
       }
       store.writeText(
         join(paths.finalDir, "summary.md"),
-        `# Run ${runId} (${mode})\n\n- Lifecycle: ${facts.lifecycle}${facts.reason ? ` (${facts.reason})` : ""}\n- Attempts: ${attempt}\n- Winner: ${lastRun.attemptId}\n- Review verified (cross-family): ${actualReviewVerified}\n- Apply recommendation: ${decision?.apply_recommendation ?? "inspect"}${stuckNoProgressReason ? `\n- No-progress reason: ${stuckNoProgressReason}` : ""}${secretDiff.summaryDisclosure(lastRun.secretLike)}\n`,
+        `${withPoolAttempts(`# Run ${runId} (${mode})\n\n- Lifecycle: ${facts.lifecycle}${facts.reason ? ` (${facts.reason})` : ""}\n- Attempts: ${attempt}\n- Winner: ${lastRun.attemptId}\n- Review verified (cross-family): ${actualReviewVerified}\n- Apply recommendation: ${decision?.apply_recommendation ?? "inspect"}${stuckNoProgressReason ? `\n- No-progress reason: ${stuckNoProgressReason}` : ""}${secretDiff.summaryDisclosure(lastRun.secretLike)}`, convPool)}\n`,
       );
       // Lifecycle invariant (all modes): output.ready precedes the terminal
       // event so a client that applied the terminal event has the output.
@@ -5485,9 +5552,7 @@ export class Orchestrator {
         !convNeedsDecision && facts.lifecycle === "failed" && !isBudgetTerminal(facts.reason)
           ? lastRun?.declaredFailure
           : undefined;
-      const processingBudgetMapping = processingBudgetDenial
-        ? classifyBudgetFailure({ denial: processingBudgetDenial, terminal: ledger.terminal() })
-        : null;
+      const inspect = secretDiff.captureInspectionActions(lastRun?.captureRefusal);
       writeFailure(store, paths, {
         phase: convNeedsDecision ? "review" : "convergence",
         category: isBudgetTerminal(facts.reason)
@@ -5497,19 +5562,15 @@ export class Orchestrator {
             : convNeedsDecision
               ? "policy"
               : (convDeclared?.category ?? "internal"),
-        code: processingBudgetMapping?.code ?? convDeclared?.code ?? null,
+        code: convBudgetMapping?.code ?? convDeclared?.code ?? null,
         resetsAt: convDeclared?.resetsAt ?? null,
         requestRefusal: convDeclared?.requestRefusal,
-        safeMessage: convNeedsDecision
-          ? `review escalated to a human decision after ${attempt} attempt(s)`
-          : facts.reason === "stuck_no_progress"
-            ? (stuckNoProgressReason ?? `stuck_no_progress after ${attempt} attempt(s)`)
-            : `${facts.lifecycle}${facts.reason ? ` (${facts.reason})` : ""} after ${attempt} attempt(s)${lastDiffStable ? "" : " (diff changed after review; review is stale)"}`,
         harnessId: lastRun?.harnessId,
         attemptId: lastRun?.attemptId,
         runDir: paths.root,
-        nextActions:
-          facts.lifecycle === "cancelled"
+        captureFailure: lastRun?.captureRefusal?.failure,
+        nextActions: [
+          ...(facts.lifecycle === "cancelled"
             ? facts.reason === "wall_clock_exceeded"
               ? [
                   "Inspect the partial work kept from before the deadline",
@@ -5527,14 +5588,28 @@ export class Orchestrator {
                     "Inspect the failing gate output",
                     "Fix the gate or provide a different repair instruction",
                   ]
-                : [
-                    "Open diagnostics",
-                    "Inspect latest patch and review findings",
-                    "Retry with more attempts or a narrower prompt",
-                  ],
-        ...(processingBudgetMapping
-          ? budgetFailureRecord(processingBudgetMapping, { runDir: paths.root })
+                : lastRun?.captureRefusal // no latest patch exists to inspect
+                  ? secretDiff.captureRefusalNextActions(lastRun.captureRefusal)
+                  : [
+                      "Open diagnostics",
+                      "Inspect latest patch and review findings",
+                      "Retry with more attempts or a narrower prompt",
+                    ]),
+          ...inspect,
+        ],
+        ...(convBudgetMapping
+          ? budgetFailureRecord(convBudgetMapping, { runDir: paths.root, followUps: inspect })
           : {}),
+        safeMessage: withPoolAttempts(
+          convBudgetMapping?.safeMessage ??
+            (convNeedsDecision
+              ? `review escalated to a human decision after ${attempt} attempt(s)`
+              : facts.reason === "stuck_no_progress"
+                ? (stuckNoProgressReason ?? `stuck_no_progress after ${attempt} attempt(s)`)
+                : `${facts.lifecycle}${facts.reason ? ` (${facts.reason})` : ""} after ${attempt} attempt(s)${lastDiffStable ? "" : " (diff changed after review; review is stale)"}`),
+          convPool,
+        ),
+        poolAttempts: convPool,
       });
       // D-16 r8/r9: an INTERRUPTED envelope run still gets its diagnostic
       // summary + output.ready (only patch/work_product are withheld) — the
@@ -5543,7 +5618,7 @@ export class Orchestrator {
       if (!lastRun || (interrupted && input.inPlace !== true && !lastRun.files)) {
         store.writeText(
           join(paths.finalDir, "summary.md"),
-          `# Run ${runId} (${mode})\n\n- Lifecycle: ${facts.lifecycle}${facts.reason ? ` (${facts.reason})` : ""}\n- Attempts: ${attempt}\n`,
+          `${withPoolAttempts(`# Run ${runId} (${mode})\n\n- Lifecycle: ${facts.lifecycle}${facts.reason ? ` (${facts.reason})` : ""}\n- Attempts: ${attempt}`, convPool)}\n`,
         );
         log.emit("output.ready", {
           kind: "summary",
@@ -5553,8 +5628,9 @@ export class Orchestrator {
       }
     }
 
-    // work_product.emitted only when a product was actually written (r9).
-    if (lastRun && (lastRun.files || !interrupted || input.inPlace === true)) {
+    // work_product.emitted only when a product was actually written (r9); a
+    // capture refusal's live record announces itself.
+    if (lastRun && !lastRun.captureRefusal && (lastRun.files || !interrupted || input.inPlace)) {
       log.emit("work_product.emitted", { winner: lastRun.attemptId });
     }
     if (!convIsFailureTerminal) {
@@ -5564,6 +5640,8 @@ export class Orchestrator {
         facts,
         reason: facts.reason,
         attempts: attempt,
+        // A work-state veto is still a block: it keeps the earlier refusals.
+        ...(convPool.length > 0 ? { pool_attempts: convPool } : {}),
       });
     } else if (facts.lifecycle === "succeeded") {
       log.emit("run.blocked", {
@@ -5572,6 +5650,7 @@ export class Orchestrator {
         facts,
         attempts: attempt,
         phase: "review",
+        pool_attempts: convPool,
         failure_ref: "final/failure.yaml",
       });
     } else {
@@ -5582,6 +5661,7 @@ export class Orchestrator {
         reason: facts.reason,
         attempts: attempt,
         phase: "convergence",
+        pool_attempts: convPool,
         failure_ref: "final/failure.yaml",
         // QA-041: surface the typed deadline reason on the terminal event so the
         // daemon job result / Control API can distinguish it from a user cancel.
@@ -5604,9 +5684,12 @@ export class Orchestrator {
       ...(facts.lifecycle === "cancelled" && convAbortReason
         ? { cancelReason: convAbortReason }
         : {}),
-      summary: converged
-        ? `converged in ${attempt} attempt(s)`
-        : `${facts.lifecycle} after ${attempt} attempt(s)`,
+      summary: withPoolAttempts(
+        converged
+          ? `converged in ${attempt} attempt(s)`
+          : `${facts.lifecycle} after ${attempt} attempt(s)`,
+        convPool,
+      ),
       candidates: lastRun
         ? [
             {
@@ -5668,7 +5751,8 @@ export class Orchestrator {
           ...sessionFields,
           ...this.harnessSpecKnobs(contract, knobs, args.intent),
           env_inheritance: envInheritance(this.config(input.repoRoot)),
-          env:
+          env: scopedSpecEnv(
+            input.runScopeMarker,
             (args.laneRun
               ? this.laneHomeEnvFor(
                   input,
@@ -5676,6 +5760,7 @@ export class Orchestrator {
                   sessionFields.credential_profile?.profile_id ?? input.credentialProfileId ?? null,
                 )
               : null) ?? args.fallbackHome,
+          ),
         });
         this.credentials.stampProfileSelection(spec, input, adapter.id);
         const plannerAbort = new AbortController();
@@ -5746,11 +5831,14 @@ export class Orchestrator {
     // harnesses run sequentially. Doctor, model inventory, and spawn share each
     // lane's durable HOME; the disposable context remains the non-thread fallback.
     const laneRun = Boolean(input.threadId);
-    const roHome = resolveReadOnlyRouteContext(
-      this.execRootOf(input),
-      laneRun
-        ? (id) => this.laneHomeEnvFor(input, id, input.credentialProfileId ?? null)
-        : undefined,
+    const roHome = scopedRouteContext(
+      resolveReadOnlyRouteContext(
+        this.execRootOf(input),
+        laneRun
+          ? (id) => this.laneHomeEnvFor(input, id, input.credentialProfileId ?? null)
+          : undefined,
+      ),
+      input.runScopeMarker,
     );
     let adapters: RoutedAdapter[];
     try {
@@ -6144,7 +6232,11 @@ export class Orchestrator {
     log: EventLog,
   ): DeepScanReducerDeps {
     return {
-      newReadOnlyHome: () => resolveReadOnlyRouteContext(this.execRootOf(input)),
+      newReadOnlyHome: () =>
+        scopedRouteContext(
+          resolveReadOnlyRouteContext(this.execRootOf(input)),
+          input.runScopeMarker,
+        ),
       costEvidence: (harnessId, attemptId, routed) =>
         // The reducer admits under a finite estimate floor (mirror of the n>1
         // scout reserve) so a subscription route is not refused for lacking a
@@ -6180,7 +6272,7 @@ export class Orchestrator {
           resume_session_id: null,
           ...this.harnessSpecKnobs(contract, knobs, "synthesize"),
           env_inheritance: envInheritance(this.config(input.repoRoot)),
-          env: homeEnv,
+          env: scopedSpecEnv(input.runScopeMarker, homeEnv),
         });
         this.credentials.stampProfileSelection(spec, input, routed.adapter.id);
         // D-16: compile the WorkReport transport onto the reducer spec (the
@@ -6229,7 +6321,7 @@ export class Orchestrator {
       opts.mode,
     );
     const quotaSnapshots = this.quotaSnapshotPreflight();
-    const { store, paths, log, ledger } = beginAnnouncedRun(
+    const { store, paths, log, ledger, runContext } = beginAnnouncedRun(
       {
         input,
         contract,
@@ -6257,11 +6349,14 @@ export class Orchestrator {
     // and the next lane turn resumes it (INV-034). Its doctor/model/spawn path
     // shares that lane HOME; deep-scan and one-shot asks keep the disposable one.
     const laneRun = Boolean(input.threadId) && opts.mode === "ask" && !opts.deepScan;
-    const roHome = resolveReadOnlyRouteContext(
-      this.execRootOf(input),
-      laneRun
-        ? (id) => this.laneHomeEnvFor(input, id, input.credentialProfileId ?? null)
-        : undefined,
+    const roHome = scopedRouteContext(
+      resolveReadOnlyRouteContext(
+        this.execRootOf(input),
+        laneRun
+          ? (id) => this.laneHomeEnvFor(input, id, input.credentialProfileId ?? null)
+          : undefined,
+      ),
+      input.runScopeMarker,
     );
     let adapters: RoutedAdapter[], width: number;
     try {
@@ -6304,26 +6399,15 @@ export class Orchestrator {
         candidates: [],
       };
     }
-    interface ReadonlyAttempt extends ContinuityTerminalFacts {
-      attemptId: string;
-      harnessId: string;
-      status: "success" | "failed" | "blocked";
-      report: string;
-      answerMatches?: number;
-      error: string | null;
-      telemetry: AttemptTelemetry;
-      /** QA-019: this scout was refused BEFORE spawn by the budget gate — it
-       * belongs in the denominator/omissions but never ran the harness, so the
-       * all-denied terminal still routes through the QA-050 budget classifier. */
-      budgetDenied?: boolean;
-      /** D-16 r8: scout ran out of context — a failed omission, never reducer
-       * input; ALL-interrupted terminalizes interrupted. */
-      interrupted?: boolean;
-      /** A5: the typed refusal (exhausted credential pool / spent window) this
-       * attempt died on, so the chain terminal can speak it machine-readably. */
-      declaredFailure?: ReturnType<typeof declaredFailure>;
-    }
     const attempts: ReadonlyAttempt[] = [];
+    // A launched attempt's tries' accounts, owned here until its record joins
+    // `attempts` (as an Agent slot owns them): a throw after its tries settled
+    // still names them on the run's terminal, and never twice.
+    const launched = new Set<PoolAttemptEvidence>();
+    runContext.attempts = () => [
+      ...attempts,
+      ...[...launched].map((tried) => ({ poolAttempts: tried.snapshot() })),
+    ];
     const attemptTelemetries: {
       attemptId: string;
       harnessId: string;
@@ -6525,7 +6609,8 @@ export class Orchestrator {
           // A thread lane turn spawns in its DURABLE per-lane home so the native
           // session it records is reachable for resume next turn; everything else
           // uses the disposable route-context home.
-          env:
+          env: scopedSpecEnv(
+            input.runScopeMarker,
             (laneRun
               ? this.laneHomeEnvFor(
                   input,
@@ -6533,6 +6618,7 @@ export class Orchestrator {
                   sessionFields.credential_profile?.profile_id ?? input.credentialProfileId ?? null,
                 )
               : null) ?? roHome.env,
+          ),
         });
         this.credentials.stampProfileSelection(spec, input, adapter.id);
         const reportInteraction = interactionChannelFor(
@@ -6642,6 +6728,8 @@ export class Orchestrator {
       const retryPolicy = transientRetryPolicy(this.config(input.repoRoot));
       let activeSessionId = spec.session_id;
       const live = liveAttempt(input, routed, paths, contract, attemptId, () => activeSessionId);
+      const tried = new PoolAttemptEvidence(adapter.id, attemptId);
+      launched.add(tried);
       let continuity: InRunContinuity;
       ({ continuity, spec } = await openContinuity(
         this.continuityDeps(adapter, routed, contract, attemptId, paths, input, log, {
@@ -6649,6 +6737,7 @@ export class Orchestrator {
           harnessHome: null,
           workOrder: input.prompt,
           firstPrompt: spec.prompt,
+          poolEvidence: tried,
         }),
         { spec, continuation: input.continuation, store, telemetry },
       ));
@@ -6684,9 +6773,8 @@ export class Orchestrator {
           runSpec.extra["abortSignal"] = input.signal
             ? AbortSignal.any([input.signal, tryAbort.signal])
             : tryAbort.signal;
-          continuity.beginTry(runSpec, nativeTry, tryAbort);
           // #363: bound before the spawn — a credential change mid-try voids it.
-          const refusal = this.credentials.bindPreProgressRefusal(adapter.id, runSpec);
+          const refusal = continuity.beginTry(runSpec, nativeTry, tryAbort);
           const transientStart = telemetry.transientFailures.length;
           const rateLimitStart = telemetry.rateLimits.length;
           log.emit("harness.started", {
@@ -6776,7 +6864,6 @@ export class Orchestrator {
             if (!recordAdapterThrow(telemetry, err)) break;
           }
 
-          if (streamBudgetDenied) break;
           if (telemetry.requestRefusal) break;
           const newTransients = telemetry.transientFailures.slice(transientStart);
           const sawRetryable = newTransients.some((f) => f.retryable);
@@ -6784,10 +6871,13 @@ export class Orchestrator {
           const reportSoFar = answer.text();
           const delivered = !harnessError && reportSoFar.length > 0 && !input.signal?.aborted;
           this.credentials.noteTryServed(refusal, telemetry.outputMarkers, delivered);
+          // A budget stop ends the attempt; typed progress before it still served the account.
+          if (streamBudgetDenied) break;
           const verdict = await continuity.afterTry({
             runSpec,
             nativeTry,
             harnessErrored: harnessError !== null,
+            originalError: harnessError,
             aborted: input.signal?.aborted === true,
             requestRefused: Boolean(telemetry.requestRefusal),
             newTransients,
@@ -6913,6 +7003,7 @@ export class Orchestrator {
               : {}),
           ...continuity.terminalFacts(roResumable),
         });
+        launched.delete(tried);
         if (opts.deepScan) {
           store.writeText(
             join(paths.findingsDir, `${attemptId}-error.md`),
@@ -6941,6 +7032,7 @@ export class Orchestrator {
         ...(scoutInterrupted ? { interrupted: true } : {}),
         ...continuity.terminalFacts(roResumable),
       });
+      launched.delete(tried);
       if (opts.deepScan) {
         const warningNote = toolWarnings(telemetry).length
           ? `\n\n> Tool warnings: ${toolWarnings(telemetry)
@@ -7138,227 +7230,30 @@ export class Orchestrator {
         store,
         undefined,
         resumableOf(attempts, "cancelled"),
+        attempts,
       );
     if (input.signal?.aborted) return cancelledTerminal();
 
     const succeededReadonly = attempts.filter((a) => a.status === "success");
-    if (!opts.deepScan && succeededReadonly.length === 0) {
-      const last = attempts[attempts.length - 1];
-      const webBlocked = attempts.some((a) => a.status === "blocked");
-      // QA-050: a budget refusal is a BUDGET failure, not a harness one — route
-      // it through the shared classifier so phase/category/code/route and the
-      // remediation are budget-typed (never auth/setup) across every mode.
-      const budgetMapping =
-        budgetStopped && !webBlocked
-          ? classifyBudgetFailure({ denial: budgetDenial, terminal: ledger.terminal() })
-          : null;
-      const singleError =
-        budgetMapping?.safeMessage ??
-        last?.error ??
-        (budgetStopped ? "budget exhausted before any attempt" : "harness failed");
-      if (fallbackOpen || webBlocked) {
-        log.emit("route.fallback.exhausted", {
-          harness_id: last?.harnessId ?? null,
-          attempt_id: last?.attemptId ?? null,
-          reason: "web_evidence_unsatisfied",
-          error: singleError,
-        });
-        fallbackOpen = false;
-      }
-      const partialReport = [...attempts].reverse().find((a) => a.report)?.report ?? "";
-      this.writeRunTelemetry(
-        store,
-        paths,
-        contract,
-        runId,
-        taskId,
-        opts.mode,
-        attemptTelemetries,
-        null,
-      );
-      store.writeText(
-        join(paths.contextDir, "context_error.md"),
-        `# ${budgetMapping ? "Budget Denied" : "Harness Error"}\n\n${singleError}\n`,
-      );
-      const roEventRefs = attempts.map((a) => `attempts/${a.attemptId}/events.jsonl`);
-      if (budgetMapping) {
-        writeFailure(
+    const readonlyTerminal = {
+      ...{ store, paths, log, runId, taskId, mode: opts.mode, ledger, attempts },
+      ...{ attemptTelemetries, budgetStopped, budgetDenial },
+      writeTelemetry: () =>
+        this.writeRunTelemetry(
           store,
           paths,
-          budgetFailureRecord(budgetMapping, { eventRefs: roEventRefs, runDir: paths.root }),
-        );
-      } else {
-        // #31: classify the harness cause across the read-only attempts so auth
-        // guidance appears only on a real auth failure.
-        const roCategory = dominantHarnessFailureCategory(
-          attemptTelemetries.flatMap((a) => a.telemetry.transientFailures),
-        );
-        // A5: the terminal already speaks with the LAST attempt's message; its
-        // typed refusal rides along machine-readably instead of reducing to it.
-        const roDeclared = webBlocked ? undefined : last?.declaredFailure;
-        writeFailure(store, paths, {
-          phase: "harness",
-          category: webBlocked ? "policy" : (roDeclared?.category ?? "harness_error"),
-          code: roDeclared?.code ?? null,
-          harnessId: last?.harnessId,
-          attemptId: last?.attemptId,
-          safeMessage: singleError,
-          eventRefs: roEventRefs,
-          runDir: paths.root,
-          resetsAt: roDeclared?.resetsAt ?? null,
-          requestRefusal: roDeclared?.requestRefusal,
-          vendorFailure: attemptVendorFailure(attemptTelemetries, last?.attemptId),
-          nextActions: harnessFailureNextActions(roCategory),
-        });
-      }
-      // QA-036: re-check the DELIVERABLE through the shared finalizer helper —
-      // a blocked Ask that produced NO answer can no longer read as a succeeded
-      // "Needs review" run (exit 0); it is an honest failure (exit 1).
-      const roTerminal = readOnlyNoSuccessTerminal({
-        webBlocked,
-        hasDeliverable: partialReport.trim().length > 0,
-        budgetStopped,
-        attemptsCount: attempts.length,
-      });
-      const terminalFacts = makeOutcomeFacts(roTerminal.lifecycle, {
-        ...(roTerminal.review ? { review: roTerminal.review } : {}),
-        reason: budgetMapping?.reason ?? roTerminal.reason,
-      });
-      const terminalHarnessId = budgetMapping?.harnessId ?? last?.harnessId;
-      store.writeText(
-        join(paths.finalDir, "summary.md"),
-        `# Run ${runId} (${opts.mode})\n\n- Harness: ${terminalHarnessId ?? "none"}\n- Lifecycle: ${terminalFacts.lifecycle}${terminalFacts.reason ? ` (${terminalFacts.reason})` : ""}\n\n${singleError}\n`,
-      );
-      log.emit("output.ready", { kind: "summary", path: "final/summary.md", state: "diagnostic" });
-      if (terminalFacts.lifecycle === "succeeded") {
-        log.emit("run.blocked", {
-          lifecycle: terminalFacts.lifecycle,
-          facts: terminalFacts,
-          harness_id: terminalHarnessId,
-          error: singleError,
-          failure_ref: "final/failure.yaml",
-          ...resumableTerminal(store, paths, attempts, true),
-        });
-      } else {
-        log.emit("run.failed", {
-          lifecycle: terminalFacts.lifecycle,
-          facts: terminalFacts,
-          reason: terminalFacts.reason,
-          phase: budgetMapping?.phase,
-          harness_id: terminalHarnessId,
-          error: singleError,
-          failure_ref: "final/failure.yaml",
-          ...resumableTerminal(store, paths, attempts, true),
-        });
-      }
-      return {
-        spendUsd: ledger.spend(),
-        runId,
-        taskId,
-        mode: opts.mode,
-        lifecycle: terminalFacts.lifecycle,
-        facts: terminalFacts,
-        winner: null,
-        runDir: paths.root,
-        summary: singleError,
-        candidates: attempts.map((a) => ({
-          attemptId: a.attemptId,
-          harnessId: a.harnessId,
-          status: a.status,
-        })),
-      };
-    }
+          contract,
+          runId,
+          taskId,
+          opts.mode,
+          attemptTelemetries,
+          null,
+        ),
+    };
+    if (!opts.deepScan && succeededReadonly.length === 0)
+      return readOnlyChainFailureResult({ ...readonlyTerminal, fallbackOpen });
     const succeeded = succeededReadonly;
-    if (opts.deepScan && succeeded.length === 0) {
-      const blocked = attempts.some((a) => a.status === "blocked");
-      // QA-050/QA-019: only a pure-denial scan may claim a budget failure.
-      const scanBudgetMapping =
-        budgetStopped && !blocked && attempts.every((a) => a.budgetDenied === true)
-          ? classifyBudgetFailure({ denial: budgetDenial, terminal: ledger.terminal() })
-          : null;
-      // D-16 r8: ALL scouts out of context → the aggregate is interrupted.
-      const allInterrupted = attempts.length > 0 && attempts.every((a) => a.interrupted === true);
-      const scanFailFacts = allInterrupted
-        ? makeOutcomeFacts("interrupted", { reason: "context_capacity_exhausted" })
-        : makeOutcomeFacts("failed", {
-            reason: scanBudgetMapping ? scanBudgetMapping.reason : "harness_failed",
-          });
-      const message = scanBudgetMapping
-        ? scanBudgetMapping.safeMessage
-        : attempts.map((a) => `${a.attemptId}/${a.harnessId}: ${a.error ?? "failed"}`).join("\n");
-      this.writeRunTelemetry(
-        store,
-        paths,
-        contract,
-        runId,
-        taskId,
-        opts.mode,
-        attemptTelemetries,
-        null,
-      );
-      if (scanBudgetMapping) {
-        writeFailure(
-          store,
-          paths,
-          budgetFailureRecord(scanBudgetMapping, {
-            eventRefs: attempts.map((a) => `attempts/${a.attemptId}/events.jsonl`),
-            runDir: paths.root,
-          }),
-        );
-      } else {
-        // Mixed causes stay generic; only unanimous evidence may name the scan's cause.
-        const declared = blocked ? null : unanimousDeclaredFailure(attempts);
-        const scanCategory = dominantHarnessFailureCategory(
-          attemptTelemetries.flatMap((a) => a.telemetry.transientFailures),
-        );
-        writeFailure(store, paths, {
-          phase: "harness",
-          category: blocked ? "policy" : (declared?.category ?? "harness_error"),
-          code: declared?.code,
-          resetsAt: declared?.resetsAt,
-          requestRefusal: declared?.requestRefusal,
-          safeMessage: message || "all explorers failed",
-          eventRefs: attempts.map((a) => `attempts/${a.attemptId}/events.jsonl`),
-          runDir: paths.root,
-          nextActions: [
-            ...harnessFailureNextActions(scanCategory).filter((a) => !a.startsWith("Retry")),
-            "Reduce explore width",
-            "Retry after setup",
-          ],
-        });
-      }
-      // QA-036: no successful explorer means no synthesizable deliverable.
-      store.writeText(
-        join(paths.finalDir, "summary.md"),
-        `# Run ${runId} (${opts.mode})\n\n- Lifecycle: ${scanFailFacts.lifecycle}${scanFailFacts.reason ? ` (${scanFailFacts.reason})` : ""}\n\n${message}\n`,
-      );
-      log.emit("output.ready", { kind: "summary", path: "final/summary.md", state: "diagnostic" });
-      log.emit("run.failed", {
-        lifecycle: scanFailFacts.lifecycle,
-        facts: scanFailFacts,
-        reason: scanFailFacts.reason,
-        phase: scanBudgetMapping ? scanBudgetMapping.phase : "harness",
-        error: message,
-        failure_ref: "final/failure.yaml",
-        ...resumableTerminal(store, paths, attempts, true),
-      });
-      return {
-        spendUsd: ledger.spend(),
-        runId,
-        taskId,
-        mode: opts.mode,
-        lifecycle: scanFailFacts.lifecycle,
-        facts: scanFailFacts,
-        winner: null,
-        runDir: paths.root,
-        summary: message,
-        candidates: attempts.map((a) => ({
-          attemptId: a.attemptId,
-          harnessId: a.harnessId,
-          status: a.status,
-        })),
-      };
-    }
+    if (opts.deepScan && succeeded.length === 0) return deepScanFailureResult(readonlyTerminal);
     const unsuccessful = attempts.filter((a) => a.status !== "success");
     // #27 / D-6: a multi-scout deep scan runs ONE bounded synthesis reducer over
     // the raw scout reports so the final artifact is a real merge, not a
@@ -7476,9 +7371,11 @@ export class Orchestrator {
       .map((a) => `${a.attemptId}:${a.harnessId}:${a.status}`)
       .join(", ");
     const secretLike = secretDiff.answerSecretLikeFinding(answerMatches);
+    // A delivered report that still ends unsuccessfully or blocked keeps it and names every failed try.
+    const reportPool = terminalPoolAttempts(terminalFacts, attempts);
     store.writeText(
       join(paths.finalDir, "summary.md"),
-      `# Run ${runId} (${opts.mode})\n\n- Harnesses: ${harnessLabel}\n- Lifecycle: ${terminalFacts.lifecycle}${terminalFacts.reason ? ` (${terminalFacts.reason})` : ""}${secretDiff.summaryDisclosure(secretLike)}\n\n${report}\n`,
+      `# Run ${runId} (${opts.mode})\n\n- Harnesses: ${harnessLabel}\n- Lifecycle: ${terminalFacts.lifecycle}${terminalFacts.reason ? ` (${terminalFacts.reason})` : ""}${secretDiff.summaryDisclosure(secretLike)}\n\n${withPoolAttempts(report, reportPool)}\n`,
     );
     const reportProducerAttemptId =
       opts.deepScan &&
@@ -7509,7 +7406,11 @@ export class Orchestrator {
         phase: "executor",
         category:
           terminalFacts.reason === "context_capacity_exhausted" ? "harness_error" : "budget",
-        safeMessage: `read-only report ended ${terminalFacts.lifecycle}${terminalFacts.reason ? ` (${terminalFacts.reason.replaceAll("_", " ")})` : ""}`,
+        safeMessage: withPoolAttempts(
+          `read-only report ended ${terminalFacts.lifecycle}${terminalFacts.reason ? ` (${terminalFacts.reason.replaceAll("_", " ")})` : ""}`,
+          reportPool,
+        ),
+        poolAttempts: reportPool,
         runDir: paths.root,
         nextActions:
           terminalFacts.reason === "context_capacity_exhausted"
@@ -7521,6 +7422,7 @@ export class Orchestrator {
         facts: terminalFacts,
         reason: terminalFacts.reason,
         phase: "executor",
+        pool_attempts: reportPool,
         failure_ref: "final/failure.yaml",
         ...resumableTerminal(store, paths, attempts, true),
       });
@@ -7529,6 +7431,7 @@ export class Orchestrator {
         lifecycle: terminalFacts.lifecycle,
         facts: terminalFacts,
         reason: terminalFacts.reason,
+        pool_attempts: reportPool,
         ...resumableTerminal(store, paths, attempts, true),
       });
     } else {
@@ -7549,7 +7452,7 @@ export class Orchestrator {
       facts: terminalFacts,
       winner: null,
       runDir: paths.root,
-      summary: redactSecrets(report).slice(0, 400),
+      summary: withPoolAttempts(redactSecrets(report).slice(0, 400), reportPool),
       candidates: candidateSummaries,
     };
   }

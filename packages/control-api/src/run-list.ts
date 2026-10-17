@@ -12,6 +12,8 @@
  *   - an LRU-bounded map primitive so the summary cache evicts its oldest entry
  *     instead of a wholesale clear-and-rehydrate thrash.
  */
+import { setImmediate } from "node:timers/promises";
+import type { DaemonRunRecord } from "./run-record.js";
 import { ControlRunState } from "@claudexor/schema";
 import { assertOnlyQueryParams, singleQuery } from "./query.js";
 
@@ -107,4 +109,17 @@ export function lruSet<K, V>(map: Map<K, V>, key: K, value: V, cap: number): voi
     if (oldest === undefined) break;
     map.delete(oldest);
   }
+}
+
+/** One synchronous summary per event-loop turn; other requests can run between them. */
+export async function summarizeRunPage<T>(
+  page: readonly DaemonRunRecord[],
+  summarize: (record: DaemonRunRecord) => T,
+): Promise<T[]> {
+  const summaries: T[] = [];
+  for (const [i, record] of page.entries()) {
+    summaries.push(summarize(record));
+    if (i + 1 < page.length) await setImmediate();
+  }
+  return summaries;
 }

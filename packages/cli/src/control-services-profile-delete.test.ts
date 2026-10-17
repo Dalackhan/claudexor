@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "@claudexor/config";
 import { noProjectRepoRoot, projectRuntimeDir } from "@claudexor/util";
 import { ensureLaneHomeEnv } from "@claudexor/workspace";
+import { createAccountEvidence } from "@claudexor/daemon";
 import { controlServices } from "./control-services.js";
 import { registerConfigDirProfile } from "./profile-registration.js";
 
@@ -54,6 +55,7 @@ function servicesWithJobs(
     undefined as never,
     undefined as never,
     (() => quota) as never,
+    createAccountEvidence(),
     () => [],
   );
 }
@@ -352,6 +354,7 @@ describe("deleteCredentialProfile (INV-135 delete service)", () => {
       undefined as never,
       undefined as never,
       (() => quota) as never,
+      createAccountEvidence(),
       () => [],
     );
 

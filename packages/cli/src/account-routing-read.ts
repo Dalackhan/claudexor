@@ -1,0 +1,60 @@
+import { ControlAccountRoutingEvidenceResponse } from "@claudexor/schema";
+
+/** The additive routing-evidence read joined beside an Accounts listing. */
+export type RoutingEvidenceRead = {
+  routingEvidence?: ControlAccountRoutingEvidenceResponse;
+  routingEvidenceProblem?: string;
+};
+
+/**
+ * `GET /v2/accounts/routing-evidence` beside the primary listing. An engine
+ * that predates the read answers 404: nothing new is shown. Any other failure
+ * keeps the listing authoritative and adds one diagnostic; it never fails the
+ * listing. `get` throws an error carrying the HTTP `status`.
+ */
+export async function readRoutingEvidence(
+  get: (path: string) => Promise<unknown>,
+): Promise<RoutingEvidenceRead> {
+  try {
+    const parsed = ControlAccountRoutingEvidenceResponse.safeParse(
+      await get("/accounts/routing-evidence"),
+    );
+    return parsed.success
+      ? { routingEvidence: parsed.data }
+      : {
+          routingEvidenceProblem:
+            "routing evidence unavailable: the response did not match its schema",
+        };
+  } catch (error) {
+    if ((error as { status?: unknown } | null)?.status === 404) return {};
+    const reason = error instanceof Error ? error.message : String(error);
+    return { routingEvidenceProblem: `routing evidence unavailable: ${reason}` };
+  }
+}
+
+/** One account row's model-scoped evidence: live refusal marks and its latest
+ * service per requested model. Service is a routing observation, never a quota
+ * or authentication verdict. */
+export function routingEvidenceLines(
+  read: RoutingEvidenceRead,
+  harnessId: string,
+  profileId: string,
+  now = Date.now(),
+): string[] {
+  const evidence = read.routingEvidence;
+  if (!evidence) return [];
+  const model = (requested: string | null) => requested ?? "default model";
+  const mine = <T extends { harness_id: string; profile_id: string }>(rows: readonly T[]) =>
+    rows.filter((row) => row.harness_id === harnessId && row.profile_id === profileId);
+  return [
+    ...mine(evidence.refusals)
+      .filter((mark) => Date.parse(mark.expires_at) > now)
+      .map(
+        (mark) =>
+          `recent refusal · ${model(mark.requested_model)} · observed ${mark.observed_at}, expires ${mark.expires_at}`,
+      ),
+    ...mine(evidence.lastService).map(
+      (service) => `last served · ${model(service.requested_model)} · ${service.observed_at}`,
+    ),
+  ];
+}

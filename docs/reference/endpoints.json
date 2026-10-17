@@ -63,6 +63,18 @@
     },
     {
       "method": "GET",
+      "path": "/v2/accounts/routing-evidence",
+      "mutating": false,
+      "applicability": "global",
+      "summary": "Read live model-scoped refusal marks and the durable last-served order; no probe or quota refresh.",
+      "auth": "loopback_bearer",
+      "request_schema": null,
+      "parameters": [],
+      "response_schema": "ControlAccountRoutingEvidenceResponse",
+      "error_schema": "ControlProblem"
+    },
+    {
+      "method": "GET",
       "path": "/v2/agent-capabilities",
       "mutating": false,
       "applicability": "global",
@@ -150,7 +162,7 @@
       "path": "/v2/daemon/status",
       "mutating": false,
       "applicability": "global",
-      "summary": "Read daemon activity, capacity and current/admission memory facts.",
+      "summary": "Read daemon activity, capacity, current/admission memory and event-loop window facts.",
       "auth": "loopback_bearer",
       "request_schema": null,
       "parameters": [],
@@ -420,6 +432,17 @@
       "request_schema": "ControlModelOperationCreateRequest",
       "parameters": [
         {
+          "name": "requestKind",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": [
+            "image"
+          ],
+          "schema_ref": null,
+          "description": "Select ImageCallRequest for the uploaded model-purpose JSON payload and ImageCallResult for the result bytes (generated payload schemas, not the query value). Omitted keeps ModelCallRequest/ModelCallResult byte-for-byte. Bound to idempotency; cannot be combined with the evidence-capture flags. Absent from this descriptor means the engine has no image operations."
+        },
+        {
           "name": "captureEffortEvidence",
           "in": "query",
           "required": false,
@@ -606,7 +629,7 @@
       "auth": "loopback_bearer",
       "request_schema": "ControlProjectRegisterRequest",
       "parameters": [],
-      "response_schema": "ControlProject",
+      "response_schema": "ControlProjectRegisterResponse",
       "error_schema": "ControlProblem"
     },
     {
@@ -720,15 +743,37 @@
       "request_schema": null,
       "parameters": [
         {
+          "name": "requestKind",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": [
+            "text",
+            "image"
+          ],
+          "schema_ref": null,
+          "description": "Availability scope, text when omitted; all scoped constraints remain visible."
+        },
+        {
+          "name": "model",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": null,
+          "schema_ref": null,
+          "description": "Optional model for quota applicability."
+        },
+        {
           "name": "view",
           "in": "query",
           "required": false,
           "repeatable": false,
           "enum": [
-            "resources"
+            "resources",
+            "constraint_freshness"
           ],
           "schema_ref": null,
-          "description": "Opt in to typed account resources alongside quota."
+          "description": "Opt in to typed account resources alongside quota, or to per-constraint freshness from raw snapshot evidence, observation TTL, and each window's own reset; omitted preserves the legacy shape. Does not refresh quota."
         }
       ],
       "response_schema": "ControlQuotaQueryResponse",

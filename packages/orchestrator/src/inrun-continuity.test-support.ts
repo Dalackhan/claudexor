@@ -15,6 +15,7 @@ import {
   CredentialProfile,
   HarnessManifest,
   type HarnessEvent,
+  type HarnessModel,
   type HarnessRunSpec,
   type RunEvent,
   type QuotaSnapshot,
@@ -53,6 +54,10 @@ interface Scenario {
   reviewers?: ReviewerSpec[];
   capabilities?: Partial<HarnessManifest["capabilities"]>;
   registryProfiles?: (profiles: CredentialProfile[]) => CredentialProfile[];
+  /** The live inventory each account answers (default: `m1` for every account). */
+  models?: (profileId: string | null) => Promise<HarnessModel[]>;
+  /** Extra Orchestrator dependencies (e.g. a Delegate drain authority). */
+  deps?: Partial<ConstructorParameters<typeof Orchestrator>[0]>;
 }
 
 export const RESET = "2026-10-06T21:00:00.000Z";
@@ -169,7 +174,8 @@ export async function run(scenario: Scenario) {
         last_verified_at: new Date().toISOString(),
       };
     },
-    async models() {
+    async models(query) {
+      if (scenario.models) return scenario.models(query?.credentialProfile?.profile_id ?? null);
       return [{ id: "m1", label: null, context_window: null, routes: null }];
     },
     async *run(spec) {
@@ -200,6 +206,7 @@ export async function run(scenario: Scenario) {
     registry: new Map([["fake", adapter]]),
     reviewers: scenario.reviewers ?? [],
     quotaSnapshots: () => scenario.snapshots ?? [],
+    ...scenario.deps,
   }).run({
     repoRoot: root,
     ...(scenario.mode === "agent" ? { inPlace: true } : {}),

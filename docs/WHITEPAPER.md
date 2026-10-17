@@ -30,6 +30,11 @@ script can do). The macOS app, the MCP/ACP bridges, and the editor plugins
 are deliberately thin: they decode engine state and send typed requests, and
 they are forbidden from inventing semantics of their own.
 
+An embedding application may own runtime lifecycle while reusing the full
+control plane. Ownership of generated integration files does not transfer
+authority to start another process; the [explicit host binding](INTEGRATIONS.md#externally-owned-host-integrations)
+keeps those responsibilities distinct.
+
 Claudexor is also not a digital entity. It has no personality, no memory
 identity, no self-modification doctrine. It is a tool developed BY external
 agents, and its immune system exists to constrain those agents' sessions.
@@ -142,6 +147,15 @@ limits remain applicable. The retirement survives replay. Usage-statistics failu
 never imply that every subscription is spent; unrelated account polling continues.
 Observing Accounts reuses the first acquisition until an explicit or credential-driven
 refresh, without a client view continuously spawning vendor checks.
+Passive quota consumers may directly request per-window freshness without
+requiring operation discovery: a reset in one
+window need not stale a sibling whose own observation is still current.
+Fully valid legacy responses retain conservative snapshot freshness; missing
+metadata never implies a fresh window, and partial explicit metadata is rejected.
+This display projection preserves the conservative snapshot used by routing,
+the original observation time and usage, and unknown values; it never invents
+refill or triggers provider work. An account reset still makes earlier evidence
+historical for every window.
 
 Account resources extend that same observation owner with independently aged
 balances, spending facts and reset offers. An explicit reset is a durable direct
@@ -415,6 +429,15 @@ it when Claudexor created it during this run AND its bytes still equal the
 bridge content exactly — any candidate edit, even one preserving the marker, is
 captured as real work rather than discarded.
 
+A completed run settles the processes it owns before publishing its terminal
+event, then exposes a best-effort process-scope receipt separately from the
+answer. Unavailable cleanup evidence remains unknown; it never becomes a clean
+receipt or rewrites a substantive review verdict. Native output is drained
+within a bound after process exit, with forced truncation disclosed. Codex
+rechecks late root lifecycle events before delivering a final answer, including
+after confirmed cleanup. A Windows limitation in proving tree death alone may
+preserve a completed answer; cancellation and observed survivors remain negative.
+
 ## The Immune System
 
 Claudexor's development is agent-driven, so the repository defends its own
@@ -447,8 +470,11 @@ Not a SaaS, no accounts of its own, no telemetry beyond public download
 counts, no autonomous self-modification, no privileged harness, no second
 source of truth beside the engine.
 
-Operator capacity and strategy width are independent: a daemon-wide job pool
-limits simultaneously admitted work, while per-run candidate, scout and Council
-limits govern fan-out within a job. These capacities are user-configurable and
-fixed for the daemon lifetime. Settings distinguish configured values from
-currently effective capacity, so pending changes never look already applied.
+Operator capacity and strategy width are independent. One daemon queue admits
+raw model operations and other jobs under optional class and global limits,
+without an implicit finite admission ceiling. An explicit global limit includes
+both classes, while the queue can pass eligible work from an unblocked class.
+Candidate, scout and Council limits continue to govern fan-out within each job.
+Capacity stays fixed for the daemon lifetime, including full ownership of active
+work through cancellation and settlement. Settings distinguish configured and
+effective values so pending changes never look already applied.

@@ -1,0 +1,390 @@
+{
+  "$ref": "#/definitions/ControlQuotaFreshnessResponse",
+  "definitions": {
+    "ControlQuotaFreshnessResponse": {
+      "type": "object",
+      "properties": {
+        "snapshots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "subject": {
+                "type": "object",
+                "properties": {
+                  "harness": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Non-empty identifier string."
+                  },
+                  "credential_route": {
+                    "type": "string",
+                    "enum": [
+                      "vendor_native",
+                      "managed_api_key",
+                      "local"
+                    ]
+                  },
+                  "plan_label": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "default": null
+                  },
+                  "subject_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "default": null
+                  }
+                },
+                "required": [
+                  "harness",
+                  "credential_route"
+                ],
+                "additionalProperties": false,
+                "description": "Quota owner and credential route; subject_id is the credential-profile id (null = the engine-default credential)."
+              },
+              "constraints": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "$ref": "#/definitions/ControlQuotaFreshnessResponse/properties/snapshots/items/properties/subject/properties/harness"
+                    },
+                    "label": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "applies_to_models": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/definitions/ControlQuotaFreshnessResponse/properties/snapshots/items/properties/subject/properties/harness"
+                          }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "applies_to_model_prefixes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/definitions/ControlQuotaFreshnessResponse/properties/snapshots/items/properties/subject/properties/harness"
+                      }
+                    },
+                    "applies_to_unspecified_model": {
+                      "type": "boolean"
+                    },
+                    "applies_to_request_kinds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "text",
+                          "image"
+                        ]
+                      },
+                      "minItems": 1,
+                      "description": "Vendor-declared operation scope. Absent applies to both text and image; model scope still applies independently."
+                    },
+                    "used_ratio": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "window_seconds": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "resets_at": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "cooldown_until": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null
+                    },
+                    "freshness": {
+                      "type": "string",
+                      "enum": [
+                        "fresh",
+                        "stale",
+                        "unknown"
+                      ],
+                      "description": "Read-time freshness from raw snapshot freshness, observation age (stale after 300000ms), and this constraint's own reset (stale at equality); a reset cutoff stales earlier evidence. Never inferred from aggregate freshness or a sibling reset; no refill is inferred. The compatibility reset_credits row reports its resets facet's freshness instead."
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "label",
+                    "used_ratio",
+                    "window_seconds",
+                    "resets_at",
+                    "freshness"
+                  ],
+                  "additionalProperties": false,
+                  "description": "One independent vendor quota window; without model ids or declared prefixes it applies to every model, and null usage stays unknown."
+                }
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "codex_app_server",
+                  "codex_rollout",
+                  "claude_statusline",
+                  "claude_api_retry",
+                  "claude_oauth_usage",
+                  "agy_command_usage",
+                  "cursor_rate_limit",
+                  "claude_rate_limit_event",
+                  "codex_app_server_event",
+                  "codex_image_response"
+                ],
+                "description": "Machine-readable source of quota evidence, classified by schema-owned traits."
+              },
+              "observed_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "freshness": {
+                "type": "string",
+                "enum": [
+                  "fresh",
+                  "stale",
+                  "unknown"
+                ],
+                "description": "Freshness of a quota snapshot at read time."
+              },
+              "snapshot_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Server-derived stable snapshot identity for consumers; absent from raw journal evidence and optional for legacy responses."
+              },
+              "availability": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "available",
+                      "exhausted",
+                      "cooldown"
+                    ],
+                    "description": "Spendability verdict for one snapshot: exhausted = a spent window blocks every applicable request; cooldown = an applicable window is only rate-limit-cooling; available = nothing applicable blocks."
+                  },
+                  "blocking_constraints": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/definitions/ControlQuotaFreshnessResponse/properties/snapshots/items/properties/subject/properties/harness"
+                    },
+                    "description": "Ids of the constraints that produced a non-available state."
+                  },
+                  "resets_at": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Earliest known instant at which any blocking constraint may release; null when nothing blocks or no reset is known."
+                  },
+                  "model_scoped_exhaustions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "constraint_id": {
+                          "$ref": "#/definitions/ControlQuotaFreshnessResponse/properties/snapshots/items/properties/subject/properties/harness"
+                        },
+                        "applies_to_models": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/definitions/ControlQuotaFreshnessResponse/properties/snapshots/items/properties/subject/properties/harness"
+                          }
+                        },
+                        "applies_to_model_prefixes": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/definitions/ControlQuotaFreshnessResponse/properties/snapshots/items/properties/subject/properties/harness"
+                          }
+                        },
+                        "resets_at": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "constraint_id",
+                        "applies_to_models",
+                        "resets_at"
+                      ],
+                      "additionalProperties": false,
+                      "description": "A spent or cooling window that applies only to the named models or declared model-id prefixes. Without a requested model only a window that DECLARES it governs the unspecified-model route can exhaust the subject; when the request names a model it covers, it blocks that request too (and is then also listed in blocking_constraints). resets_at is its earliest known release instant (null = unknown)."
+                    },
+                    "description": "Every spent/cooling model-scoped window, listed regardless of state so consumers see partial exhaustion without re-deriving constraint scope."
+                  }
+                },
+                "required": [
+                  "state",
+                  "blocking_constraints",
+                  "resets_at",
+                  "model_scoped_exhaustions"
+                ],
+                "additionalProperties": false,
+                "description": "Typed server-owned availability projection derived at the /v2/quota and atomic Accounts response boundaries; absent from raw journal/projection storage."
+              }
+            },
+            "required": [
+              "subject",
+              "constraints",
+              "source",
+              "observed_at",
+              "freshness"
+            ],
+            "additionalProperties": false,
+            "description": "One vendor-owned quota snapshot plus its derived availability projection."
+          }
+        },
+        "absences": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "subject": {
+                "$ref": "#/definitions/ControlQuotaFreshnessResponse/properties/snapshots/items/properties/subject"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "not_logged_in",
+                  "transport_unavailable",
+                  "platform_unsupported",
+                  "refresh_failed",
+                  "no_source",
+                  "auth_revoked",
+                  "rate_limited",
+                  "probe_skipped_rate_limited",
+                  "poll_paced",
+                  "credential_profile_ambiguous"
+                ],
+                "description": "Why a registered subject has no fresh quota snapshot, in the source's own vocabulary."
+              },
+              "detail": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null
+              },
+              "observed_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "retry_after_ms": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "subject",
+              "reason",
+              "observed_at"
+            ],
+            "additionalProperties": false,
+            "description": "A registered subject's typed quota observation gap; may accompany stale last-known data."
+          },
+          "default": [],
+          "description": "Every registered subject reports a snapshot or a typed absence; a refresh gap may coexist with a stale last-known snapshot."
+        },
+        "refreshed_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "refresh_skipped": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "vendor": {
+                "$ref": "#/definitions/ControlQuotaFreshnessResponse/properties/snapshots/items/properties/subject/properties/harness"
+              },
+              "subject": {
+                "$ref": "#/definitions/ControlQuotaFreshnessResponse/properties/snapshots/items/properties/subject",
+                "description": "The exact paused subject; omitted only for an existing vendor-wide floor."
+              },
+              "not_before": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "vendor",
+              "not_before"
+            ],
+            "additionalProperties": false,
+            "description": "One subject a refresh cycle did not re-fetch because its poll rate-limit cooldown is active, or a retained legacy vendor floor when subject is absent; its snapshots/absences in the same response are last-known registry data."
+          }
+        }
+      },
+      "required": [
+        "snapshots",
+        "refreshed_at"
+      ],
+      "additionalProperties": false,
+      "description": "Opt-in GET /v2/quota?view=constraint_freshness response. Adds constraint freshness while preserving aggregate snapshot freshness and all observed values. No refresh or durable write."
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

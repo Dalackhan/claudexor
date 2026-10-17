@@ -1,13 +1,18 @@
-import type { DurableJournal } from "@claudexor/journal";
+import type { EventLedger } from "./store-contracts.js";
 import { RESOURCES_OBSERVED } from "./quota-registry-replay.js";
 import { sha256 } from "@claudexor/util";
-import { activeQuotaSnapshots } from "./quota-registry-support.js";
+import {
+  activeQuotaSnapshots,
+  activeQuotaSnapshotsWithConstraintFreshness,
+} from "./quota-registry-support.js";
 import {
   ACCOUNT_RESOURCE_FACETS,
   AccountResourceSnapshot,
+  ControlQuotaFreshnessResponse,
   emptyResourceFacet,
   type AccountResourceObservation,
   type AccountTarget,
+  type QuotaAbsence,
   type QuotaSnapshot,
 } from "@claudexor/schema";
 
@@ -103,18 +108,46 @@ export function resourceSnapshots(
   });
 }
 
+function beforeResourceCutoff(snapshot: QuotaSnapshot, cutoffs: ReadonlyMap<string, string>) {
+  const subject = snapshot.subject;
+  const cutoff =
+    subject.subject_id === null
+      ? undefined
+      : cutoffs.get(resourceKey({ harness: subject.harness, profile_id: subject.subject_id }));
+  return Boolean(cutoff && snapshot.observed_at < cutoff);
+}
+
 export function resourceQuotaSnapshots(
   values: Iterable<QuotaSnapshot>,
   cutoffs: ReadonlyMap<string, string>,
   now: number,
 ): QuotaSnapshot[] {
-  return activeQuotaSnapshots([...values], now).map((snapshot) => {
-    const subject = snapshot.subject;
-    const cutoff =
-      subject.subject_id === null
-        ? undefined
-        : cutoffs.get(resourceKey({ harness: subject.harness, profile_id: subject.subject_id }));
-    return cutoff && snapshot.observed_at < cutoff ? { ...snapshot, freshness: "stale" } : snapshot;
+  return activeQuotaSnapshots([...values], now).map((snapshot) =>
+    beforeResourceCutoff(snapshot, cutoffs) ? { ...snapshot, freshness: "stale" } : snapshot,
+  );
+}
+
+/** The opt-in display read: evidence observed before an account reset is
+ * historical for every window, exactly as for the aggregate snapshot. */
+export function quotaFreshnessRead(
+  values: ReadonlyMap<string, QuotaSnapshot>,
+  cutoffs: ReadonlyMap<string, string>,
+  absences: QuotaAbsence[],
+  now: number,
+): ControlQuotaFreshnessResponse {
+  const snapshots = activeQuotaSnapshotsWithConstraintFreshness([...values.values()], now);
+  return ControlQuotaFreshnessResponse.parse({
+    snapshots: snapshots.map((snapshot) =>
+      beforeResourceCutoff(snapshot, cutoffs)
+        ? {
+            ...snapshot,
+            freshness: "stale",
+            constraints: snapshot.constraints.map((item) => ({ ...item, freshness: "stale" })),
+          }
+        : snapshot,
+    ),
+    absences,
+    refreshed_at: null,
   });
 }
 
@@ -181,7 +214,7 @@ export function applyResourceObservation(
 /** The existing quota journal stores a complete resource row so its fold slot
  * cannot lose an older independently observed facet. */
 export function recordAccountResourceObservation(
-  journal: DurableJournal,
+  journal: EventLedger,
   resources: Map<string, AccountResourceSnapshot>,
   observation: AccountResourceObservation,
 ): void {

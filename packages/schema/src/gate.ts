@@ -37,7 +37,9 @@ export const GateResult = z
     output_truncated: z
       .boolean()
       .default(false)
-      .describe("True when the stored output tails were truncated."),
+      .describe(
+        "True when the stored output tails are incomplete: sliced to the tail limit, or cut because the post-exit drain force-closed a pipe that a leftover process kept open.",
+      ),
   })
   .describe(
     "Result of a deterministic gate (build/test/lint/etc), decided by exit code, not text.",

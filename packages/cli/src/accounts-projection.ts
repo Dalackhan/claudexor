@@ -27,10 +27,10 @@ import {
   type VendorQuotaObservations,
 } from "@claudexor/orchestrator";
 import type { HarnessStatus } from "@claudexor/gateway";
+import type { AccountEvidence } from "@claudexor/daemon";
 import { credentialProfilePolicyState } from "@claudexor/core";
 import { displayAccountObservation, profileAccountIdentity } from "./account-observations.js";
 import { buildGateway, buildRegistry } from "./registry.js";
-import { credentialUnusableLedger, preProgressRefusalLedger } from "./run-orchestrator.js";
 
 /**
  * Doctor readiness projection for one credential profile (INV-135) — the ONE
@@ -117,6 +117,7 @@ export async function profileAccountProjection(
  */
 export async function accountPoolsProjection(
   repoRoot: string,
+  accounts: AccountEvidence,
   quotaSnapshots: readonly QuotaSnapshot[] = [],
   snapshot?: {
     statuses?: readonly HarnessStatus[];
@@ -139,14 +140,14 @@ export async function accountPoolsProjection(
     }
   }
   const statusById = new Map(statuses.map((status) => [status.id, status]));
-  const unusable = snapshot?.unusable ?? credentialUnusableLedger.live();
+  const unusable = snapshot?.unusable ?? accounts.unusable.live();
   const profiles = (snapshot?.profiles ?? []).map((entry) => ({
     ...entry,
     status: composeCredentialProfileEvidence(entry.status, {
       quota: snapshot?.quota ?? {
         snapshots: quotaSnapshots,
         absences: [],
-        honored: credentialUnusableLedger.honored(),
+        honored: accounts.unusable.honored(),
       },
       unusable,
       model: cfg.harnesses[entry.profile.harness_id]?.default_model ?? null,
@@ -206,8 +207,10 @@ export async function accountPoolsProjection(
       headroomThreshold: h?.profile_policy?.headroom_threshold ?? 1,
       model: h?.default_model ?? null,
       // Same pool owner as run admission, so a row a recent unpinned run saw
-      // refuse before progress is not advertised ahead of its siblings.
-      refusals: preProgressRefusalLedger.live(),
+      // refuse before progress is not advertised ahead of its siblings, and the
+      // row that last served the default model leads its unknown-headroom ties.
+      refusals: accounts.refusals.live(),
+      lastService: accounts.services,
     });
     if (selection.outcome === "selected") {
       return {

@@ -7,6 +7,7 @@ import { interpretedCommand } from "@claudexor/core";
  */
 import { spawnSync } from "node:child_process";
 import { registerConfigDirProfile } from "./profile-registration.js";
+import { readRoutingEvidence, routingEvidenceLines } from "./account-routing-read.js";
 import {
   ControlAccountsMigrationRollbackResponse,
   ControlCredentialProfileDeleteResponse,
@@ -81,8 +82,9 @@ export async function accountsCommandWithDeps(
   const snapshot = ControlCredentialProfilesSnapshotResponse.parse(
     await get("/credential-profiles?snapshot=true"),
   );
+  const evidence = await readRoutingEvidence(get);
   if (json) {
-    printJson(snapshot);
+    printJson({ ...snapshot, ...evidence });
     return 0;
   }
   print(`Accounts snapshot: quota cursor ${snapshot.quotaEventCursor}`);
@@ -101,8 +103,11 @@ export async function accountsCommandWithDeps(
       const principal = identity?.email ? ` (${identity.email})` : "";
       print(`  ${profile.harness_id}/${profile.profile_id}: ${state}${principal}`);
       if (status.detail) print(`    ${status.detail}`);
+      for (const line of routingEvidenceLines(evidence, profile.harness_id, profile.profile_id))
+        print(`    ${line}`);
     }
   }
+  // next_up is the configured DEFAULT model's verdict, never another model's forecast.
   for (const pool of snapshot.accountPools) {
     const next = pool.next_up;
     const label =
@@ -111,8 +116,9 @@ export async function accountsCommandWithDeps(
         : next.kind === "api_key_route"
           ? "API key route"
           : `none (${next.reason})`;
-    print(`  next up ${pool.harness_id}: ${label}`);
+    print(`  next up (default model) ${pool.harness_id}: ${label}`);
   }
+  if (evidence.routingEvidenceProblem) print(`  ${evidence.routingEvidenceProblem}`);
   return 0;
 }
 
@@ -456,8 +462,9 @@ export async function profilesCommandWithDeps(
     );
   }
   const result = ControlCredentialProfilesResponse.parse(await get("/credential-profiles"));
+  const evidence = await readRoutingEvidence(get);
   if (json) {
-    printJson(result);
+    printJson({ ...result, ...evidence });
     return 0;
   }
   // Unified account model (INV-135): every account is a named registry row
@@ -486,13 +493,19 @@ export async function profilesCommandWithDeps(
       print(
         `  ${profile.profile_id} [${profile.credential_kind}] ${state}${status.detail ? ` — ${status.detail}` : ""}`,
       );
+      for (const line of routingEvidenceLines(evidence, harnessId, profile.profile_id))
+        print(`    ${line}`);
     }
-    // Informational: who an UNPINNED run routes to next (never a user setting).
+    // Informational: who an UNPINNED run of the configured DEFAULT model routes
+    // to next (never a user setting, never a forecast for another model).
     const nextUp = result.accountPools.find((pool) => pool.harness_id === harnessId)?.next_up;
-    if (nextUp?.kind === "profile") print(`  next up: ${nextUp.profileId}`);
-    else if (nextUp?.kind === "api_key_route") print(`  next up: API key (paid route)`);
-    else if (nextUp?.kind === "none") print(`  next up: nothing routable (${nextUp.reason})`);
+    if (nextUp?.kind === "profile") print(`  next up (default model): ${nextUp.profileId}`);
+    else if (nextUp?.kind === "api_key_route")
+      print(`  next up (default model): API key (paid route)`);
+    else if (nextUp?.kind === "none")
+      print(`  next up (default model): nothing routable (${nextUp.reason})`);
   }
+  if (evidence.routingEvidenceProblem) print(evidence.routingEvidenceProblem);
   return 0;
 }
 

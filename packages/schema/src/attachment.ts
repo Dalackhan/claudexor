@@ -52,7 +52,7 @@ export const ControlUploadCreateRequest = z
       .literal("model")
       .optional()
       .describe(
-        "Model-operation payload, never an Agent attachment; absent preserves attachment semantics.",
+        "Model-operation payload (text or image); never an Agent attachment; absent preserves attachment semantics.",
       ),
     kind: AttachmentKind,
     mime: z.string().min(1),

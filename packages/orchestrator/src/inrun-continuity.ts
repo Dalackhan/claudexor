@@ -54,6 +54,7 @@ import {
   rotateSpecOnTypedLimit,
   type EmitFn,
 } from "./credential-profile-rotation.js";
+import { inRunRotationArgs } from "./rotation-predicate.js";
 import { emitTransientRetryPlan } from "./laneStreamEvents.js";
 import { rotatedSpecInLaneHome } from "./orchestrator-credentials.js";
 import { transientRetryDelayMs } from "./runSupport.js";
@@ -64,6 +65,11 @@ import { discloseContinuedTry } from "./inrun-continuity-thread.js";
 import type { ContinuityTerminalFacts } from "./continuity-terminal.js";
 import { RetainedAttemptOutput } from "./inrun-retained-output.js";
 import { unconfirmedContinuationInputs, type UncertainInput } from "./continuation-input.js";
+import {
+  noteRefusedBeforeProgress,
+  type PreProgressRefusalSubject,
+} from "./pre-progress-refusal.js";
+import { PoolAttemptEvidence, withRotationAttempts } from "./pool-attempt-evidence.js";
 
 const TYPED_REFUSALS = new Set(["auth_failed", "capability_refused", "config_error"]);
 
@@ -93,15 +99,27 @@ export class InRunContinuity {
   /** Carrier of the try that just settled (null = the first try or a fresh replay). */
   private settledCarrier: RunContinuityReceipt["carrier"] | null = null;
   private unstartedInputs: UncertainInput[] = [];
+  private refusal: PreProgressRefusalSubject | null = null;
+  private readonly poolEvidence: PoolAttemptEvidence;
 
   constructor(private readonly deps: InRunContinuityDeps) {
+    this.poolEvidence =
+      deps.poolEvidence ?? new PoolAttemptEvidence(deps.adapter.id, deps.attemptId);
     this.capsule = readSessionCapsule(deps.attemptDir);
     this.acted = deps.seed?.acted === true;
     this.pending = deps.seed?.continued ?? null;
   }
 
-  /** The loop calls this before each try spawns; `abort` is THIS try's controller. */
-  beginTry(runSpec: HarnessRunSpec, nativeTry: number, abort: AbortController): void {
+  /** The loop calls this before each try spawns; `abort` is THIS try's controller.
+   * Returns the try's #363 subject, bound now so a credential change mid-try voids it. */
+  beginTry(
+    runSpec: HarnessRunSpec,
+    nativeTry: number,
+    abort: AbortController,
+  ): PreProgressRefusalSubject | null {
+    this.poolEvidence.begin(runSpec, nativeTry);
+    const { runId, attemptId } = this.deps;
+    this.refusal = this.deps.bindRefusal(runSpec, { runId, attemptId, tryIndex: nativeTry });
     this.limit = null;
     this.terminalCode = null;
     this.tryIndex = nativeTry;
@@ -122,6 +140,7 @@ export class InRunContinuity {
     this.tryRequestedModel = runSpec.model_hint ?? null;
     this.tryIdentity = "not_applicable";
     this.tryFirstInputTokens = null;
+    return this.refusal;
   }
 
   /**
@@ -131,6 +150,8 @@ export class InRunContinuity {
    * null.
    */
   observe(ev: HarnessEvent, runSpec: HarnessRunSpec, markers: AttemptOutputMarkers): string | null {
+    this.poolEvidence.observe(ev);
+    this.refusal?.observe(ev, markers);
     if (ev.observed_model && this.tryModel === null) this.tryModel = ev.observed_model;
     if (ev.rate_limit) {
       this.limit = {
@@ -201,8 +222,14 @@ export class InRunContinuity {
     return this.tryStarted && !this.tryIdentity.startsWith("mismatch") && !this.packetSession;
   }
 
+  /** Record the try's account row from its own facts, before workspace capture can throw. */
+  settleTry(facts: Parameters<PoolAttemptEvidence["settle"]>[0]): void {
+    this.poolEvidence.settle(facts);
+  }
+
   /** Decide what the attempt does after a settled try. */
   async afterTry(facts: TryFacts): Promise<AfterTryVerdict> {
+    this.poolEvidence.settle(facts);
     this.retainedOutput.add(facts.answer, facts.harnessErrored, this.tryIdentity);
     const accepted = acceptedTryOutput(facts.answer, facts.harnessErrored);
     this.acted ||=
@@ -226,6 +253,19 @@ export class InRunContinuity {
     }
     if (facts.budgetStopped) return this.breakWith("other");
     if (!facts.harnessErrored || facts.aborted) return { kind: "break" };
+    // A cancel or deadline after the try settled ends the attempt: nothing
+    // probes, rotates or retries. A try that never acted keeps its own #363
+    // refusal note, read from the captured facts as `rotate` reads them.
+    if (facts.stopped) {
+      if (this.deps.rotationEnabled && !this.acted && !facts.telemetry.contextExhausted)
+        noteRefusedBeforeProgress({
+          ...inRunRotationArgs(facts, false),
+          spec: facts.runSpec,
+          pinned: this.deps.pinned,
+          notePreProgressRefusal: () => facts.refusal?.note(),
+        });
+      return { kind: "break" };
+    }
     if (facts.requestRefused) return this.breakWith("other");
     if (facts.telemetry.contextExhausted) return this.breakWith("context_exhausted");
     if (!this.acted) return this.legacy(facts);
@@ -283,8 +323,11 @@ export class InRunContinuity {
 
   /** Keep a snapshot for gates/review/arbitration that can fail after this try completed. */
   terminalFacts(resumable: RunResumable | null): ContinuityTerminalFacts {
-    if (resumable) return { resumable };
-    return this.acted || this.capsule ? { resumableOnFailure: this.resumable("other") } : {};
+    const poolAttempts = this.poolEvidence.snapshot();
+    if (resumable) return { resumable, poolAttempts };
+    return this.acted || this.capsule
+      ? { resumableOnFailure: this.resumable("other"), poolAttempts }
+      : { poolAttempts };
   }
 
   resumable(cause: ResumableCause): RunResumable {
@@ -444,7 +487,6 @@ export class InRunContinuity {
   ): Promise<Awaited<ReturnType<typeof rotateSpecOnTypedLimit>>> {
     if (!this.deps.rotationEnabled) return null;
     const { runSpec } = facts;
-    const accepted = acceptedTryOutput(facts.answer, facts.harnessErrored);
     return rotateSpecOnTypedLimit({
       spec: runSpec,
       harnessId: this.deps.adapter.id,
@@ -455,26 +497,16 @@ export class InRunContinuity {
       probeReadyProfiles: () => this.deps.probeReadyProfiles(runSpec, this.triedProfiles),
       ...this.deps.rotationObservations(runSpec, facts.newTransients, facts.refusal),
       triedProfiles: this.triedProfiles,
-      // After progress the predicate's no-deliverable/no-mutation fence scopes
-      // only the `fresh` carrier: the planner picks the carrier, rotation only
-      // picks the next account.
-      markers: forceEligible
-        ? {
-            sawAgentProgress: false,
-            fileChanges: 0,
-            sawSessionStart: facts.markers.sawSessionStart,
-          }
-        : facts.markers,
-      requestRefused: facts.requestRefused,
-      sawTypedLimit: facts.sawTypedLimit,
-      sawRetryable: facts.sawRetryable,
-      attemptErrored: facts.harnessErrored,
-      deliverableEmpty: forceEligible
-        ? true
-        : facts.workspaceDiffNonEmpty !== true && accepted.length === 0,
-      workspaceDiffNonEmpty: forceEligible ? false : facts.workspaceDiffNonEmpty,
+      ...inRunRotationArgs(facts, forceEligible),
       lastLimit: facts.lastLimit,
-      emit: this.deps.emit as EmitFn,
+      // An in-run exhaustion names each account's own failed tries (settled first).
+      emit: ((type, payload) =>
+        this.deps.emit(
+          type,
+          type === "route.profile.rotation_exhausted"
+            ? withRotationAttempts(payload, this.poolEvidence.snapshot())
+            : payload,
+        )) as EmitFn,
       newSessionId: this.deps.newSessionId,
       defaultRouteWasVendorNative: this.deps.defaultRouteWasVendorNative,
       pinned: this.deps.pinned,

@@ -56,6 +56,9 @@ export function observationsFromEvent(harnessId: string, ev: HarnessEvent): Budg
         ...(constraint.applies_to_unspecified_model !== undefined
           ? { applies_to_unspecified_model: constraint.applies_to_unspecified_model }
           : {}),
+        ...(constraint.applies_to_request_kinds
+          ? { applies_to_request_kinds: constraint.applies_to_request_kinds }
+          : {}),
         used_ratio: constraint.used_ratio,
         window_seconds: constraint.window_seconds,
         resets_at: constraint.resets_at,
@@ -85,6 +88,9 @@ function singleObservationFromEvent(harnessId: string, ev: HarnessEvent): Budget
       ...(ev.rate_limit.constraint_id ? { constraint_id: ev.rate_limit.constraint_id } : {}),
       ...(ev.rate_limit.applies_to_models !== undefined
         ? { applies_to_models: ev.rate_limit.applies_to_models }
+        : {}),
+      ...(ev.rate_limit.applies_to_request_kinds
+        ? { applies_to_request_kinds: ev.rate_limit.applies_to_request_kinds }
         : {}),
       resets_at: resets,
       cooldown_until: cooldownUntil,

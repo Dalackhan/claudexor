@@ -759,25 +759,53 @@ struct AppModelRefreshTests {
             session: URLSession(configuration: config)
         ), requestNotificationAuthorization: false)
         let calls = AppRefreshCallCounter()
+        let leadArrived = AppRefreshCallCounter()
+        let trailingArrived = AppRefreshCallCounter()
+        let expiredGates = AppRefreshCallCounter()
+        let releaseLead = DispatchSemaphore(value: 0)
+        let releaseTrailing = DispatchSemaphore(value: 0)
+        defer { releaseLead.signal(); releaseTrailing.signal() }
         AppRequestStubURLProtocol.handler = { request in
             guard request.url?.path == "/v2/runs" else { throw AppRefreshTestError.badRequest }
-            calls.increment()
-            Thread.sleep(forTimeInterval: 0.08)
+            let call = calls.incrementAndGet()
+            if call == 1 {
+                leadArrived.increment()
+                if releaseLead.wait(timeout: .now() + 5) == .timedOut { expiredGates.increment() }
+            } else if call == 2 {
+                trailingArrived.increment()
+                if releaseTrailing.wait(timeout: .now() + 5) == .timedOut { expiredGates.increment() }
+            }
             return (appResponse(for: request), Data(#"{"runs":[]}"#.utf8))
         }
 
+        // Gate each trigger on the pass it must land in, not on wall-clock
+        // sleeps: a loaded runner can delay a sleeper past a whole pass. A
+        // main-actor trigger counts itself in the same job that enters
+        // `refreshRuns`, so a counted trigger has already folded.
         let lead = Task { await model.refreshRuns() }
-        let duringTrailing = Task {
-            try? await Task.sleep(for: .milliseconds(110))   // lands in the trailing pass
-            await model.refreshRuns()
+        try await waitForAppTest(leadArrived, message: "lead runs GET never started")
+        let burstEntered = AppRefreshCallCounter()
+        let burst = (0..<5).map { _ in
+            Task { @MainActor in
+                burstEntered.increment()
+                await model.refreshRuns()
+            }
         }
-        try await Task.sleep(for: .milliseconds(20))
-        await withTaskGroup(of: Void.self) { group in
-            for _ in 0..<5 { group.addTask { await model.refreshRuns() } }
+        try await waitForAppTest({ burstEntered.count == 5 }, message: "burst never folded into the lead")
+        releaseLead.signal()
+        try await waitForAppTest(trailingArrived, message: "trailing runs GET never started")
+        let trailingEntered = AppRefreshCallCounter()
+        let duringTrailing = Task { @MainActor in
+            trailingEntered.increment()
+            await model.refreshRuns()                     // lands in the trailing pass
         }
+        try await waitForAppTest(trailingEntered, message: "trailing-pass trigger never ran")
+        releaseTrailing.signal()
         await lead.value
+        for trigger in burst { await trigger.value }
         await duringTrailing.value
 
+        #expect(expiredGates.count == 0)          // expired placement cannot look like a valid pass
         #expect(calls.count == 2)                 // lead + exactly one trailing
         #expect(model.runsRefreshTask == nil)     // settled, nothing dangling
     }
@@ -4228,7 +4256,7 @@ struct AppModelRefreshTests {
         // LocalDaemonReconcilerTests and must never probe/stop a host daemon.
         model.localDaemonReconciler = LocalDaemonReconciler(
             daemon: AppRuntimeDaemonControl(
-                isBusyProbe: { nil }, handshakeIdentityProbe: { nil }),
+                isBusyProbe: { nil }, handshakeProbe: { nil }),
             lifecycleOwner: model.localRuntimeLifecycleOwner,
             targetClosure: { nil })
         model.health = .connected

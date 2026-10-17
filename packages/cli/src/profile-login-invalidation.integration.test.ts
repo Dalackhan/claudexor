@@ -1,3 +1,4 @@
+import { SetupJobStore } from "../../daemon/src/store/test-support/fixtures/legacy/cli/setup-job-store.js";
 import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
@@ -23,11 +24,10 @@ import { createCursorAdapter } from "@claudexor/harness-cursor";
 import type { ControlSetupJob, CredentialProfile } from "@claudexor/schema";
 import { parseArgs } from "./args.js";
 import { profilesCommandWithDeps } from "./credential-commands.js";
+import { createAccountEvidence } from "@claudexor/daemon";
 import { bustLoginCredentialState } from "./credential-status-invalidation.js";
-import { modelSubstitutionLedger } from "./model-services.js";
 import { controlApiFetch } from "./live.js";
 import { registerConfigDirProfile } from "./profile-registration.js";
-import { credentialUnusableLedger, preProgressRefusalLedger } from "./run-orchestrator.js";
 import { attachSetupJob } from "./setup-attach-command.js";
 import { setupJobControlServices } from "./setup-job-control-services.js";
 import { createSetupJobManager } from "./setup-jobs.js";
@@ -39,6 +39,11 @@ import { createSetupJobManager } from "./setup-jobs.js";
 // the test scripts, and the real setup-job manager owns the credential-mutation
 // window with real process-group evidence. The Cursor status coordinator
 // probes the same synthetic store. No vendor, no account, no installed daemon.
+
+// The daemon store graph's evidence the setup lifecycle invalidates.
+const accounts = createAccountEvidence();
+const { unusable: credentialUnusableLedger, substitutions: modelSubstitutionLedger } = accounts;
+const preProgressRefusalLedger = accounts.refusals;
 
 const vendor = vi.hoisted(() => {
   const dir = `${(process.env.TMPDIR ?? "/tmp").replace(/\/+$/, "")}/claudexor-363-lifecycle-${process.pid}`;
@@ -135,6 +140,7 @@ async function withDaemon<T>(
   const quota = { noteCredentialChange: () => {} };
   const build = () =>
     createSetupJobManager({
+      store: new SetupJobStore(root),
       rootDir: root,
       runnerPath: RUNNER,
       monitorPollMs: 20,
@@ -144,7 +150,7 @@ async function withDaemon<T>(
       ...(options.loginTimeoutMs ? { loginTimeoutMs: options.loginTimeoutMs } : {}),
       onCredentialStateMayHaveChanged: (harness) => {
         bumps.push(harness);
-        bustLoginCredentialState(() => quota as never, { invalidate() {} }, harness);
+        bustLoginCredentialState(() => quota as never, accounts, { invalidate() {} }, harness);
       },
     });
   let manager = build();
@@ -192,7 +198,7 @@ async function withDaemon<T>(
       // Logins survive an ordinary daemon stop (v3.0.3 S5).
       bound = null;
       await manager.shutdown();
-      manager._store.journal.close();
+      (manager._store as SetupJobStore).journal.close();
       await beforeStart?.();
       manager = build();
       await manager.start();
@@ -205,7 +211,7 @@ async function withDaemon<T>(
     bindCredentialMutationWindow(null);
     for (const job of manager.list({ active: true })) await manager.cancel({ jobId: job.jobId });
     await manager.shutdown();
-    manager._store.journal.close();
+    (manager._store as SetupJobStore).journal.close();
     await server.stop();
   }
 }

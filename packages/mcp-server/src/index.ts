@@ -1,8 +1,9 @@
+import { mcpToolFailure } from "./tool-failure.js";
 import { accountResourceTools } from "./account-resource-tools.js";
 import { runExecutionSchema } from "./run-execution-schema.js";
 import { isAbsolute } from "node:path";
 import agentCapabilityCatalogSchemaRaw from "@claudexor/schema/generated/AgentCapabilityCatalog.schema.json" with { type: "json" };
-import accountsQuerySchemaRaw from "@claudexor/schema/generated/ControlCredentialProfilesQueryResponse.schema.json" with { type: "json" };
+import accountsQuerySchemaRaw from "@claudexor/schema/generated/McpAccountsToolResult.schema.json" with { type: "json" };
 import mcpRunToolResultSchemaRaw from "@claudexor/schema/generated/McpRunToolResult.schema.json" with { type: "json" };
 import mcpRunHandleResultSchemaRaw from "@claudexor/schema/generated/McpRunHandleResult.schema.json" with { type: "json" };
 import paidBudgetSchemaRaw from "@claudexor/schema/generated/PaidBudget.schema.json" with { type: "json" };
@@ -142,9 +143,11 @@ export function buildMcpServer(opts: {
           // matching its structural validation rather than JSON-RPC errors.
           throw new Error(validation);
         }
-        const out = await tool.handler(provided, {
-          signal: ctx?.mcpReq?.signal,
-        });
+        const out = await tool
+          .handler(provided, {
+            signal: ctx?.mcpReq?.signal,
+          })
+          .catch(mcpToolFailure);
         const text = typeof out === "string" ? out : out.text;
         const structured = typeof out === "string" ? undefined : out.structured;
         return {

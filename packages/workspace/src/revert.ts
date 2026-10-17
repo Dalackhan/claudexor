@@ -1,7 +1,12 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseUnifiedDiff, runCaptureRaw, WorkspaceError } from "@claudexor/core";
+import {
+  assertCaptureComplete,
+  parseUnifiedDiff,
+  runCaptureRaw,
+  WorkspaceError,
+} from "@claudexor/core";
 import { diffTrees, git, statusPorcelain } from "./git.js";
 
 /** Why a revert was refused, decided by the producer rather than by parsing a
@@ -38,7 +43,8 @@ async function gitEnv(
     env,
     input,
   });
-  return { code: result.code, stdout: result.stdout, stderr: result.stderr };
+  assertCaptureComplete(result);
+  return result;
 }
 
 /** Restore the live tree to a pre-turn snapshot only while the exact recorded

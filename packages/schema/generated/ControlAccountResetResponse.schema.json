@@ -196,6 +196,18 @@
                             "applies_to_unspecified_model": {
                               "type": "boolean"
                             },
+                            "applies_to_request_kinds": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "enum": [
+                                  "text",
+                                  "image"
+                                ]
+                              },
+                              "minItems": 1,
+                              "description": "Vendor-declared operation scope. Absent applies to both text and image; model scope still applies independently."
+                            },
                             "used_ratio": {
                               "anyOf": [
                                 {
@@ -265,7 +277,8 @@
                           "agy_command_usage",
                           "cursor_rate_limit",
                           "claude_rate_limit_event",
-                          "codex_app_server_event"
+                          "codex_app_server_event",
+                          "codex_image_response"
                         ],
                         "description": "Machine-readable source of quota evidence, classified by schema-owned traits."
                       },

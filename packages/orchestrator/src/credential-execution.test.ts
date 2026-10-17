@@ -195,12 +195,14 @@ describe("dispatch-bound credential intake", () => {
     }
   });
 
-  it("older concurrent results cannot overwrite or clear the newer dispatch refusal", () => {
+  it("equal-time older concurrent results cannot overwrite or clear the newer dispatch refusal", () => {
     const ledger = new CredentialUnusableLedger();
     const older = ledger.bind(subject),
       newer = ledger.bind(subject);
-    ledger.recordBound(newer, observation({ detail: "newer" }));
-    ledger.recordBound(older, observation({ detail: "older" }));
+    // Equal observation times isolate dispatch order from later-contact provenance.
+    const refusal = observation();
+    ledger.recordBound(newer, { ...refusal, detail: "newer" });
+    ledger.recordBound(older, { ...refusal, detail: "older" });
     ledger.honorBound(older, null);
     expect(ledger.live()[0].detail).toBe("newer");
     ledger.honorBound(ledger.bind(subject), null);

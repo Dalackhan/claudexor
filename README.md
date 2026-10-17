@@ -31,7 +31,7 @@ with a vendor usage source (Antigravity, Claude, and Codex); Cursor has none
 yet. Everything runs on your machine, files are the source of truth, and there
 is no telemetry.
 
-Current status: **v3.25.0**. See "Stability at 2.0" below for what is a stable
+Current status: **v4.2.0**. See "Stability at 2.0" below for what is a stable
 contract and what remains experimental; retired verbs and mode ids hard-error
 with the new spelling instead of silently aliasing.
 
@@ -87,7 +87,7 @@ composer](docs/assets/app-agent-run.jpg)
 
 ## Prerequisites
 
-- Node.js >= 20.19 (the daemon, CLI, and every surface run on Node)
+- Node.js >= 24.15 (the daemon, CLI, and every surface run on Node)
 - pnpm (via corepack: `corepack enable pnpm`)
 - Git for Git-backed worktrees, candidate envelopes, and source-control delivery.
   Explicit directory execution supports direct work and selected-input copies
@@ -197,10 +197,14 @@ client verifiers themselves stay fail-closed for the waived versions too).
   newer runtime is offered, surfaces "Update available → vX.Y.Z". One click
   installs it **in place, no new DMG**: the app downloads the closure, verifies
   its SHA-256 against the signed manifest, unpacks it under
-  `~/.claudexor/runtime/versions/<version>/`, probe-starts it, waits until the
-  engine is idle (it never interrupts running jobs), stops the daemon, swaps the
-  active pointer atomically, relaunches, and re-checks the version — rolling back
-  to the last-known-good runtime on any failure. The manifest is signed by a
+  `~/.claudexor/runtime/versions/<version>/`, probe-starts it, requires that the
+  engine is confirmed idle (otherwise it refuses and you can try Install again),
+  stops the daemon, swaps the active pointer atomically, relaunches, and confirms the exact new engine
+  accepts normal work — rolling back to the last-known-good runtime when the new
+  engine is wrong or never answers. An engine answering only in recovery mode is
+  reported as such, never as updated or rolled back by the new app; already-installed
+  older apps check identity only and can still report either outcome over a
+  recovery-only engine. The manifest is signed by a
   dedicated offline key the app pins; an unsigned, unknown-key, tampered, or
   downgraded manifest is refused. Node stays app-owned, so a Node bump still
   ships a new signed DMG. There is no background update timer; the check runs
@@ -532,8 +536,11 @@ sibling only with a disclosed lane switch. An explicit pin (per-run
 that account or a typed refusal (`subscription_window_exhausted` with the
 reset time when its quota window is spent), never a silent rotation.
 `claudexor profiles` shows the informational **next-up** verdict — who an
-unpinned run would route to next — computed server-side by the same routing
-owner (`accountPools`; also `GET /v2/account-pools`). When the pool is empty
+unpinned run of the configured default model would route to next — computed
+server-side by the same routing owner (`accountPools`; also
+`GET /v2/account-pools`), plus each account's recent refusals and last service
+per requested model. Among accounts with unknown quota, the one that last
+served the requested model is tried first, also after a daemon restart. When the pool is empty
 or exhausted, the typed API-key fallback may serve the run as an explicit,
 disclosed **route** — never a synthetic account row; key management stays in
 Auth. The macOS Accounts surface renders these rows directly from ONE server
@@ -640,8 +647,8 @@ do not enable paid usage, buy credits or change account-routing policy.
 ## Daemon And Control API
 
 The managed daemon is the mandatory runtime authority and normally auto-starts
-when a product command needs it: durable fsync-acknowledged command queueing
-over a Unix socket, idempotency-key retry binding, and a loopback HTTP/SSE
+when a product command needs it: synchronously committed command queueing
+over a Unix socket (power-loss durability follows a flusher barrier), idempotency-key retry binding, and a loopback HTTP/SSE
 control API as a thin viewport (`/v2` only; `POST /v2/handshake` negotiation;
 snapshot-then-subscribe run events). Harness setup/login is server-owned
 through observable setup jobs with typed phases, deadlines, and post-exit
@@ -670,6 +677,8 @@ events.jsonl
 context/task.yaml
 context/context_pack.yaml?
 attempts/a01/attempt.yaml
+attempts/a01/answer.md?
+attempts/a01/retained-envelope.json?  (capture-refused inspection source)
 attempts/a01/patch.diff
 reviews/a01.yaml
 arbitration/decision.yaml
@@ -964,6 +973,8 @@ Claudexor owns these locations:
   journal and process state (`daemon/`: token, socket, log), local harness
   metrics (`telemetry/`), host-plugin ownership state (`plugins/`), and
   user-level runs for no-project asks.
+- `~/.cache/claudexor/` — Claudexor caches, including the no-project repository
+  workspace (`no-project/`); include it in a complete pre-upgrade backup.
 - `~/.claudexor/runtime/` — the installed engine-runtime closures the macOS app
   updates in place (QA-071): `versions/<version>/` holds each unpacked closure,
   `current.json` names the active one, and `last-known-good.json` is the rollback

@@ -66,6 +66,37 @@ function textRecord(path: string, line: string): string {
 }
 
 describe("excludePlainDiffPathPrefix", () => {
+  it.each([
+    ownedPrefix,
+    `${ownedPrefix}////`,
+    `./${ownedPrefix}/`,
+    `.\\${ownedPrefix.replaceAll("/", "\\")}\\\\`,
+  ])("normalizes only the selected prefix %j", (prefix) => {
+    const kept = textRecord(`${ownedPrefix}-other/keep.txt`, "keep");
+    const diff = textRecord(`${ownedPrefix}/log.txt`, "generated") + kept;
+    expect(excludePlainDiffPathPrefix(diff, prefix)).toBe(kept);
+  });
+
+  it.each([
+    "",
+    "/",
+    "./",
+    ".",
+    "..",
+    `/${ownedPrefix}`,
+    `${ownedPrefix}/..`,
+    `${ownedPrefix}//bad`,
+  ])("keeps all data for an invalid prefix %j", (prefix) => {
+    const diff = textRecord(`${ownedPrefix}/log.txt`, "keep");
+    expect(excludePlainDiffPathPrefix(diff, prefix)).toBe(diff);
+  });
+
+  it("handles a long non-trailing slash run without regexp backtracking", () => {
+    const diff = textRecord(`${ownedPrefix}/log.txt`, "keep");
+    expect(excludePlainDiffPathPrefix(diff, `a${"/".repeat(200_000)}z`)).toBe(diff);
+    expect(excludePlainDiffPathPrefix(diff, `${ownedPrefix}${"/".repeat(200_000)}`)).toBe("");
+  });
+
   it("separates an owned text record from a following user binary record", () => {
     const diff = `${textRecord(`${ownedPrefix}/log.txt`, "generated")}Binary files a/user.bin and b/user.bin differ\n`;
 

@@ -22,6 +22,14 @@
           ],
           "additionalProperties": false
         },
+        "requestKind": {
+          "type": "string",
+          "enum": [
+            "text",
+            "image"
+          ],
+          "description": "Availability scope; omitted means text. Raw constraints retain every scope."
+        },
         "model": {
           "type": "string",
           "minLength": 1,

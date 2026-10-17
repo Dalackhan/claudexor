@@ -1,5 +1,45 @@
 # claudexor
 
+## 4.2.0
+
+### Patch Changes
+
+- @claudexor/cli@4.2.0
+
+## 4.1.1
+
+### Patch Changes
+
+- A finished run ends every OS process it left (razzant/claudexor#449).
+  - @claudexor/cli@4.1.1
+
+## 4.1.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/cli@4.1.0
+
+## 4.0.1
+
+### Patch Changes
+
+- @claudexor/cli@4.0.1
+
+## 4.0.0
+
+### Patch Changes
+
+- Updated dependencies [2fbf7c9]
+  - @claudexor/cli@4.0.0
+
+## 3.25.1
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/cli@3.25.1
+
 ## 3.25.0
 
 ### Minor Changes

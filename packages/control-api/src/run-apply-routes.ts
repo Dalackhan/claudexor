@@ -26,6 +26,7 @@ export interface DeliveryCommandServices {
     result?: unknown;
     error?: string;
     errorCode?: string;
+    errorContext?: Record<string, unknown>;
     reused: boolean;
   }>;
   completeDelivery?: (id: string, result: unknown) => Promise<void>;
@@ -64,6 +65,7 @@ export async function runIdempotentDelivery<T>(
       throw Object.assign(new Error(command.error ?? "delivery failed"), {
         status: typeof receipt["status"] === "number" ? receipt["status"] : 409,
         code: command.errorCode ?? receipt["code"] ?? "delivery_failed",
+        ...(command.errorContext ? { context: command.errorContext } : {}),
       });
     }
     throw Object.assign(

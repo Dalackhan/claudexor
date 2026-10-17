@@ -387,6 +387,12 @@ export function writeCandidateAttemptArtifacts(input: {
   answerText?: string;
   record: Record<string, unknown>;
 }): string[] {
+  // A capture refusal must not strand the completed answer only in memory or
+  // the stream transcript. Persist the already-redacted selected answer per attempt.
+  if (input.answerText) {
+    assertPersistableText("attempt answer", input.answerText);
+    input.store.writeText(join(input.attemptDir, "answer.md"), input.answerText);
+  }
   const persistPatch = input.persistPatch !== false;
   if (persistPatch) {
     const saved = input.persistedDiff ?? persistedPatchCopy(input.diff, []).text;

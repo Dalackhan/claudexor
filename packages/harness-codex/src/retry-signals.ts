@@ -32,6 +32,7 @@ export function codexReconnectStatus(
 export function applyCodexRateLimit(event: HarnessEvent, message: string, resetsAt: unknown): void {
   if (!CODEX_RATE_LIMIT_RE.test(message)) return;
   event.rate_limit = {
+    applies_to_request_kinds: ["text"],
     resets_at: typeof resetsAt === "string" ? resetsAt : null,
     retry_delay_ms: null,
   };

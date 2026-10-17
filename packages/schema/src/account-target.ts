@@ -1,4 +1,5 @@
 import { z } from "zod/v3";
+import { QuotaRequestKind } from "./quota-request-kind.js";
 export const AccountTarget = z
   .object({ harness: z.string().min(1), profile_id: z.string().min(1) })
   .strict();
@@ -7,6 +8,9 @@ export type AccountTarget = z.infer<typeof AccountTarget>;
 export const ControlQuotaRefreshRequest = z
   .object({
     target: AccountTarget.optional(),
+    requestKind: QuotaRequestKind.optional().describe(
+      "Availability scope; omitted means text. Raw constraints retain every scope.",
+    ),
     model: z
       .string()
       .min(1)

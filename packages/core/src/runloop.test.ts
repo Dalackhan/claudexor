@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import { HarnessRunSpec, type HarnessEvent } from "@claudexor/schema";
 import { runCliHarness } from "./runloop.js";
-import type { ChildStdin } from "./proc.js";
+import { spawnProcess, type ChildStdin } from "./proc.js";
 
 const spec = (): HarnessRunSpec =>
   HarnessRunSpec.parse({
@@ -277,6 +277,55 @@ describe("runCliHarness proven-death terminal", () => {
       { survivors?: number[]; unresolved?: unknown[] } | undefined;
     expect(tu?.survivors).toEqual([424242]);
     expect(tu?.unresolved).toHaveLength(1);
+  }, 15_000);
+});
+
+describe("runCliHarness post-exit drain disclosure", () => {
+  // Real spawnProcess pipes with a short drain bound: the native CLI prints its
+  // result, leaves a descendant holding stdout and exits 0.
+  const run = async (holdPipe: boolean): Promise<HarnessEvent[]> => {
+    const child = [
+      "const {spawn}=require('node:child_process')",
+      "console.log(JSON.stringify({answer:'kept'}))",
+      holdPipe
+        ? "spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:['ignore',1,'ignore']})"
+        : "",
+      "setTimeout(()=>process.exit(0),50)",
+    ].join(";");
+    const events: HarnessEvent[] = [];
+    for await (const event of runCliHarness({
+      bin: process.execPath,
+      args: ["-e", child],
+      spec: spec(),
+      spawn: (bin, args, options) => spawnProcess(bin, args, { ...options, exitDrainMs: 150 }),
+      parseEvent: (obj, session_id) => [
+        {
+          type: "message",
+          session_id,
+          ts: new Date().toISOString(),
+          text: String((obj as { answer?: unknown }).answer),
+          final: true,
+        },
+      ],
+    }))
+      events.push(event);
+    return events;
+  };
+
+  it("discloses a forced closure on the completed payload and keeps the result", async () => {
+    const events = await run(true);
+    expect(events.find((event) => event.final)?.text).toBe("kept");
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    const completed = events.at(-1);
+    expect(completed?.type).toBe("completed");
+    expect(completed?.payload?.["exit_code"]).toBe(0);
+    expect(completed?.payload?.["output_drain"]).toBe("truncated");
+  }, 15_000);
+
+  it("adds no drain disclosure when the pipe closes with the process (control)", async () => {
+    const events = await run(false);
+    expect(events.find((event) => event.final)?.text).toBe("kept");
+    expect(events.at(-1)?.payload).not.toHaveProperty("output_drain");
   }, 15_000);
 });
 

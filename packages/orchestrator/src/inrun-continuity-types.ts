@@ -11,10 +11,11 @@ import type { AttemptOutputMarkers } from "./attemptOutputMarkers.js";
 import type { AttemptTelemetry, TransientFailureObservation } from "./attemptTelemetry.js";
 import type { ModelGovernedRoute } from "./modelGovernance.js";
 import type { ProfilePolicy, rotateSpecOnTypedLimit } from "./credential-profile-rotation.js";
-import type { PreProgressRefusalSubject } from "./pre-progress-refusal.js";
+import type { PreProgressRefusalSubject, ServiceProducer } from "./pre-progress-refusal.js";
 import type { TransientRetryPolicy } from "./runSupport.js";
 
 import type { ContinuedTry } from "./inrun-continuity-carrier.js";
+import type { PoolAttemptEvidence } from "./pool-attempt-evidence.js";
 import type { PredecessorEvidenceSource } from "./continuation-evidence.js";
 
 type ContinuityEmit = (type: RunEventType, payload: Record<string, unknown>) => void;
@@ -44,6 +45,11 @@ export interface InRunContinuityDeps {
   rotationEnabled: boolean;
   laneEnvFor: (profileId: string | null) => Record<string, string> | null;
   probeReadyProfiles: (spec: HarnessRunSpec, tried: Set<string>) => Promise<ReadonlySet<string>>;
+  /** Bind one try's #363 refusal/service subject before it spawns (null = nothing to record). */
+  bindRefusal: (
+    spec: HarnessRunSpec,
+    producer: ServiceProducer,
+  ) => PreProgressRefusalSubject | null;
   rotationObservations: (
     spec: HarnessRunSpec,
     transients: readonly TransientFailureObservation[],
@@ -55,6 +61,9 @@ export interface InRunContinuityDeps {
   emit: ContinuityEmit;
   /** The model-governed route: an attested model is pinned only if it lists the id. */
   route?: ModelGovernedRoute;
+  /** The attempt's per-try account rows, owned by a caller whose catch must keep
+   * them when finishing the attempt throws; absent = the controller's own. */
+  poolEvidence?: PoolAttemptEvidence;
   newSessionId: () => string;
   /** First try of a continueFrom successor: predecessor progress and receipt. */
   seed?: {
@@ -90,7 +99,13 @@ export interface TryFacts {
   runSpec: HarnessRunSpec;
   nativeTry: number;
   harnessErrored: boolean;
+  /** The lane's own error text for the try (a thrown error has no error event). */
+  originalError?: string | null;
+  /** The try's own stream was aborted (a cancelled try is no account evidence). */
   aborted: boolean;
+  /** The run was cancelled or hit its deadline only after the try settled
+   * (during capture): no successor runs, but the try's own facts stand. */
+  stopped?: boolean;
   budgetStopped?: boolean;
   requestRefused: boolean;
   newTransients: readonly TransientFailureObservation[];

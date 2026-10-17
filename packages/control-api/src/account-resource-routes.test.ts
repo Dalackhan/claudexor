@@ -23,6 +23,12 @@ describe("resource wire negotiation and direct reset route", () => {
   it("advertises the opt-in query and key-required reset operation", () => {
     const catalog = OPERATION_CATALOG;
     expect(catalog.operations.find((o) => o.id === "get:quota")?.parameters).toContainEqual(
+      expect.objectContaining({ name: "view", enum: ["resources", "constraint_freshness"] }),
+    );
+    expect(catalog.operations.find((o) => o.id === "get:quota")?.parameters).toContainEqual(
+      expect.objectContaining({ name: "requestKind", enum: ["text", "image"] }),
+    );
+    expect(catalog.operations.find((o) => o.id === "post:quota")?.parameters).toContainEqual(
       expect.objectContaining({ name: "view", enum: ["resources"] }),
     );
     expect(catalog.operations.find((o) => o.id === "post:account-resets")).toMatchObject({
@@ -50,12 +56,15 @@ describe("resource wire negotiation and direct reset route", () => {
       resources: { ...raw, resources: [] },
     };
     const createAccountReset = vi.fn(async () => receipt);
+    const quota = vi.fn(async (input) =>
+      input?.view === "resources" ? { ...raw, resources: [] } : raw,
+    );
     const refreshQuota = vi.fn(async (input) => (input?.view ? { ...raw, resources: [] } : raw));
     const server = new DaemonControlApiServer({
       token: "fixture",
       daemon: { enqueue } as unknown as DaemonFacadeClient,
       services: {
-        quota: async (input) => (input?.view ? { ...raw, resources: [] } : raw),
+        quota,
         refreshQuota,
         createAccountReset,
         accountReset: async () => receipt,
@@ -76,8 +85,37 @@ describe("resource wire negotiation and direct reset route", () => {
       });
     expect(await (await call("/quota")).json()).toEqual(raw);
     expect(await (await call("/quota?view=resources")).json()).toEqual({ ...raw, resources: [] });
+    for (const view of ["resources", "constraint_freshness"]) {
+      expect((await call(`/quota?view=${view}&requestKind=image&model=gpt-image-2`)).status).toBe(
+        200,
+      );
+      expect(quota).toHaveBeenLastCalledWith({ view, requestKind: "image", model: "gpt-image-2" });
+    }
+    for (const query of [
+      "requestKind=image&requestKind=text",
+      "requestKind=other",
+      "model=",
+      "model=x&model=y",
+      "view=resources&view=resources",
+    ])
+      expect((await call(`/quota?${query}`)).status).toBe(400);
     expect((await call("/quota?view=resources", { target: request.target })).status).toBe(200);
     expect(refreshQuota).toHaveBeenLastCalledWith({ target: request.target, view: "resources" });
+    expect(
+      (
+        await call("/quota?view=resources", {
+          target: request.target,
+          requestKind: "image",
+          model: "gpt-image-2",
+        })
+      ).status,
+    ).toBe(200);
+    expect(refreshQuota).toHaveBeenLastCalledWith({
+      target: request.target,
+      requestKind: "image",
+      model: "gpt-image-2",
+      view: "resources",
+    });
     const reset = await call("/account-resets", request, "same-key");
     expect(reset.status).toBe(200);
     expect(await reset.json()).toEqual(receipt);

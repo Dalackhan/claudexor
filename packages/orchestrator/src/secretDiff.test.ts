@@ -31,6 +31,7 @@ const envelope = {
   repo_root: "/tmp/project",
   worktree_path: "/tmp/project",
   base_sha: null,
+  base_ref: null,
 } as WorkspaceEnvelope;
 
 const roots: string[] = [];
@@ -80,9 +81,27 @@ const capture = (
 ) =>
   captureCandidateWorkspace({
     wsm,
-    envelope,
+    envelope: (() => {
+      const root = tempRoot("cx-secret-envelope-");
+      mkdirSync(join(root, "home"));
+      mkdirSync(join(root, "tree"));
+      return {
+        ...envelope,
+        id: "env-test",
+        task_id: "task-test",
+        attempt_id: "a01",
+        home_dir: join(root, "home"),
+        worktree_path: join(root, "tree"),
+        branch_name: null,
+        created_at: new Date().toISOString(),
+        workspace_kind: "git",
+        policy_profile: "workspace_write",
+        harness_config_dirs: {},
+      } as WorkspaceEnvelope;
+    })(),
     inPlace,
     projectRoot: tempRoot("claudexor-v4c-project-"),
+    holder: { runId: "run-test", runDir: tempRoot("cx-capture-run-") },
     answerMatches: 0,
     ...extra,
   });
@@ -90,7 +109,7 @@ const capture = (
 describe("capture refusal is the only capture-time refusal (INV-062)", () => {
   it.each([
     { inPlace: true, disposition: "manual_cleanup" },
-    { inPlace: false, disposition: "discarded" },
+    { inPlace: false, disposition: "retained" },
   ] as const)(
     "names a capture exception honestly for inPlace=$inPlace without echoing it",
     async ({ inPlace, disposition }) => {
@@ -104,7 +123,7 @@ describe("capture refusal is the only capture-time refusal (INV-062)", () => {
       expect(result.captureRefusal?.disposition).toBe(disposition);
       expect(result.captureRefusal?.detail).not.toContain("sensitive capture sentinel");
       expect(result.captureRefusal?.detail).toMatch(
-        inPlace ? /changed files are untouched/ : /discarded/,
+        inPlace ? /changed files are untouched/ : /retained/,
       );
       expect(result.secretLike).toBeUndefined();
     },
@@ -124,8 +143,10 @@ describe("capture refusal is the only capture-time refusal (INV-062)", () => {
 
     const result = await capture(wsm, false);
 
-    expect(result.captureRefusal).toMatchObject({ disposition: "manual_cleanup" });
-    expect(result.captureRefusal?.detail).toMatch(/private scratch cleanup could not be proven/);
+    expect(result.captureRefusal).toMatchObject({
+      disposition: "retained",
+      failure: { cleanup: { message: "sensitive cleanup error" } },
+    });
     expect(result.captureRefusal?.detail).not.toContain("sensitive");
   });
 
@@ -236,6 +257,7 @@ describe("secret-like content is kept and only hidden in saved copies (INV-062)"
       envelope: { ...envelope, repo_root: repo, worktree_path: repo },
       inPlace: true,
       projectRoot: repo,
+      holder: { runId: "run-test", runDir: repo },
       answerText: "![preview](preview.png)",
       answerMatches: 0,
     });
@@ -278,6 +300,7 @@ describe("secret-like content is kept and only hidden in saved copies (INV-062)"
       envelope: { ...envelope, repo_root: repo, worktree_path: repo },
       inPlace: true,
       projectRoot: repo,
+      holder: { runId: "run-test", runDir: repo },
       answerText: "![preview](preview.png)",
       answerMatches: 0,
     });
@@ -329,9 +352,9 @@ describe("exact bytes of an isolated candidate survive its envelope (INV-062)", 
     // ...and the only other holder of the exact bytes is not deleted.
     expect(retained).toEqual(["env-test"]);
     // The diagnostic says where those bytes still are.
-    expect(result.exactBytesRetainedAt).toBe(envelope.worktree_path);
+    expect(result.exactBytesRetainedAt).toMatch(/cx-secret-envelope-.*\/tree$/);
     expect(attemptDisclosure(result)).toMatchObject({
-      exact_bytes_retained_at: envelope.worktree_path,
+      exact_bytes_retained_at: result.exactBytesRetainedAt,
       secret_like: { total_matches: 1 },
     });
   });
@@ -499,7 +522,7 @@ describe("summary disclosure line", () => {
     });
     expect(line).toBe(
       "\n- Secret-like strings: 3 in 2 changed file(s) (a.txt, b.txt) — kept in the changed files, hidden in saved copies; " +
-        "1 binary payload(s) withheld from the saved patch (x.bin); 1 hidden in the answer; 1 image(s) not saved (shot.png)",
+        "1 secret-like or uninspectable binary payload(s) withheld from the saved patch (x.bin); 1 hidden in the answer; 1 image(s) not saved (shot.png)",
     );
   });
 });

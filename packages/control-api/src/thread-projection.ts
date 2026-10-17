@@ -6,12 +6,14 @@
 import {
   ControlSession,
   ControlThread,
+  ControlThreadListResponse,
   ControlThreadTurn,
   ControlTurnRunCard,
   directDelegatedChildrenFromRecords,
   type ControlRunSummary,
 } from "@claudexor/schema";
-import { type DaemonRunRecord } from "./run-record.js";
+import { readThreadHeads } from "./command-reads.js";
+import { type DaemonFacadeClient, type DaemonRunRecord } from "./run-record.js";
 
 export function delegatedChildRunIds(
   parentRunId: string,
@@ -23,10 +25,32 @@ export function delegatedChildRunIds(
 }
 
 export function projectThread(raw: unknown, needsHuman: boolean): ControlThread {
+  return ControlThread.parse(threadFields(raw, needsHuman));
+}
+
+/** The collection validates once, after projecting every thread in store order. */
+export async function projectThreadList(
+  daemon: Pick<DaemonFacadeClient, "list">,
+  collection: { threads: unknown[]; problems?: unknown[] },
+  needsAttention: (record: DaemonRunRecord) => boolean,
+): Promise<ControlThreadListResponse> {
+  const heads = await readThreadHeads(daemon, collection.threads);
+  const blocked = new Set(
+    heads.filter((r) => r.state === "succeeded" && needsAttention(r)).map((r) => r.runId ?? r.id),
+  );
+  return ControlThreadListResponse.parse({
+    threads: collection.threads.map((t) =>
+      threadFields(t, blocked.has((t as { head_run_id?: string | null }).head_run_id ?? "")),
+    ),
+    problems: collection.problems ?? [],
+  });
+}
+
+function threadFields(raw: unknown, needsHuman: boolean) {
   const t = raw as Record<string, unknown>;
   const repo = t["repo"] as { root?: string } | null;
   const workspace = t["workspace"] as { mode?: string; workspace_root?: string | null } | undefined;
-  return ControlThread.parse({
+  return {
     id: t["id"],
     title: t["title"] ?? null,
     folder: t["folder"] ?? null,
@@ -47,7 +71,7 @@ export function projectThread(raw: unknown, needsHuman: boolean): ControlThread 
     needsHuman,
     createdAt: t["created_at"],
     updatedAt: t["updated_at"],
-  });
+  };
 }
 
 export function projectSession(raw: unknown): ControlSession {

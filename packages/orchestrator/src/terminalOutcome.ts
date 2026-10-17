@@ -1,6 +1,6 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
-import { makeOutcomeFacts, RunOutcomeFacts, WorkProduct } from "@claudexor/schema";
+import { makeOutcomeFacts, RunFailure, RunOutcomeFacts, WorkProduct } from "@claudexor/schema";
 import type { ArtifactStore } from "@claudexor/artifact-store";
 
 /** Strategy success may already have materialized a WorkProduct before a
@@ -30,10 +30,44 @@ export function reconcileWorkProductTerminal(
   context.store.writeYaml(path, reconciled);
 }
 
-/** Cancellation has no RunFailure payload. A prepared failed result may have
- * written one before the deferred terminal barrier lets cancellation win. */
-export function clearFailureArtifact(context: { paths: { finalDir: string } }): void {
-  rmSync(join(context.paths.finalDir, "failure.yaml"), { force: true });
+/** Cancellation has no RunFailure payload of its own. A prepared failed result
+ * may have written one before the deferred terminal barrier let cancellation
+ * win: it is removed — unless it carries capture facts (an incomplete capture
+ * whose live or retained source still needs inspection). That record stays on
+ * the public failure surface under the cancellation's own category and
+ * summary, with no typed code, keeping its phase, capture facts, refs and
+ * inspection/manual-cleanup actions. Returns whether such a record was kept. */
+export function clearFailureArtifact(
+  context: { store: ArtifactStore; paths: { finalDir: string } },
+  cancellation: { summary: string },
+): boolean {
+  const path = join(context.paths.finalDir, "failure.yaml");
+  const current = RunFailure.safeParse(context.store.readYaml<unknown>(path));
+  if (!current.success || !current.data.captureFailure) {
+    rmSync(path, { force: true });
+    return false;
+  }
+  context.store.writeYaml(path, {
+    ...current.data,
+    category: "cancelled",
+    code: null,
+    safeMessage: cancellation.summary,
+  });
+  return true;
+}
+
+/** A failure that replaces a prepared record without a cancellation (a
+ * Delegate child drain that failed) leads with its own cause and keeps that
+ * record's capture facts, with the record's actions as follow-ups. */
+export function preparedCaptureFacts(context: {
+  store: ArtifactStore;
+  paths: { finalDir: string };
+}): { captureFailure?: RunFailure["captureFailure"]; followUps?: string[] } {
+  const path = join(context.paths.finalDir, "failure.yaml");
+  const current = RunFailure.safeParse(context.store.readYaml<unknown>(path));
+  return current.success && current.data.captureFailure
+    ? { captureFailure: current.data.captureFailure, followUps: current.data.nextActions }
+    : {};
 }
 
 /** Replace only the process terminal axes while retaining independent

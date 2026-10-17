@@ -135,11 +135,8 @@
                 "type": "array",
                 "items": {
                   "type": "string"
-                }
-              },
-              "imageInput": {
-                "type": "boolean",
-                "description": "True only when the model itself is image-capable (an input modality) AND this engine build carries images over its transport. Absent or false never authorizes an image-bearing request; the adapter refuses it before dispatch. Missing on historical catalogs means no build-declared capability."
+                },
+                "description": "Input kinds the provider declared, verbatim and open-vocabulary. Empty means unknown, never none: a missing, empty or partly invalid provider list is not a negative claim. Declared metadata only; it neither gates a request nor proves a model understood content."
               },
               "reasoningEfforts": {
                 "type": "array",

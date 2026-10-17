@@ -11,7 +11,7 @@ import {
   PROJECTION_UPDATED,
   WINDOW_SUPERSEDED,
 } from "./quota-registry-replay.js";
-import type { DurableJournal } from "@claudexor/journal";
+import type { EventLedger } from "./store-contracts.js";
 import {
   ControlQuotaResponse,
   AccountResourceSnapshot,
@@ -60,6 +60,7 @@ import {
   recordAccountResourceObservation,
   resourceSnapshots,
   resourceQuotaSnapshots,
+  quotaFreshnessRead,
   quotaProjectionSignature,
   retireAccountResourceEvidence,
 } from "./quota-resources.js";
@@ -91,7 +92,7 @@ export class QuotaRegistry {
   private recoveryMarkerPending = false;
 
   constructor(
-    private readonly journal: DurableJournal,
+    private readonly journal: EventLedger,
     refreshers: readonly (QuotaRefresher | QuotaVendorRefresher)[] = [],
     private readonly now: () => Date = () => new Date(),
     private readonly subjects?: QuotaSubjectUniverse,
@@ -101,14 +102,7 @@ export class QuotaRegistry {
       apply: (snapshot) => this.apply(snapshot),
       applyWindowSupersession: (value) => this.applyWindowSupersession(value),
       applyResources: (observation) => applyResourceObservation(this.resources, observation),
-      invalidateResources: (target, at) =>
-        retireAccountResourceEvidence(
-          target,
-          at,
-          this.resourceCutoffs,
-          this.snapshots,
-          this.resources,
-        ),
+      invalidateResources: (target, at) => this.retireResourceEvidence(target, at),
       remove: (harness, id, resources) => this.remove(harness, id, resources),
     });
     this.lastPublishedProjectionSignature = replay.projectionSignature;
@@ -137,6 +131,11 @@ export class QuotaRegistry {
     });
   }
 
+  /** Opt-in display read, never used for routing, demand, or journal signatures. */
+  readConstraintFreshness(now = this.now().getTime()) {
+    return quotaFreshnessRead(this.snapshots, this.resourceCutoffs, this.activeAbsences(now), now);
+  }
+
   readResources(now = this.now().getTime()) {
     return resourceSnapshots(this.resources.values(), this.resourceCutoffs, now);
   }
@@ -145,14 +144,12 @@ export class QuotaRegistry {
   invalidateAccountResources(target: AccountTarget): void {
     const observed_at = this.now().toISOString();
     this.journal.append(RESOURCES_INVALIDATED, { version: 1, target, observed_at });
-    retireAccountResourceEvidence(
-      target,
-      observed_at,
-      this.resourceCutoffs,
-      this.snapshots,
-      this.resources,
-    );
+    this.retireResourceEvidence(target, observed_at);
     this.appendProjectionMarker("direct_mutation", observed_at);
+  }
+
+  private retireResourceEvidence(target: AccountTarget, at: string): void {
+    retireAccountResourceEvidence(target, at, this.resourceCutoffs, this.snapshots, this.resources);
   }
 
   private activeSnapshots(now: number): QuotaSnapshot[] {

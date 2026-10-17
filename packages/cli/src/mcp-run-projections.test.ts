@@ -107,7 +107,11 @@ describe("MCP run detail projections", () => {
   });
 
   it("preserves the typed RunFailure on immediate results", () => {
-    expect(projectImmediateRunDetail({ failure }).failure).toEqual(failure);
+    // A record written before per-try attribution decodes with an empty list.
+    expect(projectImmediateRunDetail({ failure }).failure).toEqual({
+      ...failure,
+      poolAttempts: [],
+    });
   });
 
   it("projects one schema-validated outcome receipt on immediate and recovery results", () => {
@@ -133,7 +137,7 @@ describe("MCP run detail projections", () => {
       summary: { runId: "run-1", state: "failed" },
       failure,
     });
-    expect(projected["failure"]).toEqual(failure);
+    expect(projected["failure"]).toEqual({ ...failure, poolAttempts: [] });
   });
 
   it("projects the exact canonical receipt and binds terminal run/lifecycle identity", () => {

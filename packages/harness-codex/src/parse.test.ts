@@ -124,7 +124,7 @@ describe("parseCodexEvent", () => {
     );
     expect(out).toMatchObject({
       type: "error",
-      rate_limit: { resets_at: null, retry_delay_ms: null },
+      rate_limit: { resets_at: null, retry_delay_ms: null, applies_to_request_kinds: ["text"] },
     });
   });
 

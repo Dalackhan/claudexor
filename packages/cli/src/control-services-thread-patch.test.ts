@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { projectRuntimeDir } from "@claudexor/util";
 import { ensureLaneHomeEnv } from "@claudexor/workspace";
+import { createAccountEvidence } from "@claudexor/daemon";
 import { controlServices } from "./control-services.js";
 import { registerConfigDirProfile } from "./profile-registration.js";
 import { updateGlobalConfig } from "@claudexor/config";
@@ -36,6 +37,7 @@ describe("thread PATCH forwarding (release wave round-7 tier1 blocker)", () => {
       undefined as never,
       undefined as never,
       undefined as never,
+      createAccountEvidence(),
       () => [],
     );
     await services.updateThread("th-1", {
@@ -89,6 +91,7 @@ describe("thread PATCH forwarding (release wave round-7 tier1 blocker)", () => {
       undefined as never,
       undefined as never,
       undefined as never,
+      createAccountEvidence(),
       () => [],
     );
     // Elevation: a concrete sticky scope must reach the store, else the schema
@@ -129,6 +132,7 @@ describe("thread PATCH forwarding (release wave round-7 tier1 blocker)", () => {
       undefined as never,
       undefined as never,
       undefined as never,
+      createAccountEvidence(),
       () => [],
     );
     await expect(
@@ -180,6 +184,7 @@ describe("thread PATCH forwarding (release wave round-7 tier1 blocker)", () => {
       undefined as never,
       undefined as never,
       undefined as never,
+      createAccountEvidence(),
       () => [],
     );
     await services.updateThread("th-1", { title: "Renamed" });
@@ -200,7 +205,7 @@ describe("thread PATCH forwarding (release wave round-7 tier1 blocker)", () => {
     ensureLaneHomeEnv(rt, "th-2", "claude", "work");
 
     const threads = {
-      getThread: () => ({ repo: { root: repo }, workspace: { mode: "in_place" } }),
+      getThread: (id: string) => ({ id, repo: { root: repo }, workspace: { mode: "in_place" } }),
       purgeThread: (id: string) => ({ id, state: "purged" }),
     };
     const services = controlServices(
@@ -213,6 +218,7 @@ describe("thread PATCH forwarding (release wave round-7 tier1 blocker)", () => {
       undefined as never,
       undefined as never,
       undefined as never,
+      createAccountEvidence(),
       () => [],
     );
 

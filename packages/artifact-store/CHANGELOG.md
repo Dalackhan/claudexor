@@ -1,5 +1,42 @@
 # @claudexor/artifact-store
 
+## 4.2.0
+
+### Patch Changes
+
+- @claudexor/util@4.2.0
+
+## 4.1.1
+
+### Patch Changes
+
+- @claudexor/util@4.1.1
+
+## 4.1.0
+
+### Patch Changes
+
+- @claudexor/util@4.1.0
+
+## 4.0.1
+
+### Patch Changes
+
+- @claudexor/util@4.0.1
+
+## 4.0.0
+
+### Patch Changes
+
+- Updated dependencies [2fbf7c9]
+  - @claudexor/util@4.0.0
+
+## 3.25.1
+
+### Patch Changes
+
+- @claudexor/util@3.25.1
+
 ## 3.25.0
 
 ### Patch Changes

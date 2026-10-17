@@ -9,6 +9,41 @@ import { ControlProblem } from "./problem.js";
 import { RunLifecycle } from "./status-projection.js";
 import { TokenUsage } from "./telemetry.js";
 import { ProcessingCapability, ProcessingPreference, ProcessingReceipt } from "./processing.js";
+import { JobAdmission } from "./runtime-concurrency.js";
+
+/** Decoded-byte MIME types the image facet accepts as edit references and
+ * recognizes in a provider result. Sniffed from magic bytes, never trusted
+ * from a declaration alone. */
+export const ImageMime = z.enum(["image/png", "image/jpeg", "image/webp"]);
+export type ImageMime = z.infer<typeof ImageMime>;
+
+export const ImageGenerationCapability = z
+  .object({
+    models: z
+      .array(NonBlankString)
+      .describe(
+        "Presence hint from the adapter's recorded client source, never a refusal list: another explicit id is forwarded unchanged.",
+      ),
+    modelsProvenance: NonBlankString.describe(
+      "Where the presence hint comes from (a pinned upstream client constant, not a provider catalog).",
+    ),
+    inputMimes: z.array(ImageMime),
+    maxInputImages: z.number().int().nonnegative().describe("0 means generation only."),
+    maxInputImagesProvenance: NonBlankString.describe(
+      "What the bound is: the upstream tool's own edit cap, not a proven provider maximum.",
+    ),
+    supportedOptions: z.array(z.enum(["size", "quality", "background", "n"])),
+  })
+  .strict()
+  .describe(
+    "Structural image facet declared by one model source; absent means no image operations.",
+  );
+export type ImageGenerationCapability = z.infer<typeof ImageGenerationCapability>;
+
+/** The query value that selects the image schema on the existing model-operation POST. */
+export const MODEL_OPERATION_IMAGE_KIND = "image" as const;
+export const ModelOperationRequestKind = z.literal(MODEL_OPERATION_IMAGE_KIND);
+export type ModelOperationRequestKind = z.infer<typeof ModelOperationRequestKind>;
 
 export const ModelPayloadRef = z
   .object({
@@ -223,12 +258,10 @@ export const ModelCatalogEntry = z
     contextWindow: z.number().int().positive().nullable(),
     maxContextWindow: z.number().int().positive().nullable(),
     maxOutputTokens: z.number().int().positive().nullable(),
-    inputModalities: z.array(z.string()),
-    imageInput: z
-      .boolean()
-      .optional()
+    inputModalities: z
+      .array(z.string())
       .describe(
-        "True only when the model itself is image-capable (an input modality) AND this engine build carries images over its transport. Absent or false never authorizes an image-bearing request; the adapter refuses it before dispatch. Missing on historical catalogs means no build-declared capability.",
+        "Input kinds the provider declared, verbatim and open-vocabulary. Empty means unknown, never none: a missing, empty or partly invalid provider list is not a negative claim. Declared metadata only; it neither gates a request nor proves a model understood content.",
       ),
     reasoningEfforts: z.array(z.string()),
     reasoningEffortPreferenceOrder: z
@@ -275,6 +308,9 @@ export const ControlModelSourcesAccountsResponse = z
       ControlModelSourcesResponse.shape.sources.element.extend({
         processingPreferences: z.array(ProcessingPreference),
         accountCatalog: z.literal(true),
+        imageGeneration: ImageGenerationCapability.optional().describe(
+          "Add-only: present when this source declares image generation/edit operations.",
+        ),
       }),
     ),
   })
@@ -402,6 +438,9 @@ export const ModelOperationParams = z
   .object({
     kind: z.literal("model"),
     request: ModelPayloadRef,
+    requestKind: ModelOperationRequestKind.optional().describe(
+      "Omitted preserves the text ModelCallRequest; image selects ImageCallRequest. Part of idempotency identity.",
+    ),
     captureFailureEvidence: z.literal(true).optional(),
     captureEffortEvidence: z.literal(true).optional(),
   })
@@ -450,6 +489,11 @@ export const ControlModelOperationDetail = z
   .object({
     id: Id,
     state: RunLifecycle,
+    admission: JobAdmission.nullable()
+      .optional()
+      .describe(
+        "Current scheduler observation for this operation; absent on engines without admission disclosure.",
+      ),
     createdAt: IsoTimestamp,
     startedAt: IsoTimestamp.nullable(),
     finishedAt: IsoTimestamp.nullable(),

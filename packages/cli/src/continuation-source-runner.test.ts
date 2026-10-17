@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
+import { createAccountEvidence } from "@claudexor/daemon";
 import { createDaemonAgentRunner } from "./daemon-agent-runner.js";
 
 const startHarness = vi.hoisted(() => vi.fn().mockResolvedValue({ lifecycle: "succeeded" }));
@@ -15,9 +16,11 @@ it.each(["record", "metadata", "directory"])(
     const root = mkdtempSync(join(tmpdir(), "cx-source-"));
     const runDir = join(root, "prior");
     const prior = {
+      id: "job-prior",
+      createdAt: "2026-10-08T00:00:00.000Z",
       runId: "prior",
       runDir,
-      state: "cancelled",
+      state: "cancelled" as const,
       params: { prompt: "original work" },
     };
     let records: Array<Omit<typeof prior, "runDir"> & { runDir?: string }> =
@@ -25,9 +28,11 @@ it.each(["record", "metadata", "directory"])(
         ? []
         : [{ ...prior, runDir: missing === "metadata" ? undefined : runDir }];
     const runner = createDaemonAgentRunner({
-      threads: { all: () => [{ records: () => records }], assertKnownIds: () => ({}) } as never,
+      threads: { assertKnownIds: () => ({}) } as never,
+      commands: { getByRunId: (id) => records.find((record) => record.runId === id) },
       delegationBudgetAuthority: {} as never,
       quotaStore: () => ({}) as never,
+      accounts: createAccountEvidence(),
       interactions: {} as never,
       liveInputs: {} as never,
       resources: () => ({ resolve: () => [] }) as never,

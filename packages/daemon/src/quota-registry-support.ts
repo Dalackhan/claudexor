@@ -16,6 +16,7 @@ import {
   type CredentialRoute,
   type HarnessEvent,
   type QuotaConstraint,
+  type ControlQuotaFreshnessSnapshot,
   type QuotaSnapshot,
   type QuotaSource,
 } from "@claudexor/schema";
@@ -67,6 +68,9 @@ export function reactiveCooldownSnapshot(
         ...(event.rate_limit?.applies_to_models !== undefined
           ? { applies_to_models: event.rate_limit.applies_to_models }
           : {}),
+        ...(event.rate_limit?.applies_to_request_kinds
+          ? { applies_to_request_kinds: event.rate_limit.applies_to_request_kinds }
+          : {}),
         used_ratio: null,
         window_seconds: null,
         resets_at: reset,
@@ -88,6 +92,28 @@ export function activeQuotaSnapshots(
   snapshots: readonly QuotaSnapshot[],
   now: number,
 ): QuotaSnapshot[] {
+  return activeRawQuotaSnapshots(snapshots, now).map((snapshot) => staleAt(snapshot, now));
+}
+
+/** Passive display projection. Apply the SAME aging rule to each singleton
+ * window using raw freshness, before aggregate aging can erase that evidence. */
+export function activeQuotaSnapshotsWithConstraintFreshness(
+  snapshots: readonly QuotaSnapshot[],
+  now: number,
+): ControlQuotaFreshnessSnapshot[] {
+  return activeRawQuotaSnapshots(snapshots, now).map((snapshot) => ({
+    ...staleAt(snapshot, now),
+    constraints: snapshot.constraints.map((constraint) => ({
+      ...constraint,
+      freshness: staleAt({ ...snapshot, constraints: [constraint] }, now).freshness,
+    })),
+  }));
+}
+
+function activeRawQuotaSnapshots(
+  snapshots: readonly QuotaSnapshot[],
+  now: number,
+): QuotaSnapshot[] {
   return snapshots
     .map((snapshot) => withoutExpiredScopedCooldowns(snapshot, now))
     .filter((snapshot): snapshot is QuotaSnapshot => snapshot !== null)
@@ -101,8 +127,7 @@ export function activeQuotaSnapshots(
           return Number.isFinite(at) && at > now;
         }),
       );
-    })
-    .map((snapshot) => staleAt(snapshot, now));
+    });
 }
 
 export const QUOTA_FRESHNESS_TTL_MS = 5 * 60_000;
@@ -138,7 +163,8 @@ export function withoutSupersededQuotaConstraints(
   const constraints = existing.constraints.filter((constraint) => {
     // A generic refusal retained no window identity. A successful recognized
     // read permits the next requested attempt, including unknown/empty quota;
-    // it does not promise that the provider will accept that attempt.
+    // it does not promise that the provider will accept that attempt. Its
+    // request-kind scope narrows what it blocks, not which read retires it.
     if (
       constraint.id === "cooldown" &&
       !constraint.applies_to_models?.length &&
@@ -152,7 +178,7 @@ export function withoutSupersededQuotaConstraints(
       (current) =>
         current.used_ratio !== null &&
         sameQuotaWindow(existing.source, constraint.id, current.id) &&
-        sameModelScope(constraint, current),
+        sameModelScope(constraint, legacyKindComparable(constraint, current)),
     );
   });
   return constraints.length === existing.constraints.length
@@ -166,6 +192,22 @@ function sameQuotaWindow(source: QuotaSource, oldId: string, newId: string): boo
   // Codex rollout omits the native default bucket id that app-server includes.
   // A different bucket (for example review) is an independent constraint.
   return source === "codex_rollout" && (newId === `codex:${id}` || newId === `default:${id}`);
+}
+
+/** Journals written before request-kind scope recorded known windows without
+ * one, which meant universal. Compare a newer explicit-kind measurement
+ * without that kind only when its duration is identical (null matches only
+ * null, as in quotaConstraintIdentity): the reactive path's scope comparison
+ * does not see duration. Explicit text/image scopes never cross. */
+function legacyKindComparable(old: QuotaConstraint, current: QuotaConstraint): QuotaConstraint {
+  if (
+    old.applies_to_request_kinds ||
+    !current.applies_to_request_kinds ||
+    old.window_seconds !== current.window_seconds
+  )
+    return current;
+  const { applies_to_request_kinds: _kinds, ...unscoped } = current;
+  return unscoped;
 }
 
 function sameModelScope(a: QuotaConstraint, b: QuotaConstraint): boolean {
@@ -203,7 +245,13 @@ function windowSupersession(
   if (
     !observation.constraints.some(
       (constraint) =>
-        constraint.used_ratio !== null && quotaConstraintIdentity(constraint) === identity,
+        constraint.used_ratio !== null &&
+        (quotaConstraintIdentity(legacyKindComparable(existing.constraints[0]!, constraint)) ===
+          identity ||
+          (existing.source === "codex_image_response" &&
+            existing.constraints[0]!.window_seconds === null &&
+            sameQuotaWindow(existing.source, existing.constraints[0]!.id, constraint.id) &&
+            sameModelScope(existing.constraints[0]!, constraint))),
     )
   )
     return null;
@@ -264,7 +312,10 @@ export function quotaSnapshotRecords(
   if (
     legacy.source === snapshot.source &&
     !snapshot.constraints.some(
-      (c) => c.applies_to_models !== undefined || c.applies_to_model_prefixes !== undefined,
+      (c) =>
+        c.applies_to_models !== undefined ||
+        c.applies_to_model_prefixes !== undefined ||
+        c.applies_to_request_kinds !== undefined,
     )
   )
     return [upsert];
@@ -292,14 +343,20 @@ export function legacyV320Snapshot(snapshot: QuotaSnapshot): QuotaSnapshot {
       plan_label: snapshot.subject.plan_label,
       subject_id: snapshot.subject.subject_id,
     },
-    constraints: snapshot.constraints.map((constraint): QuotaConstraint => ({
-      id: constraint.id,
-      label: constraint.label,
-      used_ratio: constraint.used_ratio,
-      window_seconds: constraint.window_seconds,
-      resets_at: constraint.resets_at,
-      cooldown_until: constraint.cooldown_until,
-    })),
+    constraints: snapshot.constraints
+      .filter(
+        (constraint) =>
+          !constraint.applies_to_request_kinds ||
+          constraint.applies_to_request_kinds.includes("text"),
+      )
+      .map((constraint): QuotaConstraint => ({
+        id: constraint.id,
+        label: constraint.label,
+        used_ratio: constraint.used_ratio,
+        window_seconds: constraint.window_seconds,
+        resets_at: constraint.resets_at,
+        cooldown_until: constraint.cooldown_until,
+      })),
     source: legacyV320QuotaSource(snapshot.source),
     observed_at: snapshot.observed_at,
     freshness: snapshot.freshness,

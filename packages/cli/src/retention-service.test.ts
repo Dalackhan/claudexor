@@ -99,6 +99,18 @@ function deps(input: {
     input.threads ?? (input.threadRunIds ? [{ id: "t1", run_ids: input.threadRunIds }] : []);
   const threads = {
     healthyProjectRoots: () => input.healthyRoots,
+    retentionReferences: (ignored = new Set<string>()) => ({
+      projectRoots: input.projectRoots,
+      protectedProjectRoots: new Set(
+        input.projectRoots.filter((root) => !input.healthyRoots.includes(root)),
+      ),
+      referencedRunIds: new Set(
+        rows
+          .filter((row) => row.state !== "purged" && !ignored.has(row.id))
+          .flatMap((row) => [...row.run_ids, ...(row.head_run_id ? [row.head_run_id] : [])]),
+      ),
+      records: input.records.filter((row) => row.runId),
+    }),
     // Like the store, a purged thread drops out of every listing; only the
     // retention pass lists it, to finish a cleanup that failed.
     listThreads: () => rows.filter((thread) => thread.state !== "purged"),
@@ -452,7 +464,7 @@ describe("expired trash purge in the retention pass (owner decision E2)", () => 
     const runner = createRetentionRunner(
       deps({ projectRoots: [], healthyRoots: [], threads: trashThreads, records: [] }),
     );
-    scheduleStartupRetention(
+    const stop = scheduleStartupRetention(
       async (request) => {
         requests.push(request);
         return runner(request);
@@ -465,5 +477,6 @@ describe("expired trash purge in the retention pass (owner decision E2)", () => 
     }
     expect(requests).toEqual([{ dry_run: false, trash_purge_report: true }]);
     expect(readLog()).toContain("1 expired trash threads");
+    await stop();
   });
 });

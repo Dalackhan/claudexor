@@ -9,22 +9,18 @@
  * through the same owner finishes every purge whose directory cleanup failed
  * after the purge was journaled.
  */
-import { join } from "node:path";
 import type { ProjectThreadPort, ProjectStorePort } from "@claudexor/daemon";
 import type { ControlGcReceipt, ControlGcRequest, Thread } from "@claudexor/schema";
-import { ArtifactStore } from "@claudexor/artifact-store";
-import {
-  findActiveThreadRun,
-  runRetentionPass,
-  type RetentionProject,
-} from "@claudexor/control-api";
+import { findActiveThreadRun, runRetentionPass } from "@claudexor/control-api";
 import { loadConfig } from "@claudexor/config";
 import { claudexorOwnedRoot, noProjectRepoRoot, userConfigDir } from "@claudexor/util";
 import { sweepOrphanLanes } from "@claudexor/workspace";
-import { logLine } from "./daemon-lifecycle.js";
+import { retentionProjects } from "./retention-projects.js";
+export { scheduleStartupRetention } from "./retention-schedule.js";
 
 export interface RetentionRunnerDeps {
   projects: () => ProjectStorePort;
+  maxDeletionsPerPass?: number;
   threads: ProjectThreadPort;
   daemonJobs: () =>
     | Array<{ runId?: string; state: string; finishedAt?: string; params?: unknown }>
@@ -36,7 +32,9 @@ export interface RetentionRunnerDeps {
   hasPurgeLeftovers: (thread: Thread) => boolean;
 }
 
-export type RetentionRunner = (request: ControlGcRequest) => Promise<ControlGcReceipt>;
+export type RetentionRunner = ((request: ControlGcRequest) => Promise<ControlGcReceipt>) & {
+  hasMore?: () => boolean;
+};
 
 /** Trashed threads whose restore window (`purge_after`) has ended. */
 function expiredTrashThreads(threads: readonly Thread[], now: number): Thread[] {
@@ -115,9 +113,11 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
   // tombstone writes on the same candidates, which would double-count
   // freed_bytes and cross-report deletions between receipts.
   let inFlight: Promise<ControlGcReceipt> | null = null;
+  let morePending = false;
   const runOnce = async (request: ControlGcRequest): Promise<ControlGcReceipt> => {
     // Policy is read fresh per pass (configurable without restart); the
     // reference set spans EVERY non-purged thread's full run lineage.
+    morePending = false;
     const retention = loadConfig(noProjectRoot).global.retention;
     const jobs = await deps.daemonJobs();
     // Purges left unfinished by an earlier failure, then expired trash, both
@@ -127,56 +127,12 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
     const leftovers = await finishPurgeLeftovers(deps, request.dry_run);
     const trash = await purgeExpiredTrash(deps, jobs, request.dry_run);
     const previewPurged = new Set(request.dry_run ? trash.purged : []);
-    const records = jobs
-      .filter((job): job is { runId: string; state: string; finishedAt?: string } =>
-        Boolean(job.runId),
-      )
-      .map((job) => ({ runId: job.runId, state: job.state, finishedAt: job.finishedAt }));
-    const referencedRunIds = (): Set<string> => {
-      const referenced = new Set<string>();
-      for (const thread of deps.threads.listThreads()) {
-        if (previewPurged.has(thread.id)) continue;
-        for (const id of thread.run_ids) referenced.add(id);
-        if (thread.head_run_id) referenced.add(thread.head_run_id);
-        for (const turn of deps.threads.turnsFor(thread.id)) {
-          for (const id of [
-            turn.run_id,
-            turn.parent_run_id,
-            turn.answers_plan_run_id,
-            turn.plan_run_id,
-          ]) {
-            if (id) referenced.add(id);
-          }
-        }
-      }
-      return referenced;
-    };
-    // Fail CLOSED on a quarantined partition (review sol #6/#7): the
-    // reference set (listThreads/turnsFor) and job records both come ONLY
-    // from ready partitions. A project whose partition journal is not ready
-    // contributes an EMPTY reference set — GC'ing its runs against that would
-    // delete runs a live thread still references. So GC only project roots
-    // whose partition is ready; a quarantined project's runs are protected
-    // until it recovers. The no-project root has no partition and is always
-    // eligible.
+    const references = deps.threads.retentionReferences(previewPurged);
     const healthyRoots = new Set(deps.threads.healthyProjectRoots());
-    const roots = [
-      ...new Set([
-        ...deps
-          .projects()
-          .list()
-          .map((p) => p.root)
-          .filter((root) => healthyRoots.has(root)),
-        noProjectRoot,
-      ]),
-    ];
-    const gcProjects: RetentionProject[] = roots.map((root) => ({
-      root,
-      runsDir: new ArtifactStore(root).runsDir(),
-      // Standalone diff-review debris lives in the user's repo; the
-      // no-project root has none.
-      reviewsDir: root === noProjectRoot ? null : join(root, ".claudexor", "reviews"),
-    }));
+    const gcProjects = retentionProjects(references, noProjectRoot, healthyRoots);
+    // Lane sweeping still uses only served healthy roots; archived lanes can
+    // belong to retained threads invisible to the public listing.
+    const roots = [...healthyRoots, noProjectRoot];
     // INV-034 lifecycle owner (c): remove durable per-lane read-only homes whose
     // thread no longer exists. Bounded to HEALTHY roots only (same fail-closed
     // set as the run GC): a quarantined partition contributes no live thread
@@ -207,8 +163,12 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
       request,
       {
         projects: () => gcProjects,
-        records: () => records,
-        referencedRunIds,
+        records: () => references.records,
+        referencedRunIds: () => references.referencedRunIds,
+        maxDeletionsPerPass: deps.maxDeletionsPerPass,
+        onTruncated: () => {
+          morePending = true;
+        },
         // Advisory data-root disclosure: the ONE owned-root derivation
         // (claudexorOwnedRoot covers both the default ~/.claudexor tree and
         // an explicit CLAUDEXOR_CONFIG_DIR override) is injected here so the
@@ -229,7 +189,7 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
     }
     return receipt;
   };
-  return (request) => {
+  const run: RetentionRunner = (request) => {
     const chained = (inFlight ?? Promise.resolve()).then(
       () => runOnce(request),
       () => runOnce(request),
@@ -239,34 +199,6 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
       if (inFlight === chained) inFlight = null;
     });
   };
-}
-
-/**
- * SCHEDULE one bounded retention pass after ownership+ready (W3.6) — it never
- * blocks boot, and the unref'd timer never keeps a stopping daemon alive.
- * Failures are logged, never fatal.
- */
-export function scheduleStartupRetention(
-  runner: RetentionRunner,
-  opts: { logPath: string; shuttingDown: () => boolean; delayMs?: number },
-): void {
-  const timer = setTimeout(() => {
-    if (opts.shuttingDown()) return;
-    void runner({ dry_run: false, trash_purge_report: true }).then(
-      (receipt) =>
-        logLine(
-          opts.logPath,
-          `retention: freed ${receipt.freed_bytes} bytes (${receipt.deleted_runs.length} runs, ` +
-            `${receipt.deleted_reviews.length} reviews, ` +
-            `${receipt.purged_threads?.length ?? 0} expired trash threads, ` +
-            `${receipt.purge_leftovers?.length ?? 0} finished purges, ${receipt.errors.length} errors)`,
-        ),
-      (error: unknown) =>
-        logLine(
-          opts.logPath,
-          `retention FAILED: ${error instanceof Error ? error.message : String(error)}`,
-        ),
-    );
-  }, opts.delayMs ?? 60_000);
-  timer.unref?.();
+  run.hasMore = () => morePending;
+  return run;
 }

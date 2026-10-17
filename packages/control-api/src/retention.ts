@@ -54,6 +54,8 @@ export interface RetentionDeps {
   now?: () => number;
   /** Bounded batches: one pass deletes at most this many trees (disclosed). */
   maxDeletionsPerPass?: number;
+  /** Signals a real skipped candidate to the lifecycle scheduler. */
+  onTruncated?: () => void;
   /**
    * Absolute Claudexor-owned data root to scan for NOT-engine-owned top-level
    * entries (advisory disclosure only — the pass never deletes anything
@@ -353,6 +355,7 @@ export async function runRetentionPass(
     }
   }
   if (truncated) {
+    deps.onTruncated?.();
     errors.push(
       `pass truncated at ${maxDeletions} deletions (bounded batch); run gc again to continue`,
     );

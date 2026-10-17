@@ -10,6 +10,7 @@ import {
 import type { AuthReadinessService } from "@claudexor/gateway";
 import {
   isModelOperation,
+  type ControlGcRequest,
   type JobAdmission,
   type RuntimeConcurrencyCaps,
   type TurnEnqueueProblem,
@@ -19,6 +20,8 @@ import { createDaemonAgentRunner } from "./daemon-agent-runner.js";
 import { createDelegationDaemonBinding } from "./delegation-daemon-binding.js";
 import { createHarnessMaintenance } from "./harness-maintenance-service.js";
 import { createModelServices } from "./model-services.js";
+
+import type { RetentionRunner } from "./retention-service.js";
 
 type SqlServices = ReturnType<typeof createSqlDaemonServices>;
 type ModelOptions = Pick<
@@ -134,6 +137,18 @@ export function createSqlDaemonExecutors(
   });
   return {
     models,
+    // Keep the bounded-pass signal through model cleanup and upload pruning.
+    retention: (runner: RetentionRunner): RetentionRunner => {
+      const wrapped = models.withRetention(runner);
+      return Object.assign(
+        async (request: ControlGcRequest) => {
+          const result = await wrapped(request);
+          if (!request.dry_run) graph.resources.pruneUploadBindings();
+          return result;
+        },
+        { hasMore: runner.hasMore },
+      );
+    },
     harnessMaintenance,
     onCommandTerminal: (record: JobRecord) => models.operations.onCommandTerminal(record),
     onRunTerminal: (runId: string, threadId?: string) => {

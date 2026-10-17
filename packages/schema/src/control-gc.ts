@@ -48,7 +48,11 @@ export type ControlGcRequest = z.infer<typeof ControlGcRequest>;
 export const GcRunDeletion = z
   .object({
     run_id: z.string().describe("Deleted (or would-be-deleted) run id."),
-    project_root: z.string().describe("Canonical project root owning the run tree."),
+    project_root: z
+      .string()
+      .describe(
+        "Canonical project root, or the owned runtime namespace when no project record remains.",
+      ),
     freed_bytes: z.number().int().nonnegative().describe("Bytes the tree occupied."),
   })
   .strict();

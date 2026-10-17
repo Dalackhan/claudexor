@@ -61,7 +61,7 @@
               },
               "project_root": {
                 "type": "string",
-                "description": "Canonical project root owning the run tree."
+                "description": "Canonical project root, or the owned runtime namespace when no project record remains."
               },
               "freed_bytes": {
                 "type": "integer",

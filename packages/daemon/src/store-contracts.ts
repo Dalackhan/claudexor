@@ -97,6 +97,9 @@ export interface InteractionStorePort {
 }
 
 export interface ProjectThreadPort {
+  retentionReferences(
+    ignoreThreadIds?: ReadonlySet<string>,
+  ): import("./store/retention-references.js").DiskRetentionReferences;
   registerProject(input: RegisterProject): ProjectRegistration;
   relinkProject(id: string, root: string): Project;
   removeProject(

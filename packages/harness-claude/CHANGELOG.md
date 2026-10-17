@@ -4,6 +4,7 @@
 
 ### Patch Changes
 
+- A Claude `workspace_write` run pre-approves `Read`, `Glob` and `Grep` outside its working folder, as `readonly` already does (#469). File-tool edits still follow `acceptEdits`; the default pre-approved shell was already unconfined (`write_mechanism: tool_policy`). Narrowing or denying `Bash`, or denying only one bare read tool, does not confine the remaining read tools: use explicit path-scoped `Read(...)` rules or the vendor's working-directory read block when that boundary is required. An explicit read allow pattern keeps all three bare tools out; deny rules remain effective, and a bare deny skips its own tool. Other access profiles are unchanged. The corrected flags have source and deterministic-test evidence, not a qualified live vendor run.
 - Updated dependencies
 - Updated dependencies [23a74cb]
   - @claudexor/core@4.3.0

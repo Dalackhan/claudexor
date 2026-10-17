@@ -2094,6 +2094,13 @@ explicit unsupported options, not silently dropped, and CLI compaction percentag
 do not reduce catalog capacity. Other installed harnesses remain Agent
 capabilities, not raw model sources.
 
+Catalog `inputModalities` is declared metadata (the `ModelCatalogEntry` field
+states its semantics), not an admission gate: a text-only list or a missing model
+row never stops a request on modality grounds. User and tool image blocks and
+replayable native continuations are serialized and sent exactly as for any model, and the
+provider's own answer decides. The declaration does not prove that a given image
+reached or was understood by the model.
+
 The optional top-level `nativeContinuation` carries live transport state in the
 same private request/result resources, apart from historical assistant
 `codex.responses.v1` output items. Omission preserves stateless result shapes;

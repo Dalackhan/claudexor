@@ -152,15 +152,24 @@ describe("raw model operation HTTP surface", () => {
     );
   });
 
-  it.each([{ levels: [] }, { levels: ["high", "ultra"] }])(
-    "projects the real Codex catalog $levels to both frozen HTTP shapes",
-    async ({ levels }) => {
+  it.each([
+    { levels: [], declared: undefined, modalities: [] },
+    { levels: ["high", "ultra"], declared: ["text", "image"], modalities: ["text", "image"] },
+    { levels: [], declared: ["text", { type: "image" }], modalities: [] },
+  ])(
+    "projects the real Codex catalog $levels with modalities $declared to both frozen HTTP shapes",
+    async ({ levels, declared, modalities }) => {
       const models = parseCodexModelCatalog({
         models: [
-          { slug: "test-model", supported_reasoning_levels: levels.map((effort) => ({ effort })) },
+          {
+            slug: "test-model",
+            supported_reasoning_levels: levels.map((effort) => ({ effort })),
+            input_modalities: declared,
+          },
         ],
       });
       expect(models[0]?.reasoningEffortsVerified).toBe(true);
+      expect(models[0]?.inputModalities).toEqual(modalities);
       const catalog = {
         source: "codex",
         credentialProfileId: "fixture",
@@ -198,7 +207,7 @@ describe("raw model operation HTTP surface", () => {
             contextWindow: null,
             maxContextWindow: null,
             maxOutputTokens: null,
-            inputModalities: [],
+            inputModalities: modalities,
             reasoningEfforts: levels.filter((level) => level !== "ultra"),
             defaultReasoningEffort: null,
             supportedOptions: [

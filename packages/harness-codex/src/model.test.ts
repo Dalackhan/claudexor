@@ -1,6 +1,11 @@
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { CredentialProfile, ModelCallRequest, ModelCallResult } from "@claudexor/schema";
+import {
+  CredentialProfile,
+  ModelCallRequest,
+  ModelCallResult,
+  ModelCatalogEntry,
+} from "@claudexor/schema";
 import { createCodexModelAdapter, parseCodexModelCatalog } from "./model.js";
 import {
   CODEX_HTTP_CLIENT_VERSION,
@@ -1074,4 +1079,120 @@ describe("single-generation Codex adapter", () => {
     expect(result.problem?.code).toBe("auth_refresh_failed");
     expect(fixture.fetcher).toHaveBeenCalledTimes(2);
   });
+});
+
+describe("declared input modalities", () => {
+  const png = "data:image/png;base64,aGVsbG8=";
+  it.each([
+    { name: "image-capable list", declared: ["text", "image"], expected: ["text", "image"] },
+    { name: "text-only list", declared: ["text"], expected: ["text"] },
+    { name: "padded nonblank entry", declared: [" image "], expected: [" image "] },
+    {
+      name: "open vocabulary",
+      declared: ["text", "audio", "Image"],
+      expected: ["text", "audio", "Image"],
+    },
+    { name: "missing field", declared: undefined, expected: [] },
+    { name: "null", declared: null, expected: [] },
+    { name: "empty list", declared: [], expected: [] },
+    { name: "string", declared: "image", expected: [] },
+    { name: "map", declared: { text: true }, expected: [] },
+    { name: "list with an object entry", declared: ["text", { type: "image" }], expected: [] },
+    { name: "list with a null entry", declared: ["image", null], expected: [] },
+    { name: "list with an empty entry", declared: ["text", ""], expected: [] },
+    { name: "list with a blank entry", declared: ["text", " \t"], expected: [] },
+  ])("reads $name as $expected, never a filtered subset", ({ declared, expected }) => {
+    const [entry] = parseCodexModelCatalog({ models: [{ slug: "m", input_modalities: declared }] });
+    expect(ModelCatalogEntry.parse(entry).inputModalities).toEqual(expected);
+  });
+  it.each([
+    { name: "image-capable", modalities: ["text", "image"], expected: ["text", "image"] },
+    { name: "text-only", modalities: ["text"], expected: ["text"] },
+    { name: "missing", modalities: undefined, expected: [] },
+    { name: "empty", modalities: [], expected: [] },
+    { name: "mixed-invalid", modalities: ["text", { type: "image" }], expected: [] },
+    { name: "unlisted-model", modalities: ["text"], expected: ["text"], model: "unlisted" },
+  ])(
+    "sends user, tool and replayed images unchanged for a $name catalog",
+    async ({ modalities, expected, model = "model-one" }) => {
+      const fixture = setup();
+      fixture.fetcher.mockImplementation(async (_url, init) =>
+        init?.method === "POST"
+          ? terminal()
+          : Response.json({ models: [{ ...catalog.models[0], input_modalities: modalities }] }),
+      );
+      const discovered = await fixture.adapter.catalog(fixture.context);
+      expect(discovered.models.map((entry) => entry.id).includes(model)).toBe(
+        model === "model-one",
+      );
+      expect(discovered.models[0]?.inputModalities).toEqual(expected);
+      const replayed = [
+        { type: "reasoning", encrypted_content: "OPAQUE+/==" },
+        { type: "message", role: "user", content: [{ type: "input_image", image_url: png }] },
+      ];
+      const result = await fixture.adapter.invoke(
+        ModelCallRequest.parse({
+          ...fixture.request,
+          model,
+          messages: [
+            { role: "system", content: "Own SYSTEM and BIBLE" },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "what is in this image?" },
+                { type: "image_url", image_url: { url: png, detail: "original" } },
+              ],
+            },
+            {
+              role: "assistant",
+              content: "prior turn",
+              nativeContinuation: {
+                format: "codex.responses.v1",
+                route: {
+                  source: discovered.source,
+                  credentialProfileId: discovered.credentialProfileId,
+                  accountFingerprint: discovered.accountFingerprint,
+                  model,
+                },
+                payload: replayed,
+              },
+            },
+            {
+              role: "tool",
+              tool_call_id: "call_one",
+              content: [{ type: "image_url", image_url: { url: png, detail: "high" } }],
+            },
+            { role: "user", content: "next question" },
+          ],
+        }),
+        fixture.context,
+      );
+      expect(result.outcome).toBe("completed");
+      expect(fixture.onDispatch).toHaveBeenCalledTimes(1);
+      const sends = fixture.fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+      expect(sends).toHaveLength(1);
+      expect(JSON.parse(sends[0][1]!.body as string).input).toEqual([
+        {
+          type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: "Own SYSTEM and BIBLE" }],
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_text", text: "what is in this image?" },
+            { type: "input_image", image_url: png, detail: "original" },
+          ],
+        },
+        ...replayed,
+        {
+          type: "function_call_output",
+          call_id: "call_one",
+          output: [{ type: "input_image", image_url: png, detail: "high" }],
+        },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "next question" }] },
+      ]);
+    },
+  );
 });

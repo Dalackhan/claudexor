@@ -1,6 +1,6 @@
 {
   "name": "@claudexor/config",
-  "version": "4.2.0",
+  "version": "4.3.0",
   "license": "MIT",
   "description": "Layered config loader (precedence + trust). Sensitive settings never from versioned repo config.",
   "type": "module",

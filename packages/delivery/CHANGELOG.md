@@ -1,5 +1,18 @@
 # @claudexor/delivery
 
+## 4.3.0
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies [23a74cb]
+  - @claudexor/core@4.3.0
+  - @claudexor/review@4.3.0
+  - @claudexor/schema@4.3.0
+  - @claudexor/workspace@4.3.0
+  - @claudexor/policy@4.3.0
+  - @claudexor/util@4.3.0
+
 ## 4.2.0
 
 ### Patch Changes

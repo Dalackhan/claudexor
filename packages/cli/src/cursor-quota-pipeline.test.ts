@@ -19,6 +19,7 @@ const roots: string[] = [],
   servers: DaemonControlApiServer[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
   for (const server of servers.splice(0)) await server.stop();
   for (const store of stores.splice(0)) await store.close();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -28,7 +29,7 @@ async function fixture() {
   roots.push(root);
   let instant = Date.parse("2026-10-15T13:05:00Z");
   const now = () => new Date(instant);
-  vi.spyOn(Date, "now").mockImplementation(() => instant);
+  vi.useFakeTimers({ toFake: ["Date"], now: instant });
   const home = join(process.env.CLAUDEXOR_CONFIG_DIR!, "profiles", "cursor-fixture");
   mkdirSync(join(home, ".cursor"), { recursive: true });
   const accessToken = `fixture.${Buffer.from(JSON.stringify({ sub: "fixture-subject" })).toString("base64url")}.fixture`;
@@ -65,7 +66,7 @@ async function fixture() {
     refreshCursorQuota(
       {
         profiles: [profile],
-        request: (p) => readCursorDashboard(p, transport as typeof fetch),
+        request: (p) => readCursorDashboard(p, transport as typeof fetch, "darwin"),
         now,
       },
       cycle,
@@ -98,6 +99,7 @@ async function fixture() {
     open,
     advance: (ms: number) => {
       instant += ms;
+      vi.setSystemTime(instant);
     },
     response: (raw: unknown) => {
       response = raw;

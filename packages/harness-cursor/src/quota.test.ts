@@ -5,7 +5,7 @@ import { CredentialProfile } from "@claudexor/schema";
 import { readCursorDashboard } from "./quota.js";
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
-function store(sub = "fixture", cachedSub = sub, platform: NodeJS.Platform = "darwin") {
+function store(sub = "fixture", cachedSub = sub, platform: NodeJS.Platform = process.platform) {
   const root = mkdtempSync(join(process.env.CLAUDEXOR_CONFIG_DIR!, "cursor-dashboard-"));
   roots.push(root);
   mkdirSync(join(root, ".cursor"));
@@ -49,8 +49,8 @@ describe("Cursor scoped dashboard transport (synthetic auth only)", () => {
     },
   );
   it("sends one same-origin request with its own bound subject and never changes auth", async () => {
-    const { root, profile, token } = store();
-    const before = readFileSync(join(root, ".cursor", "auth.json"));
+    const { profile, token, authPath } = store();
+    const before = readFileSync(authPath);
     const request = vi.fn<typeof fetch>(
       async () =>
         new Response(JSON.stringify({ individualUsage: {} }), {
@@ -64,7 +64,7 @@ describe("Cursor scoped dashboard transport (synthetic auth only)", () => {
       redirect: "error",
       headers: { Cookie: `WorkosCursorSessionToken=${encodeURIComponent("fixture::" + token)}` },
     });
-    expect(readFileSync(join(root, ".cursor", "auth.json"))).toEqual(before);
+    expect(readFileSync(authPath)).toEqual(before);
   });
   it("mismatched/unrecognized identity does not send, refresh, or login", async () => {
     const { profile } = store("one", "two");

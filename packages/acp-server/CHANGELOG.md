@@ -1,5 +1,44 @@
 # @claudexor/acp-server
 
+## 4.3.0
+
+### Minor Changes
+
+- Ordinary Codex Fast (`fast`/`priority`) on a verified ChatGPT subscription is included service under no-paid routing and every cash cap, including `finite(0)`; verified Codex subscription work now reports its cash as unknown (`spendUsd` and `budget_summary.spend_usd` null, cost basis `debit: "unobserved"`) beside the cap-governed `controllableSpendUsd` instead of exact zero, and without a preference keeps the first account's chosen speed across retries, Exact Retry, rotation and continuation (#468, thanks @IlidanNaga). Codex catalogs keep a declared `inputModalities` list only when it is wholly valid and non-empty, as metadata that gates no request (#435, thanks @josephsteuerjr). The opt-in `GET /v2/quota?view=resources_freshness` view adds a required `availability_scope` echo, Cursor accounts report dated display-only monetary resources from Cursor's internal dashboard through the existing refresh cycle, and Antigravity's native headless permission auto-denial becomes typed `permission_denial` evidence without retry or access elevation (#467).
+
+  Codex workspace-write uses native on-request with auto_review by default and an explicit one-action retry handback; HTTP/MCP can revise the existing live soft/hard timer, and configuration can disable only inactivity timing with null (#466, thanks @IlidanNaga). This adds no session-wide grant, readonly bypass, automatic retry authorization by Claudexor, per-run idle field or installed CLI update; timers are not restored after daemon loss and native UI/vendor qualification remains limited.
+
+### Patch Changes
+
+- 23a74cb: Let any controlling MCP agent inspect and answer native worker approvals through
+  the existing interaction tools. Codex workspace-write runs use native automatic
+  review and can hand back one exact denied action for an explicitly authorized
+  same-session retry, without changing managed policy or granting session-wide access.
+  A request the worker withdraws itself emits `interaction.withdrawn`, closing the
+  obsolete follow prompt or app card instead of blocking the next approval.
+
+  A completed Codex turn's answer, including a structured WorkReport envelope,
+  is kept before any handback; a denial that cannot be presented exactly is
+  disclosed and stands natively instead of failing the run. A thread that settles
+  in systemError never hands a denial back, authorizes it or starts another turn.
+
+  The verified Codex pin moves from codex-cli 0.156.1 to 0.162.1. Its captured
+  model snapshot makes `gpt-6.1-sol` the fallback default and a known model. An
+  installed 0.156.1 no longer matches the snapshot provenance: without a live
+  `model/list`, its effort snapshot is not trusted (no effort flag is sent) and
+  no turn-input bound is published for it.
+
+  Add revision-guarded live run time-limit read, set, extend and disable controls,
+  soft warnings and optional inactivity-watchdog disabling. Existing explicit
+  maxSeconds limits remain hard by default; omitting a limit adds no deadline, and
+  `set` keeps the timer's current mode unless one is named. Inactivity windows
+  longer than one Node timer delay are honored instead of firing immediately.
+
+- Updated dependencies
+- Updated dependencies [23a74cb]
+  - @claudexor/schema@4.3.0
+  - @claudexor/util@4.3.0
+
 ## 4.2.0
 
 ### Patch Changes

@@ -1,5 +1,14 @@
 # @claudexor/event-log
 
+## 4.3.0
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies [23a74cb]
+  - @claudexor/schema@4.3.0
+  - @claudexor/util@4.3.0
+
 ## 4.2.0
 
 ### Patch Changes

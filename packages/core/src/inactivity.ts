@@ -27,6 +27,10 @@ import type { HarnessEvent } from "@claudexor/schema";
  * run past this bound. Overridable per-call for deterministic tests. */
 const REAP_PROOF_DEADLINE_MS = 8000;
 
+/** Node clamps a setTimeout delay above 2^31-1 ms to 1 ms. A longer configured
+ * window is waited in chunks so its intended duration is preserved, not capped. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 export class HarnessInactivityTimeoutError extends Error {
   constructor(readonly timeoutMs: number) {
     super(
@@ -127,30 +131,35 @@ export async function* withInactivityWatchdog<T>(
       observedSuspensionVersion = opts.suspensionVersion?.() ?? observedSuspensionVersion;
     }
     if (timer) clearTimeout(timer);
-    timer = setTimeout(
-      () => {
-        const currentSuspensionVersion = opts.suspensionVersion?.() ?? observedSuspensionVersion;
-        if (opts.isSuspended?.()) {
-          suspensionObserved = true;
-          observedSuspensionVersion = currentSuspensionVersion;
-          arm(false);
-          return;
-        }
-        if (suspensionObserved || currentSuspensionVersion !== observedSuspensionVersion) {
-          // Resume has no guaranteed harness event of its own. The first timer
-          // boundary that proves the interaction is over starts a full new
-          // window; the next boundary may time out if no agent progress follows.
-          suspensionObserved = false;
-          observedSuspensionVersion = currentSuspensionVersion;
-          arm(false);
-          return;
-        }
-        timedOut = true;
-        opts.onTimeout();
-        wake?.();
-      },
-      Math.max(1, timeoutMs),
-    );
+    const elapsed = (): void => {
+      const currentSuspensionVersion = opts.suspensionVersion?.() ?? observedSuspensionVersion;
+      if (opts.isSuspended?.()) {
+        suspensionObserved = true;
+        observedSuspensionVersion = currentSuspensionVersion;
+        arm(false);
+        return;
+      }
+      if (suspensionObserved || currentSuspensionVersion !== observedSuspensionVersion) {
+        // Resume has no guaranteed harness event of its own. The first timer
+        // boundary that proves the interaction is over starts a full new
+        // window; the next boundary may time out if no agent progress follows.
+        suspensionObserved = false;
+        observedSuspensionVersion = currentSuspensionVersion;
+        arm(false);
+        return;
+      }
+      timedOut = true;
+      opts.onTimeout();
+      wake?.();
+    };
+    const wait = (remainingMs: number): void => {
+      const chunk = Math.min(remainingMs, MAX_TIMER_DELAY_MS);
+      timer = setTimeout(
+        () => (remainingMs > chunk ? wait(remainingMs - chunk) : elapsed()),
+        chunk,
+      );
+    };
+    wait(Math.max(1, timeoutMs));
     // Deliberately NOT unref'd: a wedged in-process stream can leave nothing
     // else on the event loop, and an unref'd watchdog would let node exit 0
     // mid-run instead of firing the timeout.

@@ -5,13 +5,15 @@ export type TimeLimitMode = z.infer<typeof TimeLimitMode>;
 const Seconds = z.number().int().positive().max(604_800);
 const Revision = z.number().int().nonnegative();
 
-/** Legacy explicit maxSeconds remains hard; ordinary runs have no deadline. */
+/** Legacy explicit maxSeconds remains hard; ordinary runs have no deadline.
+ * The start request also fixes the timer's initial mode: timeLimitMode, else
+ * hard with maxSeconds, else soft (a run the user did not time-limit). */
 export const RunTimeLimitStart = z.object({
   maxSeconds: Seconds.optional().describe(
     "Wall-clock limit for the whole run (seconds, max seven days). Omission disables the clock. Explicit limits cancel by default; soft mode warns and continues.",
   ),
   timeLimitMode: TimeLimitMode.optional().describe(
-    "With maxSeconds: soft warns and continues; hard cancels. Omission preserves an explicit maxSeconds as hard.",
+    "Initial timer mode: soft warns and continues; hard cancels. Omission is hard with maxSeconds and soft without it.",
   ),
 });
 
@@ -21,7 +23,9 @@ export const RunTimeLimitRequest = z.discriminatedUnion("action", [
     .object({
       action: z.literal("set"),
       seconds: Seconds,
-      mode: TimeLimitMode.default("soft"),
+      // Omission keeps the timer's current mode: a new deadline never silently
+      // turns a hard limit soft, nor a soft one hard.
+      mode: TimeLimitMode.optional(),
       expectedRevision: Revision,
     })
     .strict(),

@@ -11,7 +11,6 @@ import { nowIso, redactSecrets, sensitiveResourcePolicy } from "@claudexor/util"
 import {
   asObject,
   codexAppServerApprovalParams,
-  CodexServerRequestRefusal,
   type CodexThreadLifecycle,
   type JsonObject,
 } from "./app-server-protocol.js";
@@ -27,8 +26,22 @@ interface ReviewDependencies {
   live(): boolean;
 }
 
+interface HandbackInput {
+  turnId: string;
+  finalAnswer: string;
+  /** The completed root turn's typed terminal events (its final answer). */
+  completed: HarnessEvent[];
+  request(method: string, params: JsonObject): Promise<JsonObject>;
+  readLifecycle(): Promise<CodexThreadLifecycle>;
+  failure(): Error | null;
+  cancelled(): boolean;
+  cancel(): Promise<void>;
+}
+
 /** Guardian denials are notifications, not pending native approval RPCs.
- * Keep their controller decision alive through turn completion, but never teardown. */
+ * Keep their controller decision alive through turn completion, but never teardown.
+ * A denial Claudexor cannot offer for authorization keeps its native meaning: the
+ * action was refused and the worker continued, so it is disclosed, not a failure. */
 export class CodexAutoReview {
   private readonly channel;
   private readonly reviews = new Map<string, JsonObject>();
@@ -64,16 +77,49 @@ export class CodexAutoReview {
     this.reviews.set(id, params);
   }
 
+  get pending(): boolean {
+    return this.reviews.size > 0;
+  }
+
+  /** Emit the completed turn's answer before any authorization outcome, so a
+   * decline, cancellation, failed authorization or retry cannot erase it.
+   * Returns true only when an authorized retry turn was started. */
+  async *handback(input: HandbackInput): AsyncGenerator<HarnessEvent, boolean> {
+    yield* input.completed;
+    yield* this.interactions(input.turnId, input.finalAnswer);
+    const retries = await this.takeRetries();
+    const failure = input.failure();
+    if (failure) throw failure;
+    if (input.cancelled()) {
+      await input.cancel();
+      throw new Error("Cancelled while awaiting native access authorization");
+    }
+    if (await this.retry(retries, input.request, input.readLifecycle)) return true;
+    if (input.cancelled()) {
+      await input.cancel();
+      throw new Error("Cancelled before native access retry");
+    }
+    return false;
+  }
+
   interactions(turnId: string, finalAnswer: string): HarnessEvent[] {
     // Every record was bound to an active owned root turn in observe(). A goal
     // continuation must not discard an earlier turn's unresolved denial.
-    const pending = [...this.reviews.values()];
+    const pending = [...this.reviews];
     this.reviews.clear();
-    const events = pending.map((review) => this.nativeEvent(review));
-    if (events.length && (!this.channel || this.deps.spec.access !== "workspace_write"))
-      throw this.blocked("A workspace-write controller interaction is required");
     const result: HarnessEvent[] = [];
-    for (const event of events) {
+    for (const [reviewId, review] of pending) {
+      const event = this.nativeEvent(review);
+      if (typeof event === "string") {
+        result.push(this.notOffered(reviewId, event));
+        continue;
+      }
+      if (!this.channel || this.deps.spec.access !== "workspace_write") {
+        result.push(
+          this.notOffered(reviewId, "no workspace-write controller interaction is available"),
+        );
+        continue;
+      }
       const request: InteractionRequest = {
         interaction_id: randomUUID(),
         source_tool: COMPLETED,
@@ -86,7 +132,7 @@ export class CodexAutoReview {
               {
                 label: "Authorize one retry",
                 description:
-                  "Record authorization for this exact action, then retry under native review.",
+                  "Record authorization for this exact action, then start one more model turn that retries it under native review.",
               },
               {
                 label: "Decline",
@@ -229,7 +275,18 @@ export class CodexAutoReview {
     }
   }
 
-  private nativeEvent(review: JsonObject): JsonObject {
+  private notOffered(reviewId: string, reason: string): HarnessEvent {
+    return {
+      type: "status",
+      session_id: this.deps.spec.session_id,
+      ts: nowIso(),
+      text: `Codex native automatic review denial stands; it was not offered for controller authorization: ${reason}.`,
+      payload: { code: "codex_auto_review_not_offered", review_id: reviewId },
+    };
+  }
+
+  /** The exact reviewable denial, or the reason it cannot be offered. */
+  private nativeEvent(review: JsonObject): JsonObject | string {
     const result = asObject(review["review"]);
     const action = asObject(review["action"]);
     if (
@@ -244,9 +301,7 @@ export class CodexAutoReview {
       (review["targetItemId"] != null && typeof review["targetItemId"] !== "string") ||
       (result["rationale"] != null && typeof result["rationale"] !== "string")
     )
-      throw this.blocked(
-        `Native review status ${String(result?.["status"])} did not provide a complete denied action`,
-      );
+      return `native review status ${String(result?.["status"])} did not provide a complete denied action`;
     if (
       Object.keys(review).some(
         (key) =>
@@ -270,10 +325,10 @@ export class CodexAutoReview {
       (result["userAuthorization"] != null &&
         !["unknown", "low", "medium", "high"].includes(String(result["userAuthorization"])))
     )
-      throw this.blocked("Native review contains unsupported context fields");
+      return "native review contains unsupported context fields";
     const cwd = action["cwd"];
     if (typeof cwd !== "string" || !isAbsolute(cwd) || !reviewPath(cwd, this.deps.spec.cwd))
-      throw this.blocked("The denied action has an unreviewable working directory");
+      return "the denied action has an unreviewable working directory";
     const source = action["source"] === "unifiedExec" ? "unified_exec" : action["source"];
     let nativeAction: JsonObject;
     if (
@@ -303,9 +358,7 @@ export class CodexAutoReview {
         cwd,
       };
     else
-      throw this.blocked(
-        "This native action lacks complete supported review details (patches require the full diff)",
-      );
+      return "this native action lacks complete supported review details (patches require the full diff)";
     const event = {
       id: review["reviewId"],
       turn_id: review["turnId"],
@@ -329,15 +382,9 @@ export class CodexAutoReview {
         .split(/[\s"'`=;<>|()]+/u)
         .some((token) => sensitiveResourcePolicy.classifyPath(token).sensitive)
     )
-      throw this.blocked("The denied action is sensitive or too large to review safely");
+      return "the denied action is sensitive or too large to review safely";
     if (this.authorizedActions.has(JSON.stringify(nativeAction)))
-      throw this.blocked(
-        "Native policy denied an already authorized action; no automatic permission retry loop",
-      );
+      return "native review denied an already authorized retry again; no repeated authorization loop";
     return event;
-  }
-
-  private blocked(reason: string): Error {
-    return new CodexServerRequestRefusal("codex_approval_required", reason);
   }
 }

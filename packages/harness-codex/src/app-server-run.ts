@@ -494,33 +494,33 @@ export async function* runCodexAppServer(
           if (!systemError) break;
         }
         const status = pendingTerminal?.["status"];
-        if (status === "completed" && !harnessReportedError && !cancellation.requested) {
-          yield* autoReview.interactions(
-            String(pendingTerminal?.["id"]),
-            parseState.lastAgentMessage ?? "",
-          );
-          const retries = await autoReview.takeRetries();
-          if (processFailure) throw processFailure;
-          if (cancellation.requested) {
-            await cancel();
-            throw new Error("Cancelled while awaiting native access authorization");
-          }
-          if (await autoReview.retry(retries, request, readLifecycle)) {
-            pendingTerminal = null;
-            parseState.lastAgentMessage = undefined;
-            break;
-          }
-          if (cancellation.requested) {
-            await cancel();
-            throw new Error("Cancelled before native access retry");
-          }
-        }
+        const finalAnswer = parseState.lastAgentMessage ?? "";
         const terminal = codexTerminalEvents({
           pendingTerminal,
           systemError,
           sessionId: input.spec.session_id,
           parseState,
         });
+        // Native denials are handed back only after this turn's answer is emitted.
+        const handback =
+          status === "completed" &&
+          !harnessReportedError &&
+          !cancellation.requested &&
+          autoReview.pending;
+        const handbackInput = {
+          turnId: String(pendingTerminal?.["id"]),
+          finalAnswer,
+          completed: terminal.events,
+          request,
+          readLifecycle,
+          failure: () => processFailure,
+          cancelled: () => cancellation.requested,
+          cancel,
+        };
+        if (handback && (yield* autoReview.handback(handbackInput))) {
+          pendingTerminal = null;
+          break;
+        }
         if (terminal.reportedError !== null) harnessReportedError = terminal.reportedError;
         let failed = systemError || harnessReportedError || cancellation.requested;
         completedAnswer = !failed && codexHasCompletedAnswer(status, current, terminal.events);
@@ -532,7 +532,7 @@ export async function* runCodexAppServer(
         // only revalidate a candidate answer here.
         if (completedAnswer && codexTeardownFailed(notifications, nativeThreadId, failed))
           throw new Error("Codex completion was invalidated during process teardown");
-        for (const event of terminal.events) yield event;
+        if (!handback) for (const event of terminal.events) yield event;
         yield codexCompletedEvent(
           input.spec.session_id,
           terminalPayload({

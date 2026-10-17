@@ -98,7 +98,7 @@ export class RunTimeLimit {
           400,
         );
       this.deadline = next;
-      if (input.action === "set") this.mode = input.mode;
+      if (input.action === "set" && input.mode !== undefined) this.mode = input.mode;
     }
     this.reached = null;
     this.revision += 1;

@@ -16,7 +16,11 @@ export function runTimeLimitTool(runner: RunnerFn): McpTool {
         runId: { type: "string", minLength: 1 },
         action: { type: "string", enum: ["read", "set", "extend", "disable"] },
         seconds: { type: "integer", minimum: 1, maximum: 604800 },
-        mode: { type: "string", enum: ["soft", "hard"] },
+        mode: {
+          type: "string",
+          enum: ["soft", "hard"],
+          description: "For set only; omission keeps the timer's current mode.",
+        },
         expectedRevision: { type: "integer", minimum: 0 },
       },
     },

@@ -1,5 +1,5 @@
-import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { PassThrough } from "node:stream";
@@ -24,15 +24,8 @@ afterEach(async () => {
 });
 
 async function fixture() {
-  const scratch = resolve(import.meta.dirname, "../../../tmp");
-  mkdirSync(scratch, { recursive: true });
-  const previousTmpDir = process.env.TMPDIR;
-  process.env.TMPDIR = scratch;
-  cleanups.push(() => {
-    if (previousTmpDir === undefined) delete process.env.TMPDIR;
-    else process.env.TMPDIR = previousTmpDir;
-  });
-  const root = mkdtempSync(join(scratch, "rtl-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "claudexor-rtl-")));
+  cleanups.push(() => rmSync(root, { recursive: true, force: true }));
   const store = await EngineStore.open({
     daemonDir: root,
     workerEntry: resolve(import.meta.dirname, "../../daemon/dist/store/flusher-worker.js"),
@@ -69,7 +62,7 @@ async function fixture() {
       limit.dispose();
     }
   };
-  const socketPath = join(scratch, `s-${randomUUID().slice(0, 6)}`);
+  const socketPath = join(root, "d.sock");
   const daemon = new DaemonServer({
     socketPath,
     token: "fixture",
@@ -260,6 +253,22 @@ describe("run time limit across SQLite, daemon socket, CLI helper, and HTTP", ()
         .filter((event) => event.type === "control.applied")
         .map((event) => event.payload.control?.action),
     ).toEqual(expect.arrayContaining(["set", "reached", "extend", "disable"]));
+  }, 10_000);
+
+  it("keeps a hard limit hard when a controller resets it without naming a mode", async () => {
+    const f = await fixture();
+    const run = await runningJob(f, { prompt: "hard reset fixture", maxSeconds: 600 });
+    const initial = await f.request("GET", run.runId);
+    expect(initial).toMatchObject({ status: 200, body: { state: "armed", mode: "hard" } });
+    const reset = await f.request("PATCH", run.runId, {
+      action: "set",
+      seconds: 1,
+      expectedRevision: (initial.body as RunTimeLimitSnapshot).revision,
+    });
+    expect(reset).toMatchObject({ status: 200, body: { state: "armed", mode: "hard" } });
+    await terminalJob(f, run.id);
+    expect(f.starts()).toBe(1);
+    expect(f.abortReasons).toEqual(["wall_clock_exceeded"]);
   }, 10_000);
 
   it("keeps a legacy one-second hard limit on the same worker until it cancels", async () => {

@@ -196,6 +196,20 @@ describe("RunTimeLimits scheduler registry", () => {
     expect(owned.snapshot().revision).toBe(0);
   });
 
+  it("keeps an external orchestrator's delegated workspace run controllable", () => {
+    const registry = new RunTimeLimits();
+    registry.register("job-1", timer(), () => true);
+    expect(
+      registry.dispatch(
+        { id: "job-1", request: { action: "set", seconds: 10, expectedRevision: 0 } },
+        () =>
+          job("running", {
+            execution: { delegated: true, workspaceRoot: "/caller/workspace" },
+          }),
+      ),
+    ).toMatchObject({ state: "armed", revision: 1 });
+  });
+
   it("does not treat ordinary parent lineage as delegation authority", () => {
     const registry = new RunTimeLimits();
     registry.register("job-1", timer(), () => true);

@@ -134,7 +134,13 @@ describe("native automatic review handback", () => {
     t.answer(["Authorize one retry"]);
     await result;
     t.review.observe(denial({ reviewId: "retry-denied" }));
-    expect(() => t.review.interactions("turn", "Still blocked")).toThrow(/already authorized/);
+    expect(t.review.interactions("turn", "Still blocked")).toEqual([
+      expect.objectContaining({
+        type: "status",
+        text: expect.stringMatching(/already authorized retry again/),
+        payload: { code: "codex_auto_review_not_offered", review_id: "retry-denied" },
+      }),
+    ]);
     expect(t.asks).toHaveLength(1);
   });
 
@@ -171,27 +177,43 @@ describe("native automatic review handback", () => {
     { decisionSource: "unknown" },
     { review: { status: "timedOut" } },
     { review: { status: "aborted" } },
-  ])("fails closed without complete reviewable denied action %j", (params) => {
+  ])("keeps the native denial without offering an incomplete action %j", async (params) => {
     const t = setup();
     t.review.observe(denial(params));
-    expect(() => t.review.interactions("turn", "Blocked")).toThrow();
+    const events = t.review.interactions("turn", "Blocked");
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "status",
+        payload: expect.objectContaining({ code: "codex_auto_review_not_offered" }),
+      }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain(".env");
     expect(t.asks).toEqual([]);
+    expect(await t.review.takeRetries()).toEqual([]);
   });
 
   it.each(["readonly", "full", "inherit_native"])(
     "does not enable automatic-review escalation under %s",
-    (access) => {
+    async (access) => {
       const t = setup(access);
       t.review.observe(denial());
-      expect(() => t.review.interactions("turn", "Blocked")).toThrow();
+      expect(t.review.interactions("turn", "Blocked")).toEqual([
+        expect.objectContaining({
+          payload: { code: "codex_auto_review_not_offered", review_id: "review" },
+        }),
+      ]);
       expect(t.asks).toEqual([]);
+      expect(await t.review.takeRetries()).toEqual([]);
     },
   );
 
-  it("reports missing controller channel instead of auto-authorizing", () => {
+  it("discloses a missing controller channel instead of auto-authorizing", async () => {
     const t = setup("workspace_write", false);
     t.review.observe(denial());
-    expect(() => t.review.interactions("turn", "Blocked")).toThrow(/controller/);
+    expect(t.review.interactions("turn", "Blocked")).toEqual([
+      expect.objectContaining({ text: expect.stringMatching(/controller interaction/) }),
+    ]);
+    expect(await t.review.takeRetries()).toEqual([]);
   });
 
   it("preserves complete execve actions and review context without accepting answer-supplied actions", async () => {

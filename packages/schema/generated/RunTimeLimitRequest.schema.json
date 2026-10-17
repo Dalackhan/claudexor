@@ -33,8 +33,7 @@
               "enum": [
                 "soft",
                 "hard"
-              ],
-              "default": "soft"
+              ]
             },
             "expectedRevision": {
               "type": "integer",

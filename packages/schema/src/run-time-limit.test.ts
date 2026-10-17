@@ -21,10 +21,13 @@ describe("explicit run time policy", () => {
       ControlRunStartRequest.parse({ prompt: "work", maxSeconds: 60, timeLimitMode: "soft" }),
     ).toMatchObject({ maxSeconds: 60, timeLimitMode: "soft" });
   });
-  it("defaults a new set to soft and requires a revision for mutations", () => {
+  it("leaves an omitted set mode to the live timer and requires a revision for mutations", () => {
+    const parsed = RunTimeLimitRequest.parse({ action: "set", seconds: 60, expectedRevision: 0 });
+    expect(parsed).toEqual({ action: "set", seconds: 60, expectedRevision: 0 });
+    expect("mode" in parsed).toBe(false);
     expect(
-      RunTimeLimitRequest.parse({ action: "set", seconds: 60, expectedRevision: 0 }),
-    ).toMatchObject({ mode: "soft" });
+      RunTimeLimitRequest.parse({ action: "set", seconds: 60, mode: "hard", expectedRevision: 0 }),
+    ).toMatchObject({ mode: "hard" });
     expect(() => RunTimeLimitRequest.parse({ action: "extend", seconds: 60 })).toThrow();
     expect(() =>
       RunTimeLimitRequest.parse({ action: "disable", expectedRevision: 0, extraAuthority: true }),

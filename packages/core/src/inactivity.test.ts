@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HarnessEvent } from "@claudexor/schema";
 import {
   countsAsAgentProgress,
@@ -7,6 +7,8 @@ import {
 } from "./inactivity.js";
 
 const tick = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+afterEach(() => vi.useRealTimers());
 
 /**
  * A source that models the runCliHarness/spawnProcess shape: it yields one
@@ -359,6 +361,48 @@ describe("withInactivityWatchdog useful-progress window", () => {
     expect(seen).toEqual(["started"]);
     expect(thrown).toEqual(new Error("source failed"));
     expect(cleaned).toBe(true);
+  });
+
+  it("preserves a configured window longer than one Node timer delay", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    async function* source(): AsyncGenerator<string> {
+      yield "started";
+      await new Promise<void>((resolve) => {
+        if (controller.signal.aborted) resolve();
+        else controller.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    }
+    const timeoutMs = 2_147_483_647 + 1_000;
+    let timeouts = 0;
+    let thrown: unknown;
+    const consumed = (async () => {
+      try {
+        for await (const _value of withInactivityWatchdog(source(), {
+          timeoutMs,
+          countsAsProgress: () => true,
+          onTimeout: () => {
+            timeouts += 1;
+            controller.abort();
+          },
+          cleanupDeadlineMs: 10,
+        })) {
+          // drain
+        }
+      } catch (error) {
+        thrown = error;
+      }
+    })();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(timeouts).toBe(0);
+    await vi.advanceTimersByTimeAsync(timeoutMs - 1_001);
+    expect(timeouts).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(timeouts).toBe(1);
+    await vi.runAllTimersAsync();
+    await consumed;
+    expect(thrown).toBeInstanceOf(HarnessInactivityTimeoutError);
+    expect((thrown as HarnessInactivityTimeoutError).timeoutMs).toBe(timeoutMs);
   });
 
   it("keeps zero as an active inactivity window", async () => {

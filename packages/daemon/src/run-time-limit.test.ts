@@ -87,8 +87,9 @@ describe("live run time limit", () => {
     ).toThrow(/disabled/);
     timer.dispose();
   });
-  it("set measures from now and defaults to a soft limit", async () => {
+  it("set measures from now and keeps an unclocked run's soft mode", async () => {
     const { timer } = setup();
+    expect(timer.snapshot()).toMatchObject({ state: "disabled", mode: "soft", revision: 0 });
     await vi.advanceTimersByTimeAsync(5000);
     expect(timer.control({ action: "set", seconds: 10, expectedRevision: 0 })).toMatchObject({
       mode: "soft",
@@ -96,6 +97,43 @@ describe("live run time limit", () => {
     });
     await vi.advanceTimersByTimeAsync(10_000);
     expect(timer.signal.aborted).toBe(false);
+    timer.dispose();
+  });
+  it("set without mode never downgrades a hard limit, even after disable", async () => {
+    const { timer } = setup(600);
+    const reset = timer.control({ action: "set", seconds: 10, expectedRevision: 0 });
+    expect(reset).toMatchObject({ mode: "hard", revision: 1 });
+    const disabled = timer.control({ action: "disable", expectedRevision: reset.revision });
+    expect(disabled).toMatchObject({ state: "disabled", mode: "hard" });
+    expect(
+      timer.control({ action: "set", seconds: 10, expectedRevision: disabled.revision }),
+    ).toMatchObject({ state: "armed", mode: "hard" });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(timer.signal.reason).toBe("wall_clock_exceeded");
+    timer.dispose();
+  });
+  it("changes mode only when set names one", async () => {
+    const { timer } = setup(600);
+    const soft = timer.control({ action: "set", seconds: 10, mode: "soft", expectedRevision: 0 });
+    expect(soft).toMatchObject({ mode: "soft" });
+    const extended = timer.control({
+      action: "extend",
+      seconds: 5,
+      expectedRevision: soft.revision,
+    });
+    expect(extended).toMatchObject({ mode: "soft", deadlineAt: "2026-10-15T12:00:15.000Z" });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(timer.signal.aborted).toBe(false);
+    expect(timer.snapshot()).toMatchObject({ state: "reached", mode: "soft" });
+    const hard = timer.control({
+      action: "set",
+      seconds: 1,
+      mode: "hard",
+      expectedRevision: timer.snapshot().revision,
+    });
+    expect(hard).toMatchObject({ state: "armed", mode: "hard" });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(timer.signal.aborted).toBe(true);
     timer.dispose();
   });
   it("disposal cancels callbacks but does not forge a user abort", async () => {

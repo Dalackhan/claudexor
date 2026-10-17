@@ -557,7 +557,7 @@
             "soft",
             "hard"
           ],
-          "description": "With maxSeconds: soft warns and continues; hard cancels. Omission preserves an explicit maxSeconds as hard."
+          "description": "Initial timer mode: soft warns and continues; hard cancels. Omission is hard with maxSeconds and soft without it."
         },
         "denyPaths": {
           "type": "array",

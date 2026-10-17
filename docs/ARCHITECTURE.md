@@ -4793,7 +4793,9 @@ whole window remains indistinguishable from a hang and is killed.
 Set `runtime.harness_inactivity_timeout_ms: null` in the config to disable
 only inactivity timing; ordinary cancellation, stream cleanup, resource limits
 and explicit run deadlines remain in effect. The numeric environment override
-still takes precedence over this setting. No existing persisted value is
+still takes precedence over this setting. A numeric window longer than Node's
+single-timer limit (about 24.8 days) is waited in chunks rather than shortened;
+`withInactivityWatchdog` is the one owner of that conversion. No existing persisted value is
 rewritten, and omission retains the 60-minute default. Whole-run limits are
 independent: optional soft/hard deadlines can be changed on the live run through
 the [integration controls](INTEGRATIONS.md#embedder-run-controls-v21).

@@ -33,11 +33,9 @@ import {
 import { parseCodexStderrFailure, type CodexParseState } from "./parse.js";
 import { parseCodexRpcError } from "./rpc-error.js";
 import { codexResumeIdentityMismatch } from "./resume-identity.js";
-
 export { CodexAppServerController } from "./app-server-protocol.js";
 export { codexAppServerEvents, codexAppServerThreadParams } from "./app-server-protocol.js";
 export type { CodexAppServerRunInput } from "./app-server-protocol.js";
-
 export async function* runCodexAppServer(
   input: CodexAppServerRunInput,
 ): AsyncGenerator<HarnessEvent> {
@@ -64,7 +62,6 @@ export async function* runCodexAppServer(
   let activeTurnId: string | null = null;
   const ownedCommandItemIds = new Set<string>();
   const subagents = new CodexSubagentThreads();
-  // Cancellation is visible to transport teardown; its dependency seams are lazy.
   const cancellation = new CodexCancellation({
     spawned,
     threadId: () => (threadConfirmed ? nativeThreadId : null),
@@ -92,7 +89,6 @@ export async function* runCodexAppServer(
       .map((server) => server.name),
     startedEmitted: true,
   };
-
   const rejectPending = (error: Error): void => {
     for (const request of pending.values()) request.reject(error);
     pending.clear();
@@ -136,7 +132,11 @@ export async function* runCodexAppServer(
       if (item?.["type"] === "commandExecution" && typeof item["id"] === "string")
         ownedCommandItemIds.add(item["id"]);
     } else if (method === "thread/status/changed") {
-      if (asObject(params?.["status"])?.["type"] === "systemError") nativeSystemError = true;
+      if (asObject(params?.["status"])?.["type"] === "systemError") {
+        nativeSystemError = true;
+        approvals.close();
+        autoReview.close(new Error("Codex root thread failed during native authorization"));
+      }
     } else if (method === "mcpServer/startupStatus/updated") {
       const name = params?.["name"];
       const status = params?.["status"];
@@ -249,16 +249,16 @@ export async function* runCodexAppServer(
     }
   })();
   void process.catch(() => {});
-
-  // `taint`: a refused request marks the run harness_reported_error; a live
-  // message (turn/steer) passes false so a benign refusal never poisons the run.
+  // taint=false keeps benign turn/steer refusals out of harness_reported_error.
   const request = async (method: string, params: JsonObject, taint = true): Promise<JsonObject> => {
-    await Promise.race([
-      spawned,
-      process.then(() => {
-        throw processFailure ?? new Error("Codex app-server exited before accepting requests");
-      }),
-    ]);
+    // Once ready, write synchronously with the caller's last authority check.
+    if (!io)
+      await Promise.race([
+        spawned,
+        process.then(() => {
+          throw processFailure ?? new Error("Codex app-server exited before accepting requests");
+        }),
+      ]);
     const id = nextId++;
     const response = new Promise<JsonObject>((resolve, reject) => {
       pending.set(id, { resolve, reject, taint });
@@ -501,10 +501,10 @@ export async function* runCodexAppServer(
           sessionId: input.spec.session_id,
           parseState,
         });
-        // Native denials are handed back only after this turn's answer is emitted.
+        // Hand denials back only after this turn's answer, never from a failed thread.
         const handback =
           status === "completed" &&
-          !harnessReportedError &&
+          !(systemError || harnessReportedError || terminal.reportedError === true) &&
           !cancellation.requested &&
           autoReview.pending;
         const handbackInput = {

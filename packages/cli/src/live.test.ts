@@ -196,6 +196,15 @@ describe("claudexor follow", () => {
     ).toBe("[a01/claude] question wait cancelled");
   });
 
+  it("renders a harness-withdrawn interaction without expiry or cancellation wording", () => {
+    expect(
+      formatRunEventLine({
+        type: "interaction.withdrawn",
+        payload: { harness_id: "codex", attempt_id: "a01", interaction_id: "int-1" },
+      }),
+    ).toBe("[a01/codex] question withdrawn by the agent — no answer needed");
+  });
+
   it("renders plan.brief.materialized with source run + short sha (QA-046)", () => {
     expect(
       formatRunEventLine({

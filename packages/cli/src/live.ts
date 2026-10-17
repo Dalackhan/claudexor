@@ -106,6 +106,8 @@ export function formatRunEventLine(ev: Record<string, unknown>): string | null {
       return p["reason"] === "cancelled"
         ? `[${who}] question wait cancelled`
         : `[${who}] no answer in time — continuing with assumptions`;
+    case "interaction.withdrawn":
+      return `[${who}] question withdrawn by the agent — no answer needed`;
     case "harness.completed":
       return `[${who}] completed: ${String(p["status"] ?? "?")}${p["error"] ? ` — ${truncate(String(p["error"]), 160)}` : ""}`;
     case "gate.completed": {
@@ -384,7 +386,11 @@ export async function followRun(runId: string, json: boolean): Promise<number> {
       if (line) print(line);
     }
     const type = String(ev["type"] ?? "");
-    if (type === "interaction.answered" || type === "interaction.timeout") {
+    if (
+      type === "interaction.answered" ||
+      type === "interaction.timeout" ||
+      type === "interaction.withdrawn"
+    ) {
       const interactionId = eventInteractionId(ev);
       if (interactionId) {
         promptControllers.get(interactionId)?.abort({ kind: "interaction_resolved", event: type });

@@ -778,6 +778,12 @@ native session, and a run that ends failed keeps the answer only as diagnostic
 `final/retained-output.md`, never as a deliverable. An unattended run with no
 controller answer waits for the interaction timeout (default 15 minutes) before
 that benign decline, and a hard time limit keeps counting during the wait.
+Internal Delegate children receive the same interaction channel, but the
+delegation belt has no answer tool, so their parent agent cannot answer a
+child's approval. It waits for an answer through the ordinary surfaces (Control
+API, MCP `claudexor_answer_interaction`, `claudexor follow`, the app) until the
+default 15-minute expiry; with `interaction_timeout_ms: null` it waits until it
+is answered or the run is stopped, reaches its deadline or ends.
 
 Cancellation and disconnect revoke unanswered interactions. Once an exact-action
 authorization has been submitted to native Codex it cannot be recalled by
@@ -818,7 +824,10 @@ in-workspace paths/diffs and can be approved under `workspace_write`.
 Missing, oversized or secret-bearing review details fail closed, as do unknown
 native request methods and runs without an interaction channel. Native
 resolution, turn end, cancellation and transport closure revoke pending requests;
-late answers cannot approve an obsolete action. `delivered` confirms receipt by
+late answers cannot approve an obsolete action. A request withdrawn while the
+run continues emits `interaction.withdrawn`, which closes the obsolete
+`claudexor follow` prompt or app card so the next approval is not blocked behind
+it. `delivered` confirms receipt by
 the control surface, not execution: follow the run and inspect its actual result.
 These answers and the timer controls are authorized by the daemon's local
 bearer token, which identifies a local engine client, not a particular run or

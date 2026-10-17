@@ -6,11 +6,17 @@ import {
   type InteractionAnswerSet,
   type InteractionRequest,
 } from "@claudexor/schema";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runCodexAppServer } from "./app-server-run.js";
 
 type Frame = Record<string, unknown>;
-type Turn = { text: string; denial?: Frame | null; status?: "completed" | "failed" };
+type Turn = {
+  text: string;
+  denial?: Frame | null;
+  status?: "completed" | "failed";
+  /** The thread reports systemError after this turn completed. */
+  systemErrorAfter?: boolean;
+};
 
 const COMMAND = { type: "command", source: "shell", command: "node --test", cwd: process.cwd() };
 const ENVELOPE = JSON.stringify({
@@ -21,6 +27,7 @@ const ENVELOPE = JSON.stringify({
 /** A scripted app-server root thread: each turn/start plays the next turn. */
 function peer(turns: Turn[], options: { authorizationFails?: boolean } = {}) {
   const writes: Frame[] = [];
+  let lifecycleError = false;
   const frames: string[] = [];
   let wake: (() => void) | undefined;
   let stopped = false;
@@ -74,6 +81,11 @@ function peer(turns: Turn[], options: { authorizationFails?: boolean } = {}) {
         },
       },
     });
+    if (turn.systemErrorAfter)
+      push({
+        method: "thread/status/changed",
+        params: { threadId: "root", status: { type: "systemError" } },
+      });
   };
   const spawn: typeof spawnProcess = async function* (_bin, _args, opts = {}) {
     const safety = setTimeout(() => {
@@ -97,7 +109,10 @@ function peer(turns: Turn[], options: { authorizationFails?: boolean } = {}) {
               : { id: frame["id"], result: {} },
           );
         if (method === "thread/read")
-          push({ id: frame["id"], result: { thread: { status: { type: "idle" } } } });
+          push({
+            id: frame["id"],
+            result: { thread: { status: { type: lifecycleError ? "systemError" : "idle" } } },
+          });
         if (method === "thread/goal/get")
           push({ id: frame["id"], result: { goal: { status: "complete" } } });
         if (method === "thread/backgroundTerminals/list")
@@ -121,7 +136,19 @@ function peer(turns: Turn[], options: { authorizationFails?: boolean } = {}) {
       clearTimeout(safety);
     }
   };
-  return { spawn, writes, turnStarts: () => started };
+  return {
+    spawn,
+    writes,
+    turnStarts: () => started,
+    failRoot: () =>
+      push({
+        method: "thread/status/changed",
+        params: { threadId: "root", status: { type: "systemError" } },
+      }),
+    failLifecycle: () => {
+      lifecycleError = true;
+    },
+  };
 }
 
 function start(
@@ -134,10 +161,12 @@ function start(
   } = {},
 ) {
   const asked: InteractionRequest[] = [];
+  const signals: AbortSignal[] = [];
   const asking: Array<() => void> = [];
   const channel: InteractionChannel = {
-    request(request) {
+    request(request, signal) {
       asked.push(request);
+      if (signal) signals.push(signal);
       asking.splice(0).forEach((notify) => notify());
       const answer = options.reply?.(request) ?? null;
       return answer === "wait" ? new Promise(() => {}) : Promise.resolve(answer);
@@ -169,7 +198,7 @@ function start(
   const firstAsk = new Promise<void>((resolve) =>
     asked.length ? resolve() : asking.push(resolve),
   );
-  return { done, asked, events, firstAsk };
+  return { done, asked, events, firstAsk, signals };
 }
 
 const choose = (request: InteractionRequest, label: string): InteractionAnswerSet => ({
@@ -300,6 +329,68 @@ describe("completed Codex output survives native-denial handback", () => {
     expect(events.some((event) => event.type === "error")).toBe(true);
     expect(finals(events).map((event) => event.text)).toEqual(["Blocked by policy"]);
     expect(keptOutput(events)).toBe("Blocked by policy");
+  });
+
+  it.each([
+    ["a healthy thread still offers", false],
+    ["a systemError thread never offers", true],
+  ])("%s the denial for one authorized retry", async (_label, systemErrorAfter) => {
+    const scripted = peer([
+      { text: "Blocked by policy", denial: {}, systemErrorAfter },
+      { text: "Retried and verified" },
+    ]);
+    const run = start(scripted, { reply: (request) => choose(request, "Authorize one retry") });
+    const events = await run.done;
+    const authorizations = scripted.writes.filter(
+      (frame) => frame["method"] === "thread/approveGuardianDeniedAction",
+    );
+    if (!systemErrorAfter) {
+      expect(run.asked).toHaveLength(1);
+      expect(authorizations).toHaveLength(1);
+      expect(scripted.turnStarts()).toBe(2);
+      expect(events.some((event) => event.type === "error")).toBe(false);
+      return;
+    }
+    // No question, no native authorization RPC and no extra paid turn; the
+    // failed thread stays a failure instead of becoming a handed-back success.
+    expect(run.asked).toEqual([]);
+    expect(authorizations).toEqual([]);
+    expect(scripted.turnStarts()).toBe(1);
+    expect(events.some((event) => event.type === "error")).toBe(true);
+    expect(events.at(-1)).toMatchObject({ type: "completed" });
+    expect(events.at(-1)?.payload?.["harness_reported_error"]).toBe(true);
+  });
+
+  it("withdraws pending authorization when the root fails during controller deliberation", async () => {
+    const scripted = peer([{ text: "Completed report before failure", denial: {} }]);
+    const run = start(scripted, { reply: () => "wait" });
+    await run.firstAsk;
+    scripted.failRoot();
+    await vi.waitFor(() => expect(run.signals[0]?.aborted).toBe(true));
+    const events = await run.done;
+    expect(scripted.turnStarts()).toBe(1);
+    expect(
+      scripted.writes.some((frame) => frame["method"] === "thread/approveGuardianDeniedAction"),
+    ).toBe(false);
+    expect(events.some((event) => event.type === "error")).toBe(true);
+    expect(finals(events).map((event) => event.text)).toEqual(["Completed report before failure"]);
+  });
+
+  it("refuses authorization when refreshed lifecycle reveals a failed root", async () => {
+    const scripted = peer([{ text: "Report before lifecycle failure", denial: {} }]);
+    const run = start(scripted, {
+      reply: (request) => {
+        scripted.failLifecycle();
+        return choose(request, "Authorize one retry");
+      },
+    });
+    const events = await run.done;
+    expect(scripted.turnStarts()).toBe(1);
+    expect(
+      scripted.writes.some((frame) => frame["method"] === "thread/approveGuardianDeniedAction"),
+    ).toBe(false);
+    expect(events.some((event) => event.type === "error")).toBe(true);
+    expect(keptOutput(events)).toBe("Report before lifecycle failure");
   });
 
   it("keeps the completed answer when Stop arrives while authorization is pending", async () => {

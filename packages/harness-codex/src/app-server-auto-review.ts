@@ -94,7 +94,10 @@ export class CodexAutoReview {
       await input.cancel();
       throw new Error("Cancelled while awaiting native access authorization");
     }
-    if (await this.retry(retries, input.request, input.readLifecycle)) return true;
+    const retried = await this.retry(retries, input.request, input.readLifecycle);
+    const lateFailure = this.failure ?? input.failure();
+    if (lateFailure) throw lateFailure;
+    if (retried) return true;
     if (input.cancelled()) {
       await input.cancel();
       throw new Error("Cancelled before native access retry");
@@ -158,12 +161,13 @@ export class CodexAutoReview {
     const answers = this.answers;
     this.answers = [];
     const results = await Promise.all(answers);
-    if (this.abort.signal.aborted || !this.deps.live()) return [];
     if (this.failure) throw this.failure;
+    if (this.abort.signal.aborted || !this.deps.live()) return [];
     return results.filter((event): event is JsonObject => event !== null);
   }
 
-  close(): void {
+  close(error?: Error): void {
+    this.failure ??= error ?? null;
     this.abort.abort();
     this.reviews.clear();
   }
@@ -179,6 +183,7 @@ export class CodexAutoReview {
     if (
       this.deps.turnId() ||
       !fresh.threadSettled ||
+      fresh.threadStatus === "systemError" ||
       fresh.goalActive ||
       fresh.ownedBackground.length
     )

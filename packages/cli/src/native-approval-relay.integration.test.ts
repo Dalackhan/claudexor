@@ -418,6 +418,21 @@ describe("native Codex approvals through the existing interaction surfaces", () 
     f.peer.finishTurn(turnId, "Continued without the write");
     expect((await f.terminal(run.id)).state).toBe("succeeded");
     expect(decisionsFor(f.peer.writes, "srv-revoked")).toEqual([]);
+    // The durable per-run stream announces the withdrawal answer surfaces close on.
+    const events = readFileSync(join(run.runDir, "events.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; payload: Record<string, unknown> });
+    expect(
+      events.filter(
+        (event) =>
+          event.type.startsWith("interaction.") &&
+          event.payload["interaction_id"] === interaction!.interactionId,
+      ),
+    ).toEqual([
+      expect.objectContaining({ type: "interaction.requested" }),
+      expect.objectContaining({ type: "interaction.withdrawn" }),
+    ]);
   }, 20_000);
 
   it("lets an MCP controller authorize one denied-action retry, keeping both turns' answers", async () => {
@@ -507,6 +522,9 @@ describe("native Codex approvals through the existing interaction surfaces", () 
     expect(f.harnessEvents.filter((event) => event.final).map((event) => event.text)).toEqual([
       "Done except the denied check",
     ]);
+    const events = readFileSync(join(run.runDir, "events.jsonl"), "utf8");
+    expect(events).not.toContain('"type":"interaction.withdrawn"');
+    expect(events).not.toContain('"reason":"request_withdrawn"');
   }, 20_000);
 
   it("lets a hard time limit stop the run while a native approval waits, without approving it", async () => {
@@ -529,5 +547,7 @@ describe("native Codex approvals through the existing interaction surfaces", () 
     expect(decisionsFor(f.peer.writes, "srv-deadline")).toEqual([]);
     const events = readFileSync(join(run.runDir, "events.jsonl"), "utf8");
     expect(events).toMatch(/"control":\{"kind":"time_limit","action":"reached"\}/);
+    expect(events).not.toContain('"type":"interaction.withdrawn"');
+    expect(events).not.toContain('"reason":"request_withdrawn"');
   }, 20_000);
 });

@@ -64,6 +64,7 @@
             "interaction.answered",
             "interaction.timeout",
             "interaction.answer_discarded",
+            "interaction.withdrawn",
             "message.accepted",
             "message.delivered",
             "message.refused",

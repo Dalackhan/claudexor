@@ -4,7 +4,8 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DurableJournal } from "./store/test-support/fixtures/legacy/journal/index.js";
-import type { RunEvent } from "@claudexor/schema";
+// The frozen legacy stores accept the frozen event vocabulary, not later additions.
+import type { RunEvent } from "./store/test-support/fixtures/legacy/schema/index.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CommandStore } from "./store/test-support/fixtures/legacy/daemon/command-store.js";
 import { durableTerminalRunEvents } from "./store/test-support/fixtures/legacy/daemon/run-event-terminal-index.js";

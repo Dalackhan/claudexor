@@ -2849,7 +2849,7 @@ EventLog at emit time (control-api audit appends continue the same sequence).
 In the daemon composition root, the lifecycle-significant events — `run.created`
 (journaled with the prompt's sha256 digest and byte length in place of the
 prompt text), `interaction.requested`, `interaction.answered`,
-`interaction.timeout`, `output.ready` and the terminal
+`interaction.timeout`, `interaction.withdrawn`, `output.ready` and the terminal
 `run.completed|run.failed|run.blocked` — also commit to the SQL event ledger of
 its global/project partition generation before live bus publication. Per-token
 `harness.event` deltas and every other progress event reach only the per-run
@@ -2912,7 +2912,9 @@ died — fabricated by no first-party site), riding the abort token into the
 terminal writers through one mapper; the projection labels them "Stopped by
 host" / "Owner task gone". `write_mechanism` similarly types how
 workspace_write is confined per harness (`fs_sandbox` | `tool_policy` |
-`none`) so lane choice by confinement never branches on a harness name.
+`none`) so lane choice by confinement never branches on a harness name;
+`fs_sandbox` names the base sandbox, and a native automatic reviewer (Codex
+workspace_write `auto_review`) may still admit single actions outside it.
 Control API, CLI, MCP, ACP, and macOS consume those typed facts rather than
 rewriting every cancellation as user intent; a legacy cancellation with no
 reason stays unknown/cancelled instead of receiving a fabricated cause.
@@ -3520,7 +3522,11 @@ the run's outer deadline, terminal cleanup, daemon restart, or registry release
 still ends the wait; those releases must not be relabeled as timeouts.
 Adapters can also revoke one obsolete native request without cancelling the
 run: a runtime-only per-request abort signal releases the durable interaction as
-`interrupted`, clears the wait and never authorizes a late answer.
+`interrupted`, clears the wait and never authorizes a late answer. The engine
+announces that withdrawal once as `interaction.withdrawn` (never a timeout), so
+`claudexor follow` and the macOS card close the obsolete prompt instead of
+letting it block the next question; an answer accepted in the same tick is
+disclosed as `interaction.answer_discarded` (`request_withdrawn`).
 Declined/timed-out interactive flow-control tools are benign timeline events,
 never blocking tool errors.
 

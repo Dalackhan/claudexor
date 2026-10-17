@@ -41,6 +41,9 @@ export interface CandidateRun extends ContinuityTerminalFacts {
   /** Where the exact bytes of an isolated candidate still are when its private
    * exact patch object could not be written (the envelope is kept, not deleted). */
   exactBytesRetainedAt?: string;
+  /** Untracked nested repositories the capture left out of `diff` (exact
+   * paths); the attempt record and the final work product disclose them. */
+  excludedNestedRepositories?: string[];
   /** D-16 r7: the finalizer's outcome class for THIS attempt. An `interrupted`
    * candidate (terminal context exhaustion with NO completed WorkReport) is
    * never reviewed/arbitrated/adopted as clean — it terminalizes the run

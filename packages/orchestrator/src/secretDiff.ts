@@ -102,12 +102,26 @@ export interface CandidateCapture {
    * not be written: its envelope is kept and this is where the bytes still are. */
   exactBytesRetainedAt?: string;
   /** Untracked nested repositories the capture left out of `diff` (exact paths;
-   * the attempt disclosure redacts them like every other disclosed path). */
+   * the attempt record and the final work product disclose them redacted, like
+   * every other disclosed path). */
   excludedNestedRepositories?: string[];
 }
 
-/** Disclosure fields of one attempt record (`attempt.yaml`). The excluded nested
- * repositories are an attempt-level fact; the final work product does not repeat them. */
+/** `excluded_nested_repositories` as saved: redacted like every other disclosed
+ * path, deduplicated and sorted; nothing when the capture left nothing out. */
+function nestedRepositoryDisclosure(
+  capture: Pick<CandidateCapture, "excludedNestedRepositories">,
+): Record<string, unknown> {
+  return capture.excludedNestedRepositories?.length
+    ? {
+        excluded_nested_repositories: [
+          ...new Set(capture.excludedNestedRepositories.map((path) => redactSecrets(path))),
+        ].sort(),
+      }
+    : {};
+}
+
+/** Disclosure fields of one attempt record (`attempt.yaml`). */
 export function attemptDisclosure(capture: CandidateCapture): Record<string, unknown> {
   return {
     ...(capture.captureRefusal ? { capture_refusal: capture.captureRefusal } : {}),
@@ -115,13 +129,7 @@ export function attemptDisclosure(capture: CandidateCapture): Record<string, unk
     ...(capture.exactBytesRetainedAt
       ? { exact_bytes_retained_at: capture.exactBytesRetainedAt }
       : {}),
-    ...(capture.excludedNestedRepositories?.length
-      ? {
-          excluded_nested_repositories: [
-            ...new Set(capture.excludedNestedRepositories.map((path) => redactSecrets(path))),
-          ].sort(),
-        }
-      : {}),
+    ...nestedRepositoryDisclosure(capture),
   };
 }
 
@@ -195,19 +203,28 @@ export async function captureCandidateWorkspace(input: {
 /**
  * Write a run's final patch: the saved copy to `final/patch.diff`, the exact
  * bytes to the private exact patch object when the copy hides anything, and
- * the disclosure fields for `work_product.yaml` meta. `patchSha256` is ALWAYS
+ * the disclosure fields (secret-like findings, excluded nested repositories)
+ * for `work_product.yaml` meta. `patchSha256` is ALWAYS
  * the digest of the exact patch, so a redacted copy can never pass the apply
  * gate's digest binding on any route.
  */
 export function persistFinalPatch(
   store: ArtifactStore,
   finalDir: string,
-  run: Pick<CandidateCapture, "diff" | "persistedDiff" | "secretLike" | "exactBytesRetainedAt">,
+  run: Pick<
+    CandidateCapture,
+    "diff" | "persistedDiff" | "secretLike" | "exactBytesRetainedAt" | "excludedNestedRepositories"
+  >,
 ): { patchSha256: string; meta: Record<string, unknown> } {
   const copy = run.persistedDiff ?? persistedPatchCopy(run.diff, []).text;
   assertPersistableText("final patch copy", copy);
   store.writeText(join(finalDir, "patch.diff"), copy);
-  const meta: Record<string, unknown> = run.secretLike ? { secret_like: run.secretLike } : {};
+  // The final work product says what its patch left out, so a reader of the
+  // final artifacts alone sees the omission too.
+  const meta: Record<string, unknown> = {
+    ...(run.secretLike ? { secret_like: run.secretLike } : {}),
+    ...nestedRepositoryDisclosure(run),
+  };
   if (copy !== run.diff) {
     meta["persisted_patch"] = "redacted";
     // null: the exact bytes could not be stored; a deferred Apply answers

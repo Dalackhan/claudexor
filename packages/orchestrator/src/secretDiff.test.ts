@@ -441,6 +441,23 @@ describe("persistFinalPatch", () => {
     expect(readRevertAnchor(repo, saved.patchSha256)).toBe(diff);
   });
 
+  it("tells the final work product which nested repositories its patch left out, redacted", () => {
+    const { store, paths } = storeFor("claudexor-v4c-final-nested-");
+    const diff = textPatch("SAFE.txt", "safe");
+    const secretName = `.review-evidence/${fakeKey("m")}`;
+
+    const saved = persistFinalPatch(store, paths.finalDir, {
+      diff,
+      excludedNestedRepositories: [secretName, ".review-evidence/copy", ".review-evidence/copy"],
+    });
+
+    expect(readFileSync(join(paths.finalDir, "patch.diff"), "utf8")).toBe(diff);
+    const named = saved.meta["excluded_nested_repositories"] as string[];
+    expect(named).toHaveLength(2);
+    expect(named).toContain(".review-evidence/copy");
+    expect(JSON.stringify(named)).not.toContain(fakeKey("m"));
+  });
+
   it("leaves a clean patch byte-exact with no extra meta", () => {
     const { repo, store, paths } = storeFor("claudexor-v4c-final-clean-");
     const diff = textPatch("SAFE.txt", "safe");

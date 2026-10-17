@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { captureWorkingTreeTransient } from "./git.js";
+import { captureWorkingTreeTransient, stashCreate } from "./git.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -69,12 +69,6 @@ it("names nothing and keeps every untracked file when no nested repository exist
 
 it("keeps a submodule the candidate declares as its commit link", async () => {
   const { root, git } = repository();
-  const library = mkdtempSync(join(tmpdir(), "cx-nested-library-"));
-  roots.push(library);
-  git(library, "init", "-q");
-  writeFileSync(join(library, "lib.txt"), "library\n");
-  git(library, "add", "lib.txt");
-  git(library, ...identity, "commit", "-qm", "library");
   // `git submodule add` clones the repository and declares it in .gitmodules.
   git(
     root,
@@ -83,7 +77,7 @@ it("keeps a submodule the candidate declares as its commit link", async () => {
     "submodule",
     "add",
     "-q",
-    library,
+    library(),
     "modules/library",
   );
   const undeclared = join(root, ".review-evidence", "copy");
@@ -97,4 +91,104 @@ it("keeps a submodule the candidate declares as its commit link", async () => {
   expect(captured.patch).toContain("b/modules/library");
   expect(captured.patch).toContain("Subproject commit");
   expect(captured.excludedNestedRepositories).toEqual([".review-evidence/copy"]);
+});
+
+function library(): string {
+  const root = mkdtempSync(join(tmpdir(), "cx-nested-library-"));
+  roots.push(root);
+  const run = (...args: string[]) =>
+    execFileSync("git", ["-C", root, ...args], { stdio: "ignore" });
+  run("init", "-q");
+  writeFileSync(join(root, "lib.txt"), "library\n");
+  run("add", "lib.txt");
+  run(...identity, "commit", "-qm", "library");
+  return root;
+}
+
+function nestedRepository(
+  path: string,
+  git: (cwd: string, ...args: string[]) => void,
+  commit: boolean,
+) {
+  mkdirSync(path, { recursive: true });
+  git(path, "init", "-q");
+  writeFileSync(join(path, "inside.txt"), "inside a nested repository\n");
+  if (!commit) return;
+  git(path, "add", "inside.txt");
+  git(path, ...identity, "commit", "-qm", "nested");
+}
+
+it("names top-relative paths and still captures when the project root is a subdirectory", async () => {
+  const { root, git } = repository();
+  mkdirSync(join(root, "sub"));
+  writeFileSync(join(root, "sub", "file.txt"), "base\n");
+  git(root, "add", "sub/file.txt");
+  git(root, ...identity, "commit", "-qm", "sub");
+  writeFileSync(join(root, "sub", "file.txt"), "base\nedited\n");
+  nestedRepository(join(root, "sub", "clone"), git, true);
+  nestedRepository(join(root, "sub", "scratch"), git, false);
+  // A declared submodule under the subdirectory stays a commit link, though
+  // its .gitmodules lives at the worktree top, outside the capture root.
+  git(
+    root,
+    "-c",
+    "protocol.file.allow=always",
+    "submodule",
+    "add",
+    "-q",
+    library(),
+    "sub/vendor/lib",
+  );
+
+  const captured = await captureWorkingTreeTransient(join(root, "sub"), "HEAD");
+
+  expect(captured.captureIncomplete).toBe(false);
+  expect(captured.patch).toContain("+edited");
+  expect(captured.patch).not.toContain("sub/clone");
+  expect(captured.patch).not.toContain("sub/scratch");
+  expect(captured.patch).toContain("b/sub/vendor/lib");
+  expect(captured.excludedNestedRepositories).toEqual(["sub/clone", "sub/scratch"]);
+});
+
+it("excludes a nested repository by its literal name, never as a glob over its siblings", async () => {
+  const { root, git } = repository();
+  nestedRepository(join(root, "ev", "[ab]"), git, true);
+  mkdirSync(join(root, "ev"), { recursive: true });
+  writeFileSync(join(root, "ev", "b"), "a sibling the glob [ab] would match\n");
+
+  const captured = await captureWorkingTreeTransient(root, "HEAD");
+
+  expect(captured.captureIncomplete).toBe(false);
+  expect(captured.patch).toContain("b/ev/b");
+  expect(captured.excludedNestedRepositories).toEqual(["ev/[ab]"]);
+});
+
+it("snapshots a dirty tree without its undeclared nested repositories", async () => {
+  const { root, git } = repository();
+  writeFileSync(join(root, "tracked.txt"), "base\nchanged\n");
+  // Left by an earlier in-place turn: without a commit `add -A` refuses it,
+  // with one it would freeze into the next turn's base as a commit link.
+  nestedRepository(join(root, "scratch-repo"), git, false);
+  nestedRepository(join(root, "ref", "clone"), git, true);
+  git(
+    root,
+    "-c",
+    "protocol.file.allow=always",
+    "submodule",
+    "add",
+    "-q",
+    library(),
+    "modules/library",
+  );
+
+  const snapshot = await stashCreate(root);
+
+  expect(snapshot).not.toBeNull();
+  const names = execFileSync("git", ["-C", root, "ls-tree", "-r", "--name-only", snapshot ?? ""], {
+    encoding: "utf8",
+  }).split("\n");
+  expect(names).toEqual(expect.arrayContaining(["tracked.txt", ".gitmodules", "modules/library"]));
+  expect(
+    names.filter((name) => name.startsWith("scratch-repo") || name.startsWith("ref/")),
+  ).toEqual([]);
 });

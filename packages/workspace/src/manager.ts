@@ -57,6 +57,9 @@ export interface CapturedWorkspaceDiff {
    * baseline, a failed `diff`): an honest capture refusal, never "no changes". */
   captureIncomplete: boolean;
   captureFailure?: Error;
+  /** Untracked nested repositories left out of `diff` (a patch cannot carry
+   * another repository); disclosed with the attempt. */
+  excludedNestedRepositories?: string[];
 }
 
 export interface CreateEnvelopeOptions {
@@ -363,6 +366,9 @@ export class WorkspaceManager {
           binarySecretPaths: captured.binarySecretPaths,
           captureIncomplete: captured.captureIncomplete,
           captureFailure: captured.captureFailure,
+          ...(captured.excludedNestedRepositories
+            ? { excludedNestedRepositories: captured.excludedNestedRepositories }
+            : {}),
         };
       }
       // Non-git fallback: diff the best-effort cpSync baseline against the live
@@ -399,6 +405,9 @@ export class WorkspaceManager {
       binarySecretPaths: captured.binarySecretPaths,
       captureIncomplete: captured.captureIncomplete,
       captureFailure: captured.captureFailure,
+      ...(captured.excludedNestedRepositories
+        ? { excludedNestedRepositories: captured.excludedNestedRepositories }
+        : {}),
     };
   }
 

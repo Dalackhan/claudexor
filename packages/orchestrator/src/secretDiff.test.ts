@@ -64,6 +64,7 @@ function fakeManager(
     diff: string;
     binarySecretPaths: string[];
     captureIncomplete: boolean;
+    excludedNestedRepositories?: string[];
   }>,
   retained: string[] = [],
 ): WorkspaceManager {
@@ -357,6 +358,28 @@ describe("exact bytes of an isolated candidate survive its envelope (INV-062)", 
       exact_bytes_retained_at: result.exactBytesRetainedAt,
       secret_like: { total_matches: 1 },
     });
+  });
+
+  it("discloses the nested repositories a capture left out, and nothing when there were none", async () => {
+    const patch = textPatch("notes.txt", "plain text");
+    const kept = await capture(
+      fakeManager(async () => ({
+        diff: patch,
+        binarySecretPaths: [],
+        captureIncomplete: false,
+        excludedNestedRepositories: [".review-evidence/base-copy"],
+      })),
+      true,
+    );
+    expect(kept.diff).toBe(patch);
+    expect(attemptDisclosure(kept)).toMatchObject({
+      excluded_nested_repositories: [".review-evidence/base-copy"],
+    });
+    const plain = await capture(
+      fakeManager(async () => ({ diff: patch, binarySecretPaths: [], captureIncomplete: false })),
+      true,
+    );
+    expect(attemptDisclosure(plain)).not.toHaveProperty("excluded_nested_repositories");
   });
 
   it("does not write an exact object for an in-place candidate at capture time", async () => {

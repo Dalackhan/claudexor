@@ -205,6 +205,36 @@ export interface TransientDiffCapture {
    * could not be read for inspection). The exact patch still carries their
    * payload; a persisted COPY withholds it and discloses these paths (INV-062). */
   binarySecretPaths: string[];
+  /** Untracked directories holding their own Git repository. A patch cannot
+   * carry another repository (Git would record a commit link, or refuse a
+   * repository without a commit), so they are left out of the capture and
+   * named here instead of failing the whole capture. */
+  excludedNestedRepositories?: string[];
+}
+
+/** Untracked nested repositories under `repo`, relative to it: `git ls-files
+ * --others` names each one with a trailing slash because Git never descends
+ * into another repository. Read against the capture's own scratch index, so
+ * the set is "not in the base tree", never the user's staging state. */
+async function untrackedNestedRepositories(
+  repo: string,
+  env: Record<string, string>,
+  pathExcludes: string[],
+): Promise<string[]> {
+  const listed = await gitEnv(
+    repo,
+    ["ls-files", "--others", "--exclude-standard", "-z", "--", ".", ...pathExcludes],
+    env,
+  );
+  if (listed.code !== 0) {
+    throw new WorkspaceError(
+      `transient diff could not list untracked files: ${listed.stderr.trim()}`,
+    );
+  }
+  return listed.stdout
+    .split("\0")
+    .filter((entry) => entry.endsWith("/"))
+    .map((entry) => entry.slice(0, -1));
 }
 
 export async function captureWorkingTreeTransient(
@@ -241,7 +271,19 @@ export async function captureWorkingTreeTransient(
     if (read.code !== 0) {
       throw new WorkspaceError(`transient diff read-tree failed: ${read.stderr.trim()}`);
     }
-    const add = await gitEnv(repo, ["add", "-A", "--", ".", ...pathExcludes], env);
+    const nested = await untrackedNestedRepositories(repo, env, pathExcludes);
+    const add = await gitEnv(
+      repo,
+      [
+        "add",
+        "-A",
+        "--",
+        ".",
+        ...pathExcludes,
+        ...nested.map((path) => `:(exclude,top,literal)${path}`),
+      ],
+      env,
+    );
     if (add.code !== 0) {
       throw new WorkspaceError(`transient diff add failed: ${add.stderr.trim()}`);
     }
@@ -276,7 +318,12 @@ export async function captureWorkingTreeTransient(
         break;
       }
     }
-    return { patch: diff.stdout, binarySecretPaths: [...flagged], captureIncomplete: false };
+    return {
+      patch: diff.stdout,
+      binarySecretPaths: [...flagged],
+      captureIncomplete: false,
+      ...(nested.length ? { excludedNestedRepositories: nested } : {}),
+    };
   } catch (error) {
     primaryError = error;
     if (error instanceof CaptureOutputExceeded)

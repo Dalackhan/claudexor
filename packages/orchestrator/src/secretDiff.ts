@@ -101,6 +101,8 @@ export interface CandidateCapture {
   /** Set when the private exact patch object of an isolated candidate could
    * not be written: its envelope is kept and this is where the bytes still are. */
   exactBytesRetainedAt?: string;
+  /** Untracked nested repositories the capture left out of `diff`. */
+  excludedNestedRepositories?: string[];
 }
 
 /** Disclosure fields of one attempt record (`attempt.yaml`). */
@@ -110,6 +112,9 @@ export function attemptDisclosure(capture: CandidateCapture): Record<string, unk
     ...(capture.secretLike ? { secret_like: capture.secretLike } : {}),
     ...(capture.exactBytesRetainedAt
       ? { exact_bytes_retained_at: capture.exactBytesRetainedAt }
+      : {}),
+    ...(capture.excludedNestedRepositories?.length
+      ? { excluded_nested_repositories: capture.excludedNestedRepositories }
       : {}),
   };
 }
@@ -175,6 +180,9 @@ export async function captureCandidateWorkspace(input: {
     ...(redactedCopy ? { persistedDiff: copy.text } : {}),
     ...(secretLike ? { secretLike } : {}),
     ...(retained ? { exactBytesRetainedAt: envelope.worktree_path } : {}),
+    ...(captured.excludedNestedRepositories?.length
+      ? { excludedNestedRepositories: captured.excludedNestedRepositories }
+      : {}),
   };
 }
 

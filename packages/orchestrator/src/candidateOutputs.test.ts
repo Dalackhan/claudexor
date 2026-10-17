@@ -299,6 +299,7 @@ describe("candidate produced-output persistence", () => {
     const produced = writeCandidateAttemptArtifacts({
       store: {
         writeText: () => undefined,
+        writePatch: () => undefined,
         writeYaml: (_path: string, value: unknown) => writes.push(value as Record<string, unknown>),
       } as never,
       attemptDir,
@@ -323,6 +324,7 @@ describe("candidate produced-output persistence", () => {
     const produced = writeCandidateAttemptArtifacts({
       store: {
         writeText: () => undefined,
+        writePatch: () => undefined,
         writeYaml: () => undefined,
       } as never,
       attemptDir,
@@ -354,6 +356,7 @@ describe("candidate produced-output persistence", () => {
     const produced = writeCandidateAttemptArtifacts({
       store: {
         writeText: () => undefined,
+        writePatch: () => undefined,
         writeYaml: () => undefined,
       } as never,
       attemptDir,
@@ -383,6 +386,7 @@ describe("candidate produced-output persistence", () => {
     const produced = writeCandidateAttemptArtifacts({
       store: {
         writeText: () => undefined,
+        writePatch: () => undefined,
         writeYaml: () => undefined,
       } as never,
       attemptDir,
@@ -410,6 +414,7 @@ describe("candidate produced-output persistence", () => {
     const produced = writeCandidateAttemptArtifacts({
       store: {
         writeText: () => undefined,
+        writePatch: () => undefined,
         writeYaml: (_path: string, value: unknown) => writes.push(value as Record<string, unknown>),
       } as never,
       attemptDir,
@@ -439,6 +444,7 @@ describe("candidate produced-output persistence", () => {
     const yamls: Record<string, unknown>[] = [];
     const store = {
       writeText: (path: string, value: string) => void (texts[path] = value),
+      writePatch: (path: string, value: string) => void (texts[path] = value),
       writeYaml: (_path: string, value: unknown) => yamls.push(value as Record<string, unknown>),
     } as never;
 
@@ -479,7 +485,11 @@ describe("candidate produced-output persistence", () => {
       Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0]), Buffer.from(token)]),
     );
     const produced = writeCandidateAttemptArtifacts({
-      store: { writeText: () => undefined, writeYaml: () => undefined } as never,
+      store: {
+        writeText: () => undefined,
+        writePatch: () => undefined,
+        writeYaml: () => undefined,
+      } as never,
       attemptDir,
       worktreePath: worktree,
       artifactRelativeDir: null,

@@ -1,0 +1,93 @@
+import {
+  closeSync,
+  copyFileSync,
+  existsSync,
+  fsyncSync,
+  linkSync,
+  lstatSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
+import { ensureDir, fsyncDirectory, sha256 } from "./index.js";
+
+const LINK_UNAVAILABLE = new Set(["EXDEV", "EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EMLINK"]);
+
+/** Publish a new directory entry, never truncate an inode shared by other patches. */
+function publishLink(source: string, target: string): void {
+  ensureDir(dirname(target));
+  const temp = `${target}.tmp-${crypto.randomUUID()}`;
+  try {
+    try {
+      linkSync(source, temp);
+    } catch (error) {
+      if (!LINK_UNAVAILABLE.has((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      copyFileSync(source, temp);
+      const fd = openSync(temp, "r+");
+      try {
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+    }
+    renameSync(temp, target);
+    fsyncDirectory(dirname(target));
+  } finally {
+    if (existsSync(temp)) unlinkSync(temp);
+  }
+}
+
+/** Shared by display copies and private anchors. Different bytes never share an object. */
+export function writePatchObject(runtimeDir: string, target: string, patch: string): void {
+  const id = sha256(patch).slice(7);
+  const object = join(runtimeDir, "patches", `${id}.patch`);
+  ensureDir(dirname(object));
+  if (existsSync(object)) {
+    if (sha256(readFileSync(object, "utf8")) !== `sha256:${id}`) {
+      throw new Error(`patch object ${id} failed its content digest`);
+    }
+  } else {
+    const temp = `${object}.tmp-${crypto.randomUUID()}`;
+    try {
+      const fd = openSync(temp, "wx", 0o600);
+      try {
+        writeFileSync(fd, patch, "utf8");
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      renameSync(temp, object);
+      fsyncDirectory(dirname(object));
+    } finally {
+      if (existsSync(temp)) unlinkSync(temp);
+    }
+  }
+  publishLink(object, target);
+  // A filesystem without hard links keeps the published copy, not an extra cache copy.
+  if (lstatSync(object).nlink === 1) unlinkSync(object);
+}
+
+/** Cache entries have no authority of their own. Anchors and run paths own their lifetime. */
+export function prunePatchObjects(
+  runtimeDir: string,
+  dryRun: boolean,
+  plannedUnlinks: ReadonlyMap<string, number> = new Map(),
+): number {
+  const directory = join(runtimeDir, "patches");
+  if (!existsSync(directory)) return 0;
+  let bytes = 0;
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isFile() || !/^[0-9a-f]{64}\.patch$/.test(entry.name)) continue;
+    const path = join(directory, entry.name);
+    const stat = lstatSync(path);
+    if (stat.nlink !== 1 + (dryRun ? (plannedUnlinks.get(`${stat.dev}:${stat.ino}`) ?? 0) : 0))
+      continue;
+    bytes += stat.size;
+    if (!dryRun) unlinkSync(path);
+  }
+  return bytes;
+}

@@ -14,8 +14,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ArtifactStore } from "@claudexor/artifact-store";
 import { WorkspaceError } from "@claudexor/core";
 import type { HarnessEvent, WorkspaceEnvelope } from "@claudexor/schema";
-import { projectRuntimeDir, sha256 } from "@claudexor/util";
-import { readRevertAnchor, type WorkspaceManager } from "@claudexor/workspace";
+import { projectRuntimeDir, sha256, prunePatchObjects } from "@claudexor/util";
+import {
+  createRevertAnchorFromPatchOrNull,
+  readRevertAnchor,
+  type WorkspaceManager,
+} from "@claudexor/workspace";
 
 import { PERSISTED_PATCH_NOTICE } from "./persistedPatch.js";
 import {
@@ -381,6 +385,31 @@ describe("persistFinalPatch", () => {
     roots.push(projectRuntimeDir(repo));
     return { repo, store, paths: store.createRun("run-v4c") };
   }
+
+  it("shares the real attempt, final and anchor writers without changing their readers", () => {
+    const repo = tempRoot("claudexor-shared-patch-");
+    const store = new ArtifactStore(repo);
+    roots.push(store.claudexorDir);
+    const paths = store.createRun("run-shared");
+    const diff = textPatch("SAFE.txt", "ordinary output");
+    const attempt = join(paths.attemptsDir, "a01", "patch.diff");
+    store.writePatch(attempt, diff);
+    const final = persistFinalPatch(store, paths.finalDir, { diff });
+    const anchor = createRevertAnchorFromPatchOrNull(repo, diff)!;
+    const anchorPath = join(store.claudexorDir, "anchors", "objects", `${anchor.slice(7)}.patch`);
+    expect(
+      new Set(
+        [attempt, join(paths.finalDir, "patch.diff"), anchorPath].map(
+          (path) => lstatSync(path).ino,
+        ),
+      ).size,
+    ).toBe(1);
+    expect(readRevertAnchor(repo, anchor)).toBe(diff);
+    expect(final.patchSha256).toBe(anchor);
+    rmSync(paths.root, { recursive: true });
+    expect(prunePatchObjects(store.claudexorDir, false)).toBe(0);
+    expect(readRevertAnchor(repo, anchor)).toBe(diff);
+  });
 
   it("saves the redacted copy, binds the digest to the exact patch and stores the exact object", () => {
     const { repo, store, paths } = storeFor("claudexor-v4c-final-");

@@ -397,7 +397,7 @@ export function writeCandidateAttemptArtifacts(input: {
   if (persistPatch) {
     const saved = input.persistedDiff ?? persistedPatchCopy(input.diff, []).text;
     assertPersistableText("attempt patch copy", saved);
-    input.store.writeText(join(input.attemptDir, "patch.diff"), saved);
+    input.store.writePatch(join(input.attemptDir, "patch.diff"), saved);
   }
   const stats = summarizeDiffPaths(input.diff);
   // Build one candidate path set before the first filesystem write. A raster

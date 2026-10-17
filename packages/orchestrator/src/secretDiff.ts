@@ -192,7 +192,7 @@ export function persistFinalPatch(
 ): { patchSha256: string; meta: Record<string, unknown> } {
   const copy = run.persistedDiff ?? persistedPatchCopy(run.diff, []).text;
   assertPersistableText("final patch copy", copy);
-  store.writeText(join(finalDir, "patch.diff"), copy);
+  store.writePatch(join(finalDir, "patch.diff"), copy);
   const meta: Record<string, unknown> = run.secretLike ? { secret_like: run.secretLike } : {};
   if (copy !== run.diff) {
     meta["persisted_patch"] = "redacted";

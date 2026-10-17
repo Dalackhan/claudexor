@@ -4940,6 +4940,16 @@ plans/<harness>.md?           (plan mode)
 attempts/aNN/events.jsonl?    (read-only modes)
 ```
 
+Patch writers publish identical bytes through a per-project content-addressed
+`patches/<sha256>.patch` cache. Attempt/final `patch.diff` paths and private
+`anchors/objects/<sha256>.patch` paths are ordinary hard links to those bytes;
+replacing a saved patch publishes a new inode atomically. Filesystems that
+cannot link receive independent byte-identical copies. Masked display copies
+and their different exact bytes remain separate objects. Existing plain-file
+run trees and anchors stay readable without migration. Retention removes cache
+entries only after their last run/anchor link is gone; an anchor keeps its
+existing independent lifetime.
+
 `final/telemetry.yaml` (`RunTelemetry` in the schema) is the single engine-owned
 record of per-attempt web evidence (requested/effective mode, attempted,
 satisfied, status), unrecovered tool errors, non-blocking tool-warning counts,

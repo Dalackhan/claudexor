@@ -9,7 +9,7 @@
  * thin callers of this one owner.
  */
 import { existsSync, lstatSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 import {
   ControlGcReceipt,
@@ -18,7 +18,8 @@ import {
   type GcRunDeletion,
   isTerminalLifecycle,
 } from "@claudexor/schema";
-import { readTextSafe, writeText } from "@claudexor/util";
+import { prunePatchObjects, readTextSafe, writeText } from "@claudexor/util";
+import { treeReclaimableBytes } from "./retention-bytes.js";
 import { holdsRetainedSources } from "@claudexor/workspace";
 
 export interface RetentionPolicy {
@@ -191,6 +192,7 @@ export async function runRetentionPass(
   const errors: string[] = [];
   let examined = 0;
   let freedBytes = 0;
+  const plannedUnlinks = new Map<string, number>();
   let deletions = 0;
   let truncated = false;
 
@@ -257,7 +259,7 @@ export async function runRetentionPass(
         break;
       }
       try {
-        const bytes = treeBytes(candidate.root);
+        const bytes = treeReclaimableBytes(candidate.root, dryRun ? plannedUnlinks : new Map());
         if (!dryRun) {
           rmSync(candidate.root, { recursive: true, force: true });
           // The deletion is FACT once rmSync returns — a failed tombstone
@@ -337,7 +339,7 @@ export async function runRetentionPass(
           truncated = true;
           break;
         }
-        const bytes = treeBytes(path);
+        const bytes = treeReclaimableBytes(path, dryRun ? plannedUnlinks : new Map());
         if (!dryRun) rmSync(path, { recursive: true, force: true });
         deletedReviews.push({ path, freed_bytes: bytes });
         freedBytes += bytes;
@@ -354,6 +356,14 @@ export async function runRetentionPass(
     errors.push(
       `pass truncated at ${maxDeletions} deletions (bounded batch); run gc again to continue`,
     );
+  }
+
+  for (const project of projects) {
+    try {
+      freedBytes += prunePatchObjects(dirname(project.runsDir), dryRun, plannedUnlinks);
+    } catch (error) {
+      errors.push(`patch objects: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   // Advisory data-root disclosure (never a deletion surface): a failed scan
@@ -540,25 +550,4 @@ function ageStampOf(runRoot: string, record: RetentionRunRecord | undefined): nu
   } catch {
     return Date.now();
   }
-}
-
-function treeBytes(root: string): number {
-  let total = 0;
-  const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const path = join(dir, entry.name);
-      try {
-        if (entry.isDirectory()) walk(path);
-        else if (entry.isFile()) total += statSync(path).size;
-      } catch {
-        /* a racing unlink must not fail the measurement */
-      }
-    }
-  };
-  try {
-    walk(root);
-  } catch {
-    /* tree vanished mid-walk */
-  }
-  return total;
 }

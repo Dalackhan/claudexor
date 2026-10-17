@@ -756,11 +756,12 @@ describe("parseClaudeEvent", () => {
     expect(deniedAllow).not.toContain("Bash");
   });
 
-  it("workspace_write pre-approves the read tools outside the working folder; a caller's read shape wins", () => {
+  it("workspace_write pre-approves the read tools outside the working folder; a caller's narrowing wins", () => {
     // A delegated run whose subject sits beside its own working folder reads it
     // in place; acceptEdits alone leaves Read/Glob/Grep there to the bridge,
-    // which denies them. Claude applies a Read(...) rule to the whole read
-    // family, so any caller deny or pattern on one of them keeps all three out.
+    // which denies them. Claude applies a Read(...) allow pattern to the whole
+    // read family, so it keeps all three bare tools out; deny rules win on
+    // their own, so a deny pattern keeps them and a bare deny skips one tool.
     const base = {
       session_id: "ses-test",
       intent: "implement" as const,
@@ -790,15 +791,19 @@ describe("parseClaudeEvent", () => {
       write.slice(write.indexOf("--permission-mode"), write.indexOf("--permission-mode") + 2),
     ).toEqual(["--permission-mode", "acceptEdits"]);
 
-    for (const [allow, deny] of [
-      [["Read(./**)"], []],
-      [[], ["Grep"]],
-      [[], ["Read(/secrets/**)"]],
-    ] as const) {
-      const shaped = allowOf(argsFor("workspace_write", [...allow], [...deny]));
-      expect(shaped).toEqual(expect.arrayContaining([...allow, "Bash"]));
-      for (const tool of ["Read", "Glob", "Grep"]) expect(shaped).not.toContain(tool);
+    for (const pattern of ["Read(./**)", "Grep(src/**)"]) {
+      const narrowed = allowOf(argsFor("workspace_write", [pattern], []));
+      expect(narrowed).toEqual(expect.arrayContaining([pattern, "Bash"]));
+      for (const tool of ["Read", "Glob", "Grep"]) expect(narrowed).not.toContain(tool);
     }
+
+    const denyPattern = argsFor("workspace_write", [], ["Read(./.env)"]);
+    expect(allowOf(denyPattern)).toEqual(expect.arrayContaining(["Read", "Glob", "Grep", "Bash"]));
+    expect(denyPattern[denyPattern.indexOf("--disallowedTools") + 1]).toBe("Read(./.env)");
+
+    const bareDeny = allowOf(argsFor("workspace_write", [], ["Grep"]));
+    expect(bareDeny).toEqual(expect.arrayContaining(["Read", "Glob", "Bash"]));
+    expect(bareDeny).not.toContain("Grep");
 
     for (const access of ["full", "inherit_native"] as const) {
       expect(allowOf(argsFor(access, [], []))).not.toContain("Read");

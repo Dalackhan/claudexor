@@ -212,10 +212,34 @@ export interface TransientDiffCapture {
   excludedNestedRepositories?: string[];
 }
 
-/** Untracked nested repositories under `repo`, relative to it: `git ls-files
- * --others` names each one with a trailing slash because Git never descends
- * into another repository. Read against the capture's own scratch index, so
- * the set is "not in the base tree", never the user's staging state. */
+/** Submodule paths the working tree's own `.gitmodules` declares: a submodule
+ * the candidate added on purpose is captured as its commit link, as before.
+ * No file, or no declared path, declares nothing. */
+async function declaredSubmodulePaths(
+  repo: string,
+  env: Record<string, string>,
+): Promise<Set<string>> {
+  const listed = await gitEnv(
+    repo,
+    ["config", "--file", ".gitmodules", "--null", "--get-regexp", "^submodule\\..*\\.path$"],
+    env,
+  );
+  if (listed.code !== 0) return new Set();
+  // --null: each entry is "key\nvalue\0", so a path keeps its spaces and newlines.
+  return new Set(
+    listed.stdout
+      .split("\0")
+      .filter((entry) => entry.includes("\n"))
+      .map((entry) => entry.slice(entry.indexOf("\n") + 1))
+      .filter((path) => path.length > 0),
+  );
+}
+
+/** Untracked nested repositories under `repo` that no `.gitmodules` entry
+ * declares, relative to it: `git ls-files --others` names each one with a
+ * trailing slash because Git never descends into another repository. Read
+ * against the capture's own scratch index, so the set is "not in the base
+ * tree", never the user's staging state. */
 async function untrackedNestedRepositories(
   repo: string,
   env: Record<string, string>,
@@ -231,10 +255,12 @@ async function untrackedNestedRepositories(
       `transient diff could not list untracked files: ${listed.stderr.trim()}`,
     );
   }
+  const declared = await declaredSubmodulePaths(repo, env);
   return listed.stdout
     .split("\0")
     .filter((entry) => entry.endsWith("/"))
-    .map((entry) => entry.slice(0, -1));
+    .map((entry) => entry.slice(0, -1))
+    .filter((path) => !declared.has(path));
 }
 
 export async function captureWorkingTreeTransient(

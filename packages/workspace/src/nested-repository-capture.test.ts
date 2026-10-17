@@ -66,3 +66,35 @@ it("names nothing and keeps every untracked file when no nested repository exist
   expect(captured.patch).toContain("b/.review-evidence/notes/log.txt");
   expect(captured.excludedNestedRepositories).toBeUndefined();
 });
+
+it("keeps a submodule the candidate declares as its commit link", async () => {
+  const { root, git } = repository();
+  const library = mkdtempSync(join(tmpdir(), "cx-nested-library-"));
+  roots.push(library);
+  git(library, "init", "-q");
+  writeFileSync(join(library, "lib.txt"), "library\n");
+  git(library, "add", "lib.txt");
+  git(library, ...identity, "commit", "-qm", "library");
+  // `git submodule add` clones the repository and declares it in .gitmodules.
+  git(
+    root,
+    "-c",
+    "protocol.file.allow=always",
+    "submodule",
+    "add",
+    "-q",
+    library,
+    "modules/library",
+  );
+  const undeclared = join(root, ".review-evidence", "copy");
+  mkdirSync(undeclared, { recursive: true });
+  git(undeclared, "init", "-q");
+
+  const captured = await captureWorkingTreeTransient(root, "HEAD");
+
+  expect(captured.captureIncomplete).toBe(false);
+  expect(captured.patch).toContain("b/.gitmodules");
+  expect(captured.patch).toContain("b/modules/library");
+  expect(captured.patch).toContain("Subproject commit");
+  expect(captured.excludedNestedRepositories).toEqual([".review-evidence/copy"]);
+});

@@ -8,7 +8,7 @@ import {
   type WorkspaceManager,
   type CapturedWorkspaceDiff,
 } from "@claudexor/workspace";
-import { sensitiveResourcePolicy, sha256 } from "@claudexor/util";
+import { redactSecrets, sensitiveResourcePolicy, sha256 } from "@claudexor/util";
 import { candidateOutputSecretRisk, rasterLinksInMarkdown } from "./candidateOutputs.js";
 import {
   assertPersistableText,
@@ -101,11 +101,13 @@ export interface CandidateCapture {
   /** Set when the private exact patch object of an isolated candidate could
    * not be written: its envelope is kept and this is where the bytes still are. */
   exactBytesRetainedAt?: string;
-  /** Untracked nested repositories the capture left out of `diff`. */
+  /** Untracked nested repositories the capture left out of `diff` (exact paths;
+   * the attempt disclosure redacts them like every other disclosed path). */
   excludedNestedRepositories?: string[];
 }
 
-/** Disclosure fields of one attempt record (`attempt.yaml`). */
+/** Disclosure fields of one attempt record (`attempt.yaml`). The excluded nested
+ * repositories are an attempt-level fact; the final work product does not repeat them. */
 export function attemptDisclosure(capture: CandidateCapture): Record<string, unknown> {
   return {
     ...(capture.captureRefusal ? { capture_refusal: capture.captureRefusal } : {}),
@@ -114,7 +116,11 @@ export function attemptDisclosure(capture: CandidateCapture): Record<string, unk
       ? { exact_bytes_retained_at: capture.exactBytesRetainedAt }
       : {}),
     ...(capture.excludedNestedRepositories?.length
-      ? { excluded_nested_repositories: capture.excludedNestedRepositories }
+      ? {
+          excluded_nested_repositories: [
+            ...new Set(capture.excludedNestedRepositories.map((path) => redactSecrets(path))),
+          ].sort(),
+        }
       : {}),
   };
 }

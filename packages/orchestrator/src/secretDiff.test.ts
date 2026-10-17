@@ -380,6 +380,22 @@ describe("exact bytes of an isolated candidate survive its envelope (INV-062)", 
       true,
     );
     expect(attemptDisclosure(plain)).not.toHaveProperty("excluded_nested_repositories");
+    // A secret-like folder name is redacted in the saved disclosure; the exact
+    // path stays with the capture, which excluded it from the patch.
+    const secretName = `.review-evidence/${fakeKey("n")}`;
+    const named = await capture(
+      fakeManager(async () => ({
+        diff: patch,
+        binarySecretPaths: [],
+        captureIncomplete: false,
+        excludedNestedRepositories: [secretName],
+      })),
+      true,
+    );
+    expect(named.excludedNestedRepositories).toEqual([secretName]);
+    const saved = JSON.stringify(attemptDisclosure(named));
+    expect(saved).not.toContain(fakeKey("n"));
+    expect(saved).toContain(".review-evidence/");
   });
 
   it("does not write an exact object for an in-place candidate at capture time", async () => {

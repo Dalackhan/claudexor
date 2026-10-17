@@ -315,6 +315,10 @@ public struct BudgetSnapshot: Codable, Sendable, Equatable {
     public let cashKnowledge: String?
     /// CASH spend so far in USD; null when unknown.
     public let spendUsd: Double?
+    /// The part of cash the finite cap governs (settled amounts on routes Claudexor
+    /// controls); null when that cash is unknown. Known while `spendUsd` is nil when an
+    /// included subscription reports no actual debit, so the total is unknown beside it.
+    public let controllableSpendUsd: Double?
     /// Subscription VALUATION in USD (QA-023c): what this run's native-subscription
     /// work would approximately have cost by token valuation, accumulated separately
     /// from real billed cash. Nil when no valuation is known — an UNKNOWN valuation
@@ -323,7 +327,7 @@ public struct BudgetSnapshot: Codable, Sendable, Equatable {
     /// Confidence of `valuationUsd`: `exact` (natively priced), `estimated`
     /// (token-derived), or `unknown` (no usage reported — `valuationUsd` is then nil).
     public let valuationKnowledge: String
-    /// Remaining budget in USD; null when no cap or unknown spend.
+    /// Remaining finite cap after `controllableSpendUsd`; null when no cap or unknown.
     public let remainingUsd: Double?
     /// True when settled cash is estimated rather than exact. Subscription
     /// valuation confidence lives separately in `valuationKnowledge`.
@@ -347,10 +351,12 @@ public struct BudgetSnapshot: Codable, Sendable, Equatable {
     public init(paidBudget: PaidBudget, spendUsd: Double?, remainingUsd: Double?,
                 estimated: Bool, source: String,
                 valuationUsd: Double? = nil, valuationKnowledge: String = "unknown",
-                evidence: String = "complete", cashKnowledge: String? = nil) {
+                evidence: String = "complete", cashKnowledge: String? = nil,
+                controllableSpendUsd: Double? = nil) {
         self.paidBudget = paidBudget
         self.cashKnowledge = cashKnowledge
         self.spendUsd = cashKnowledge == "unknown" ? nil : spendUsd
+        self.controllableSpendUsd = controllableSpendUsd
         self.valuationUsd = valuationUsd
         self.valuationKnowledge = valuationKnowledge
         self.remainingUsd = remainingUsd
@@ -360,8 +366,8 @@ public struct BudgetSnapshot: Codable, Sendable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case paidBudget, spendUsd, valuationUsd, valuationKnowledge, remainingUsd,
-             estimated, source, evidence, cashKnowledge
+        case paidBudget, spendUsd, controllableSpendUsd, valuationUsd, valuationKnowledge,
+             remainingUsd, estimated, source, evidence, cashKnowledge
     }
 
     // Legacy defaults mirror ControlBudgetSnapshot; explicit unknown cash stays nil.
@@ -370,6 +376,8 @@ public struct BudgetSnapshot: Codable, Sendable, Equatable {
         paidBudget = try c.decode(PaidBudget.self, forKey: .paidBudget)
         cashKnowledge = try c.decodeIfPresent(String.self, forKey: .cashKnowledge)
         spendUsd = cashKnowledge == "unknown" ? nil : try c.decodeIfPresent(Double.self, forKey: .spendUsd)
+        // Older engines omit it: absent stays nil (never copied from the total).
+        controllableSpendUsd = try c.decodeIfPresent(Double.self, forKey: .controllableSpendUsd) ?? nil
         valuationUsd = try c.decodeIfPresent(Double.self, forKey: .valuationUsd) ?? nil
         valuationKnowledge = try c.decodeIfPresent(String.self, forKey: .valuationKnowledge) ?? "unknown"
         remainingUsd = try c.decodeIfPresent(Double.self, forKey: .remainingUsd) ?? nil

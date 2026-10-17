@@ -131,6 +131,11 @@
                   },
                   "source": {
                     "$ref": "#/definitions/ControlRunDetail/properties/attemptExecution/items/properties/processing/properties/submittedNative/anyOf/0"
+                  },
+                  "debit": {
+                    "type": "string",
+                    "const": "unobserved",
+                    "description": "The route reports no actual cash or purchased-credit debit. Included service still admits the work, but its cash stays unknown instead of zero and is outside the finite cap; absence keeps proven ordinary inclusion as zero cash."
                   }
                 },
                 "required": [
@@ -177,7 +182,7 @@
                   "valuationKnowledge"
                 ],
                 "additionalProperties": false,
-                "description": "Observed usage components. An amount of unknown meaning is not charged cash; separately proven included service can still establish exact zero incremental cash."
+                "description": "Observed usage components. An amount of unknown meaning is not charged cash; separately proven included service can still establish exact zero incremental cash unless its route reports no actual debit."
               }
             },
             "required": [
@@ -3080,6 +3085,14 @@
               "default": null,
               "description": "CASH spend so far in USD; null when unknown."
             },
+            "controllableSpendUsd": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "default": null,
+              "description": "Cash governed by the finite cap: settled amounts on routes Claudexor controls; null when that cash is unknown. spendUsd can still be null when an included subscription reports no actual debit."
+            },
             "valuationUsd": {
               "type": [
                 "number",
@@ -3104,7 +3117,7 @@
                 "null"
               ],
               "default": null,
-              "description": "Remaining budget in USD; null when no cap or unknown spend."
+              "description": "Remaining finite cap after controllableSpendUsd; null when no cap or unknown."
             },
             "estimated": {
               "type": "boolean",
@@ -3301,7 +3314,14 @@
                         "null"
                       ],
                       "default": null,
-                      "description": "Settled cash spend in USD (0 on native-subscription routes); null when unknown."
+                      "description": "Settled cash spend in USD (0 on proven included routes); null when unknown, including an included subscription that reports no actual debit."
+                    },
+                    "controllable_cash_usd": {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "description": "Cash governed by the finite cap: settled amounts on routes Claudexor controls; null when that cash is unknown. spend_usd and cash_usd stay null when an included subscription reports no actual debit. Absent on legacy decisions."
                     },
                     "valuation_usd": {
                       "type": [

@@ -676,6 +676,7 @@ without a project uses an empty synthetic cwd at
 events.jsonl
 context/task.yaml
 context/context_pack.yaml?
+context/processing_intent.yaml?   (routed lanes' frozen speed intent)
 attempts/a01/attempt.yaml
 attempts/a01/answer.md?
 attempts/a01/retained-envelope.json?  (capture-refused inspection source)

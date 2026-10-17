@@ -99,10 +99,13 @@ struct TurnReceiptRow: View {
             Spacer()
             elapsed
             let spend = model.spendDisplay(run)
-            if spend.known {
-                Text(CashSpend.label(spend.usd, estimated: spend.estimated))
+            if let cash = CashSpend.receipt(
+                total: spend.known ? spend.usd : nil, estimated: spend.estimated,
+                controllable: spend.controllableUsd, cap: run.finiteCapUsd) {
+                Text(cash.text)
                     .font(.caption).foregroundStyle(.secondary)
-                    .help(CashSpend.help(estimated: spend.estimated))
+                    .lineLimit(1)
+                    .help(cash.help)
             }
             // QA-023c: the subscription VALUATION beside cash — a $0-cash native
             // run still shows what the work was worth. Shown ONLY when known

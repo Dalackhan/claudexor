@@ -9007,6 +9007,116 @@ describe("DaemonControlApiServer", () => {
     });
   });
 
+  it.each([
+    { controllable: "exact", spend: 0.4, controllableSpendUsd: 0.4, remainingUsd: 1.6 },
+    { controllable: "unknown", spend: 0.4, controllableSpendUsd: null, remainingUsd: null },
+    { controllable: undefined, spend: 0.4, controllableSpendUsd: null, remainingUsd: null },
+  ])(
+    "keeps unknown total cash null while the cap-governed part is $controllable",
+    async ({ controllable, spend, controllableSpendUsd, remainingUsd }) => {
+      // An included subscription without a debit receipt: the ledger reports
+      // unknown cash, but the finite cap's controllable part is known.
+      const { daemon, record } = fakeDaemon();
+      rmSync(join(record.runDir as string, "arbitration", "decision.yaml"), { force: true });
+      record.params = { ...(record.params ?? {}), paidBudget: { kind: "finite", maxUsd: 2 } };
+      appendFileSync(
+        join(record.runDir as string, "events.jsonl"),
+        `${JSON.stringify({
+          ts: new Date().toISOString(),
+          run_id: "run-d1",
+          task_id: "task-d1",
+          type: "budget.cash",
+          payload: {
+            cash_spend_usd: spend,
+            valuation_usd: 0,
+            estimated: true,
+            valuation_knowledge: "unknown",
+            cash_knowledge: "unknown",
+            ...(controllable ? { controllable_cash_knowledge: controllable } : {}),
+          },
+        })}\n`,
+      );
+      await withDaemonServer(daemon, async (base) => {
+        const detail = await apiFetch(`${base}/runs/run-d1`, {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        const body = (await detail.json()) as { budget: Record<string, unknown> };
+        expect(body.budget).toMatchObject({
+          cashKnowledge: "unknown",
+          spendUsd: null,
+          controllableSpendUsd,
+          remainingUsd,
+          estimated: true,
+        });
+      });
+    },
+  );
+
+  it.each([true, false])(
+    "projects a decision's unknown total beside its cap-governed part (events=%s)",
+    async (withEvents) => {
+      // The decision shape the producer writes for Codex subscription work
+      // (orchestrator decisionBudget.test.ts); older event logs may lack budget.cash.
+      const { daemon, record } = fakeDaemon();
+      record.params = { ...(record.params ?? {}), paidBudget: { kind: "finite", maxUsd: 2 } };
+      writeFileSync(
+        join(record.runDir as string, "arbitration", "decision.yaml"),
+        [
+          "winner: a01",
+          "facts:",
+          "  lifecycle: succeeded",
+          "  review: approved",
+          "  checks: passed",
+          "  noChanges: false",
+          "  reason: null",
+          "budget_summary:",
+          "  spend_usd: null",
+          "  cash_usd: null",
+          "  controllable_cash_usd: 0.4",
+          "  valuation_usd: 1.5",
+          "  valuation_knowledge: estimated",
+          "  estimated: true",
+          "",
+        ].join("\n"),
+      );
+      if (withEvents)
+        appendFileSync(
+          join(record.runDir as string, "events.jsonl"),
+          `${JSON.stringify({
+            ts: new Date().toISOString(),
+            run_id: "run-d1",
+            task_id: "task-d1",
+            type: "budget.cash",
+            payload: {
+              cash_spend_usd: 0.4,
+              valuation_usd: 1.5,
+              estimated: true,
+              valuation_knowledge: "estimated",
+              cash_knowledge: "unknown",
+              controllable_cash_knowledge: "exact",
+            },
+          })}\n`,
+        );
+      await withDaemonServer(daemon, async (base) => {
+        const detail = await apiFetch(`${base}/runs/run-d1`, {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        const body = (await detail.json()) as {
+          summary: { spendUsd: number | null };
+          budget: Record<string, unknown>;
+        };
+        expect(body.budget).toMatchObject({
+          spendUsd: null,
+          controllableSpendUsd: 0.4,
+          remainingUsd: 1.6,
+          estimated: true,
+          source: "decision",
+        });
+        expect(body.summary.spendUsd).toBeNull();
+      });
+    },
+  );
+
   it("normalizes legacy combined cash/valuation certainty without rewriting history", async () => {
     const legacyEvent = fakeDaemon();
     rmSync(join(legacyEvent.record.runDir as string, "arbitration", "decision.yaml"), {

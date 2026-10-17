@@ -1307,11 +1307,19 @@ views in the shared design-system files; screens compose them.
     planner to successful merely because that lane later merged.
   - **Subscription valuation** — the token-valued cost of native-subscription
     work (`valuationUsd`), shown beside billed cash in the turn receipt as a
-    quiet `≈ $Y sub` element (separate from the `Cash: $X` spend the cap
-    governs). It renders ONLY when the valuation is known
+    quiet `≈ $Y sub` element (separate from the cash element beside it, below).
+    It renders ONLY when the valuation is known
     (`valuationKnowledge` is `exact`/`estimated`, so `knownValuationUsd` is
     non-nil); an UNKNOWN valuation is simply ABSENT — never rendered as `$0`, and
-    never a literal "unknown". Cash stays the only value the cap governs.
+    never a literal "unknown". Cash stays the only value the cap governs. Its
+    element reads `$X` once a settle discloses a known total (a fresh stream never
+    seeds an exact `$0.00`; the newest disclosure wins, an unknown total included,
+    so an earlier exact value never answers for it) and
+    `Cash unknown · $c of $cap cap` when an included
+    subscription reports no actual debit: the cap-governed part
+    (`controllableSpendUsd`) stays known beside the unknown total and is labelled
+    apart from it, with the remaining cap in its hover. With nothing known it
+    renders nothing.
   - **Plan hash** — an implemented plan carries the frozen plan's identity
     (`planRunId` / plan hash) so the agent turn's outcome names exactly which
     plan it froze and ran; a plan-readiness override is recorded on the turn for

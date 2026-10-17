@@ -21,7 +21,11 @@ export function usageCostSettlement(
 export function reviewUsageCostSettlement(
   cashUsd: number,
   valuationUsd: number,
-  knowledge: { cash: CostKnowledge; valuation: CostKnowledge },
+  knowledge: {
+    cash: CostKnowledge;
+    valuation: CostKnowledge;
+    allowanceDebitUnobserved?: boolean;
+  },
   provenance: string[],
   unknownUsd = 0,
 ): BudgetSettlement {
@@ -34,6 +38,7 @@ export function reviewUsageCostSettlement(
   return {
     knowledge: unknownUsd > 0 ? "unknown" : aggregateKnowledge,
     cashKnowledge: knowledge.cash,
+    ...(knowledge.allowanceDebitUnobserved ? { allowanceDebitUnobserved: true } : {}),
     ...(normalizedValuation > 0 || unknownUsd > 0
       ? {
           valuationKnowledge: unknownUsd > 0 ? ("unknown" as const) : knowledge.valuation,
@@ -65,6 +70,7 @@ export function attemptUsageCostSettlement(
     valuationEstimated?: boolean;
     cashKnowledge?: CostKnowledge;
     valuationKnowledge?: CostKnowledge;
+    allowanceDebitUnobserved?: boolean;
   },
 ): BudgetSettlement {
   if (split) {
@@ -86,6 +92,7 @@ export function attemptUsageCostSettlement(
           ...(normalizedValuation > 0 || split.unknownUsd > 0 ? [valuationKnowledge] : []),
         ]),
         cashKnowledge,
+        ...(split.allowanceDebitUnobserved ? { allowanceDebitUnobserved: true } : {}),
         ...(normalizedValuation > 0 || split.unknownUsd > 0 ? { valuationKnowledge } : {}),
         source: observed > 0 ? "harness-usage-by-route" : "harness-route-usage-missing",
         provenance: [`attempt:${attemptId}`, `harness:${harnessId}`, "route:stream-evidence"],

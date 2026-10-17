@@ -381,11 +381,15 @@ export function beltClaudexorTools(
       // so the next draw sees the actual amount drawn. A terminal result whose
       // settled spend is unknowable (the post-terminal detail read degraded, so
       // spendUsd is null) commits the FULL reservation fail-closed — unknown
-      // spend must never widen the next draw's headroom.
-      const spendUsd =
+      // spend must never widen the next draw's headroom. An included
+      // subscription without a debit receipt leaves the total unknown but its
+      // cap-governed spend known; that is what the parent cap draws against.
+      const settled =
         result && typeof result === "object"
-          ? (result as { spendUsd?: unknown }).spendUsd
-          : undefined;
+          ? (result as { spendUsd?: unknown; controllableSpendUsd?: unknown })
+          : {};
+      const spendUsd =
+        typeof settled.spendUsd === "number" ? settled.spendUsd : settled.controllableSpendUsd;
       ledger.committedUsd += typeof spendUsd === "number" ? Math.max(0, spendUsd) : reservedUsd;
       const terminalFailure = failedChildTerminal(result);
       if (terminalFailure) throw terminalFailure;

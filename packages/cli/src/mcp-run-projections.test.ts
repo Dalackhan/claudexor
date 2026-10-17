@@ -106,6 +106,22 @@ describe("MCP run detail projections", () => {
     expect(projectRunPrimaryOutput({ primaryOutput: { kind: "invented", text: 42 } })).toBeNull();
   });
 
+  it("carries cap-governed spend beside an unknown total for the delegation belt", () => {
+    const detail = (budget: Record<string, unknown>) => ({
+      summary: { runId: "run-1", spendUsd: budget["spendUsd"] },
+      budget,
+    });
+    expect(
+      projectImmediateRunDetail(
+        detail({ spendUsd: null, controllableSpendUsd: 0, cashKnowledge: "unknown" }),
+      ),
+    ).toMatchObject({ spendUsd: null, controllableSpendUsd: 0 });
+    expect(
+      projectImmediateRunDetail(detail({ spendUsd: null, controllableSpendUsd: null })),
+    ).toMatchObject({ spendUsd: null, controllableSpendUsd: null });
+    expect(projectImmediateRunDetail(null).controllableSpendUsd).toBeNull();
+  });
+
   it("preserves the typed RunFailure on immediate results", () => {
     // A record written before per-try attribution decodes with an empty list.
     expect(projectImmediateRunDetail({ failure }).failure).toEqual({

@@ -59,6 +59,11 @@ export interface HarnessProcessingSpec extends HarnessModelSpec {
   effort: string | null;
   /** Existing monetary policy; false requests ordinary fallback before paid work. */
   allowPaid?: boolean;
+  /** Receipt this work unit already chose without a preference (routing-time or an
+   * earlier try). An adapter that honours it (Codex today) keeps that intent across a
+   * retry, rotation or continuation instead of adopting another account's native
+   * setting; an adapter that does not implement it ignores the field. */
+  chosen?: ProcessingReceipt;
 }
 
 export interface PreparedHarnessProcessing {

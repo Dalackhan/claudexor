@@ -499,7 +499,11 @@ diagnostic evidence: classification, retry and routing never read it, and a
 record from an older engine decodes with an empty list.
 Web/tool evidence is projected from the engine-owned
 `final/telemetry.yaml`; runs that predate it report `available: false`. Unknown
-quota or spend remains unknown; do not render missing values as `$0`. The optional
+quota or spend remains unknown; do not render missing values as `$0`. When an
+included subscription reports no actual debit, the run budget's `spendUsd` is null
+while its `controllableSpendUsd` and `remainingUsd` carry the finite cap's known part;
+the decision record's `budget_summary` likewise keeps `spend_usd` null beside
+`controllable_cash_usd`. The optional
 `attemptExecution` array exposes compact per-attempt Processing and amount
 evidence through HTTP and MCP run reads; its [field map](ARCHITECTURE.md#8-artifact-layout)
 distinguishes observed components from prospective billing. General previews

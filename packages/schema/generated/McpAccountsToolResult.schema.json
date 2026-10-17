@@ -1979,6 +1979,53 @@
                                 "items": {
                                   "type": "object",
                                   "properties": {
+                                    "scope": {
+                                      "type": "string",
+                                      "enum": [
+                                        "personal",
+                                        "team"
+                                      ]
+                                    },
+                                    "usage_kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "included",
+                                        "bonus",
+                                        "on_demand",
+                                        "total"
+                                      ]
+                                    },
+                                    "period": {
+                                      "type": "object",
+                                      "properties": {
+                                        "starts_at": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "format": "date-time"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "ends_at": {
+                                          "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/period/properties/starts_at"
+                                        }
+                                      },
+                                      "required": [
+                                        "starts_at",
+                                        "ends_at"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "fee_included": {
+                                      "type": [
+                                        "boolean",
+                                        "null"
+                                      ],
+                                      "description": "Whether the reported amount includes fees; null means the source did not establish this."
+                                    },
                                     "id": {
                                       "type": "string"
                                     },
@@ -2049,15 +2096,7 @@
                             ]
                           },
                           "observed_at": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "format": "date-time"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
+                            "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/period/properties/starts_at"
                           },
                           "freshness": {
                             "type": "string",
@@ -2068,7 +2107,7 @@
                             ]
                           },
                           "last_attempt_at": {
-                            "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/observed_at"
+                            "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/period/properties/starts_at"
                           },
                           "last_error": {
                             "type": [
@@ -2097,6 +2136,18 @@
                                 "items": {
                                   "type": "object",
                                   "properties": {
+                                    "scope": {
+                                      "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/scope"
+                                    },
+                                    "usage_kind": {
+                                      "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/usage_kind"
+                                    },
+                                    "period": {
+                                      "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/period"
+                                    },
+                                    "fee_included": {
+                                      "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/fee_included"
+                                    },
                                     "id": {
                                       "type": "string"
                                     },
@@ -2142,7 +2193,7 @@
                                       ]
                                     },
                                     "resets_at": {
-                                      "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/observed_at"
+                                      "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/period/properties/starts_at"
                                     },
                                     "reason": {
                                       "type": [
@@ -2178,7 +2229,7 @@
                             ]
                           },
                           "observed_at": {
-                            "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/observed_at"
+                            "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/period/properties/starts_at"
                           },
                           "freshness": {
                             "type": "string",
@@ -2189,7 +2240,7 @@
                             ]
                           },
                           "last_attempt_at": {
-                            "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/observed_at"
+                            "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/period/properties/starts_at"
                           },
                           "last_error": {
                             "type": [
@@ -2267,7 +2318,7 @@
                                       ]
                                     },
                                     "resets_at": {
-                                      "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/observed_at"
+                                      "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/period/properties/starts_at"
                                     },
                                     "weekly_limit_applies": {
                                       "type": "boolean"
@@ -2320,10 +2371,10 @@
                                                 ]
                                               },
                                               "starts_at": {
-                                                "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/observed_at"
+                                                "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/period/properties/starts_at"
                                               },
                                               "expires_at": {
-                                                "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/observed_at"
+                                                "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/period/properties/starts_at"
                                               },
                                               "clears": {
                                                 "type": "array",
@@ -2380,7 +2431,7 @@
                             ]
                           },
                           "observed_at": {
-                            "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/observed_at"
+                            "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/period/properties/starts_at"
                           },
                           "freshness": {
                             "type": "string",
@@ -2391,7 +2442,7 @@
                             ]
                           },
                           "last_attempt_at": {
-                            "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/observed_at"
+                            "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/period/properties/starts_at"
                           },
                           "last_error": {
                             "type": [
@@ -2449,7 +2500,7 @@
                             ]
                           },
                           "observed_at": {
-                            "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/observed_at"
+                            "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/period/properties/starts_at"
                           },
                           "freshness": {
                             "type": "string",
@@ -2460,7 +2511,7 @@
                             ]
                           },
                           "last_attempt_at": {
-                            "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/observed_at"
+                            "$ref": "#/definitions/McpAccountsToolResult/anyOf/2/properties/quota/properties/resources/items/properties/balances/properties/value/anyOf/0/items/properties/period/properties/starts_at"
                           },
                           "last_error": {
                             "type": [

@@ -42,18 +42,16 @@ What Claudexor already does, so you can calibrate reports:
   credentials remain in each vendor's own store, which may use the OS Keychain;
   secret material is redacted from event logs, job records, thread stores, and
   reviewer artifacts.
-- No telemetry, analytics, or crash reporting is collected (see the Privacy
-  section of the README). Outbound traffic comes from configured model/harness
-  routes. Generic Web/Search follows the run's external-context policy (default
-  `auto`); Browser MCP/navigation requires explicit Browser opt-in. Remote SSH
-  reaches only connections explicitly configured and enabled, after which the
-  app may connect and retry their event streams automatically. While the daemon
-  runs, it may poll configured vendor quota/status sources in the background
-  (including Anthropic `oauth/usage`) to maintain routing and readiness. Public
-  GitHub/npm lookups cover release-name checks, updates, and download statistics;
-  they are user-invoked except the app's update check, which runs only on app
-  foreground (there is no background update timer). Local files named
-  `telemetry` contain only on-device run evidence and are never transmitted.
+- No telemetry, analytics or crash reports (README Privacy). Configured model/
+  harness routes send outbound traffic; Web/Search follows run policy (`auto`),
+  Browser needs opt-in, and enabled SSH streams may reconnect automatically.
+  Existing demand/pacing polls vendor status/quota, including Anthropic
+  `oauth/usage` and Cursor's internal dashboard `usage-summary`. Cursor sends
+  only the named file store's bound token as a `WorkosCursorSessionToken` cookie
+  to cursor.com: no OAuth refresh/credential write. Dashboard money is display-only,
+  never execution quota/admission. Public GitHub/npm name/update/statistics reads
+  are user-invoked except foreground app update checks (no update timer).
+  Local `telemetry` files are on-device evidence, never transmitted analytics.
 - Harness processes run as the signed-in OS user under each vendor CLI's
   native access mode. Claudexor does not add an outer Seatbelt, container, or
   other OS filesystem boundary. Scoped `HOME` and named profile directories

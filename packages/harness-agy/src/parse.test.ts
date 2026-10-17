@@ -59,14 +59,15 @@ describe("parseAgyEvent", () => {
     });
   });
 
-  it("maps SUCCESS with an empty response to a typed soft-deny error (#794)", () => {
+  it("keeps empty SUCCESS an unknown failure without guessing permission denial", () => {
     const out = parseAgyEvent(
       { event: "result", result: { status: "SUCCESS", response: "" } },
       SID,
     );
     expect(out).toHaveLength(1);
     expect(out![0].type).toBe("error");
-    expect((out![0] as { error?: string }).error).toMatch(/soft-deny/);
+    expect(out![0].error).toContain("cause unknown");
+    expect(out![0].permission_denial).toBeUndefined();
   });
 
   it("maps an ERROR result to a typed error", () => {

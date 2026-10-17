@@ -340,6 +340,7 @@ describe("runCliHarness stderr tail on every exit path", () => {
   const collect = async (opts: {
     args: string[];
     redact?: (text: string) => string;
+    observeStderr?: (line: string) => void;
     parseStderrFailure?: (stderr: string, sessionId: string) => HarnessEvent | null;
   }): Promise<HarnessEvent[]> => {
     const events: HarnessEvent[] = [];
@@ -349,6 +350,7 @@ describe("runCliHarness stderr tail on every exit path", () => {
       spec: spec(),
       parseEvent: () => null,
       ...(opts.redact ? { redact: opts.redact } : {}),
+      ...(opts.observeStderr ? { observeStderr: opts.observeStderr } : {}),
       ...(opts.parseStderrFailure ? { parseStderrFailure: opts.parseStderrFailure } : {}),
     })) {
       events.push(ev);
@@ -378,6 +380,22 @@ describe("runCliHarness stderr tail on every exit path", () => {
     expect(completed?.type).toBe("completed");
     expect(completed?.payload?.["exit_code"]).toBe(0);
     expect(completed?.payload && "stderr_tail" in completed.payload).toBe(false);
+  }, 15_000);
+
+  it("observes redacted native lines before the bounded diagnostic tail evicts them", async () => {
+    const observed: string[] = [];
+    const events = await collect({
+      args: [
+        "-e",
+        "require('node:fs').writeSync(2, 'first tok-cafebabe\\n' + 'later\\n'.repeat(55))",
+      ],
+      redact: (text) => text.replaceAll("tok-cafebabe", "[scrubbed]"),
+      observeStderr: (line) => observed.push(line),
+    });
+    expect(observed[0]).toBe("first [scrubbed]");
+    expect(observed).toHaveLength(56);
+    expect(events.at(-1)?.payload?.["stderr_tail"]).not.toContain("first");
+    expect(JSON.stringify(events)).not.toContain("tok-cafebabe");
   }, 15_000);
 
   it("preserves the tail on the ABORT path", async () => {

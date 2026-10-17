@@ -74,3 +74,6 @@ fixtures:
       thinking_events: 0
       delta_messages: 0
       typed_rate_limit: false
+
+# Already-normalized historical events live separately under
+# src/test-support/normalized with their own provenance, not a vendor stream pin.

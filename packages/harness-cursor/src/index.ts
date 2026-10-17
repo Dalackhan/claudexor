@@ -51,6 +51,7 @@ import {
   staleCursorAuthEvent,
 } from "./profile.js";
 export { canonicalCursorProfileHome, cursorProfilePathEnv } from "./profile.js";
+export { readCursorDashboard, CursorDashboardError } from "./quota.js";
 import { prepareCursorMcpInjection } from "./mcp-config.js";
 import { detectCursorVersion, resolveCursorBin } from "./bin.js";
 export { resolveCursorBin } from "./bin.js";

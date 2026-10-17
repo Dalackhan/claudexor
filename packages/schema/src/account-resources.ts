@@ -1,10 +1,23 @@
 import { z } from "zod/v3";
 import { ControlQuotaResponse } from "./quota.js";
 import { ControlQuotaFreshnessResponse } from "./quota-read.js";
+import { QuotaRequestKind } from "./quota-request-kind.js";
 
 import { AccountTarget } from "./account-target.js";
 export { AccountTarget } from "./account-target.js";
 const instant = z.string().datetime({ offset: true }).nullable();
+const resourceScopeFields = {
+  scope: z.enum(["personal", "team"]).optional(),
+  usage_kind: z.enum(["included", "bonus", "on_demand", "total"]).optional(),
+  period: z.object({ starts_at: instant, ends_at: instant }).strict().optional(),
+  fee_included: z
+    .boolean()
+    .nullable()
+    .optional()
+    .describe(
+      "Whether the reported amount includes fees; null means the source did not establish this.",
+    ),
+};
 export const resourceFacet = <T extends z.ZodTypeAny>(value: T) =>
   z
     .object({
@@ -18,6 +31,7 @@ export const resourceFacet = <T extends z.ZodTypeAny>(value: T) =>
     .strict();
 export const AccountBalance = z
   .object({
+    ...resourceScopeFields,
     id: z.string(),
     label: z.string(),
     amount: z.string().nullable(),
@@ -30,6 +44,7 @@ export const AccountBalance = z
   .strict();
 export const AccountSpending = z
   .object({
+    ...resourceScopeFields,
     id: z.string(),
     label: z.string(),
     enabled: z.boolean().nullable(),
@@ -42,6 +57,8 @@ export const AccountSpending = z
     reason: z.string().nullable(),
   })
   .strict();
+export type AccountSpending = z.infer<typeof AccountSpending>;
+export type AccountBalance = z.infer<typeof AccountBalance>;
 export const AccountResetGrant = z
   .object({
     id: z.string(),
@@ -83,6 +100,10 @@ export const AccountResourceSnapshot = z
   })
   .strict();
 export type AccountResourceSnapshot = z.infer<typeof AccountResourceSnapshot>;
+/** Resource-only sources satisfy poll demand, never quota admission. */
+export const ACCOUNT_RESOURCE_REFRESH_SOURCES = {
+  cursor_dashboard: { harness: "cursor", facets: ["balances", "spending"] },
+} as const;
 export const AccountResourceObservation = AccountResourceSnapshot.partial()
   .required({ target: true })
   .extend({
@@ -105,12 +126,32 @@ export const ControlAccountResourcesResponse = ControlQuotaResponse.extend({
   resources: z.array(AccountResourceSnapshot),
 }).strict();
 export type ControlAccountResourcesResponse = z.infer<typeof ControlAccountResourcesResponse>;
+/** Negotiated complete passive view. The echo proves which selectors the
+ * engine applied; an old engine's legacy response is not scoped authority. */
+export const ControlAccountResourcesFreshnessResponse = ControlQuotaFreshnessResponse.extend({
+  resources: z.array(AccountResourceSnapshot),
+  availability_scope: z
+    .object({
+      basis: z.literal("quota_block"),
+      model: z.string().min(1).nullable(),
+      requestKind: QuotaRequestKind,
+    })
+    .strict(),
+})
+  .strict()
+  .describe(
+    "Negotiated resources_freshness view: complete passive account resources, per-constraint freshness and the quota_block availability_scope applied by the engine.",
+  );
+export type ControlAccountResourcesFreshnessResponse = z.infer<
+  typeof ControlAccountResourcesFreshnessResponse
+>;
 /** Whole-response union of every strict quota read shape. A caller validates
  * the complete payload; a partial view is never stripped down to legacy. */
 export const ControlQuotaQueryResponse = z.union([
   ControlQuotaResponse,
   ControlAccountResourcesResponse,
   ControlQuotaFreshnessResponse,
+  ControlAccountResourcesFreshnessResponse,
 ]);
 export const ControlAccountResetRequest = z
   .object({

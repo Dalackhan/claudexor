@@ -2,6 +2,7 @@ import { loadConfig } from "@claudexor/config";
 import {
   harnessHasDefaultCredentialStore,
   quotaRefreshDemandHarnesses,
+  ACCOUNT_RESOURCE_REFRESH_SOURCES,
   type QuotaSubject,
 } from "@claudexor/schema";
 import { noProjectRepoRoot } from "@claudexor/util";
@@ -16,7 +17,10 @@ export function quotaSubjectUniverseFromConfig(): QuotaSubject[] {
   const profiles = global.credential_profiles;
   const subjects: QuotaSubject[] = [];
   const migrated = readAccountsMigrationFile();
-  for (const harness of quotaRefreshDemandHarnesses()) {
+  for (const harness of new Set([
+    ...quotaRefreshDemandHarnesses(),
+    ...Object.values(ACCOUNT_RESOURCE_REFRESH_SOURCES).map((source) => source.harness),
+  ])) {
     const settings = global.harnesses[harness];
     if (settings?.enabled === false) continue;
     // agy has no unprofiled default subject (PLAN Л-4): its universe is

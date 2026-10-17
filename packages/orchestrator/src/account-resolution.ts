@@ -1,4 +1,5 @@
 import type { QuotaRequestKind } from "@claudexor/schema";
+import { quotaRefusalWithScope } from "./quota-refusal-scope.js";
 import type {
   AuthPreference,
   CredentialProfile,
@@ -119,19 +120,8 @@ export interface AccountResolutionContext {
   emit: AccountResolutionEmit;
 }
 
-/**
- * A spent subscription window on an EXPLICITLY PINNED account, refused
- * MACHINE-READABLY (D-U6: a pin is strict — never a silent rotation). Homed
- * beside its A4 sibling `pinnedWindowBlocked` in the pinned-lane owner.
- *
- * The verdict a caller actually needs from this refusal is "not now, come back
- * at T" — and the only honest way to deliver T is as a field. Gluing it into
- * the sentence and shipping the terminal as `category: internal, code: null`
- * left every consumer (a surface, a scheduler, an automating host) to regex
- * the prose for a timestamp, which no contract in this repo permits. The
- * message stays human-readable; the machine reads `code` and `resetsAt`, which
- * the run terminal lifts onto `final/failure.yaml` verbatim.
- */
+/** A pin never rotates. Typed code/reset evidence reaches final/failure.yaml;
+ * consumers do not recover scope or reset times from this human message. */
 export function subscriptionWindowExhausted(
   profileId: string,
   harnessId: string,
@@ -349,9 +339,18 @@ export async function resolveAccountForRun(
       threshold: policy.headroom_threshold,
       resets_at: breach?.resets_at ?? block?.resets_at ?? null,
     });
-    throw breach
-      ? subscriptionWindowExhausted(pinned.profile_id, harnessId, breach)
-      : pinnedWindowBlocked(pinned.profile_id, harnessId, block as QuotaBlock);
+    throw quotaRefusalWithScope(
+      breach
+        ? subscriptionWindowExhausted(pinned.profile_id, harnessId, breach)
+        : pinnedWindowBlocked(pinned.profile_id, harnessId, block as QuotaBlock),
+      {
+        harness: harnessId,
+        profileId: pinned.profile_id,
+        model,
+        requestKind: ctx.requestKind,
+        constraintId: breach?.constraint_id ?? block?.constraint_id,
+      },
+    );
   }
   const pool = accountPoolRows(registry, harnessId);
   // The legacy ladder serves ONLY harnesses with no REGISTERED subscription
@@ -582,6 +581,8 @@ export async function resolveAccountForRun(
   });
   throw credentialPoolExhausted({
     harnessId,
+    model,
+    requestKind: ctx.requestKind,
     // The triggering subject of a preflight pool refusal is the thread's
     // bound row when one exists (its exhaustion is what forced the pool
     // decision); a fresh unbound run has no subject of its own.

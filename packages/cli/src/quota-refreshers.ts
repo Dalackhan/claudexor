@@ -1,13 +1,14 @@
 import type { QuotaRefreshCycle, QuotaVendorRefresher } from "@claudexor/daemon";
-import type { QuotaSource } from "@claudexor/schema";
+import { ACCOUNT_RESOURCE_REFRESH_SOURCES, type QuotaSource } from "@claudexor/schema";
 import { refreshClaudeOauthUsageQuota } from "./claude-oauth-usage.js";
 import { refreshClaudeStatuslineQuota } from "./claude-statusline.js";
 import { refreshCodexQuota } from "./codex-quota-source.js";
 import { refreshAgyQuota } from "./agy-quota-source.js";
+import { refreshCursorQuota } from "./cursor-quota-source.js";
 import type { QuotaDiagnosticSink } from "./quota-refresh-diagnostics.js";
 
 export interface QuotaRefresherRegistration {
-  readonly source: QuotaSource;
+  readonly source: QuotaSource | keyof typeof ACCOUNT_RESOURCE_REFRESH_SOURCES;
   /** Pacing lane (per-vendor poll pacing): the vendor whose credential
    * fan-out this refresher performs. Must equal the source trait's
    * refreshDemandHarness whenever that is non-null (parity test);
@@ -46,6 +47,12 @@ export const QUOTA_REFRESHER_REGISTRATIONS = [
       refreshClaudeOauthUsageQuota(diagnostic ? { diagnostic } : {}, cycle),
   },
   { source: "agy_command_usage", vendor: "agy", refresh: () => refreshAgyQuota() },
+  {
+    source: "cursor_dashboard",
+    vendor: "cursor",
+    refresh: (cycle?: QuotaRefreshCycle, diagnostic?: QuotaDiagnosticSink) =>
+      refreshCursorQuota(diagnostic ? { diagnostic } : {}, cycle),
+  },
 ] as const satisfies readonly QuotaRefresherRegistration[];
 
 export function quotaRefreshers(diagnostic?: QuotaDiagnosticSink): QuotaVendorRefresher[] {

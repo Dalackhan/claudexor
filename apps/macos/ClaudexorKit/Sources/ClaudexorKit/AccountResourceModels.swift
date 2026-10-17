@@ -34,10 +34,23 @@ public enum ResourceFreshness: String, Codable, Sendable {
     case fresh, stale, unknown
 }
 
+public struct ResourceUsagePeriod: Codable, Equatable, Sendable {
+    public let startsAt: String?
+    public let endsAt: String?
+    private enum CodingKeys: String, CodingKey {
+        case startsAt = "starts_at"
+        case endsAt = "ends_at"
+    }
+}
+
 public struct AccountBalance: Codable, Equatable, Sendable, Identifiable {
     public let id: String
     public let label: String
     public let amount: String?
+    public var scope: String? = nil
+    public var usageKind: String? = nil
+    public var period: ResourceUsagePeriod? = nil
+    public var feeIncluded: Bool? = nil
     public let unit: String
     public let currency: String?
     public let decimalPlaces: Int?
@@ -45,6 +58,9 @@ public struct AccountBalance: Codable, Equatable, Sendable, Identifiable {
     public let unlimited: Bool?
     private enum CodingKeys: String, CodingKey {
         case id, label, amount, unit, currency, unlimited
+        case scope, period
+        case usageKind = "usage_kind"
+        case feeIncluded = "fee_included"
         case hasBalance = "has_balance"
         case decimalPlaces = "decimal_places"
     }
@@ -55,6 +71,10 @@ public struct AccountSpending: Codable, Equatable, Sendable, Identifiable {
     public let label: String
     public let enabled: Bool?
     public let used: String?
+    public var scope: String? = nil
+    public var usageKind: String? = nil
+    public var period: ResourceUsagePeriod? = nil
+    public var feeIncluded: Bool? = nil
     public let limit: String?
     public let unit: String
     public let currency: String?
@@ -63,6 +83,9 @@ public struct AccountSpending: Codable, Equatable, Sendable, Identifiable {
     public let reason: String?
     private enum CodingKeys: String, CodingKey {
         case id, label, enabled, used, limit, unit, currency, reason
+        case scope, period
+        case usageKind = "usage_kind"
+        case feeIncluded = "fee_included"
         case resetsAt = "resets_at"
         case decimalPlaces = "decimal_places"
     }

@@ -160,6 +160,8 @@ export function poolMemberEvidence(candidate: PoolExhaustionCandidate): boolean 
  */
 export function credentialPoolExhausted(args: {
   harnessId: string;
+  model?: string | null;
+  requestKind?: QuotaRequestKind;
   /** The triggering subject: a pinned profile id, or null for the default. */
   profileId: string | null;
   reason:
@@ -248,7 +250,13 @@ export function credentialPoolExhausted(args: {
       code: "credential_pool_exhausted",
       message: error.message,
       retryable: false,
-      context: { poolCauses, resetsAt },
+      context: {
+        poolCauses,
+        resetsAt,
+        model: args.model ?? null,
+        requestKind: args.requestKind ?? "text",
+        subject: { harness: args.harnessId, profile_id: args.profileId },
+      },
     }),
   });
 }

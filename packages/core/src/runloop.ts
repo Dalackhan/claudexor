@@ -65,6 +65,8 @@ export interface CliRunLoopOptions {
   label?: string;
   /** Redactor applied to stderr detail before it is surfaced. */
   redact?: (text: string) => string;
+  /** Adapter-owned native evidence, observed before diagnostic-tail eviction. */
+  observeStderr?: (line: string) => void;
   /** Adapter-owned translation for a recognized stderr-only nonzero exit. */
   parseStderrFailure?: (stderr: string, sessionId: string) => HarnessEvent | null;
   /** Stop and reap the harness immediately after a normalized fatal event. */
@@ -183,6 +185,7 @@ export async function* runCliHarness(opts: CliRunLoopOptions): AsyncGenerator<Ha
         continue;
       }
       if (ev.type === "stderr") {
+        opts.observeStderr?.(redact(ev.line));
         stderrRing.push(ev.line);
         if (stderrRing.length > STDERR_RING_MAX) stderrRing.shift();
         continue;

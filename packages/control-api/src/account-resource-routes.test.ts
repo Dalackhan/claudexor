@@ -23,7 +23,10 @@ describe("resource wire negotiation and direct reset route", () => {
   it("advertises the opt-in query and key-required reset operation", () => {
     const catalog = OPERATION_CATALOG;
     expect(catalog.operations.find((o) => o.id === "get:quota")?.parameters).toContainEqual(
-      expect.objectContaining({ name: "view", enum: ["resources", "constraint_freshness"] }),
+      expect.objectContaining({
+        name: "view",
+        enum: ["resources", "constraint_freshness", "resources_freshness"],
+      }),
     );
     expect(catalog.operations.find((o) => o.id === "get:quota")?.parameters).toContainEqual(
       expect.objectContaining({ name: "requestKind", enum: ["text", "image"] }),
@@ -57,7 +60,19 @@ describe("resource wire negotiation and direct reset route", () => {
     };
     const createAccountReset = vi.fn(async () => receipt);
     const quota = vi.fn(async (input) =>
-      input?.view === "resources" ? { ...raw, resources: [] } : raw,
+      input?.view === "resources_freshness"
+        ? {
+            ...raw,
+            resources: [],
+            availability_scope: {
+              basis: "quota_block",
+              model: input.model ?? null,
+              requestKind: input.requestKind ?? "text",
+            },
+          }
+        : input?.view === "resources"
+          ? { ...raw, resources: [] }
+          : raw,
     );
     const refreshQuota = vi.fn(async (input) => (input?.view ? { ...raw, resources: [] } : raw));
     const server = new DaemonControlApiServer({
@@ -85,7 +100,7 @@ describe("resource wire negotiation and direct reset route", () => {
       });
     expect(await (await call("/quota")).json()).toEqual(raw);
     expect(await (await call("/quota?view=resources")).json()).toEqual({ ...raw, resources: [] });
-    for (const view of ["resources", "constraint_freshness"]) {
+    for (const view of ["resources", "constraint_freshness", "resources_freshness"]) {
       expect((await call(`/quota?view=${view}&requestKind=image&model=gpt-image-2`)).status).toBe(
         200,
       );

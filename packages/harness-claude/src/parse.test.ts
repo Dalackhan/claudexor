@@ -756,6 +756,55 @@ describe("parseClaudeEvent", () => {
     expect(deniedAllow).not.toContain("Bash");
   });
 
+  it("workspace_write pre-approves the read tools outside the working folder; a caller's read shape wins", () => {
+    // A delegated run whose subject sits beside its own working folder reads it
+    // in place; acceptEdits alone leaves Read/Glob/Grep there to the bridge,
+    // which denies them. Claude applies a Read(...) rule to the whole read
+    // family, so any caller deny or pattern on one of them keeps all three out.
+    const base = {
+      session_id: "ses-test",
+      intent: "implement" as const,
+      prompt: "x",
+      cwd: "/tmp/seat",
+      external_context_policy: "live" as const,
+    };
+    const allowOf = (args: string[]) => {
+      expect(args).toContain("--allowedTools");
+      return (args[args.indexOf("--allowedTools") + 1] ?? "").split(",");
+    };
+    const argsFor = (
+      access: "workspace_write" | "full" | "inherit_native",
+      allow: string[],
+      deny: string[],
+    ) =>
+      claudeArgsForSpec(
+        HarnessRunSpec.parse({
+          ...base,
+          access,
+          tool_permission_policy: { web: "live" as const, allow, deny },
+        }),
+      );
+    const write = argsFor("workspace_write", [], []);
+    expect(allowOf(write)).toEqual(expect.arrayContaining(["Read", "Glob", "Grep", "Bash"]));
+    expect(
+      write.slice(write.indexOf("--permission-mode"), write.indexOf("--permission-mode") + 2),
+    ).toEqual(["--permission-mode", "acceptEdits"]);
+
+    for (const [allow, deny] of [
+      [["Read(./**)"], []],
+      [[], ["Grep"]],
+      [[], ["Read(/secrets/**)"]],
+    ] as const) {
+      const shaped = allowOf(argsFor("workspace_write", [...allow], [...deny]));
+      expect(shaped).toEqual(expect.arrayContaining([...allow, "Bash"]));
+      for (const tool of ["Read", "Glob", "Grep"]) expect(shaped).not.toContain(tool);
+    }
+
+    for (const access of ["full", "inherit_native"] as const) {
+      expect(allowOf(argsFor(access, [], []))).not.toContain("Read");
+    }
+  });
+
   it("Bash pre-approval never widens inherit_native or a caller-scoped shell", () => {
     const base = {
       session_id: "ses-test",

@@ -400,8 +400,8 @@ export function createClaudeAdapter(deps: Partial<ClaudeRuntimeDeps> = {}): Harn
 
 /** Claude's native names for web-permissioned tools. This knowledge lives ONLY in the adapter. */
 const CLAUDE_WEB_TOOLS = ["WebSearch", "WebFetch"];
-const CLAUDE_READONLY_ALLOWED_TOOLS = ["Read", "Glob", "Grep"];
-const CLAUDE_READONLY_BUILTIN_TOOLS = [...CLAUDE_READONLY_ALLOWED_TOOLS, ...CLAUDE_WEB_TOOLS];
+const CLAUDE_READ_TOOLS = ["Read", "Glob", "Grep"];
+const CLAUDE_READONLY_BUILTIN_TOOLS = [...CLAUDE_READ_TOOLS, ...CLAUDE_WEB_TOOLS];
 const CLAUDE_READONLY_DENIED_TOOLS = [
   "Bash",
   "Write",
@@ -509,7 +509,7 @@ function toolPermissionSets(spec: HarnessRunSpec): { allow: Set<string>; deny: S
   const allow = new Set(spec.access === "readonly" ? [] : spec.tool_permission_policy.allow);
   const deny = new Set(spec.tool_permission_policy.deny);
   if (spec.access === "readonly") {
-    for (const tool of CLAUDE_READONLY_ALLOWED_TOOLS) {
+    for (const tool of CLAUDE_READ_TOOLS) {
       if (!deny.has(tool)) allow.add(tool);
     }
     for (const tool of CLAUDE_READONLY_DENIED_TOOLS) {
@@ -530,6 +530,19 @@ function toolPermissionSets(spec: HarnessRunSpec): { allow: Set<string>; deny: S
     // sandbox exists, so this is BROADER than codex's seatbelt — disclosed
     // as the typed write_mechanism capability (owner decision 2026-08-30).
     allow.add("Bash");
+  }
+  const callerShapesReads = CLAUDE_READ_TOOLS.some(
+    (tool) => deny.has(tool) || [...allow, ...deny].some((entry) => entry.startsWith(`${tool}(`)),
+  );
+  if (spec.access === "workspace_write" && !callerShapesReads) {
+    // Under acceptEdits the bridge also denies Read/Glob/Grep outside the
+    // working directory, so a delegated run whose subject sits beside its own
+    // working folder (a reviewer reading the reviewed folder in place) could
+    // reach it only through Bash. The read tools are pre-approved like Bash;
+    // file-tool edits stay confined by acceptEdits. Claude applies a Read(...)
+    // rule to the whole read family, so a caller who denies or narrows any of
+    // the three keeps that shape and gets none of them added.
+    for (const tool of CLAUDE_READ_TOOLS) allow.add(tool);
   }
   if (policy === "off") {
     for (const tool of CLAUDE_WEB_TOOLS) {

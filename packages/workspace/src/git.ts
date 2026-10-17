@@ -14,11 +14,7 @@ import {
 } from "./git-nested-repositories.js";
 import { assertNoBinaryStubs, git, gitEnv } from "./git-run.js";
 export { git } from "./git-run.js";
-export {
-  captureWorkingTreeTransient,
-  diffWorkingTreeTransient,
-  type TransientDiffCapture,
-} from "./git-transient-capture.js";
+export { captureWorkingTreeTransient, diffWorkingTreeTransient } from "./git-transient-capture.js";
 export {
   GitBoundaryRootRefusedError,
   GitInitializationError,

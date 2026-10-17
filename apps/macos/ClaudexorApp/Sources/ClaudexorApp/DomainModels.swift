@@ -528,6 +528,7 @@ struct TaskRun: Identifiable, Hashable {
     var capKnown: Bool = true
     var budgetUnlimited: Bool = false
     var spendEstimated: Bool = false
+    var controllableSpendUsd: Double? // cap-governed cash; nil = unknown, may be known while `spendKnown` is false
     /// Subscription token valuation (QA-023c), separate from cash; nil is unknown, never $0.
     var valuationUsd: Double?
     var routeProof: RouteProof
@@ -607,7 +608,6 @@ struct TaskRun: Identifiable, Hashable {
     var planQuestions: [PlanQuestion] = []
     /// Council plan-strategy projection (D31); nil for non-council runs.
     var council: CouncilInfo?
-
 }
 
 // MARK: - Projects & specs

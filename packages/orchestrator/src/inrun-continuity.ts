@@ -1,30 +1,14 @@
-/**
- * In-run continuation (the owner's "auto-rotation inside the work"): ONE
- * per-attempt controller both the candidate loop and the read-only twin call,
- * so the two lanes never re-derive the ladder (A8).
+/** Agent and Ask share one per-attempt continuation owner. Before progress,
+ * existing fresh-retry/rotation rules apply. After progress, limits move the
+ * session to another account (or a packet); transport resumes the same account
+ * bounded by max_retries. Deterministic permission/context refusals stop rather
+ * than replaying the same limitation. Pins never rotate.
  *
- * Per try it OBSERVES the stream (the native session id → the capsule, the
- * per-try attested model, the typed limit that ended the try, the identity of
- * a resumed session, the adapter's typed rejection of carried state) and AFTER
- * the try decides what the attempt does next:
- *
- *   - the attempt did NOT act → today's rules, byte for byte (typed-limit /
- *     structural rotation onto a fresh session, same-profile transient retry);
- *   - it acted and a typed vendor limit ended the try → hop to the next
- *     eligible account with the session moved (`native_moved`) or, when the
- *     session cannot be moved, re-briefed by the evidence index (`packet`,
- *     owner 1B) — never a fresh replay of the original prompt;
- *   - it acted and the process died (transport) → the same account resumes
- *     its own session (`native`), or `packet` once a typed fact rejected the
- *     native carrier, bounded by `transient_retry.max_retries` per account;
- *   - pinned / `fail` / `ask` / pool spent → a typed terminal that still
- *     carries the `resumable` facts (cause, reset, carriers).
- *
- * "Acted" is sticky for the whole attempt (any accepted answer text, any agent
- * progress marker, any file change or workspace diff in ANY try): a silent
- * resumed try never re-opens the `fresh` rung. Hops are bounded by
- * `triedProfiles`; same-account continuations by `max_retries` (A2).
- */
+ * Acted is sticky across every try (answer, activity, file change or diff): a
+ * silent resumed try never reopens the fresh rung. The capsule, per-try receipts,
+ * typed terminal cause and retained output preserve what happened. Hops are
+ * bounded by triedProfiles; work never silently becomes a fresh prompt replay.
+ * Full mechanism and carrier rationale: ARCHITECTURE "In-run continuation". */
 import { CONTINUITY_IDENTITY_MISMATCH_CODE, acceptedTryOutput } from "@claudexor/core";
 import { readContinuationSources } from "@claudexor/workspace";
 import {
@@ -70,6 +54,7 @@ import {
   type PreProgressRefusalSubject,
 } from "./pre-progress-refusal.js";
 import { PoolAttemptEvidence, withRotationAttempts } from "./pool-attempt-evidence.js";
+import { quotaRefusalWithScope } from "./quota-refusal-scope.js";
 
 const TYPED_REFUSALS = new Set(["auth_failed", "capability_refused", "config_error"]);
 
@@ -82,6 +67,7 @@ export class InRunContinuity {
   private lastCause: ResumableCause | null = null;
   private limit: LimitEvidenceState | null = null;
   private terminalCode: string | null = null;
+  private permissionDenied = false;
   // Per-try state.
   private tryIndex = 0;
   private tryAbort: AbortController | null = null;
@@ -122,6 +108,7 @@ export class InRunContinuity {
     this.refusal = this.deps.bindRefusal(runSpec, { runId, attemptId, tryIndex: nativeTry });
     this.limit = null;
     this.terminalCode = null;
+    this.permissionDenied = false;
     this.tryIndex = nativeTry;
     this.tryAbort = abort;
     this.tryStarted = false;
@@ -151,6 +138,7 @@ export class InRunContinuity {
    */
   observe(ev: HarnessEvent, runSpec: HarnessRunSpec, markers: AttemptOutputMarkers): string | null {
     this.poolEvidence.observe(ev);
+    if (ev.permission_denial) this.permissionDenied = true;
     this.refusal?.observe(ev, markers);
     if (ev.observed_model && this.tryModel === null) this.tryModel = ev.observed_model;
     if (ev.rate_limit) {
@@ -267,6 +255,9 @@ export class InRunContinuity {
       return { kind: "break" };
     }
     if (facts.requestRefused) return this.breakWith("other");
+    // A known permission refusal is not repaired by replaying the same rights
+    // or rotating accounts. Keep its answer and ordinary continuation evidence.
+    if (this.permissionDenied) return this.breakWith("permission_denied");
     if (facts.telemetry.contextExhausted) return this.breakWith("context_exhausted");
     if (!this.acted) return this.legacy(facts);
     const typedRefusal = facts.newTransients.some((t) => TYPED_REFUSALS.has(t.category));
@@ -406,14 +397,23 @@ export class InRunContinuity {
       this.terminalCode = "subscription_window_exhausted";
       return {
         kind: "terminal",
-        error: Object.assign(
-          new Error(
-            `credential profile "${facts.runSpec.credential_profile?.profile_id ?? "default"}" (${this.deps.adapter.id}) hit a typed vendor limit after progress and a pinned account never rotates${this.limit?.resetsAt ? `; resets ${this.limit.resetsAt}` : ""}`,
+        error: quotaRefusalWithScope(
+          Object.assign(
+            new Error(
+              `credential profile "${facts.runSpec.credential_profile?.profile_id ?? "default"}" (${this.deps.adapter.id}) hit a typed vendor limit after progress and a pinned account never rotates${this.limit?.resetsAt ? `; resets ${this.limit.resetsAt}` : ""}`,
+            ),
+            {
+              code: "subscription_window_exhausted",
+              category: "harness_unavailable",
+              resetsAt: this.limit?.resetsAt ?? null,
+            },
           ),
           {
-            code: "subscription_window_exhausted",
-            category: "harness_unavailable",
-            resetsAt: this.limit?.resetsAt ?? null,
+            harness: this.deps.adapter.id,
+            profileId: facts.runSpec.credential_profile?.profile_id ?? null,
+            model: facts.runSpec.model_hint,
+            requestKind: "text",
+            constraintId: this.limit?.constraintId,
           },
         ),
       };

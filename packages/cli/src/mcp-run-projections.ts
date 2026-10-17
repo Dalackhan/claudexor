@@ -15,6 +15,7 @@ import {
   projectRunLineage,
   projectRunPrimaryOutput,
   projectRunSpendUsd,
+  projectRunControllableSpendUsd,
 } from "./run-detail-projections.js";
 import { projectRunOutcomeFacts } from "./daemon-outcome.js";
 import { projectRunFacts, type ExpectedRunFactsIdentity } from "./run-facts-projection.js";
@@ -29,6 +30,7 @@ export function projectImmediateRunDetail(
     outcomeFacts: projectRunOutcomeFacts(detail),
     applyEligibility: projectApplyEligibility(detail),
     spendUsd: projectRunSpendUsd(detail),
+    controllableSpendUsd: projectRunControllableSpendUsd(detail),
     council: projectRunCouncil(detail),
     outcomeBanner: projectOutcomeBanner(detail),
     planReadiness:

@@ -120,6 +120,7 @@ import type {
   ModeKind,
   PaidBudget,
   ProcessingPreference,
+  ProcessingReceipt,
   WorkspaceKind,
   CredentialUnusableObservation,
   QuotaAbsence,
@@ -310,6 +311,7 @@ import { interactionChannelFor } from "./interaction.js";
 import { liveAttempt, type LiveAttemptContext, type LiveAttemptHook } from "./live-input.js";
 import { finalVerifyRun, gateSpecsFromContract, renderTestsEvidence } from "./contract-gates.js";
 import { buildTaskContract } from "./task-contract-builder.js";
+import { recordProcessingIntent } from "./retry-processing-intent.js";
 import { prepareReviewEvidenceDir, recordReviewEvidenceCleanup } from "./reviewEvidence.js";
 import { ArtifactStore, type RunPaths } from "@claudexor/artifact-store";
 import type { EventLog, TerminalPersistenceHook } from "@claudexor/event-log";
@@ -529,6 +531,10 @@ export interface RunInput {
   /** Optional reasoning-effort hint forwarded to harnesses that support it. */
   effort?: EffortHint;
   processingPreference?: ProcessingPreference;
+  /** Exact Retry only: the source run's frozen routing-time intent per harness
+   * (no preference). Routing keeps it instead of adopting a changed or different
+   * account's native setting; a preference still wins. */
+  processingIntent?: Readonly<Record<string, ProcessingReceipt>>;
   /** Harness-scoped effort map (harness id → effort). Specific beats general: an
    * entry wins over the scalar `effort` and the per-harness settings default,
    * analogous to `models`. Exact Retry replays the frozen per-lane efforts here
@@ -690,6 +696,9 @@ interface HarnessRouteSettings {
 /** A routed candidate adapter plus its manifest capabilities and user settings. */
 export interface RoutedAdapter {
   processing?: PreparedHarnessProcessing;
+  /** Speed this lane chose without a preference; every spawn, rotation and
+   * Exact Retry keeps it (frozen in context/processing_intent.yaml). */
+  processingIntent?: ProcessingReceipt;
   processingAllowPaid?: boolean;
   adapter: HarnessAdapter;
   adapterAccess: AccessProfile;
@@ -1664,6 +1673,19 @@ export class Orchestrator {
       effectiveN: out.length,
       droppedLanes,
     });
+    if (runId) {
+      // Freeze each selected lane's inherited speed for Exact Retry (first routing wins).
+      const store = this.artifactStore(input);
+      recordProcessingIntent(
+        store,
+        store.runPaths(runId).contextDir,
+        Object.fromEntries(
+          out.flatMap((lane) =>
+            lane.processingIntent ? [[lane.adapter.id, lane.processingIntent]] : [],
+          ),
+        ),
+      );
+    }
     this.requestRequirements.requireEffectiveBrowser(
       input.browser === true,
       out.map((lane) => lane.browserRequirement),

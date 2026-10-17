@@ -45,6 +45,8 @@ extension AppModel {
         // build resets these to nil/empty, so a refresh mid-thread would blank the
         // Run Detail receipts unless the last hydrated value is kept.
         task.valuationUsd = task.valuationUsd ?? existing.valuationUsd
+        // The cap-governed cash rides Run Detail only (the list summary has the total).
+        task.controllableSpendUsd = task.controllableSpendUsd ?? existing.controllableSpendUsd
         task.council = task.council ?? existing.council
         task.outcomeBanner = task.outcomeBanner ?? existing.outcomeBanner
         task.applyEligibility = task.applyEligibility ?? existing.applyEligibility

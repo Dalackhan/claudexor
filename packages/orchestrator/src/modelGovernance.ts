@@ -50,6 +50,7 @@ import {
   type HarnessRunSpec,
   type KnownModelEntry,
   type ModelInventoryAbsence,
+  type ProcessingReceipt,
 } from "@claudexor/schema";
 
 export interface ModelGovernedRoute {
@@ -74,6 +75,8 @@ export interface ModelGovernedRoute {
   billingVerificationForProfile?: (profile: CredentialProfile) => Promise<AuthVerification>;
   paidFallback?: PaidFallback;
   settings: { defaultModel: string | null; fallbackModel: string | null } | null;
+  /** Speed the lane chose without a preference (see RoutedAdapter). */
+  processingIntent?: ProcessingReceipt;
 }
 
 type ModelCandidate = { role: string; model: string };
@@ -247,6 +250,9 @@ export async function* runModelGovernedRoute(
   let nativeModel: string | null = null;
   let preparedEffort: EffortResolution | undefined;
   if (spec.processing_preference || routed.adapter.prepareProcessing) {
+    // The lane's own intent (an Exact Retry original included); a copied
+    // retry/rotation spec otherwise still carries the first account's choice.
+    const chosen = routed.processingIntent ?? spec.processing;
     const prepared = await prepareHarnessProcessing(routed.adapter, {
       preference: spec.processing_preference,
       model: spec.model_hint,
@@ -256,6 +262,7 @@ export async function* runModelGovernedRoute(
       env: spec.env,
       authPreference: spec.auth_preference,
       allowPaid: spec.processing_allow_paid,
+      ...(spec.processing_preference === undefined && chosen ? { chosen } : {}),
     });
     nativeModel = prepared.model;
     preparedEffort = prepared.effort;

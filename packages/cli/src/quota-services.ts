@@ -2,6 +2,7 @@
 import type { QuotaRegistry } from "@claudexor/daemon";
 import {
   ControlQuotaFreshnessResponse,
+  ControlAccountResourcesFreshnessResponse,
   ControlQuotaReadRequest,
   ControlQuotaRefreshRequest,
   withQuotaAvailability,
@@ -60,8 +61,8 @@ function withResetCreditLabel<T extends object>(snapshot: DecoratedSnapshot, lab
   };
 }
 
-/** Compatibility text belongs at the old wire boundary, never in canonical
- * quota evidence or admission. Rich clients get typed reset inventory only. */
+/** Compatibility text belongs at the wire boundary, never in canonical quota
+ * evidence or admission. The resources-only view keeps its existing semantics. */
 export function legacyQuotaResponse(
   registry: QuotaRegistry,
   response: ControlQuotaResponse,
@@ -84,8 +85,8 @@ export function legacyQuotaResponse(
 export function constraintFreshnessQuotaResponse(
   registry: QuotaRegistry,
   scope: AvailabilityScope = {},
+  resources = registry.readResources?.() ?? [],
 ): ControlQuotaFreshnessResponse {
-  const resources = registry.readResources?.() ?? [];
   const decorated = withQuotaAvailability(registry.readConstraintFreshness(), scope);
   return ControlQuotaFreshnessResponse.parse({
     ...decorated,
@@ -111,6 +112,19 @@ export function quotaControlServices(quotaRegistry: () => QuotaRegistry) {
     quota: async (input?: ControlQuotaReadRequest) => {
       const { view, ...scope } = ControlQuotaReadRequest.parse(input ?? {});
       const registry = quotaRegistry();
+      if (view === "resources_freshness") {
+        const resources = registry.readResources();
+        const response = constraintFreshnessQuotaResponse(registry, scope, resources);
+        return ControlAccountResourcesFreshnessResponse.parse({
+          ...response,
+          resources,
+          availability_scope: {
+            basis: "quota_block",
+            model: scope.model ?? null,
+            requestKind: scope.requestKind ?? "text",
+          },
+        });
+      }
       if (view === "resources")
         return accountResourcesResponse(registry, registry.read(), registry.readResources(), scope);
       if (view === "constraint_freshness") return constraintFreshnessQuotaResponse(registry, scope);

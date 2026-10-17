@@ -13,6 +13,7 @@ export interface PartialReviewerSpend {
   partialValuationUsd?: number;
   partialValuationKnowledge?: CostKnowledge;
   partialUnknownUsd?: number;
+  partialAllowanceDebitUnobserved?: boolean;
 }
 
 /** Input-ordered panel accounting, kept separate from review orchestration. */
@@ -24,6 +25,7 @@ export class ReviewerSpendAccumulator {
   private readonly valuation: number[];
   private readonly valuationKnowledge: CostKnowledge[];
   private readonly unknown: number[];
+  private readonly allowanceDebitUnobserved: boolean[];
 
   constructor(size: number) {
     this.spend = Array(size).fill(0);
@@ -33,6 +35,7 @@ export class ReviewerSpendAccumulator {
     this.valuation = Array(size).fill(0);
     this.valuationKnowledge = Array(size).fill("unknown");
     this.unknown = Array(size).fill(0);
+    this.allowanceDebitUnobserved = Array(size).fill(false);
   }
 
   record(index: number, output: ReviewerOutput): void {
@@ -43,6 +46,7 @@ export class ReviewerSpendAccumulator {
     this.valuation[index] = output.valuationUsd;
     this.valuationKnowledge[index] = output.valuationKnowledge;
     this.unknown[index] = output.unknownUsd;
+    this.allowanceDebitUnobserved[index] = output.allowanceDebitUnobserved === true;
   }
 
   recordPartial(index: number, output: PartialReviewerSpend): void {
@@ -60,6 +64,7 @@ export class ReviewerSpendAccumulator {
     this.valuation[index] = output.partialValuationUsd ?? 0;
     this.valuationKnowledge[index] = output.partialValuationKnowledge ?? "unknown";
     this.unknown[index] = output.partialUnknownUsd ?? 0;
+    this.allowanceDebitUnobserved[index] = output.partialAllowanceDebitUnobserved === true;
   }
 
   summary(): Pick<
@@ -71,6 +76,7 @@ export class ReviewerSpendAccumulator {
     | "reviewValuationUsd"
     | "reviewValuationKnowledge"
     | "reviewUnknownUsd"
+    | "reviewAllowanceDebitUnobserved"
   > {
     return summarizeReviewerSpend(
       this.spend,
@@ -80,6 +86,7 @@ export class ReviewerSpendAccumulator {
       this.estimated,
       this.cashKnowledge,
       this.valuationKnowledge,
+      this.allowanceDebitUnobserved,
     );
   }
 }

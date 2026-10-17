@@ -770,10 +770,11 @@
           "repeatable": false,
           "enum": [
             "resources",
-            "constraint_freshness"
+            "constraint_freshness",
+            "resources_freshness"
           ],
           "schema_ref": null,
-          "description": "Opt in to typed account resources alongside quota, or to per-constraint freshness from raw snapshot evidence, observation TTL, and each window's own reset; omitted preserves the legacy shape. Does not refresh quota."
+          "description": "Opt in to typed resources, per-constraint freshness, or resources_freshness combining both with an explicit availability_scope echo. Omitted preserves the legacy shape. Does not refresh quota."
         }
       ],
       "response_schema": "ControlQuotaQueryResponse",

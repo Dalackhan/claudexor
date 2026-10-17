@@ -3,6 +3,7 @@ import {
   ControlAccountResourcesResponse,
   ControlAccountRoutingEvidenceResponse,
   ControlQuotaFreshnessResponse,
+  ControlAccountResourcesFreshnessResponse,
   ControlQuotaResponse,
   ControlQuotaReadRequest,
   ControlQuotaRefreshRequest,
@@ -27,9 +28,9 @@ const readParameters = [
   ...QUOTA_READ_PARAMETERS,
   queryParam({
     name: "view",
-    enum: ["resources", "constraint_freshness"],
+    enum: ["resources", "constraint_freshness", "resources_freshness"],
     description:
-      "Opt in to typed account resources alongside quota, or to per-constraint freshness from raw snapshot evidence, observation TTL, and each window's own reset; omitted preserves the legacy shape. Does not refresh quota.",
+      "Opt in to typed resources, per-constraint freshness, or resources_freshness combining both with an explicit availability_scope echo. Omitted preserves the legacy shape. Does not refresh quota.",
   }),
 ];
 export const ACCOUNT_RESOURCE_OPERATION_DRAFTS: OperationDraft[] = [
@@ -149,11 +150,13 @@ export async function handleAccountResourceRoute(
             })
           : undefined;
       const schema =
-        view === "resources"
-          ? ControlAccountResourcesResponse
-          : view === "constraint_freshness"
-            ? ControlQuotaFreshnessResponse
-            : ControlQuotaResponse;
+        view === "resources_freshness"
+          ? ControlAccountResourcesFreshnessResponse
+          : view === "resources"
+            ? ControlAccountResourcesResponse
+            : view === "constraint_freshness"
+              ? ControlQuotaFreshnessResponse
+              : ControlQuotaResponse;
       const payload =
         method === "GET"
           ? await required(ctx.services?.quota)(

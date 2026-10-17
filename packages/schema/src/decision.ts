@@ -278,7 +278,7 @@ export const DecisionRecord = z
           .describe("True when settled cash is estimated rather than exact."),
         // QA-010b: the settled CASH vs subscription-VALUATION split, so the
         // terminal decision record is self-contained. `spend_usd` above is the
-        // cash figure (0 on native-subscription routes); `valuation_usd`
+        // cash figure (0 on proven included routes); `valuation_usd`
         // carries the subscription-equivalent total INCLUDING the reviewer
         // panel, which used to live only in raw events. Optional/nullable so
         // older records and ledgerless paths stay valid.
@@ -287,7 +287,16 @@ export const DecisionRecord = z
           .nullable()
           .default(null)
           .describe(
-            "Settled cash spend in USD (0 on native-subscription routes); null when unknown.",
+            "Settled cash spend in USD (0 on proven included routes); null when unknown, including an included subscription that reports no actual debit.",
+          ),
+        // The finite cap governs this known part while an unobserved included
+        // debit leaves the total above unknown (same split as the run budget).
+        controllable_cash_usd: z
+          .number()
+          .nullable()
+          .optional()
+          .describe(
+            "Cash governed by the finite cap: settled amounts on routes Claudexor controls; null when that cash is unknown. spend_usd and cash_usd stay null when an included subscription reports no actual debit. Absent on legacy decisions.",
           ),
         valuation_usd: z
           .number()

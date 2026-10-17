@@ -386,13 +386,6 @@ export function quotaSnapshotDueAt(snapshot: QuotaSnapshot): number {
   return Math.min(observed + QUOTA_FRESHNESS_TTL_MS, ...resets);
 }
 
-/** Whether primary evidence will be due by a future demand horizon. Unlike
- * `staleAt`, the TTL comparison includes equality so the last existing poll
- * before expiry requests renewal instead of waiting for the following tick. */
-export function quotaSnapshotDueBefore(snapshot: QuotaSnapshot, deadline: number): boolean {
-  return quotaSnapshotDueAt(snapshot) <= deadline;
-}
-
 function resetExpiredAt(constraint: Pick<QuotaConstraint, "resets_at">, now: number): boolean {
   const reset = constraint.resets_at ? Date.parse(constraint.resets_at) : Number.NaN;
   return Number.isFinite(reset) && reset <= now;

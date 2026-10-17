@@ -454,7 +454,34 @@ produce a new Standard request and reservation; an unknown outcome may not.
 
 Choosing Fast permits its premium service within existing monetary limits. It
 does not enable paid account settings, change credentials, buy credits, or raise
-limits. An explicit no-paid policy selects ordinary fallback before dispatch.
+limits. An explicit no-paid policy selects ordinary fallback before dispatch
+unless the exact native mode has a documented subscription allowance. On a
+verified ChatGPT subscription, ordinary Codex Fast (`fast`/`priority`) consumes
+included subscription limits ([OpenAI Speed documentation](https://learn.chatgpt.com/docs/agent-configuration/speed))
+and remains eligible under `paid_fallback: never` and `finite(0)`. This allowance
+does not cover `ultrafast`, other premium or unknown tiers, API credentials or
+unknown routes. Advisory Fast still requires the selected model/account's
+advertisement; an inherited native setting is preserved only within the same
+paid policy, and omission never selects Fast by itself. For Codex, omission may
+inherit the first account's own native setting, recorded with its
+`codex.managed_config` provenance; a retry, rotation or in-run continuation keeps
+that chosen intent and never adopts another account's setting (other adapters
+ignore the intent and read each account's own setting). Ordinary Fast is one
+intent under either spelling (`fast`/`priority`); Ultrafast is not. Exact Retry
+keeps its source run's inherited intent as it keeps the frozen model and effort;
+a new command or thread turn chooses its own initial intent. An inherited intent the next account
+cannot serve falls back to ordinary service with its reason, like an advisory
+preference; an exact native `serviceTier` is never substituted, and an inherited
+premium setting is never treated as an exact request.
+Allowance admission is not a debit receipt. A ChatGPT plan can spend purchased
+credits beyond its included limits for Standard as well as Fast, and no Codex
+transport reports that debit, so every verified Codex subscription cost basis
+declares `debit: "unobserved"`. That work completes under unlimited, positive and
+`finite(0)` caps with its reported cash unknown, never inferred as exact zero, in
+the run budget and the decision record alike; the finite cap governs only
+controllable cash and promises no provider-credit limit.
+API, unknown and premium routes, an earlier paid interval without a receipt, and
+actual cash receipts keep their meaning, including `cost_unverifiable`.
 Resolve native controls and mode-qualified billing before ranking and reservation;
 carry observed usage through the existing ledger. Authentication proves the
 credential route, not inclusion of premium service. A native list-price amount is

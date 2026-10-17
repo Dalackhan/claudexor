@@ -677,7 +677,8 @@ route exactly like an explicit input, so the TaskContract records them
 (`routing_models` + `routing_efforts`) instead of leaving `{}` that a later
 retry would re-resolve against changed settings. Exact Retry replays those
 frozen values, so a run made on a settings default stays reproducible after
-the default changes (QA-035); the resolved map is what route-spec building
+the default changes (QA-035); an inherited native speed is kept the same way
+from the source run's frozen routing-time intent (Processing and account catalogs); the resolved map is what route-spec building
 reads; per-attempt overrides
 (budget downgrade to `fallback_model`, fallback retry) sit on top. Every
 explicit model — per-run, settings default, fallback, reviewer — must pass
@@ -993,9 +994,16 @@ nullable currency and provider-reported `decimal_places`. Reset offer/grant
 codes retain provenance while their detail explains the state, including false/unknown.
 These resources do not enable paid usage or change routing policy.
 
+`cursor-quota-source` uses the bound vendor file store (macOS HOME, Linux XDG,
+Windows APPDATA; config stays CURSOR_CONFIG_DIR). Source-derived layouts are not
+native-platform proof. Existing demand/pacing emits bounded `usage_http` receipts;
+Retry-After starts at response receipt. USD minor-unit resources (scale 2) never
+admit runs; `no_source` means no quota-window source, not no account resources.
+
 The operation catalog advertises `view=resources` on quota and atomic Accounts
-reads. Without a view selector, quota responses keep the strict legacy representation, including
-the historical Codex reset-credit label at the serializer boundary. A refresh body
+reads; `resources_freshness` combines the freshness view (including its Codex reset-credit
+compatibility label), typed resources and a model/request-kind echo on passive GET
+(wire contract: INTEGRATIONS). Unselected quota reads keep the strict legacy shape. A refresh body
 may select one exact `target` (harness and profile id), including a named default
 or a disabled portable profile. It uses the existing refresh coordinator and pacing
 floor, retains other accounts, and cannot join a cycle that did not cover its target.
@@ -1929,6 +1937,29 @@ reservation. `serviceTier` remains an exact native override. Requested cognitive
 model and native variant stay distinct, and the per-spawn model gate validates
 the actual account's chosen variant. Result/event Processing receipts separate
 request, submission and observation; sessions may remain mixed or unknown.
+Codex's Processing cost owner qualifies ordinary native Fast against the
+subscription allowance described in the [Processing rule](DEVELOPMENT.md#processing-preference).
+The same paid-policy resolver prepares routing, reviewers and final native
+execution; final preparation recomputes the billing basis for the actual
+credential route rather than retaining another route's included verdict.
+The prepared `ProcessingCostBasis.kind=included` describes prospective allowance;
+its optional `debit: "unobserved"` states that the route reports no actual debit.
+Execution events carry that same basis: controllable cash stays exact while the
+reported total stays unknown until an actual cash receipt, and token valuation
+alone never proves zero cash. Without a preference, each governed spawn passes
+the receipt its work unit already chose as the optional `chosen` field of
+`HarnessProcessingSpec`. Only the Codex adapter honours it today, so a Codex
+retry, rotation or continuation keeps that intent instead of reading the next
+account's native setting; other adapters ignore the field and keep reading each
+account's own setting. Routing freezes the intent per routed harness lane in
+`context/processing_intent.yaml` (`RunProcessingIntent`) before any attempt, and
+every governed spawn and rotation of the lane passes it. Exact Retry carries it
+across runs: for a request with `retryOf`
+and no preference, the daemon runner reads the source run's record and hands it
+to routing as the run input's `processingIntent`; the retry records that
+original (with its provenance), not its own fallback, so a retry of a retry
+keeps it. A source without the record (an older run) inherits afresh. A new
+command, including a new thread turn, chooses its own initial intent.
 
 Existing catalog endpoints provide an opt-in `view=accounts` declared in the
 operation catalog. It includes every enabled compatible account with its
@@ -2069,6 +2100,13 @@ model/window/usage/cash stays unknown; `maxOutputTokens` and `temperature` are
 explicit unsupported options, not silently dropped, and CLI compaction percentages
 do not reduce catalog capacity. Other installed harnesses remain Agent
 capabilities, not raw model sources.
+
+Catalog `inputModalities` is declared metadata (the `ModelCatalogEntry` field
+states its semantics), not an admission gate: a text-only list or a missing model
+row never stops a request on modality grounds. User and tool image blocks and
+replayable native continuations are serialized and sent exactly as for any model, and the
+provider's own answer decides. The declaration does not prove that a given image
+reached or was understood by the model.
 
 The optional top-level `nativeContinuation` carries live transport state in the
 same private request/result resources, apart from historical assistant
@@ -4166,10 +4204,18 @@ candidates and each reviewer route) is telemetry, not a cash debit. It is
 projected BESIDE cash on `ControlBudgetSnapshot` (`valuationUsd` +
 `valuationKnowledge`, also on the MCP read result), so proven included ordinary
 work reads as exact `$0` cash with a non-null valuation; an unknown valuation
-stays null, never a fabricated `$0`. Codex's token-only usage stays unpriced
+stays null, never a fabricated `$0`. A Processing cost basis carrying
+`debit: "unobserved"` (every verified Codex subscription route) is the exception:
+the route reports no actual cash or credit debit, so its reported cash stays
+unknown (`spendUsd` null) while `controllableSpendUsd` and `remainingUsd` keep
+the exact part the finite cap governs. The terminal decision record applies the
+same split: `budget_summary.spend_usd`/`cash_usd` are null when the ledger's
+reported cash is unknown, `controllable_cash_usd` carries the cap-governed part
+(null when that is unknown too), and `claudexor inspect` prints
+`budget: spend=unknown controllable=<usd>` instead of the known subtotal. Codex's token-only usage stays unpriced
 unless explicit `CLAUDEXOR_CODEX_PRICE_INPUT`, `_OUTPUT` and `_CACHED` rates cover
 every used token category; model names never imply a fallback tariff, and
-included ordinary subscription cash stays exact zero regardless of that optional
+included ordinary subscription cash is never priced from that optional
 valuation. Premium native processing is separately qualified before ranking and
 reservation; verified login alone cannot prove inclusion. Observed amount basis is
 independent: vendor list prices are valuation, while unknown cash or credit
@@ -4197,8 +4243,14 @@ paid routes. A reviewer cap stops the panel while retaining partial usage;
 unknown ordinary-included amounts do not become paid holds. `finite(0)` admits
 only proven-zero or subscription-entitlement work; a positive finite cap permits
 at most one unknown-cost paid unit in flight. A later exact charge above the cap
-is retained and ends `budget_overshoot`; permanently unknown cost ends
-`cost_unverifiable` rather than fabricating `$0`. Later parallel race
+is retained and ends `budget_overshoot`; permanently unknown controllable cost
+ends `cost_unverifiable` rather than fabricating `$0`. The cap governs only
+controllable cash and never promises a provider-credit limit: an unobserved
+included debit is settled as reported-unknown cash (`budget.cash` carries
+`cash_knowledge` beside `controllable_cash_knowledge`) and is neither unknown-paid
+debt nor a cost-unverifiable terminal, while an earlier paid interval without a
+receipt keeps the family unverifiable. The Delegate belt commits a child's
+`controllableSpendUsd` against its draw when the child's total spend is unknown. Later parallel race
 candidates, Council members, and deep-scan scouts reserve an estimate floor
 (`budget.estimate_usd_floor`, default $0.05). The Deep Scan synthesis reducer
 and the one-shot enveloped candidate continuation reserve it too because each
@@ -4262,8 +4314,8 @@ read uses existing pruning rules without refresh or event writes. The legacy GET
 POST refresh (whose `view` stays `resources` only), Accounts responses, raw
 schemas, routing and refresh demand keep their contract. Supporting engines reject
 empty, unknown and repeated `view`; the catalog's `ControlQuotaQueryResponse` is a
-union of the strict whole-response shapes (legacy, `resources`,
-`constraint_freshness`). A direct caller accepts only a fully valid explicit or
+union of four strict whole-response shapes (legacy, `resources`,
+`constraint_freshness`, `resources_freshness`). A caller accepts only valid explicit or
 legacy response; missing nested freshness in valid legacy data keeps conservative
 snapshot freshness and never implies independent freshness or refill. Malformed or
 partial explicit metadata, including mixed explicit/legacy constraints or
@@ -4519,7 +4571,9 @@ loop attaches a bounded, adapter-redacted `stderr_tail` to the terminal
 SSE / `--json-stream`), never a verdict axis. Persistence into attempt events
 is guaranteed for consumers that drain the stream to completion; an
 orchestrator-side abort that stops consuming before the terminal event does
-not persist it (bounded residue).
+not persist it (bounded residue). AGY observes redacted stderr lines before tail
+eviction, retains only confirmed native denial and projects it as typed run evidence;
+a nonempty typed final remains usable with a warning, never proof of tool success.
 
 Structured output: routes whose manifest declares `json_schema_output`
 receive `HarnessRunSpec.output_schema` — a CALLER-supplied per-run schema the
@@ -4699,9 +4753,13 @@ resume keeps the id; codex compares the `thread/resume` reply before
 session) and the adapter's typed rejection of carried state. "Acted" is a
 sticky fact of the attempt (an accepted answer, agent progress, a file change
 or a diff in any try). An attempt that did not act keeps the rotation and
-transient rules above byte for byte, except that a context exhaustion ends the
-attempt with `resumable` cause `context_exhausted` instead of a structural
-rotation (another account has the same window). After progress: a typed vendor limit on an
+transient rules above, except typed context exhaustion and native permission
+refusal end the attempt rather than replaying the same limitation. AGY's adapter
+recognizes exact native-stderr auto-denial, not empty output or model prose.
+Only a nonempty typed final keeps an answer with that warning; narration
+cannot make the refusal successful. `permission_denial` records
+`capability_refused`/`permission_denied` without upgrading access or retrying.
+A DONE tool without output is diagnostic, not successful read evidence. After progress: a typed vendor limit on an
 unpinned `rotate` route hops to the next eligible account and the next try
 carries the work — `native_moved` when the adapter's `continuity` located the
 session and moved it into the target store (claude: `<sid>.jsonl` + `<sid>/`
@@ -4841,6 +4899,7 @@ Canonical project output lives under
 events.jsonl
 context/task.yaml
 context/context_pack.yaml?
+context/processing_intent.yaml?   (routed lanes' frozen speed intent; Codex applies it, §7)
 attempts/aNN/attempt.yaml       (Agent candidate evidence)
 attempts/aNN/answer.md?         (selected answer, even if capture failed)
 attempts/<envelope-attempt>/retained-envelope.json? (inspection-source address)

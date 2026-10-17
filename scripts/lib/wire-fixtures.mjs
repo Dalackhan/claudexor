@@ -284,6 +284,7 @@ export function buildWireFixtures() {
   add("budget-snapshot-capped", "ControlBudgetSnapshot", {
     paidBudget: { kind: "finite", maxUsd: 2.5 },
     spendUsd: 1.25,
+    controllableSpendUsd: 1.25,
     remainingUsd: 1.25,
     estimated: true,
     source: "decision",
@@ -296,6 +297,7 @@ export function buildWireFixtures() {
   add("budget-snapshot-valued", "ControlBudgetSnapshot", {
     paidBudget: { kind: "unlimited" },
     spendUsd: 0,
+    controllableSpendUsd: 0,
     valuationUsd: 0.87,
     valuationKnowledge: "estimated",
     remainingUsd: null,

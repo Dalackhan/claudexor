@@ -296,12 +296,11 @@ export function harnessEventPayload(
     quota: safe.quota,
     rate_limit: safe.rate_limit,
     request_refusal: safe.request_refusal,
+    permission_denial: safe.permission_denial,
     tool: safe.tool,
     interaction: safe.interaction,
-    // Typed finality/status MUST survive this projection (W-C1/W-C2): the
-    // app's transcript reducer keys the answer-dedup on `final` and the
-    // activity feed on `status` — dropping them here silently killed both
-    // on the LIVE path (caught by the F2.5 E2E smoke, not unit tests).
+    // Preserve finality/status for answer dedup and activity (W-C1/W-C2);
+    // losing them here broke both on the live path (F2.5 E2E).
     final: safe.final,
     status: safe.status,
     payload: safe.payload,

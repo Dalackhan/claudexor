@@ -238,6 +238,7 @@ export class QuotaRegistry {
       refreshSubjects(this.subjects?.(), target),
       this.activeSnapshots(this.now().getTime()),
       target,
+      this.readResources(),
     );
     const settled = await Promise.allSettled(running.map(async ({ refresh }) => refresh()));
     const batches = validatedRefreshBatches(settled, target);
@@ -267,6 +268,7 @@ export class QuotaRegistry {
       claims,
       skipped,
       now,
+      batches.flatMap((batch) => batch?.resources ?? []),
     );
     const refreshedAt = this.now().toISOString();
     const response = ControlQuotaResponse.parse({
@@ -397,6 +399,7 @@ export class QuotaRegistry {
           dueBefore,
           since,
           this.refresherLanes.lanes,
+          this.readResources(now),
         ),
       currentGeneration: () => this.refreshCoordinator.currentGeneration(),
       isCurrentGeneration: (generation) => this.refreshCoordinator.isCurrent(generation),

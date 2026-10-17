@@ -47,6 +47,8 @@ export interface ReviewerOutput {
   unknownUsd: number;
   cashKnowledge: CostKnowledge;
   valuationKnowledge: CostKnowledge;
+  /** Included reviewer route reported no actual debit (reported cash unknown). */
+  allowanceDebitUnobserved?: boolean;
 }
 
 export interface ReviewerArtifactContext {
@@ -114,6 +116,7 @@ export interface ReviewCandidateResult {
   reviewValuationUsd: number;
   reviewValuationKnowledge: CostKnowledge;
   reviewUnknownUsd: number;
+  reviewAllowanceDebitUnobserved?: boolean;
 }
 
 export function summarizeReviewerSpend(
@@ -124,6 +127,7 @@ export function summarizeReviewerSpend(
   estimated: readonly boolean[],
   cashKnowledge: readonly CostKnowledge[],
   valuationKnowledge: readonly CostKnowledge[],
+  allowanceDebitUnobserved: readonly boolean[] = [],
 ): {
   reviewSpendUsd: number;
   reviewSpendEstimated: boolean;
@@ -132,6 +136,7 @@ export function summarizeReviewerSpend(
   reviewValuationUsd: number;
   reviewValuationKnowledge: CostKnowledge;
   reviewUnknownUsd: number;
+  reviewAllowanceDebitUnobserved: boolean;
 } {
   const relevantValuationKnowledge = valuationKnowledge.filter(
     (_, index) => (valuation[index] ?? 0) > 0 || (unknown[index] ?? 0) > 0,
@@ -144,6 +149,7 @@ export function summarizeReviewerSpend(
     reviewValuationUsd: valuation.reduce((sum, value) => sum + value, 0),
     reviewValuationKnowledge: mergeKnowledge(relevantValuationKnowledge),
     reviewUnknownUsd: unknown.reduce((sum, value) => sum + value, 0),
+    reviewAllowanceDebitUnobserved: allowanceDebitUnobserved.some(Boolean),
   };
 }
 

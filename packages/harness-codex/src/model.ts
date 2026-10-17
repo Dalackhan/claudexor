@@ -94,6 +94,15 @@ function capacity(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
+/** Declared input kinds verbatim (open vocabulary). Only a wholly valid, non-empty
+ * list counts: a missing, empty, non-array or partly invalid one is unknown (`[]`),
+ * never a filtered subset that would read as a confident negative. */
+function declaredInputModalities(value: unknown): string[] {
+  return Array.isArray(value) && value.length > 0 && value.every((item) => text(item)?.trim())
+    ? [...value]
+    : [];
+}
+
 /** An expired/opaque access token's 401 is not proof that a new login is needed. */
 function authenticatedProblem(
   response: Response,
@@ -147,9 +156,6 @@ export function parseCodexModelCatalog(value: unknown): ModelCatalogEntry[] {
       ? reportedEfforts.map((item) => text(record(item)?.effort)!)
       : [];
     const projectedEfforts = codexModelEfforts(efforts);
-    const modalities = Array.isArray(entry.input_modalities)
-      ? entry.input_modalities.filter((item): item is string => typeof item === "string")
-      : [];
     return {
       id,
       processing: codexProcessingCapability(entry, "codex.models"),
@@ -159,7 +165,7 @@ export function parseCodexModelCatalog(value: unknown): ModelCatalogEntry[] {
       maxContextWindow: capacity(entry.max_context_window),
       // Backend output-cap parameters are unsupported even when a model has a published output capacity.
       maxOutputTokens: capacity(entry.max_output_tokens),
-      inputModalities: modalities,
+      inputModalities: declaredInputModalities(entry.input_modalities),
       ...projectedEfforts,
       reasoningEffortsVerified,
       defaultReasoningEffort:

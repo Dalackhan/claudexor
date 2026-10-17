@@ -30,7 +30,11 @@ import {
 } from "./processing.js";
 import { AuthCapabilities } from "./platform-auth.js";
 import { InteractionRequest, LiveInputCapability } from "./harness-interaction.js";
-import { HarnessInputLimit, HarnessRequestRefusal } from "./harness-input.js";
+import {
+  HarnessInputLimit,
+  HarnessRequestRefusal,
+  HarnessPermissionDenial,
+} from "./harness-input.js";
 export * from "./harness-input.js";
 export * from "./platform-auth.js";
 // Re-exported so sibling contract modules keep one import path for the type.
@@ -772,6 +776,7 @@ export const HarnessEvent = z
     refusal_code: RawPatchRefusalCode.optional().describe(
       "Typed refusal code for a rejected raw patch contract.",
     ),
+    permission_denial: HarnessPermissionDenial.optional(),
     usage: z
       .object({
         input_tokens: z.number().int().nonnegative().optional().describe("Input tokens consumed."),

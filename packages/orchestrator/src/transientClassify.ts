@@ -87,6 +87,10 @@ export function classifyRateLimit(retryDelayMs: number | null): TransientFailure
   return observation("rate_limited", { retryDelayMs });
 }
 
+export function classifyPermissionDenial(): TransientFailureObservation {
+  return observation("capability_refused", { adapterCode: "permission_denied" });
+}
+
 /** Map the vendor's typed `status.error_category` onto the taxonomy. Only the
  * deterministic FAILURE classes are surfaced here; rate limits arrive via the
  * dedicated `rate_limit` signal, and transient/overload retries the vendor

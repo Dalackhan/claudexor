@@ -1,6 +1,7 @@
-import type { CostKnowledge, HarnessEvent } from "@claudexor/schema";
+import type { CostKnowledge, HarnessEvent, UsageCostSummary } from "@claudexor/schema";
 import {
   attemptUsageCostSettlement,
+  reportedCashKnowledge,
   unknownCostSettlement,
   UsageCostTracker,
   type BudgetLedger,
@@ -17,6 +18,8 @@ export interface AttemptUsageCost {
   readonly cashKnowledge?: CostKnowledge;
   readonly valuationKnowledge?: CostKnowledge;
   readonly unknownPaidUsd?: number;
+  /** Included work whose route reported no actual debit (reported cash unknown). */
+  readonly allowanceDebitUnobserved?: boolean;
 }
 
 const usageTrackers = new WeakMap<AttemptUsageCost, UsageCostTracker>();
@@ -138,8 +141,27 @@ export function newAttemptUsageCost(): AttemptUsageCost {
     cashKnowledge: { enumerable: false, get: () => tracker.snapshot().cashKnowledge },
     valuationKnowledge: { enumerable: false, get: () => tracker.snapshot().valuationKnowledge },
     unknownPaidUsd: { enumerable: false, get: () => tracker.unknownPaidUsd },
+    allowanceDebitUnobserved: {
+      enumerable: false,
+      get: () => tracker.snapshot().allowanceDebitUnobserved,
+    },
   });
   return cost;
+}
+
+/** Attempt-record projection. Reported cash stays unknown when an included
+ * route reported no actual debit, while settlement keeps the controllable fact. */
+export function attemptUsageCostSummary(cost: AttemptUsageCost): UsageCostSummary {
+  return {
+    cashUsd: cost.cashUsd,
+    valuationUsd: cost.valuationUsd,
+    unknownUsd: cost.unknownUsd,
+    cashKnowledge: reportedCashKnowledge(
+      cost.cashKnowledge ?? "unknown",
+      cost.allowanceDebitUnobserved,
+    ),
+    valuationKnowledge: cost.valuationKnowledge ?? "unknown",
+  };
 }
 
 /** Observe one event and return the route to carry into the next event. */

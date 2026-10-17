@@ -37,6 +37,8 @@ import {
   budgetValuationFromEvents,
   cashEstimatedFromLedgerEvent,
   cashKnowledgeFromEvents,
+  controllableSpendFromEvents,
+  decisionCashAnchor,
   normalizeLegacyBudgetComponents,
 } from "./budget-valuation.js";
 import {
@@ -2715,7 +2717,8 @@ function budgetSnapshot(
   const paidBudget = PaidBudget.safeParse(p["paidBudget"]).data ??
     contractBudget ?? { kind: "unlimited" as const };
   const evs = eventsSnapshot ?? readRunEvents(rec);
-  let spendUsd = decision?.budget_summary?.spend_usd ?? null;
+  const anchor = decisionCashAnchor(decision?.budget_summary);
+  let spendUsd = anchor.spendUsd;
   let estimated = decision?.budget_summary?.estimated ?? false;
   let source: "decision" | "events" | "settings" | "unknown" =
     spendUsd === null ? "unknown" : "decision";
@@ -2792,11 +2795,12 @@ function budgetSnapshot(
     if (observationEstimated && lastCash === null) estimated = true;
   }
   const cashKnowledge = cashKnowledgeFromEvents(evs);
-  if (cashKnowledge === "unknown") spendUsd = null;
+  const controllableSpendUsd = controllableSpendFromEvents(evs, spendUsd);
+  if (cashKnowledge === "unknown" || anchor.totalUnknown) spendUsd = null;
   if (cashKnowledge !== undefined) estimated = cashKnowledge !== "exact";
   const remainingUsd =
-    paidBudget.kind === "finite" && spendUsd !== null
-      ? Math.max(0, paidBudget.maxUsd - spendUsd)
+    paidBudget.kind === "finite" && controllableSpendUsd !== null
+      ? Math.max(0, paidBudget.maxUsd - controllableSpendUsd)
       : null;
   // Disclose when the spend fallback read incomplete/unreadable canonical
   // events (QA-074): a partial event set can silently drop a spend tick, so the
@@ -2806,6 +2810,7 @@ function budgetSnapshot(
     cashKnowledge,
     paidBudget,
     spendUsd,
+    controllableSpendUsd,
     valuationUsd,
     valuationKnowledge,
     remainingUsd,

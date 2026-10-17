@@ -106,6 +106,10 @@ function printQuota(value: ReturnType<typeof ControlQuotaResponse.parse>): void 
         ? ""
         : ` retry-after=${Math.ceil(absence.retry_after_ms / 1000)}s`;
     const detail = absence.detail ? ` (${absence.detail})` : "";
-    print(`${subject}: no fresh snapshot — ${absence.reason}${retryAfter}${detail}`);
+    const reason =
+      absence.reason === "no_source"
+        ? "no quota-window source (account resources may be reported separately)"
+        : absence.reason;
+    print(`${subject}: no fresh snapshot — ${reason}${retryAfter}${detail}`);
   }
 }

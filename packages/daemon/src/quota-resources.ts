@@ -77,9 +77,16 @@ export function ageResources(
   const result = structuredClone(snapshot);
   for (const key of ACCOUNT_RESOURCE_FACETS) {
     const facet = result[key];
+    const periodEnded =
+      (key === "balances" || key === "spending") &&
+      result[key].value?.some((row) => {
+        const endsAt = Date.parse(row.period?.ends_at ?? "");
+        return Number.isFinite(endsAt) && endsAt <= now;
+      });
     if (facet.value === null) facet.freshness = "unknown";
     else if (
       facet.last_error !== null ||
+      periodEnded ||
       facet.observed_at === null ||
       now - Date.parse(facet.observed_at) >= 300_000
     )

@@ -27,9 +27,9 @@ profiles**: named Antigravity/Claude/Codex/Cursor subscription bindings side
 by side, each with Claudexor-scoped state and platform-declared credential
 custody. Live subscription-quota tracking — and the opt-in policy that rotates
 a spent account out of the way on typed vendor limits — covers the harnesses
-with a vendor usage source (Antigravity, Claude, and Codex); Cursor has none
-yet. Everything runs on your machine, files are the source of truth, and there
-is no telemetry.
+with a vendor quota source (Antigravity, Claude, and Codex). Cursor's internal
+dashboard supplies dated monetary resources, not an execution-quota verdict.
+Everything runs on your machine, files are the source of truth, and there is no telemetry.
 
 Current status: **v4.2.0**. See "Stability at 2.0" below for what is a stable
 contract and what remains experimental; retired verbs and mode ids hard-error
@@ -676,6 +676,7 @@ without a project uses an empty synthetic cwd at
 events.jsonl
 context/task.yaml
 context/context_pack.yaml?
+context/processing_intent.yaml?   (routed lanes' frozen speed intent)
 attempts/a01/attempt.yaml
 attempts/a01/answer.md?
 attempts/a01/retained-envelope.json?  (capture-refused inspection source)
@@ -947,22 +948,20 @@ GitHub account without their explicit approval.
 
 ## Privacy
 
-Claudexor collects **no telemetry**: no analytics, no crash reporting, no
-background auto-update pings. Outbound traffic comes from the vendor harness
-CLIs and model APIs used by configured run routes. Generic Web/Search follows
-the run's external-context policy (default `auto`); Browser MCP/navigation
-requires explicit Browser opt-in. Remote SSH reaches only connections you
-explicitly configure and enable; the app may then connect and retry their event
-streams automatically. While the daemon runs, it may poll configured vendor
-quota/status sources in the background (including Anthropic `oauth/usage`) to
-maintain routing and readiness. Public lookups include `claudexor release
-check-name` (package registries), `claudexor release check` and the app's Check
-for Updates (the GitHub release manifest), and `claudexor release stats` (GitHub
-release download counts + the npm downloads API, owner-facing). These are
-user-invoked except the app's engine update check, which runs on foreground or
-when you click Check for Updates, never on a timer. The `telemetry/` names you
-may see under `~/.claudexor/v3/` and in run artifacts are **local files only**
-(per-harness cost/latency averages and per-run evidence); nothing is transmitted.
+Claudexor collects **no telemetry**, analytics or crash reports. Configured
+harness/model routes send outbound traffic. Generic Web/Search follows the run's
+policy (`auto` by default); Browser requires opt-in. Enabled SSH connections may
+reconnect automatically. The daemon polls configured quota/status sources,
+including Anthropic `oauth/usage` and Cursor's **internal dashboard**
+`usage-summary`, on the existing demand/pacing cadence. Cursor reads only the
+named file store and sends its bound token as a `WorkosCursorSessionToken` cookie
+to cursor.com; it does not refresh OAuth or write credentials. Dashboard balances
+and spending are display-only, not execution-quota or admission evidence.
+Public lookups: release name checks (registries), update checks (GitHub release
+manifest), download statistics (GitHub/npm). These are user-invoked except the
+app's update check on foreground; there is no update timer or auto-update ping.
+Files named `telemetry/` are **local only**: cost/latency averages and run evidence,
+not transmitted analytics.
 
 ## Uninstall / where your data lives
 

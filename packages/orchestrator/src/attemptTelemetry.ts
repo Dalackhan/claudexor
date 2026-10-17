@@ -13,6 +13,7 @@ import type {
   WorkState,
 } from "@claudexor/schema";
 import {
+  attemptUsageCostSummary,
   newAttemptUsageCost,
   observeAttemptUsageEvent,
   type AttemptUsageCost,
@@ -25,6 +26,7 @@ import {
   type TransientFailureObservation,
   classifyCompletedCrash,
   classifyRateLimit,
+  classifyPermissionDenial,
   classifyStatusError,
   classifyTransientSignal,
 } from "./transientClassify.js";
@@ -316,6 +318,7 @@ export function observeAttemptTelemetry(t: AttemptTelemetry, ev: HarnessEvent): 
   // Typed transient/auth/capability evidence owns retry and remediation;
   // rate limits also stay available to credential rotation.
   if (ev.transient) t.transientFailures.push(classifyTransientSignal(ev.transient));
+  if (ev.permission_denial) t.transientFailures.push(classifyPermissionDenial());
   if (ev.rate_limit) {
     t.rateLimits.push({
       retryDelayMs: ev.rate_limit.retry_delay_ms ?? null,
@@ -665,13 +668,7 @@ export function attemptTelemetryRecord(
   const errors = t.toolErrors.slice(-TELEMETRY_TOOL_ERRORS_MAX);
   const warnings = toolWarnings(t);
   return {
-    usage_cost: {
-      cashUsd: t.usageCost.cashUsd,
-      valuationUsd: t.usageCost.valuationUsd,
-      unknownUsd: t.usageCost.unknownUsd,
-      cashKnowledge: t.usageCost.cashKnowledge ?? "unknown",
-      valuationKnowledge: t.usageCost.valuationKnowledge ?? "unknown",
-    },
+    usage_cost: attemptUsageCostSummary(t.usageCost),
     effort_resolution: t.effortResolution,
     request_refusal: t.requestRefusal,
     processing: t.processing,

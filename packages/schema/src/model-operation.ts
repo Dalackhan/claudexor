@@ -258,7 +258,11 @@ export const ModelCatalogEntry = z
     contextWindow: z.number().int().positive().nullable(),
     maxContextWindow: z.number().int().positive().nullable(),
     maxOutputTokens: z.number().int().positive().nullable(),
-    inputModalities: z.array(z.string()),
+    inputModalities: z
+      .array(z.string())
+      .describe(
+        "Input kinds the provider declared, verbatim and open-vocabulary. Empty means unknown, never none: a missing, empty or partly invalid provider list is not a negative claim. Declared metadata only; it neither gates a request nor proves a model understood content.",
+      ),
     reasoningEfforts: z.array(z.string()),
     reasoningEffortPreferenceOrder: z
       .array(NonBlankString)

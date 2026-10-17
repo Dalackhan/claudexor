@@ -5,6 +5,7 @@ export * from "./routing-failure.js";
 export * from "./live-input.js";
 export { catalogInputLimits } from "./prompt-framing.js";
 export { assertCouncilWidth } from "./council.js";
+export { retryProcessingIntent } from "./retry-processing-intent.js";
 export {
   effectiveAuthPreference,
   probeCredentialProfileStatus,

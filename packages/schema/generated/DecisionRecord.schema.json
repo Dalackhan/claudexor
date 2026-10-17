@@ -329,7 +329,14 @@
                 "null"
               ],
               "default": null,
-              "description": "Settled cash spend in USD (0 on native-subscription routes); null when unknown."
+              "description": "Settled cash spend in USD (0 on proven included routes); null when unknown, including an included subscription that reports no actual debit."
+            },
+            "controllable_cash_usd": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "description": "Cash governed by the finite cap: settled amounts on routes Claudexor controls; null when that cash is unknown. spend_usd and cash_usd stay null when an included subscription reports no actual debit. Absent on legacy decisions."
             },
             "valuation_usd": {
               "type": [

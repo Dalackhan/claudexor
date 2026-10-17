@@ -573,6 +573,8 @@ export async function rotateSpecOnTypedLimit(args: {
     return {
       poolExhausted: credentialPoolExhausted({
         harnessId: args.harnessId,
+        model: args.spec.model_hint,
+        requestKind: "text", // Agent/Ask completion, not an image-generation operation.
         profileId: current?.profile_id ?? null,
         reason: evidence.sawTypedLimit
           ? "vendor_limit_rejected"

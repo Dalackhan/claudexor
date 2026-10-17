@@ -65,6 +65,17 @@ export function parseAgyEvent(obj: Json, sessionId: string): HarnessEvent[] | nu
             text: `tool_result: error: ${errorDetail}`,
             tool: { ...tool, status: "error", error_summary: errorDetail },
           });
+        } else if (info.output === undefined || info.output === null) {
+          // DONE is a lifecycle state, not proof a read returned content. Native
+          // soft-denials have produced DONE without output before exiting zero.
+          events.push({
+            type: "status",
+            session_id: sessionId,
+            ts,
+            text: `${name}: completed without reported output`,
+            tool,
+            payload: { native_tool_state: "DONE" },
+          });
         } else {
           const output = summarize(info.output);
           events.push({
@@ -137,15 +148,12 @@ export function parseAgyEvent(obj: Json, sessionId: string): HarnessEvent[] | nu
           },
         });
       } else {
-        // Vendor soft-deny class (upstream #794): SUCCESS with an empty
-        // response means a permission-denied turn that did nothing. Honest
-        // typed error, never a silent empty success.
+        // Empty output alone does not establish why the vendor gave no answer.
         events.push({
           type: "error",
           session_id: sessionId,
           ts,
-          error:
-            "agy reported SUCCESS with an empty response (no output produced; commonly a vendor soft-deny of a required tool permission)",
+          error: "agy reported SUCCESS with an empty response (no output produced; cause unknown)",
         });
       }
     } else {

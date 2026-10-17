@@ -107,6 +107,7 @@ const CAUSE_LINE: Record<ResumableCause, string> = {
   pool_exhausted: "every account's usage limit",
   pinned_limit: "the pinned account's usage limit",
   transport: "a process death",
+  permission_denied: "a native tool permission refusal",
   context_exhausted: "context exhaustion",
   wall_clock: "the wall-clock deadline",
   cancelled: "a cancel",

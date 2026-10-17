@@ -32,6 +32,7 @@ import {
 import { threadRunResumeInputs, threadContinuityContext } from "./thread-continuity-context.js";
 import { continuationForRun } from "./continue-from-run.js";
 import { createRunTimeLimit } from "./run-time-limit.js";
+import { exactRetryProcessingIntent } from "./retry-processing.js";
 
 /** Agent commands alone own projects, tool execution, and conversation continuity.
  * Model commands are dispatched before entering this run-normalization boundary. */
@@ -286,6 +287,7 @@ export function createDaemonAgentRunner(deps: {
         effort: p.effort,
         efforts: p.efforts,
         processingPreference: p.processingPreference,
+        processingIntent: exactRetryProcessingIntent(p, deps.commands, repoRoot),
         tests: Array.isArray(p.tests) ? p.tests : undefined,
         protectedPathApprovals: Array.isArray(p.protectedPathApprovals)
           ? p.protectedPathApprovals

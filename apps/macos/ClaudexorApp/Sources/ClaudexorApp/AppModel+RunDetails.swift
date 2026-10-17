@@ -67,6 +67,7 @@ extension AppModel {
                 task.capKnown = budget.maxUsd != nil
                 task.spendKnown = budget.spendUsd != nil
                 task.spendEstimated = budget.estimated
+                task.controllableSpendUsd = budget.controllableSpendUsd
                 task.valuationUsd = budget.knownValuationUsd
             }
             if !detail.timeline.isEmpty {

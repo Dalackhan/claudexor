@@ -358,6 +358,24 @@ returns legacy data, whose snapshot freshness then applies to every window. 3.25
 after other statuses, transport errors or malformed payloads, and never use POST for
 this read.
 
+`GET /v2/quota` with `view=resources_freshness` returns the strict
+`ControlAccountResourcesFreshnessResponse`: every constraint has freshness,
+`resources` retains independently dated facets, and required
+`availability_scope: {basis: "quota_block", model: string|null, requestKind: "text"|"image"}` echoes the
+exact supplied model and effective request kind (omitted means null/text).
+The basis names the existing `profileQuotaBlock` quota-blocking projection,
+including its deliberately loose alias matching and declared prefixes; it is not
+a promise of all dispatch/admission checks. BudgetLedger threshold/model checks
+are distinct. Null is the unspecified vendor route, not a claim about all models.
+An old/partial response without this echo is not proof selectors were honored.
+The three earlier views are unchanged. The combined view keeps the freshness-view
+`reset_credits` compatibility label; its typed reset offer is the same count, not additive inventory.
+Cursor resource rows optionally carry `scope` (personal/team), `usage_kind`
+(included/bonus/on_demand/total), `period` (starts_at/ends_at), and
+`fee_included` (null when unestablished). Team pool is not personal balance;
+bonus usage is not remaining budget. The internal dashboard is not a stable
+public API, and these amounts never authorize spending or change quota admission.
+
 `POST /v2/account-resets` accepts `{target, offer_id, grant_id?}` and requires an
 Idempotency-Key. The receipt separates provider outcome from readback freshness;
 `GET /v2/account-resets/:id` reads it again. After a timeout without a receipt id,
@@ -524,7 +542,11 @@ diagnostic evidence: classification, retry and routing never read it, and a
 record from an older engine decodes with an empty list.
 Web/tool evidence is projected from the engine-owned
 `final/telemetry.yaml`; runs that predate it report `available: false`. Unknown
-quota or spend remains unknown; do not render missing values as `$0`. The optional
+quota or spend remains unknown; do not render missing values as `$0`. When an
+included subscription reports no actual debit, the run budget's `spendUsd` is null
+while its `controllableSpendUsd` and `remainingUsd` carry the finite cap's known part;
+the decision record's `budget_summary` likewise keeps `spend_usd` null beside
+`controllable_cash_usd`. The optional
 `attemptExecution` array exposes compact per-attempt Processing and amount
 evidence through HTTP and MCP run reads; its [field map](ARCHITECTURE.md#8-artifact-layout)
 distinguishes observed components from prospective billing. General previews
@@ -1197,8 +1219,8 @@ ships as a signed Go binary with no npm artifact and no source repository, so
 its wire shapes are pinned by fixtures rather than by reading vendor code.
 `packages/harness-agy/fixtures/manifest.yaml` says which is which: the run,
 schema-envelope and auth-error streams were RECORDED from live sessions, the
-resume stream is synthesized from those recorded shapes, and the empty-SUCCESS
-soft-deny below has no fixture at all (it is sourced to an upstream report).
+resume stream is synthesized from those shapes. Native headless refusal evidence
+is sanitized in `native-completion.test.ts`; empty output alone proves no cause.
 Every claim below is re-verified when the pinned vendor version moves.
 
 Discovery/manifests describe static capabilities and possible auth sources.
@@ -1448,22 +1470,20 @@ prompt on piped stdin, without a print flag (agy 1.1.13 selects print mode
 from non-empty non-TTY stdin)
 (`--dangerously-skip-permissions` for full access; `--conversation <id>`
 resumes). Events: `init` → `started` (the vendor `conversation_id` is the
-resumable native session id); `step_update` with `step_type: "tool"` → a
-`tool_call` on `state: "ACTIVE"` and a `tool_result` on `state: "DONE"`
-(+ `file_change` for a writing tool) — every OTHER state, including a future
-one, is a recognized no-op, never a fabricated success; `step_update` with
-`text_delta` → a `message` narration segment (complete segments, not display
-deltas); terminal `result` → the typed final from `response`
-(`final_source: result`), or from a serialized `structured_output` envelope
-when a schema is passed — a branch no shipped path reaches today, because the
-adapter passes no `--json-schema` and the manifest declares
-`json_schema_output` false. `status: "SUCCESS"` with an EMPTY response is the
-vendor's soft-deny class (upstream #794) and surfaces as a typed `error`, not
-an empty success. A login timeout also exits 0, but it is a different shape:
-it carries `status: "ERROR"` with the failure text
-(`packages/harness-agy/fixtures/error-auth.jsonl`). `usage` carries
-input/output/cache-read tokens; `thinking_tokens` has no schema home and is
-dropped rather than folded into output. No typed rate-limit path exists. The CLI has no config-dir env var
+resumable native session id); tool steps emit `tool_call` on `ACTIVE`.
+`DONE` emits an error `tool_result` for native tool errors, a successful
+`tool_result` (+ `file_change` for writers) only with reported output, otherwise
+a diagnostic `status`. Other states are recognized no-ops. `text_delta` emits
+complete narration segments, not display deltas. Terminal `result` emits the
+`response` final (`final_source: result`); object `structured_output` is parsed
+but unreachable in shipped runs (`json_schema_output` is false).
+Empty `SUCCESS` is a cause-unknown error, never proof of permission denial.
+Only the native `jetski` headless auto-denial stderr diagnostic establishes
+`permission_denial`: without a final it is a terminal refusal; with a retained
+final it is a typed warning, not failed output (INV-044). No retry or access
+elevation is inferred. A zero-exit login timeout instead carries `ERROR` and
+failure text (`fixtures/error-auth.jsonl`). `usage` carries input/output/cache-read
+tokens; `thinking_tokens` is dropped, never folded into output. No typed rate-limit path exists. The CLI has no config-dir env var
 (upstream #155), so a named identity is a Claudexor-owned `HOME` — which also
 relocates the vendor's conversation and cache state, so one profile HOME holds
 every thread's vendor state. Credential custody is platform-shaped: on Linux

@@ -21,7 +21,8 @@
           "type": "string",
           "enum": [
             "resources",
-            "constraint_freshness"
+            "constraint_freshness",
+            "resources_freshness"
           ]
         }
       },

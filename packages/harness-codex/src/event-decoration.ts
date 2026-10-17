@@ -32,15 +32,7 @@ export function decorateCodexEvent(
   }
   if (spec.processing) {
     event.processing = spec.processing;
-    // Allowance admission is not evidence of the vendor's actual credit debit.
-    event.processing_cost_basis =
-      spec.processing.submitted === "fast" && spec.processing_cost_basis?.kind === "included"
-        ? {
-            ...spec.processing_cost_basis,
-            kind: "unknown",
-            source: "codex_fast_subscription_debit_unobserved",
-          }
-        : spec.processing_cost_basis;
+    event.processing_cost_basis = spec.processing_cost_basis;
   }
   if (event.type === "started" && spec.model_hint && !event.observed_model) {
     event.payload = {

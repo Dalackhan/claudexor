@@ -104,15 +104,40 @@ export function cashEstimatedFromLedgerEvent(payload: Record<string, unknown>): 
 }
 
 /** A new component-aware ledger receipt distinguishes unknown from estimated
- * zero. Absence preserves historical projection behavior. */
+ * zero. Absence preserves historical projection behavior. The controllable
+ * key is the cap-governed part; older receipts carry only the reported total. */
 export function cashKnowledgeFromEvents(
   events: Record<string, unknown>[],
+  key: "cash_knowledge" | "controllable_cash_knowledge" = "cash_knowledge",
 ): "exact" | "estimated" | "unknown" | undefined {
   let knowledge: "exact" | "estimated" | "unknown" | undefined;
   for (const event of events) {
     if (event["type"] !== "budget.cash") continue;
-    const value = eventPayload(event)["cash_knowledge"];
+    const value = eventPayload(event)[key];
     if (value === "exact" || value === "estimated" || value === "unknown") knowledge = value;
   }
   return knowledge;
+}
+
+/** Cash the finite cap governs. An included route without a debit receipt
+ * leaves the reported total unknown while this part stays known. */
+export function controllableSpendFromEvents(
+  events: Record<string, unknown>[],
+  spendUsd: number | null,
+): number | null {
+  const knowledge =
+    cashKnowledgeFromEvents(events, "controllable_cash_knowledge") ??
+    cashKnowledgeFromEvents(events);
+  return knowledge === "unknown" ? null : spendUsd;
+}
+
+/** A current decision keeps an unknown total null beside its known cap-governed
+ * part; that part still anchors the run budget projection. */
+export function decisionCashAnchor(
+  budget: { spend_usd?: number | null; controllable_cash_usd?: number | null } | undefined,
+): { spendUsd: number | null; totalUnknown: boolean } {
+  return {
+    spendUsd: budget?.spend_usd ?? budget?.controllable_cash_usd ?? null,
+    totalUnknown: budget?.spend_usd === null && typeof budget.controllable_cash_usd === "number",
+  };
 }

@@ -274,6 +274,7 @@ export async function reviewCandidateRuns(
             result.reviewValuationUsd,
             {
               cash: result.reviewCashKnowledge,
+              allowanceDebitUnobserved: result.reviewAllowanceDebitUnobserved,
               valuation: result.reviewValuationKnowledge,
             },
             [`attempt:${run.attemptId}`, "review:panel"],

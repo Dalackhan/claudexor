@@ -340,6 +340,49 @@ describe("processing on the physical Codex model request", () => {
       1,
     );
   });
+  it.each([
+    { tier: "flex", status: 400 },
+    { tier: "ultrafast", status: 200 },
+  ])(
+    "sends an exact $tier the account does not advertise unchanged, once",
+    async ({ tier, status }) => {
+      // Raw operations are the exact native interface. They have no paid policy,
+      // and catalog absence is not authoritative unsupported evidence, so the
+      // exact tier is sent unchanged and never substituted. No pre-dispatch
+      // known-unsupported refusal exists at this seam; a provider refusal stays
+      // the provider's typed problem, with no Claudexor claim about generation
+      // and no Standard follow-up.
+      const fixture = setup((init) => {
+        expect(JSON.parse(String(init?.body)).service_tier).toBe(tier);
+        return status === 200
+          ? terminal()
+          : Response.json(
+              { error: { code: "unsupported_parameter", param: "service_tier" } },
+              { status },
+            );
+      });
+      fixture.fetcher.mockResolvedValueOnce(
+        Response.json({
+          models: catalog.models.map((model) => ({
+            ...model,
+            service_tiers: [{ id: "priority" }],
+          })),
+        }),
+      );
+      fixture.request.options.serviceTier = tier;
+      const result = await fixture.adapter.invoke(fixture.request, fixture.context);
+      expect(fixture.fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(
+        1,
+      );
+      if (status === 200) {
+        expect(result.problem).toBeNull();
+      } else {
+        expect(result.problem?.code).not.toBe("processing_unavailable");
+        expect(result.problem?.context).not.toHaveProperty("generationStarted");
+        expect(result.problem?.context).not.toHaveProperty("processingFallback");
+      }
+    },
+  );
   it("keeps old serviceTier-only clients on the strict legacy response shape", async () => {
     const fixture = setup();
     fixture.request.options.serviceTier = "priority";

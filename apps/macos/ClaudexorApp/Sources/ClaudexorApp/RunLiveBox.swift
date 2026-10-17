@@ -41,9 +41,33 @@ final class RunLiveBox: Identifiable {
     var spendUsd: Double = 0
     var spendKnown = false
     var spendEstimated = false
+    /// Cap-governed cash from the latest disclosure; nil until one says it is known.
+    var controllableSpendUsd: Double?
+    /// True once cash evidence reached this box: a settle event, a seed from a task that
+    /// knew its cash, or a budget snapshot stating the total or disclosing it unknown.
+    /// From then on the box is the latest word, even when it says "unknown"; before it,
+    /// the box has no evidence and the task snapshot is what renders.
+    var cashDisclosed = false
 
     init(id: String) {
         self.id = id
+    }
+
+    /// Mirror a fresh run-detail budget snapshot (authoritative up to its last event;
+    /// later disclosures apply on top). A total it states, or discloses as unknown,
+    /// replaces the box's earlier cash, and its cap-governed part replaces the old
+    /// one (nil included). A snapshot that says nothing about cash (no total, no
+    /// unknown disclosure) is no evidence and leaves the box alone.
+    func adopt(_ budget: BudgetSnapshot) {
+        let totalKnown = budget.spendUsd != nil
+        let disclosedUnknown = budget.cashKnowledge == "unknown"
+            || (!totalKnown && budget.controllableSpendUsd != nil)
+        guard totalKnown || disclosedUnknown else { return }
+        spendKnown = totalKnown
+        if let usd = budget.spendUsd { spendUsd = usd }
+        spendEstimated = budget.estimated
+        controllableSpendUsd = budget.controllableSpendUsd
+        cashDisclosed = true
     }
 
     /// Append one live event, honestly collapsing the oldest past the cap.
@@ -83,6 +107,8 @@ extension AppModel {
                 box.spendKnown = true
                 box.spendEstimated = task.spendEstimated
             }
+            box.controllableSpendUsd = task.controllableSpendUsd
+            box.cashDisclosed = task.spendKnown || task.controllableSpendUsd != nil
         }
         if let folded = transcripts[runId] {
             box.transcript = folded
@@ -106,13 +132,15 @@ extension AppModel {
         liveBoxes[runId]?.transcript.truncatedChars ?? transcripts[runId]?.truncatedChars ?? 0
     }
 
-    /// Live-first spend for meters/cards: the box once it has spend evidence,
-    /// the task snapshot otherwise.
-    func spendDisplay(_ task: TaskRun) -> (usd: Double, known: Bool, estimated: Bool) {
-        if let box = liveBoxes[task.id], box.spendKnown {
-            return (box.spendUsd, true, box.spendEstimated)
+    /// Live-first spend for meters/cards: the box once cash evidence reached it,
+    /// the task snapshot otherwise. A disclosed box wins even when it says
+    /// "unknown": an older exact task value must not answer for a newer disclosure.
+    func spendDisplay(_ task: TaskRun)
+        -> (usd: Double, known: Bool, estimated: Bool, controllableUsd: Double?) {
+        guard let box = liveBoxes[task.id], box.cashDisclosed else {
+            return (task.spendUsd, task.spendKnown, task.spendEstimated, task.controllableSpendUsd)
         }
-        return (task.spendUsd, task.spendKnown, task.spendEstimated)
+        return (box.spendUsd, box.spendKnown, box.spendEstimated, box.controllableSpendUsd)
     }
 
     /// Reclaim heavy per-run memory (P3 eviction): TERMINAL runs that are not
@@ -158,13 +186,17 @@ extension AppModel {
             // (authoritative, truncation-marked). Only an EMPTY snapshot falls
             // back to the SSE-accumulated feed.
             if t.activity.isEmpty, !box.activity.isEmpty { t.activity = box.activity }
-            // Snapshot spend (summary/budget) already landed on the task in
-            // loadRunDetail; the box only contributes when the snapshot had
-            // no spend truth but live increments did arrive.
-            if !t.spendKnown, box.spendKnown {
-                t.spendUsd = box.spendUsd
-                t.spendKnown = true
-                t.spendEstimated = box.spendEstimated
+            // The box mirrored the terminal snapshot's budget (`adopt`) and then
+            // took every later disclosure, so a disclosed box is the latest word
+            // on cash, an unknown total included. A box that never heard cash
+            // evidence leaves the snapshot's values alone.
+            if box.cashDisclosed {
+                t.spendKnown = box.spendKnown
+                if box.spendKnown {
+                    t.spendUsd = box.spendUsd
+                    t.spendEstimated = box.spendEstimated
+                }
+                t.controllableSpendUsd = box.controllableSpendUsd
             }
             liveTasks[idx] = t
         }

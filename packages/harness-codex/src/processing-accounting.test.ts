@@ -6,7 +6,7 @@ import { codexProcessingCost, legacyCodexProcessing } from "./processing.js";
 
 describe("Codex Fast allowance is not an observed debit receipt", () => {
   it.each(["tokens", "none", "valuation", "cash"])(
-    "keeps actual cash honest for %s evidence",
+    "keeps actual cash honest for %s evidence without failing the cap",
     (evidence) => {
       const processing = legacyCodexProcessing("fast");
       const context: CodexEventDecoration = {
@@ -25,7 +25,10 @@ describe("Codex Fast allowance is not an observed debit receipt", () => {
         tempCodexHome: null,
         model: null,
       };
-      expect(context.spec.processing_cost_basis?.kind).toBe("included");
+      expect(context.spec.processing_cost_basis).toMatchObject({
+        kind: "included",
+        debit: "unobserved",
+      });
       const events: HarnessEvent[] = [
         { type: "started", session_id: "s", ts: new Date().toISOString() },
       ];
@@ -50,12 +53,18 @@ describe("Codex Fast allowance is not an observed debit receipt", () => {
       tracker.startAttempt();
       for (const raw of events) {
         const event = decorateCodexEvent(raw, context);
+        // Execution evidence keeps the prospective allowance and its debit fact.
+        expect(event.processing_cost_basis).toEqual(context.spec.processing_cost_basis);
         tracker.observeEvent("local_session", event);
         if (event.usage?.cost_usd !== undefined)
           tracker.observeUsage("local_session", event.usage.cost_usd, false, event);
       }
       tracker.finishAttempt();
-      expect(tracker.snapshot().cashKnowledge).toBe(evidence === "cash" ? "exact" : "unknown");
+      // Controllable cash is exact; only an actual receipt observes the debit.
+      expect(tracker.snapshot()).toMatchObject({
+        cashKnowledge: "exact",
+        allowanceDebitUnobserved: evidence !== "cash",
+      });
       expect(tracker.totals.cashUsd).toBe(evidence === "cash" ? 0.02 : 0);
       expect(tracker.totals.valuationUsd).toBe(evidence === "valuation" ? 0.02 : 0);
       expect(context.spec.processing_cost_basis?.kind).toBe("included");

@@ -32,13 +32,12 @@ extension AppModel {
                 guard let self, let client = self.client else { break }
                 let resumeFrom = self.lastEventIds[runId]
                 if resumeFrom == nil {
-                    // Cash-so-far is a KNOWN engine fact from the first
-                    // moment: $0.00 until a settle discloses otherwise
-                    // (budget.cash carries the CUMULATIVE ledger truth, so
-                    // replay/reattach cannot double the money — last wins).
-                    let box = self.ensureLiveBox(runId)
-                    box.spendUsd = 0
-                    box.spendKnown = true
+                    // Cash is NOT seeded as a known $0.00: whether the total is
+                    // exact or unknown (an included subscription without a debit
+                    // receipt) is disclosed only by a settle. budget.cash carries
+                    // the CUMULATIVE ledger truth, so replay/reattach cannot double
+                    // the money — last wins — and the box starts from the hydrated task.
+                    _ = self.ensureLiveBox(runId)
                 }
                 do {
                     for try await env in client.events(runId: runId, lastEventId: resumeFrom) {
@@ -501,13 +500,20 @@ extension AppModel {
         } else if type.hasPrefix("budget.") {
             if type == "budget.cash", let cash = payload["cash_spend_usd"]?.doubleValue {
                 // THE cash fact (W4.3): the budget ledger discloses cumulative
-                // real-money spend at every settle — subscription work settles
-                // to 0 there. Vendor cost ticks (budget.observation) are
-                // VALUATION and never move this number; the app renders the
-                // engine's cash truth and its cash-specific certainty verbatim,
-                // without route inference.
+                // settled cash at every settle — an exact number, or an unknown
+                // total when an included subscription reports no debit. Vendor
+                // cost ticks (budget.observation) are VALUATION and never move
+                // this number; the app renders the engine's cash truth and its
+                // cash-specific certainty verbatim, without route inference. The
+                // newest disclosure wins, "unknown" included.
+                box.cashDisclosed = true
                 box.spendUsd = cash
                 box.spendKnown = payload["cash_knowledge"]?.stringValue != "unknown"
+                // The cap-governed part can stay known beside an unknown total;
+                // older engines carry only the reported knowledge.
+                let capKnowledge = payload["controllable_cash_knowledge"]?.stringValue
+                    ?? payload["cash_knowledge"]?.stringValue
+                box.controllableSpendUsd = capKnowledge == "unknown" ? nil : cash
                 let estimated = payload["estimated"]?.boolValue ?? false
                 let legacyExactZero = payload["valuation_knowledge"] == nil
                     && estimated

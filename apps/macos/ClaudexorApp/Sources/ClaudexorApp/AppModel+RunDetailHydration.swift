@@ -169,6 +169,9 @@ extension AppModel {
                 task.capKnown = budget.maxUsd != nil
                 task.spendKnown = budget.spendUsd != nil
                 task.spendEstimated = budget.estimated
+                // Known beside an unknown total when an included subscription
+                // reports no debit; the finite cap is governed by this part.
+                task.controllableSpendUsd = budget.controllableSpendUsd
                 // QA-023c: the KNOWN subscription valuation only (unknown stays
                 // absent, never a fabricated $0). Rendered beside cash so a $0
                 // cash subscription run still shows what the work was worth.
@@ -177,10 +180,16 @@ extension AppModel {
             // Seed the live box's spend from the snapshot (authoritative up to
             // lastSeq): post-fence budget.observation increments then add ON
             // TOP — same "seed from replay OR summary, never both" rule.
-            if let box = liveBoxes[id], task.spendKnown {
-                box.spendUsd = task.spendUsd
-                box.spendKnown = true
-                box.spendEstimated = task.spendEstimated
+            if let box = liveBoxes[id] {
+                if task.spendKnown {
+                    box.spendUsd = task.spendUsd
+                    box.spendKnown = true
+                    box.spendEstimated = task.spendEstimated
+                    box.cashDisclosed = true
+                }
+                // A fresh budget snapshot may also say the total is unknown (or the
+                // cap-governed part is): that replaces an earlier exact box value.
+                if let budget = detail.budget { box.adopt(budget) }
             }
             if let final = detail.finalSummary, !final.isEmpty,
                !task.activity.contains(where: { $0.title == "Final summary" }) {

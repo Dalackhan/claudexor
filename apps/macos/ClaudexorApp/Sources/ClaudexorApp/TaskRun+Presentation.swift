@@ -33,17 +33,27 @@ extension TaskRun {
 
     var planDone: Int { plan.filter { $0.state == .done }.count }
     var filesChanged: Int { diff.count }
+    /// The finite cap, when the run has one the app knows.
+    var finiteCapUsd: Double? { capKnown && !budgetUnlimited ? capUsd : nil }
+    /// Share of the finite cap used. The cap governs `controllableSpendUsd`, which stays
+    /// known when the total is unknown; engines that omit it fall back to the known total.
     var spendFraction: Double {
-        spendKnown && capKnown && capUsd > 0 ? min(spendUsd / capUsd, 1) : 0
+        guard let cap = finiteCapUsd, cap > 0 else { return 0 }
+        guard let used = controllableSpendUsd ?? (spendKnown ? spendUsd : nil) else { return 0 }
+        return min(used / cap, 1)
     }
     var budgetLabel: String {
-        let spend = spendKnown
-            ? "\(spendEstimated ? "~" : "")\(String(format: "$%.4f", spendUsd))"
-            : "Unknown"
         let cap = budgetUnlimited
             ? "Unlimited"
             : capKnown ? String(format: "$%.2f", capUsd) : "Unknown"
-        return "\(spend) / \(cap)"
+        if spendKnown {
+            return "\(spendEstimated ? "~" : "")\(String(format: "$%.4f", spendUsd)) / \(cap)"
+        }
+        // An unknown total is never a number; the cap-governed part is labelled as such.
+        if let governed = controllableSpendUsd, finiteCapUsd != nil {
+            return "Unknown · \(String(format: "$%.4f", governed)) of \(cap) cap"
+        }
+        return "Unknown / \(cap)"
     }
 
     /// A terminal status is presented as Finalizing until its final content is

@@ -132,7 +132,11 @@ describe("processing-aware usage evidence", () => {
     tracker.startAttempt();
     observe(tracker, event(receipt("standard"), "included", "unknown"));
     tracker.finishAttempt();
-    expect(tracker.snapshot()).toEqual({ cashKnowledge: "exact", valuationKnowledge: "unknown" });
+    expect(tracker.snapshot()).toEqual({
+      cashKnowledge: "exact",
+      valuationKnowledge: "unknown",
+      allowanceDebitUnobserved: false,
+    });
     expect(tracker.totals.unknownUsd).toBe(2);
     expect(tracker.unknownPaidUsd).toBe(0);
     const ledger = new BudgetLedger({ kind: "finite", maxUsd: 0 });

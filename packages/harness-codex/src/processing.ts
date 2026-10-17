@@ -128,6 +128,50 @@ export function codexProcessingCost(
     source: included
       ? "codex_subscription_service_allowance"
       : "codex_service_tier_has_no_cash_receipt",
+    // A ChatGPT plan may spend purchased credits beyond its included limits, for
+    // Standard as well as Fast, and no Codex transport reports that debit.
+    ...(subscription === true ? { debit: "unobserved" as const } : {}),
+  };
+}
+
+/** Whether two native tiers are the same speed intent. `fast` and `priority` are
+ * one ordinary Fast; Ultrafast and every other native tier match only themselves
+ * (not by `codexTierMode`, which maps Ultrafast to the Fast mode too). */
+export function sameCodexTierIntent(a: string | null, b: string | null): boolean {
+  const ordinaryFast = (tier: string | null) => tier === "fast" || tier === "priority";
+  return a === b || (ordinaryFast(a) && ordinaryFast(b));
+}
+
+/** Keep the intent this work unit chose without a preference. Another account's
+ * native setting never replaces it; an unadvertised Fast/Economy intent falls
+ * back to ordinary service with its reason. The paid policy still applies. */
+export function retainCodexProcessing(
+  chosen: ProcessingReceipt,
+  capability?: ProcessingCapability,
+): ProcessingReceipt {
+  const mode =
+    chosen.submitted === "fast" || chosen.submitted === "economy" ? chosen.submitted : null;
+  const ordinary = mode === "fast" ? ["fast", "priority"] : ["flex"];
+  const listed = mode
+    ? (
+        capability?.nativeModes.find(
+          (entry) => entry.mode === mode && entry.id === chosen.submittedNative,
+        ) ??
+        capability?.nativeModes.find((entry) => entry.mode === mode && ordinary.includes(entry.id))
+      )?.id
+    : undefined;
+  const native = listed ?? "default";
+  return {
+    requested: null,
+    submitted: codexTierMode(native),
+    submittedNative: native,
+    observed: "unknown",
+    observedNative: [],
+    reason:
+      mode && !listed
+        ? "initial_processing_unavailable; ordinary_service_requested"
+        : "initial_processing_retained",
+    source: "codex.service_tier",
   };
 }
 

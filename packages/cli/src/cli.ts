@@ -89,6 +89,7 @@ import {
   projectDelegation,
   terminalDelegationLines,
 } from "./delegation-output.js";
+import { inspectBudgetLine } from "./run-detail-projections.js";
 import { readRunFactsArtifact } from "./run-facts-projection.js";
 import { projectTerminalRunOutput, terminalRunRequiredActionLines } from "./terminal-run-output.js";
 import { runPlanQuestionLoop } from "./plan-question-loop.js";
@@ -1191,10 +1192,7 @@ async function dispatch(args: ParsedArgs, outputMode: CliOutputMode): Promise<nu
         print(
           `decision: ${runOutcomeLabel(f)} (lifecycle=${f.lifecycle} checks=${f.checks} review=${f.review}${f.reason ? ` reason=${f.reason}` : ""}) apply=${parsedDecision.data.apply_recommendation}${vb !== "none" ? ` verified_by=${vb}` : ""}`,
         );
-        const budget = parsedDecision.data.budget_summary;
-        print(
-          `budget: spend=${budget.spend_usd ?? "unknown"}${budget.estimated ? " estimated" : ""}`,
-        );
+        print(inspectBudgetLine(parsedDecision.data.budget_summary));
       }
       if (telemetry) {
         const u = telemetry.usage_totals;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { BudgetLedger } from "@claudexor/budget";
@@ -28,12 +28,13 @@ describe("ordinary Codex Fast on subscription allowance", () => {
       { tier: "priority", resume: false },
       { tier: "priority", resume: true },
     ].flatMap((input) => [
-      { ...input, paidBudget: { kind: "unlimited" as const }, expectedLifecycle: "succeeded" },
-      { ...input, paidBudget: { kind: "finite" as const, maxUsd: 0 }, expectedLifecycle: "failed" },
+      { ...input, paidBudget: { kind: "unlimited" as const } },
+      { ...input, paidBudget: { kind: "finite" as const, maxUsd: 0 } },
+      { ...input, paidBudget: { kind: "finite" as const, maxUsd: 2 } },
     ]),
   )(
-    "routes and dispatches $tier with never/$paidBudget.kind, resume=$resume",
-    async ({ tier, resume, paidBudget, expectedLifecycle }) => {
+    "routes, dispatches and completes $tier with never/$paidBudget.kind $paidBudget.maxUsd, resume=$resume",
+    async ({ tier, resume, paidBudget }) => {
       const root = mkdtempSync(join(tmpdir(), "codex-subscription-fast-"));
       roots.push(root);
       const home = join(process.env.CLAUDEXOR_CONFIG_DIR!, "fast-profile");
@@ -142,8 +143,9 @@ describe("ordinary Codex Fast on subscription allowance", () => {
           : {}),
         onHarnessEvent: (event) => events.push(event),
       });
-      expect(result.lifecycle, result.summary).toBe(expectedLifecycle);
-      if (paidBudget.kind === "finite") expect(result.facts.reason).toBe("cost_unverifiable");
+      // The unobserved allowance debit is separated from the work result.
+      expect(result.lifecycle, result.summary).toBe("succeeded");
+      expect(result.facts.reason).not.toBe("cost_unverifiable");
       expect(launches).toHaveLength(1);
       expect(launches[0]!.args).toContain(`service_tier="${tier}"`);
       expect(launches[0]!.args.includes("resume")).toBe(resume);
@@ -159,7 +161,7 @@ describe("ordinary Codex Fast on subscription allowance", () => {
           observed: "unknown",
           observedNative: [],
         },
-        processing_cost_basis: { kind: "included", nativeMode: tier },
+        processing_cost_basis: { kind: "included", nativeMode: tier, debit: "unobserved" },
       });
       expect(
         probedHomes.filter((seen) => seen === canonicalCodexProfileHome(home)).length,
@@ -176,9 +178,22 @@ describe("ordinary Codex Fast on subscription allowance", () => {
         eligible: true,
       });
       expect(events.find((event) => event.type === "usage")?.usage?.cost_usd).toBeUndefined();
-      expect(events.find((event) => event.type === "started")?.processing_cost_basis?.kind).toBe(
-        "unknown",
+      expect(events.find((event) => event.type === "started")?.processing_cost_basis).toMatchObject(
+        { kind: "included", debit: "unobserved" },
       );
+      const cash = readFileSync(join(result.runDir, "events.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { type: string; payload: Record<string, unknown> })
+        .filter((event) => event.type === "budget.cash")
+        .at(-1)?.payload;
+      // Actual cash stays unknown, never inferred exact zero; the cap's part is known.
+      expect(cash).toMatchObject({
+        cash_spend_usd: 0,
+        cash_knowledge: "unknown",
+        controllable_cash_knowledge: "exact",
+      });
+      expect(telemetry.attempts[0].usage_cost.cashKnowledge).toBe("unknown");
       expect(events.find((event) => event.type === "started")?.processing?.observed).toBe(
         "unknown",
       );

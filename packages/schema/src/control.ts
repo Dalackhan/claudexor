@@ -12,9 +12,11 @@ import {
   RecordedAccessProfile,
 } from "./primitives.js";
 import {
+  ControllableSpendUsd,
   PaidBudget,
   PaidFallback,
   QualityTierSet,
+  RemainingCapUsd,
   RouteRankingRationale,
   RoutingGoal,
 } from "./budget.js";
@@ -838,6 +840,7 @@ export const ControlBudgetSnapshot = z
       .nullable()
       .default(null)
       .describe("CASH spend so far in USD; null when unknown."),
+    controllableSpendUsd: ControllableSpendUsd,
     /** Subscription VALUATION in USD (QA-023c/QA-017b): what this run's
      * native-subscription work would approximately have cost by token valuation,
      * accumulated separately from real billed cash. Null when no valuation is
@@ -857,11 +860,7 @@ export const ControlBudgetSnapshot = z
       .describe(
         "Confidence of valuationUsd: 'estimated' when token-derived, 'unknown' when no usage was reported (valuationUsd is then null), 'exact' when natively priced.",
       ),
-    remainingUsd: z
-      .number()
-      .nullable()
-      .default(null)
-      .describe("Remaining budget in USD; null when no cap or unknown spend."),
+    remainingUsd: RemainingCapUsd,
     estimated: z
       .boolean()
       .default(false)

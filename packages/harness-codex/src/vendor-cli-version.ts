@@ -15,4 +15,4 @@ import type { PinnedVendorCliVersion } from "@claudexor/util";
  * input bound before updating capability-profile.ts's input-limit provenance;
  * a new unverified CLI version intentionally publishes no input bound.
  */
-export const CODEX_VENDOR_CLI_VERSION: PinnedVendorCliVersion = "0.156.1";
+export const CODEX_VENDOR_CLI_VERSION: PinnedVendorCliVersion = "0.162.1";

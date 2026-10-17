@@ -16,6 +16,7 @@ import {
   EffortHint,
   ProcessingPreference,
   RunExecution,
+  TimeLimitMode,
   ExternalContextPolicy,
   type ProtectedPathApproval,
   type ControlReviewerPanelEntry,
@@ -309,6 +310,7 @@ async function orchestrate(
   let resolvedProtectedPathApprovals: ProtectedPathApproval[] | undefined;
   let resolvedInstructions: string | undefined;
   let resolvedMaxSeconds: number | undefined;
+  let resolvedTimeLimitMode: TimeLimitMode | undefined;
   let resolvedMaxTurns: number | undefined;
   let resolvedDenyPaths: string[] | undefined;
   let resolvedOutputSchema: Record<string, unknown> | undefined;
@@ -350,6 +352,9 @@ async function orchestrate(
     resolvedProtectedPathApprovals = protectedPathApprovals(args);
     resolvedInstructions = resolveInstructions(args);
     resolvedMaxSeconds = intFlag(args, "max-seconds");
+    const rawTimeLimitMode = flagStr(args, "time-limit-mode");
+    resolvedTimeLimitMode =
+      rawTimeLimitMode === undefined ? undefined : TimeLimitMode.parse(rawTimeLimitMode);
     resolvedMaxTurns = intFlag(args, "max-turns");
     const denyPathFlags = flagStringList(args, "deny-path");
     resolvedDenyPaths = denyPathFlags.length > 0 ? denyPathFlags : undefined;
@@ -434,6 +439,7 @@ async function orchestrate(
     prompt: prompt || "audit this repository",
     instructions: resolvedInstructions,
     maxSeconds: resolvedMaxSeconds,
+    timeLimitMode: resolvedTimeLimitMode,
     maxTurns: resolvedMaxTurns,
     denyPaths: resolvedDenyPaths,
     outputSchema: resolvedOutputSchema,
@@ -469,6 +475,7 @@ interface DaemonRunParams {
   prompt: string;
   instructions: string | undefined;
   maxSeconds: number | undefined;
+  timeLimitMode: TimeLimitMode | undefined;
   maxTurns: number | undefined;
   denyPaths: string[] | undefined;
   outputSchema: Record<string, unknown> | undefined;
@@ -581,6 +588,7 @@ async function daemonRun(
     prompt: p.prompt,
     ...(p.instructions ? { instructions: p.instructions } : {}),
     ...(p.maxSeconds !== undefined ? { maxSeconds: p.maxSeconds } : {}),
+    ...(p.timeLimitMode !== undefined ? { timeLimitMode: p.timeLimitMode } : {}),
     ...(p.maxTurns !== undefined ? { maxTurns: p.maxTurns } : {}),
     ...(p.denyPaths?.length ? { denyPaths: p.denyPaths } : {}),
     ...(p.outputSchema !== undefined ? { outputSchema: p.outputSchema } : {}),

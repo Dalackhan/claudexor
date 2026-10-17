@@ -393,6 +393,7 @@ export function createCodexAdapter(deps: Partial<CodexRuntimeDeps> = {}): Harnes
           ...CODEX_MODEL_INVENTORY,
           plan: true,
           implement: true,
+          interactive: Boolean(runtime.runAppServer),
           create_from_scratch: true,
           review: true,
           verify: true,
@@ -404,15 +405,14 @@ export function createCodexAdapter(deps: Partial<CodexRuntimeDeps> = {}): Harnes
           work_report_transport: "constrained",
           structured_output_channel: "final_message",
           web_policy: "native",
-          // Effort is per MODEL (`model/list` → supportedReasoningEfforts): the harness-wide
-          // list is the UNION; `model_effort_levels` holds the truth a model is held to.
+          // Per-model effort comes from model/list; the harness-wide list is its union.
           effort_levels: unionEffortLevels(efforts.catalog.models),
           model_effort_levels: efforts.catalog.models,
           effort_levels_verified_against: efforts.live
             ? version
             : CODEX_EFFORT_SNAPSHOT_VERIFIED_AGAINST,
-          // Manifest truth for routes the live probe does not answer; no hidden models.
           known_models: [
+            "gpt-6.1-sol",
             "gpt-6-astra",
             "gpt-6-sol",
             "gpt-6-luna",

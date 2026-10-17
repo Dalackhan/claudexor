@@ -20,6 +20,13 @@ import {
 } from "./acp-surface-runner.js";
 
 describe("ACP run-control projection", () => {
+  it("preserves explicit soft timer settings without creating an implicit limit", () => {
+    expect(projectAcpRunControls({ maxSeconds: 60, timeLimitMode: "soft" })).toEqual({
+      maxSeconds: 60,
+      timeLimitMode: "soft",
+    });
+    expect(projectAcpRunControls({})).toEqual({});
+  });
   it("keeps explicit Standard and directory footprint on the thread request", () => {
     const execution = { workspaceKind: "directory", scopePaths: ["input", "image.bin"] };
     const reviewerPanel = [{ harness: "claude", processingPreference: "economy" }];
@@ -372,6 +379,63 @@ describe("projectTerminalTurnDetail (post-terminal degrade)", () => {
 });
 
 describe("acpSessionQuery terminal RunFacts binding", () => {
+  it.each(["running", "succeeded"])(
+    "forwards a soft timer warning when the first status is %s",
+    async (state) => {
+      const daemonRun = await import("./daemon-run.js");
+      const live = await import("./live.js");
+      const event = {
+        type: "control.applied",
+        payload: {
+          control: { kind: "time_limit", action: "reached" },
+          timeLimit: { mode: "soft" },
+        },
+      };
+      const ensureSpy = vi.spyOn(daemonRun, "ensureDaemon").mockResolvedValue({
+        client: {
+          status: vi
+            .fn()
+            .mockResolvedValueOnce({ state, runId: "run-soft" })
+            .mockResolvedValue({ state: "succeeded", runId: "run-soft" }),
+        },
+        addr,
+      } as never);
+      const detailSpy = vi.spyOn(daemonRun, "fetchRunDetail").mockResolvedValue(null);
+      const controlSpy = vi
+        .spyOn(live, "controlApiFetch")
+        .mockImplementation(async (_addr, path) => {
+          if (path === "/threads/thread-soft")
+            return Response.json({ thread: { id: "thread-soft", repoRoot: "/repo" } });
+          if (path === "/threads/thread-soft/turns") return Response.json({ jobId: "job-soft" });
+          if (path === "/runs/run-soft/events")
+            return new Response(
+              `event: control.applied\ndata: ${JSON.stringify(event)}\n\nevent: end\ndata: {}\n\n`,
+            );
+          throw new Error(`unexpected request ${path}`);
+        });
+      const onEvent = vi.fn();
+      try {
+        const result = await acpSessionQuery(
+          {
+            mode: "__acp_session_prompt",
+            sessionId: "thread-soft",
+            prompt: "work",
+            maxSeconds: 1,
+            timeLimitMode: "soft",
+          },
+          { onEvent } as never,
+          {} as never,
+        );
+        expect(onEvent).toHaveBeenCalledWith(event);
+        expect(result).toMatchObject({ runId: "run-soft", status: "succeeded" });
+      } finally {
+        ensureSpy.mockRestore();
+        detailSpy.mockRestore();
+        controlSpy.mockRestore();
+      }
+    },
+  );
+
   it("uses the exact terminal status runId and failed lifecycle at the detail boundary", async () => {
     const daemonRun = await import("./daemon-run.js");
     const live = await import("./live.js");

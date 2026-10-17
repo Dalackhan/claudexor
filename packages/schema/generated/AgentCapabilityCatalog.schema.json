@@ -345,7 +345,7 @@
                   "tool_policy",
                   "none"
                 ],
-                "description": "HOW workspace_write is confined (fs_sandbox | tool_policy | none) — tool_policy means an allowed shell is unconfined (no FS/network fence); consumers choosing lanes by confinement read THIS field, never a harness name.",
+                "description": "HOW workspace_write is confined (fs_sandbox | tool_policy | none) — fs_sandbox is the base sandbox; a native automatic reviewer may still admit individual actions outside it. tool_policy means an allowed shell is unconfined (no FS/network fence); consumers choosing lanes by confinement read THIS field, never a harness name.",
                 "default": "none"
               },
               "delegation": {

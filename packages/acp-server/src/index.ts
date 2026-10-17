@@ -14,7 +14,7 @@ import {
   summarizeResult,
   type AcpPlanQuestion,
 } from "./prompt.js";
-import { validateRunControls } from "./validate.js";
+import { runControlsFromMeta, validateRunControls } from "./validate.js";
 import { terminalAuth, type AcpAuthOptions } from "./auth.js";
 import { attachmentInputs } from "./attachments.js";
 
@@ -27,7 +27,6 @@ export interface RunnerHooks {
 }
 
 export type RunnerFn = (params: any, hooks?: RunnerHooks) => Promise<unknown>;
-
 export interface AcpServerOptions extends AcpAuthOptions {
   runner: RunnerFn;
   transport: { read: NodeReadableStream; write: NodeWritableStream };
@@ -135,7 +134,7 @@ export class AcpServer {
         return {};
       })
       .onRequest(acp.methods.agent.session.prompt, async ({ params, client, signal }) => {
-        const controls = this.controls(params._meta);
+        const controls = runControlsFromMeta(params._meta);
         const validation = validateRunControls({
           sessionId: params.sessionId,
           prompt: params.prompt,
@@ -240,14 +239,6 @@ export class AcpServer {
     }
   }
 
-  private controls(meta: unknown): Record<string, unknown> {
-    if (!meta || typeof meta !== "object" || Array.isArray(meta)) return {};
-    const value = (meta as Record<string, unknown>)["claudexor"];
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {};
-  }
-
   private async agentMessage(
     client: acp.AgentContext,
     sessionId: string,
@@ -283,6 +274,15 @@ export class AcpServer {
   ): Promise<void> {
     const type = String(event?.type ?? "");
     const payload = (event?.payload ?? {}) as Record<string, any>;
+    if (type === "surface.warning" && typeof payload.message === "string")
+      return this.agentMessage(client, sessionId, payload.message);
+    if (
+      type === "control.applied" &&
+      payload.control?.kind === "time_limit" &&
+      payload.control?.action === "reached" &&
+      payload.timeLimit?.mode === "soft"
+    )
+      return this.agentMessage(client, sessionId, "Soft time limit reached; work continues.");
     if (type !== "harness.event") return;
     const sub = String(payload["type"] ?? "");
     const tool = payload["tool"] as Record<string, any> | undefined;

@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest";
 import { validateRunControls } from "./validate.js";
 
 describe("ACP run-control applicability", () => {
+  it("accepts explicit soft or legacy hard limits and rejects malformed timer controls", () => {
+    expect(validateRunControls({ maxSeconds: 60, timeLimitMode: "soft" })).toBeNull();
+    expect(validateRunControls({ maxSeconds: 60 })).toBeNull();
+    expect(validateRunControls({ maxSeconds: 0 })?.message).toContain("maxSeconds");
+    expect(validateRunControls({ maxSeconds: 604801 })?.message).toContain("maxSeconds");
+    expect(validateRunControls({ timeLimitMode: "forever" })?.message).toContain("timeLimitMode");
+  });
   it("accepts the shared execution object and validates its complete shape", () => {
     expect(
       validateRunControls({

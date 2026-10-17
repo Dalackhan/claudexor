@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { INTERACTION_TIMEOUT_MAX_MS } from "@claudexor/schema";
+import { INTERACTION_TIMEOUT_MAX_MS, type InteractionHandlerResult } from "@claudexor/schema";
 import { interactionChannelFor } from "./interaction.js";
 
 type CapturedEvent = { type: string; payload: Record<string, unknown> };
@@ -23,6 +23,146 @@ function request() {
 afterEach(() => vi.useRealTimers());
 
 describe("interactionChannelFor finite-or-disabled policy", () => {
+  it("releases only the aborted request while the run remains active", async () => {
+    const events: CapturedEvent[] = [];
+    const requestAbort = new AbortController();
+    let seenSignal: AbortSignal | undefined;
+    let resolveAnswer!: (value: null) => void;
+    const channel = interactionChannelFor(
+      {
+        interactionTimeoutMs: null,
+        onInteraction: (ctx) => {
+          seenSignal = ctx.signal;
+          return new Promise((resolve) => {
+            resolveAnswer = resolve;
+          });
+        },
+      },
+      eventLog(events) as never,
+      "run-live",
+      "task-live",
+      "a01",
+      "codex",
+      true,
+    );
+
+    const pending = channel!.request(request() as never, requestAbort.signal);
+    expect(channel!.pendingCount!()).toBe(1);
+    expect(seenSignal).toBe(requestAbort.signal);
+    requestAbort.abort();
+    await expect(pending).resolves.toBeNull();
+    expect(channel!.pendingCount!()).toBe(0);
+    expect(events.some((event) => event.type === "interaction.timeout")).toBe(false);
+    expect(events.filter((event) => event.type === "interaction.withdrawn")).toEqual([
+      {
+        type: "interaction.withdrawn",
+        payload: { interaction_id: "int-1", attempt_id: "a01", harness_id: "codex" },
+      },
+    ]);
+    resolveAnswer(null);
+    await Promise.resolve();
+    expect(events.some((event) => event.type === "interaction.answer_discarded")).toBe(false);
+  });
+
+  it("announces one withdrawal when the registry's interrupted release wins the race", async () => {
+    const events: CapturedEvent[] = [];
+    const channel = interactionChannelFor(
+      {
+        interactionTimeoutMs: null,
+        onInteraction: async () => ({ kind: "released", reason: "interrupted" }),
+      },
+      eventLog(events) as never,
+      "run-release",
+      "task-release",
+      "a01",
+      "codex",
+      true,
+    );
+
+    await expect(
+      channel!.request(request() as never, new AbortController().signal),
+    ).resolves.toBeNull();
+    expect(events.map((event) => event.type)).toEqual([
+      "interaction.requested",
+      "interaction.withdrawn",
+    ]);
+  });
+
+  it("discloses an answer accepted in the same tick as the withdrawal", async () => {
+    const events: CapturedEvent[] = [];
+    const requestAbort = new AbortController();
+    let resolveAnswer!: (value: InteractionHandlerResult) => void;
+    const channel = interactionChannelFor(
+      {
+        interactionTimeoutMs: null,
+        onInteraction: () =>
+          new Promise((resolve) => {
+            resolveAnswer = resolve;
+          }),
+      },
+      eventLog(events) as never,
+      "run-answer-race",
+      "task-answer-race",
+      "a01",
+      "codex",
+      true,
+    );
+
+    const pending = channel!.request(request() as never, requestAbort.signal);
+    resolveAnswer({
+      interaction_id: "int-1",
+      answers: [{ question_id: "approval", selected_labels: ["Approve once"], free_text: null }],
+    });
+    requestAbort.abort();
+    await expect(pending).resolves.toBeNull();
+    await vi.waitFor(() =>
+      expect(
+        events.find((event) => event.type === "interaction.answer_discarded")?.payload,
+      ).toMatchObject({ interaction_id: "int-1", reason: "request_withdrawn", answer_count: 1 }),
+    );
+    expect(events.some((event) => event.type === "interaction.answered")).toBe(false);
+    expect(events.filter((event) => event.type === "interaction.withdrawn")).toHaveLength(1);
+  });
+
+  it("keeps ordinary answers, run cancellation and terminal release out of withdrawal", async () => {
+    const events: CapturedEvent[] = [];
+    const run = new AbortController();
+    let release: (() => void) | undefined;
+    const outcomes = [
+      async () => ({
+        interaction_id: "int-1",
+        answers: [{ question_id: "q1", selected_labels: ["A"], free_text: null }],
+      }),
+      async () => ({ kind: "released" as const, reason: "run_terminal" as const }),
+      () =>
+        new Promise<null>((resolve) => {
+          release = () => resolve(null);
+        }),
+    ];
+    let next = 0;
+    const channel = interactionChannelFor(
+      { interactionTimeoutMs: null, signal: run.signal, onInteraction: () => outcomes[next++]!() },
+      eventLog(events) as never,
+      "run-controls",
+      "task-controls",
+      "a01",
+      "claude",
+      true,
+    );
+
+    await expect(channel!.request(request() as never)).resolves.toMatchObject({
+      interaction_id: "int-1",
+    });
+    await expect(channel!.request(request() as never)).resolves.toBeNull();
+    const cancelled = channel!.request(request() as never, new AbortController().signal);
+    run.abort();
+    await expect(cancelled).resolves.toBeNull();
+    release?.();
+    expect(events.filter((event) => event.type === "interaction.answered")).toHaveLength(1);
+    expect(events.some((event) => event.type === "interaction.withdrawn")).toBe(false);
+    expect(events.some((event) => event.type === "interaction.timeout")).toBe(false);
+  });
+
   it("emits a nullable deadline and never age-expires a disabled interaction", async () => {
     vi.useFakeTimers();
     const events: CapturedEvent[] = [];

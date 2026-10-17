@@ -139,6 +139,12 @@ export const RunEventType = z
     "interaction.answered",
     "interaction.timeout",
     "interaction.answer_discarded",
+    /** The asking harness withdrew one pending request itself (e.g. Codex
+     * `serverRequest/resolved`): no answer is needed, and a late one is refused.
+     * Neither an expiry nor a run cancellation; answer surfaces close the
+     * prompt they opened for it. Payload: {interaction_id, attempt_id,
+     * harness_id}. */
+    "interaction.withdrawn",
     /** Live message into a running attempt (`POST /v2/runs/:id/messages`).
      * `message.accepted` = daemon ADMISSION, journaled through a
      * failure-propagating append BEFORE any native dispatch (nothing is sent

@@ -34,6 +34,7 @@ import {
 import { readRunDetailResponse } from "./run-detail-response.js";
 import { catalogQuery } from "./mcp-catalog-query.js";
 import { threadQuery } from "./mcp-thread-query.js";
+import { runTimeLimitQuery } from "./mcp-run-time-limit.js";
 import { journalRecoveryQuery } from "./mcp-journal-recovery.js";
 
 export interface SurfaceRunnerHooks {
@@ -70,6 +71,7 @@ export interface McpSurfaceRunnerOptions {
 export function mcpSurfaceRunner(options: McpSurfaceRunnerOptions = {}) {
   return async (p: any, hooks?: SurfaceRunnerHooks) => {
     const beltContext = Boolean(options.delegationParentRunId);
+    if (p?.mode === "__run_time_limit") return runTimeLimitQuery(p, beltContext);
     if (p?.mode === "__account_resources")
       return accountResourceQuery(
         "resources",
@@ -154,6 +156,8 @@ export function mcpSurfaceRunner(options: McpSurfaceRunnerOptions = {}) {
       ...(p?.council === true ? { council: true } : {}),
       ...(Array.isArray(p?.tests) ? { tests: p.tests } : {}),
       ...(p?.paidBudget ? { paidBudget: p.paidBudget } : {}),
+      ...(p?.maxSeconds !== undefined ? { maxSeconds: p.maxSeconds } : {}),
+      ...(p?.timeLimitMode !== undefined ? { timeLimitMode: p.timeLimitMode } : {}),
       ...(p?.credentialProfileId ? { credentialProfileId: String(p.credentialProfileId) } : {}),
       ...(p?.access ? { access: String(p.access) } : {}),
       // `externalContextPolicy` is the control-api-parity alias of `web`; the

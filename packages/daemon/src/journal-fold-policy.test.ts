@@ -10,6 +10,7 @@ import {
 } from "./store/test-support/fixtures/legacy/journal/index.js";
 import { CredentialRoute, QuotaSource, type RunEvent } from "@claudexor/schema";
 import { afterEach, describe, expect, it } from "vitest";
+import type { RunEvent as LegacyRunEvent } from "./store/test-support/fixtures/legacy/schema/index.js";
 import { CommandStore } from "./store/test-support/fixtures/legacy/daemon/command-store.js";
 import { InteractionStore } from "./store/test-support/fixtures/legacy/daemon/interactions.js";
 import { journalFoldPolicy } from "./journal-fold-policy.js";
@@ -73,6 +74,10 @@ function snapshot(
 const describeSnapshot = (value: Snapshot) =>
   `${value.subject.harness}/${value.subject.subject_id}@${value.constraints[0]!.used_ratio}`;
 
+/** The frozen legacy store types only the frozen event vocabulary; these
+ * fixtures use none of the event types added after it was sealed. */
+const legacyEvent = (event: RunEvent): LegacyRunEvent => event as LegacyRunEvent;
+
 function runEvent(
   runId: string,
   type: RunEvent["type"],
@@ -100,7 +105,7 @@ function buildFixture() {
   const decisions = new OperatorDecisionStore(journal);
   const runEvents = new RunEventStore(journal);
   const quota = new QuotaRegistry(journal, [], now);
-  const record = (event: RunEvent) => runEvents.record(journaledRunEventCopy(event));
+  const record = (event: RunEvent) => runEvents.record(legacyEvent(journaledRunEventCopy(event)));
   const request = (runId: string, interactionId: string) =>
     interactions.request({
       runId,
@@ -303,7 +308,9 @@ function buildDuplicateFixture(kind: "terminal" | "request" | "accepted"): strin
   const journal = new DurableJournal({ rootDir: join(root, "journal"), partition: "global", now });
   const runEvents = new RunEventStore(journal);
   const interactions = new InteractionStore(journal);
-  runEvents.record(journaledRunEventCopy(runEvent("run-x", "run.created", { mode: "ask" }, 1)));
+  runEvents.record(
+    legacyEvent(journaledRunEventCopy(runEvent("run-x", "run.created", { mode: "ask" }, 1))),
+  );
   if (kind === "accepted") {
     // Same id and idempotency key, conflicting request digest.
     const commands = new CommandStore(journal, now);
@@ -320,8 +327,8 @@ function buildDuplicateFixture(kind: "terminal" | "request" | "accepted"): strin
     });
   } else if (kind === "terminal") {
     const terminal = runEvent("run-x", "run.completed", { lifecycle: "succeeded" }, 2);
-    runEvents.record(terminal);
-    runEvents.record(terminal);
+    runEvents.record(legacyEvent(terminal));
+    runEvents.record(legacyEvent(terminal));
   } else {
     interactions.request({
       runId: "run-x",

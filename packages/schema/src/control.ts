@@ -1,4 +1,5 @@
 import { z } from "zod/v3";
+import { RunTimeLimitStart } from "./run-time-limit.js";
 import { CANCEL_REASON_CODES } from "./cancel-reason.js";
 import {
   AccessProfile,
@@ -306,22 +307,9 @@ export const ControlRunStartRequest = z
       .describe(
         "Agent-only: inject the Claudexor delegation belt so the harness can spawn bounded isolated sub-runs; non-agent modes refuse, while known belt or harness unavailability degrades before start to ordinary Agent with a durable warning.",
       ),
-    /** Hard wall-clock deadline for the WHOLE run, measured from scheduler
-     * start. On expiry the run is cooperatively cancelled (hard-kill fallback)
-     * and ends `cancelled` with reason `wall_clock_exceeded`, preserving partial
-     * artifacts. Distinct from the inactivity watchdog (per-attempt silence). */
-    maxSeconds: z
-      .number()
-      .int()
-      .positive()
-      // 7 days. Bounded so `maxSeconds * 1000` never exceeds setTimeout's 32-bit
-      // ms ceiling (~24.8 days), where an over-large delay silently wraps to 1ms
-      // and cancels the run almost immediately.
-      .max(604_800)
-      .optional()
-      .describe(
-        "Hard wall-clock deadline for the whole run (seconds, from scheduler start, max 7 days); on expiry the run is cancelled with reason wall_clock_exceeded and partial artifacts are kept.",
-      ),
+    /** Optional whole-run clock: explicit limits remain hard by default;
+     * soft limits warn without cancelling. Separate from attempt inactivity. */
+    ...RunTimeLimitStart.shape,
     /** Per-run globs no candidate may touch at all (create/modify/delete).
      * Envelope/isolated runs only: enforced by the engine's authoritative
      * post-diff policy gate (violation → blocking finding → blocked, patch
@@ -1434,8 +1422,11 @@ export const ControlSettingsSnapshot = z
           .number()
           .int()
           .positive()
+          .nullable()
           .default(HARNESS_INACTIVITY_TIMEOUT_DEFAULT_MS)
-          .describe("Inactivity watchdog for harness streams, in milliseconds."),
+          .describe(
+            "Inactivity watchdog in milliseconds; null disables inactivity timing, not cancellation or cleanup.",
+          ),
         concurrency: RuntimeConcurrencyState.optional(),
         transientRetry: z
           .object({

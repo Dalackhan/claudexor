@@ -1,4 +1,9 @@
-import type { CancelReasonCode, CommandListQuery } from "@claudexor/schema";
+import type {
+  CancelReasonCode,
+  CommandListQuery,
+  RunTimeLimitRequest,
+  RunTimeLimitSnapshot,
+} from "@claudexor/schema";
 import { delegatedParentOf } from "@claudexor/schema";
 
 export interface DaemonRunRecord {
@@ -44,6 +49,7 @@ export interface DaemonFacadeClient {
   /** Required addressed selection before projection. */
   list(query: CommandListQuery): Promise<DaemonRunRecord[]>;
   cancel(id: string, reasonCode?: CancelReasonCode): Promise<unknown>;
+  runTimeLimit?(id: string, request: RunTimeLimitRequest): Promise<RunTimeLimitSnapshot>;
   fenceDelegationParent?(runId: string): Promise<unknown>;
 }
 

@@ -1,10 +1,10 @@
 /**
  * Per-attempt interaction channel. Emits the typed lifecycle events
- * (`interaction.requested` / `interaction.answered` / `interaction.timeout`)
- * around the caller-provided answer surface. The wait policy is finite or has
- * automatic expiry disabled; answers, cancellation, terminal cleanup, and
- * registry release still end either form. Undefined when the caller provides
- * no surface — the adapter then runs non-interactive.
+ * (`interaction.requested` / `interaction.answered` / `interaction.timeout` /
+ * `interaction.withdrawn`) around the caller-provided answer surface. The wait
+ * policy is finite or has automatic expiry disabled; answers, cancellation,
+ * terminal cleanup, and registry release still end either form. Undefined
+ * when the caller provides no surface — the adapter then runs non-interactive.
  *
  * Capability gate: the channel is OFFERED only to routes whose manifest
  * declares `interactive` — a non-interactive harness never gets a surface it
@@ -74,7 +74,11 @@ export function interactionChannelFor(
   return {
     pendingCount: () => pending,
     suspensionVersion: () => suspensionVersion,
-    request: async (request: InteractionRequest): Promise<InteractionAnswerSet | null> => {
+    request: async (
+      request: InteractionRequest,
+      signal?: AbortSignal,
+    ): Promise<InteractionAnswerSet | null> => {
+      if (signal?.aborted) return null;
       const requestedAt = nowIso();
       const deadlineAtMs =
         timeoutPolicy.kind === "finite" ? finiteDeadline(timeoutPolicy.timeoutMs) : null;
@@ -102,6 +106,7 @@ export function interactionChannelFor(
               request,
               requestedAt,
               timeoutAt,
+              signal,
             }),
           ).catch(() => null);
         } catch {
@@ -118,11 +123,29 @@ export function interactionChannelFor(
         });
         let cancelTimer: (() => void) | undefined;
         let onAbort: (() => void) | undefined;
+        let onRequestAbort: (() => void) | undefined;
         const startedWaiting = Date.now();
+        const discloseDiscardedAnswer = (
+          reason: "run_cancelled" | "request_withdrawn" | "timed_out",
+        ) =>
+          void answersPromise
+            .then((late) => {
+              if (late && !isInteractionHandlerRelease(late) && late.answers.length > 0) {
+                log.emit("interaction.answer_discarded", {
+                  interaction_id: request.interaction_id,
+                  attempt_id: attemptId,
+                  harness_id: harnessId,
+                  answer_count: late.answers.length,
+                  reason,
+                });
+              }
+            })
+            .catch(() => undefined);
         type WaitResult =
           | { kind: "handler"; result: InteractionHandlerResult }
           | { kind: "timeout" }
-          | { kind: "abort" };
+          | { kind: "abort" }
+          | { kind: "request_abort" };
         const waits: Promise<WaitResult>[] = [
           answersPromise.then((result) => ({ kind: "handler", result })),
           // A cancelled run must release the interaction wait IMMEDIATELY —
@@ -133,6 +156,12 @@ export function interactionChannelFor(
             if (input.signal.aborted) return resolve({ kind: "abort" });
             onAbort = () => resolve({ kind: "abort" });
             input.signal.addEventListener("abort", onAbort, { once: true });
+          }),
+          new Promise<WaitResult>((resolve) => {
+            if (!signal) return;
+            if (signal.aborted) return resolve({ kind: "request_abort" });
+            onRequestAbort = () => resolve({ kind: "request_abort" });
+            signal.addEventListener("abort", onRequestAbort, { once: true });
           }),
         ];
         if (deadlineAtMs !== null) {
@@ -145,6 +174,36 @@ export function interactionChannelFor(
         const result = await Promise.race(waits);
         cancelTimer?.();
         if (onAbort) input.signal?.removeEventListener("abort", onAbort);
+        if (onRequestAbort) signal?.removeEventListener("abort", onRequestAbort);
+        // The asking harness withdrew this exact request (e.g. Codex
+        // serverRequest/resolved). The request signal and the registry's
+        // `interrupted` release fire in the same abort dispatch, so either may
+        // win the race; both are one withdrawal. Announce it so every surface
+        // that opened an answer prompt closes it — under a disabled expiry an
+        // unclosed prompt would block every later question. Neither an expiry
+        // nor a run cancellation, so it never borrows interaction.timeout.
+        if (
+          result.kind === "request_abort" ||
+          (result.kind === "handler" &&
+            isInteractionHandlerRelease(result.result) &&
+            result.result.reason === "interrupted")
+        ) {
+          // Adapter cancellation revokes request signals before the channel's
+          // run-abort listener can win the race. Preserve the outer cause.
+          if (input.signal?.aborted) {
+            discloseDiscardedAnswer("run_cancelled");
+            return null;
+          }
+          log.emit("interaction.withdrawn", {
+            interaction_id: request.interaction_id,
+            attempt_id: attemptId,
+            harness_id: harnessId,
+          });
+          // An answer the registry accepted in the same tick never reaches the
+          // harness; disclose it instead of letting "delivered" stand silently.
+          discloseDiscardedAnswer("request_withdrawn");
+          return null;
+        }
         // Run cancellation has its own terminal event and is not an expired
         // answer window. Emitting interaction.timeout here makes downstream
         // surfaces briefly claim a benign timeout before the cancellation
@@ -153,19 +212,7 @@ export function interactionChannelFor(
           // Preserve late-answer honesty without fabricating an expiry. The
           // registry may still deliver an answer racing the run cancellation;
           // disclose that it was discarded for the actual terminal cause.
-          void answersPromise
-            .then((late) => {
-              if (late && !isInteractionHandlerRelease(late) && late.answers.length > 0) {
-                log.emit("interaction.answer_discarded", {
-                  interaction_id: request.interaction_id,
-                  attempt_id: attemptId,
-                  harness_id: harnessId,
-                  answer_count: late.answers.length,
-                  reason: "run_cancelled",
-                });
-              }
-            })
-            .catch(() => undefined);
+          discloseDiscardedAnswer("run_cancelled");
           return null;
         }
         const handlerResult = result.kind === "handler" ? result.result : null;
@@ -179,7 +226,7 @@ export function interactionChannelFor(
           });
           return answers;
         }
-        // An untyped external null or a terminal/restart registry release is a
+        // An untyped external null or a run-terminal registry release is a
         // decline, not an automatic expiry. The daemon tags only its own
         // finite expiry so that race can retain exact provenance.
         if (
@@ -199,17 +246,7 @@ export function interactionChannelFor(
         // Late-answer honesty: the run already declined this
         // interaction; an answer arriving AFTER the timeout must be visibly
         // DISCARDED, not silently swallowed (the user typed it in good faith).
-        void answersPromise.then((late) => {
-          if (late && !isInteractionHandlerRelease(late) && late.answers.length > 0) {
-            log.emit("interaction.answer_discarded", {
-              interaction_id: request.interaction_id,
-              attempt_id: attemptId,
-              harness_id: harnessId,
-              answer_count: late.answers.length,
-              reason: "timed_out",
-            });
-          }
-        });
+        discloseDiscardedAnswer("timed_out");
         return null;
       } finally {
         // ALWAYS release the suspension: a synchronous handler throw or a

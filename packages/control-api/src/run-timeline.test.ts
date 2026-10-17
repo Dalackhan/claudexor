@@ -62,3 +62,33 @@ describe("timelineEvents projects partial Git initialization honestly", () => {
     });
   });
 });
+
+describe("soft run time limit reached notification", () => {
+  it("marks only the soft reached control event as warning", () => {
+    const events = [
+      {
+        type: "control.applied",
+        payload: {
+          control: { kind: "time_limit", action: "reached" },
+          timeLimit: { mode: "soft" },
+        },
+      },
+      {
+        type: "control.applied",
+        payload: {
+          control: { kind: "time_limit", action: "reached" },
+          timeLimit: { mode: "hard" },
+        },
+      },
+      {
+        type: "control.applied",
+        payload: { control: { kind: "time_limit", action: "extend" }, timeLimit: { mode: "soft" } },
+      },
+    ];
+    expect(timelineEvents({}, events).map((row) => row.severity)).toEqual([
+      "warning",
+      "info",
+      "info",
+    ]);
+  });
+});

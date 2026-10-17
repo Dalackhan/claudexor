@@ -1092,6 +1092,48 @@ struct AppModelRefreshTests {
     }
 
     @MainActor
+    @Test func harnessWithdrawnInteractionClosesItsCardWithoutTimeoutWording() {
+        let model = AppModel(requestNotificationAuthorization: false)
+        model.liveTasks = [TaskRun(
+            id: "run-withdrawn", title: "Run", prompt: "", mode: .agent, phase: .running,
+            project: "Project", harnesses: [], n: 1,
+            createdAt: .now, updatedAt: .now,
+            spendUsd: 0, capUsd: 0, spendKnown: false, capKnown: false,
+            routeProof: .unverified, attentionNote: nil, plan: [], activity: [],
+            candidates: [], findings: [], diff: []
+        )]
+        let question: JSONValue = .object([
+            "id": .string("approval"), "header": .string("Codex approval"),
+            "question": .string("Approve this single native action?"),
+            "options": .array([.object(["label": .string("Approve once"), "description": .string("")])]),
+            "multi_select": .bool(false),
+        ])
+        for (seq, id) in [(1, "int-withdrawn"), (2, "int-next")] {
+            model.apply(BusEnvelope(seq: seq, kind: "interaction.requested", event: .object([
+                "type": .string("interaction.requested"),
+                "payload": .object([
+                    "interaction_id": .string(id), "harness_id": .string("codex"),
+                    "source_tool": .string("item/fileChange/requestApproval"),
+                    "questions": .array([question]), "requested_at": .string("2026-10-17T00:00:00.000Z"),
+                    "timeout_at": .null,
+                ]),
+            ])), to: "run-withdrawn")
+        }
+        #expect(model.liveTasks[0].pendingInteractions.map(\.interactionId) == ["int-withdrawn", "int-next"])
+
+        model.apply(BusEnvelope(seq: 3, kind: "interaction.withdrawn", event: .object([
+            "type": .string("interaction.withdrawn"),
+            "payload": .object(["interaction_id": .string("int-withdrawn"), "harness_id": .string("codex")]),
+        ])), to: "run-withdrawn")
+
+        #expect(model.liveTasks[0].pendingInteractions.map(\.interactionId) == ["int-next"])
+        #expect(model.liveTasks[0].waitingOnUser)
+        let title = model.liveBoxes["run-withdrawn"]?.activity.last?.title ?? ""
+        #expect(title == "Question withdrawn by the agent — no answer needed")
+        #expect(!title.localizedCaseInsensitiveContains("timed out"))
+    }
+
+    @MainActor
     @Test func availabilityReadsServerRoutableIntentsNotLocalDerivation() {
         let model = AppModel(requestNotificationAuthorization: false)
         // Healthy + intent enabled, but the SERVER says not routable (e.g.

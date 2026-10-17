@@ -27,6 +27,10 @@ import type { HarnessEvent } from "@claudexor/schema";
  * run past this bound. Overridable per-call for deterministic tests. */
 const REAP_PROOF_DEADLINE_MS = 8000;
 
+/** Node clamps a setTimeout delay above 2^31-1 ms to 1 ms. A longer configured
+ * window is waited in chunks so its intended duration is preserved, not capped. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 export class HarnessInactivityTimeoutError extends Error {
   constructor(readonly timeoutMs: number) {
     super(
@@ -82,7 +86,8 @@ export function countsAsAgentProgress(event: HarnessEvent): boolean {
 export async function* withInactivityWatchdog<T>(
   source: AsyncIterable<T>,
   opts: {
-    timeoutMs: number;
+    /** Null disables inactivity timing while retaining stream cleanup. */
+    timeoutMs: number | null;
     /** Closed typed policy deciding which values prove useful progress. */
     countsAsProgress: (value: T) => boolean;
     /** Called once when the window elapses; abort the stream here. */
@@ -108,6 +113,7 @@ export async function* withInactivityWatchdog<T>(
   },
 ): AsyncIterable<T> {
   const iterator = source[Symbol.asyncIterator]();
+  const timeoutMs = opts.timeoutMs;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let timedOut = false;
   let wake: (() => void) | null = null;
@@ -116,38 +122,44 @@ export async function* withInactivityWatchdog<T>(
   // useful-progress window instead of charging the user-wait interval to the
   // harness and firing immediately after an answer.
   let suspensionObserved = false;
-  let observedSuspensionVersion = opts.suspensionVersion?.() ?? 0;
+  let observedSuspensionVersion = timeoutMs === null ? 0 : (opts.suspensionVersion?.() ?? 0);
   const cleanupDeadlineMs = opts.cleanupDeadlineMs ?? REAP_PROOF_DEADLINE_MS;
   const arm = (resetSuspension = true): void => {
+    if (timeoutMs === null) return;
     if (resetSuspension) {
       suspensionObserved = false;
       observedSuspensionVersion = opts.suspensionVersion?.() ?? observedSuspensionVersion;
     }
     if (timer) clearTimeout(timer);
-    timer = setTimeout(
-      () => {
-        const currentSuspensionVersion = opts.suspensionVersion?.() ?? observedSuspensionVersion;
-        if (opts.isSuspended?.()) {
-          suspensionObserved = true;
-          observedSuspensionVersion = currentSuspensionVersion;
-          arm(false);
-          return;
-        }
-        if (suspensionObserved || currentSuspensionVersion !== observedSuspensionVersion) {
-          // Resume has no guaranteed harness event of its own. The first timer
-          // boundary that proves the interaction is over starts a full new
-          // window; the next boundary may time out if no agent progress follows.
-          suspensionObserved = false;
-          observedSuspensionVersion = currentSuspensionVersion;
-          arm(false);
-          return;
-        }
-        timedOut = true;
-        opts.onTimeout();
-        wake?.();
-      },
-      Math.max(1, opts.timeoutMs),
-    );
+    const elapsed = (): void => {
+      const currentSuspensionVersion = opts.suspensionVersion?.() ?? observedSuspensionVersion;
+      if (opts.isSuspended?.()) {
+        suspensionObserved = true;
+        observedSuspensionVersion = currentSuspensionVersion;
+        arm(false);
+        return;
+      }
+      if (suspensionObserved || currentSuspensionVersion !== observedSuspensionVersion) {
+        // Resume has no guaranteed harness event of its own. The first timer
+        // boundary that proves the interaction is over starts a full new
+        // window; the next boundary may time out if no agent progress follows.
+        suspensionObserved = false;
+        observedSuspensionVersion = currentSuspensionVersion;
+        arm(false);
+        return;
+      }
+      timedOut = true;
+      opts.onTimeout();
+      wake?.();
+    };
+    const wait = (remainingMs: number): void => {
+      const chunk = Math.min(remainingMs, MAX_TIMER_DELAY_MS);
+      timer = setTimeout(
+        () => (remainingMs > chunk ? wait(remainingMs - chunk) : elapsed()),
+        chunk,
+      );
+    };
+    wait(Math.max(1, timeoutMs));
     // Deliberately NOT unref'd: a wedged in-process stream can leave nothing
     // else on the event loop, and an unref'd watchdog would let node exit 0
     // mid-run instead of firing the timeout.
@@ -164,19 +176,23 @@ export async function* withInactivityWatchdog<T>(
       // Race the next event against the watchdog firing: after onTimeout()
       // aborts the child, the source SHOULD end on its own, but a stuck
       // iterator must not keep the run parked — the sentinel wakes the pump.
-      const raced = await Promise.race([
-        pending.then<
-          { kind: "next"; result: IteratorResult<T> } | { kind: "source_error"; error: unknown },
-          { kind: "next"; result: IteratorResult<T> } | { kind: "source_error"; error: unknown }
-        >(
-          (result) => ({ kind: "next", result }),
-          (error) => ({ kind: "source_error", error }),
-        ),
-        new Promise<{ kind: "timeout" }>((resolve) => {
-          wake = () => resolve({ kind: "timeout" });
-          if (timedOut) resolve({ kind: "timeout" });
-        }),
-      ]);
+      const nextResult = pending.then<
+        { kind: "next"; result: IteratorResult<T> } | { kind: "source_error"; error: unknown },
+        { kind: "next"; result: IteratorResult<T> } | { kind: "source_error"; error: unknown }
+      >(
+        (result) => ({ kind: "next", result }),
+        (error) => ({ kind: "source_error", error }),
+      );
+      const raced =
+        timeoutMs === null
+          ? await nextResult
+          : await Promise.race([
+              nextResult,
+              new Promise<{ kind: "timeout" }>((resolve) => {
+                wake = () => resolve({ kind: "timeout" });
+                if (timedOut) resolve({ kind: "timeout" });
+              }),
+            ]);
       if (raced.kind === "timeout" || timedOut) {
         // Inactivity fired. onTimeout() already aborted the child. Do NOT throw
         // and terminalize yet: DRAIN the aborted source to its process-reap
@@ -189,13 +205,15 @@ export async function* withInactivityWatchdog<T>(
         // event is not lost; yielding the drained events lets the caller see the
         // unconfirmed-death error/terminal before it terminalizes on the throw.
         yield* drainAfterTimeout(iterator, pending, cleanupDeadlineMs);
-        throw new HarnessInactivityTimeoutError(opts.timeoutMs);
+        throw new HarnessInactivityTimeoutError(timeoutMs!);
       }
       if (raced.kind === "source_error") throw raced.error;
       pending = null;
       if (raced.result.done) return;
-      if (opts.countsAsProgress(raced.result.value)) arm();
-      else if (opts.isSuspended?.()) suspensionObserved = true;
+      if (timeoutMs !== null) {
+        if (opts.countsAsProgress(raced.result.value)) arm();
+        else if (opts.isSuspended?.()) suspensionObserved = true;
+      }
       yield raced.result.value;
     }
   } finally {

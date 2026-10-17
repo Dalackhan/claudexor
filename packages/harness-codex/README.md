@@ -7,6 +7,13 @@ run-owned background terminals keep that run active; Stop pauses the goal,
 interrupts the exact active turn, and terminates only terminals observed in
 that run.
 
+The verified install pin is codex-cli 0.162.1. Its selected-account `model/list`
+capture is `fixtures/models-0.162.1.json`; the fallback keeps historical model
+ladders but takes the captured default (`gpt-6.1-sol`) from that version. The
+native turn-text bound was re-probed against an unauthenticated loopback
+provider: 1,048,576 Unicode scalars accepted; 1,048,577 refused before a provider
+request. This is a character bound, not a model token-window guarantee.
+
 Live messages (`POST /v2/runs/:id/messages`, capability `live_input: mid_turn`):
 `message(sessionId)` steers the ACTIVE turn through `turn/steer`. Outcomes come
 from adapter state, never from error prose: `accepted` when the server answers

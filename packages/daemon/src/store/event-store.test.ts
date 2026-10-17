@@ -199,7 +199,7 @@ describe("SQL EventLedger body and fold contract", () => {
     expect(ledger.records(0, ["thread.entities_upserted"])).toEqual([]);
   });
 
-  it("stores all eleven typed run-event copies with the existing producer's redaction", async () => {
+  it("stores every journaled run-event type with the existing producer's redaction", async () => {
     const { ledger } = await fixture();
     const expected = [...JOURNALED_RUN_EVENT_TYPES].map((type, index) => {
       const source = RunEvent.parse({
@@ -220,7 +220,7 @@ describe("SQL EventLedger body and fold contract", () => {
     for (const event of expected) ledger.append("run.event", event);
     const actual = ledger.records<RunEvent>(0, ["run.event"]).map((record) => record.payload);
     expect(actual).toEqual(expected);
-    expect(actual).toHaveLength(11);
+    expect(actual).toHaveLength(JOURNALED_RUN_EVENT_TYPES.size);
     expect(actual.find((event) => event.type === "run.created")?.payload).toMatchObject({
       prompt_bytes: 14,
     });
@@ -239,7 +239,7 @@ describe("SQL EventLedger body and fold contract", () => {
       }),
     );
     expect(ledger.records<RunEvent>(0, ["run.event"]).map((record) => record.payload)).toHaveLength(
-      11,
+      JOURNALED_RUN_EVENT_TYPES.size,
     );
   });
 

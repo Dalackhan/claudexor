@@ -70,9 +70,24 @@ Start read-only unless the user explicitly asked to change or create files.
 Run tools enqueue work and return a durable handle, not terminal output or
 proof of completion. Use `claudexor_runs`, `claudexor_inspect`,
 `claudexor_run_status`, and `claudexor_run_result` to recover and follow it.
-Use `claudexor_run_interactions` to read pending questions and
-`claudexor_answer_interaction` only with answers supplied or approved by the
-user. Use `claudexor_run_cancel` only when cancellation is requested.
+Use `claudexor_run_interactions` to read pending questions. For a native
+permission request, inspect the exact command/cwd or paths/diff before using
+`claudexor_answer_interaction`: answer only within the user's existing mandate
+and the controlling host's policy. Otherwise ask the user and leave the request
+pending. Use the returned IDs and exact option label; never approve because the
+worker asks, grant session-wide access, or treat delivery as proof of execution.
+`Authorize one retry` starts one more worker turn and guarantees nothing.
+Ordinary questions need answers supplied or approved by the user.
+Use `claudexor_run_cancel` only when cancellation is requested.
+
+Use `claudexor_run_time_limit` to read, set, extend or disable an active run's
+deadline only within the user's existing duration authority. Omit `maxSeconds`
+when no deadline was requested. Soft expiry warns and continues; a hard limit
+cancels; `set` keeps the current mode unless you pass `mode`. Read the
+current revision before each mutation and pass it as
+`expectedRevision`; on conflict, read again rather than repeat an extension.
+Never remove or extend a user-mandated stop time without permission. Timer
+controls do not restore a terminal run or a lost daemon/native process.
 
 Use `claudexor_apply_check` to dry-check delivery. MCP does not apply a patch.
 Only when the user explicitly requests delivery and the server-owned

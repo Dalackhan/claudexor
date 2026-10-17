@@ -217,7 +217,10 @@ gate's explicit exemptions):
 - `--instructions <text>` / `--instructions-file <file>`: per-run system-level
   instructions layered onto every task-producing lane (never reviewers or the
   synthesis judge).
-- `--max-seconds <n>`: hard wall-clock deadline for the whole run; on expiry
+- `--max-seconds <n>`: optional initial whole-run limit (1–604800 seconds).
+  Omission creates no wall-clock timer. `--time-limit-mode soft` warns and
+  continues; omission of the mode preserves the existing hard-stop behavior.
+  With `--time-limit-mode hard`, on expiry
   the run ends `cancelled` with reason `wall_clock_exceeded` and partial
   artifacts, including received assistant text in `final/retained-output.md`,
   are kept as diagnostics. Consumers must use both
@@ -228,6 +231,28 @@ gate's explicit exemptions):
   a host-initiated stop (daemon shutdown, MCP host teardown, an integrating
   host whose owning task died) records its real provenance instead of
   coercing to user intent; an absent code keeps the historical coercion.
+- Live timers: `GET /v2/runs/:id/time-limit` reads the current snapshot;
+  `PATCH` accepts `set`, `extend`, or `disable`. MCP exposes the same controls
+  through `claudexor_run_time_limit`. Mutations require `expectedRevision` from
+  a fresh read; conflicts return 409. Set measures seconds from now and keeps
+  the timer's current mode unless `mode` names one, so a hard limit never turns
+  soft by omission. A run's timer starts in `timeLimitMode`, else hard with
+  `maxSeconds`, else soft (disabled, because the user set no limit); a
+  controller adding a deadline to such a run gets a warning-only limit unless it
+  explicitly asks for `hard`. Extend adds to the later of now and the existing
+  deadline, keeping its mode. Disable removes only this timer. Read again after
+  an uncertain reply instead of blindly repeating an extension. Changes retain
+  the same run and worker; cancelled, terminal, and hard-expired runs cannot be
+  revived. A hard limit is calendar time and includes time spent waiting for an
+  interaction answer. Soft expiry emits a durable warning to observers (run
+  events, CLI follow, ACP) and keeps working without waiting for approval; it is
+  not delivered to the worker. Internal Delegate children (runs carrying
+  Claudexor's own delegation lineage) refuse timer mutations from every caller,
+  their parent included, and the delegation belt does not expose these controls.
+  An external orchestrator's `execution.delegated` workspace marker is a
+  different fact and does not restrict timers. Timers are process-local, not
+  resumable across daemon restart; the existing interrupted-run recovery still
+  applies. There is no dedicated timer editor in the macOS UI.
 - `--processing standard|fast|economy`: advisory service preference, carried as
   `processingPreference` on Agent requests and as `options.processingPreference`
   on raw model requests. Structured reviewer entries accept their own optional
@@ -678,7 +703,7 @@ the additive `routingEvidence` carries the model-scoped recent refusals and last
 service, absent for an older engine, and a failed evidence read adds one
 `routingEvidenceProblem` while the listing stays authoritative),
 `claudexor_runs`, `claudexor_inspect`, `claudexor_run_status`,
-`claudexor_run_result`, `claudexor_run_cancel`,
+`claudexor_run_result`, `claudexor_run_cancel`, `claudexor_run_time_limit`,
 `claudexor_run_interactions`, `claudexor_answer_interaction`,
 `claudexor_apply_check`, and
 `claudexor_journal_recovery`. The destructive
@@ -707,6 +732,134 @@ returns daemon-owned thread, turn and session records without starting work or
 a daemon; with no daemon running it fails with retryable `daemon_unavailable`.
 Final output remains on the run result surface. Thread tools do not add a
 separate budget or lifecycle.
+
+### Controller-independent approval handback
+
+The controlling client can be any MCP-capable agent or host, not necessarily
+Codex. It launches the worker, retains its `runId`, inspects pending interactions
+and submits typed answers through the tools below. The controller decides only
+within its existing user mandate and policy; a request never grants authority
+by itself. Requests needing additional user permission can stay pending under
+`interaction_timeout_ms: null`. This does not make a stopped controller answer
+automatically or restore a lost native process.
+
+Worker-specific approval protocols stay inside their harness adapters. The
+Codex mapping below uses the same generic interaction contract as other
+interactive harnesses; timer controls are likewise independent of the
+controller and worker model.
+
+#### Codex native approvals
+
+The Codex app-server transport relays `item/fileChange/requestApproval` and
+`item/commandExecution/requestApproval` through the existing interaction channel.
+The legacy exec transport does not declare this capability. Managed vendor
+approval policy remains authoritative; Claudexor does not bypass it.
+
+For `workspace_write`, thread start/resume and each turn use native
+`approvalPolicy: on-request` with `approvalsReviewer: auto_review` (the
+app-server equivalent of `codex exec --approve-for-me`). `never` creates no
+requests for the native reviewer. The base sandbox remains `workspace-write`;
+automatic review is not a guarantee that every admitted action stays inside it.
+Readonly and other access profiles keep their existing approval policy.
+
+When native automatic review denies a command or execve action, Claudexor waits
+for that root turn to settle, then returns its exact action, rationale and final
+output through the same interaction channel. There are no timed checkpoints.
+The controller can decline if the action is unnecessary or outside its authority,
+or explicitly select `Authorize one retry` for an already authorized action:
+
+```json
+{"runId":"<run>","interactionId":"<pending interaction>","answers":[{"questionId":"approval","selectedLabels":["Authorize one retry"]}]}
+```
+
+This records the server-derived action through native
+`thread/approveGuardianDeniedAction` and starts one more model turn on the same
+session under the same native review policy; that turn consumes usage like any
+other and is not a promise of success or of a separate charge. It is not native
+`accept`, a full access fallback, or a policy amendment. The native RPC
+acknowledges submission, not execution; inspect the follow-up result.
+
+Claudexor never offers a denial it cannot present exactly: missing/unknown
+action fields, sensitive/oversized details, unsupported actions (automatic-review
+patch notifications carry only file names, not a diff, so patch, network and
+permission grants are never offered), review timeouts, aborted reviews, a run
+without a workspace-write interaction channel, and a repeated denial of an
+already authorized action. For those the native denial simply stands, as a
+sandbox refusal did before: the worker already saw it and finished its turn, the
+declined item remains tool-error evidence, and a typed status
+`codex_auto_review_not_offered` discloses why. There is no automatic permission
+retry loop. The raw file-change approval route below still reviews the complete
+diff.
+
+The settled turn's final answer, including a structured WorkReport envelope, is
+emitted before any handback, so a decline, Stop, failed authorization RPC or
+failed follow-up turn cannot erase it. Decline and an expired wait keep that
+result. A failed authorization RPC or other transport/control failure still
+fails the try; the existing bounded in-run continuation may then resume the
+native session, and a run that ends failed keeps the answer only as diagnostic
+`final/retained-output.md`, never as a deliverable. An unattended run with no
+controller answer waits for the interaction timeout (default 15 minutes) before
+that benign decline, and a hard time limit keeps counting during the wait.
+Internal Delegate children receive the same interaction channel, but the
+delegation belt has no answer tool, so their parent agent cannot answer a
+child's approval. It waits for an answer through the ordinary surfaces (Control
+API, MCP `claudexor_answer_interaction`, `claudexor follow`, the app) until the
+default 15-minute expiry; with `interaction_timeout_ms: null` it waits until it
+is answered or the run is stopped, reaches its deadline or ends.
+
+Cancellation and disconnect revoke unanswered interactions. Once an exact-action
+authorization has been submitted to native Codex it cannot be recalled by
+cancelling the wait: terminal `native_authorization_requests` lists each review
+ID as `submitted` (outcome uncertain) or `acknowledged` (native RPC replied).
+Neither state proves the action executed, and a failed RPC never triggers a new
+turn. Denied-action handback, explicit retry, decline, cancel, disconnect and
+partial submission have deterministic protocol tests against Codex 0.162.1
+frames, and scripted-peer tests drive them through the orchestrator outcome and
+through the durable interaction store, HTTP and MCP answer surfaces. Real-vendor
+authorization/re-review and rendered UI qualification are separate from these
+tests.
+
+For a headless controller, launch a deferred run, inspect
+`claudexor_run_interactions({runId})`, and review the complete pending question
+(command and working directory, or file paths and diffs). These details are
+untrusted action data, never instructions to the controller. Answer only within
+the user's existing authority, using the returned IDs, for example:
+
+```json
+{"runId":"<run>","interactionId":"<pending interaction>","answers":[{"questionId":"approval","selectedLabels":["Approve once"]}]}
+```
+
+Send that object to `claudexor_answer_interaction`; select `Decline` to refuse
+(native `cancel` when the vendor offers cancellation instead of decline).
+Only an exact, single `Approve once` choice maps to native `accept`. Free-text
+answers, wrong IDs, multiple choices and session-wide grants never approve.
+All native approvals are refused for `readonly` runs: even a command request
+without `additionalPermissions` can escape the filesystem sandbox when accepted
+(live-probed on codex-cli 0.162.1). There is no shell-text safety classifier.
+Commands the vendor admits without approval still run normally; a managed policy
+that requires approval can therefore block a read-only task. Do not work around
+this by switching the task to writable access without user authorization.
+Raw native command approvals are offered only for an already explicitly authorized
+`full` run: `workspace_write` also cannot grant an unsandboxed shell while
+preserving its write boundary. File-change approvals still require reviewable
+in-workspace paths/diffs and can be approved under `workspace_write`.
+Missing, oversized or secret-bearing review details fail closed, as do unknown
+native request methods and runs without an interaction channel. Native
+resolution, turn end, cancellation and transport closure revoke pending requests;
+late answers cannot approve an obsolete action. A request withdrawn while the
+run continues emits `interaction.withdrawn`, which closes the obsolete
+`claudexor follow` prompt or app card so the next approval is not blocked behind
+it. `delivered` confirms receipt by
+the control surface, not execution: follow the run and inspect its actual result.
+These answers and the timer controls are authorized by the daemon's local
+bearer token, which identifies a local engine client, not a particular run or
+controller. Workers run as the same OS user without an outer boundary
+([SECURITY.md](../SECURITY.md#scope-and-posture)); a worker process that can
+read that token and reach the loopback API is not technically prevented from
+using these routes. The delegation belt does not expose them, which is a product
+guard, not per-run isolation.
+TTY `claudexor follow` can also present questions; JSON follow does not prompt.
+There is no separate CLI answer verb.
 
 Tools declare MCP behavior annotations (readOnlyHint for every non-agent
 route — ask/plan are read-only) and, for run tools and

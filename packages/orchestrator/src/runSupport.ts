@@ -367,7 +367,7 @@ export interface ResolvedConfigLike {
     runtime: {
       transient_retry: { max_retries: number; initial_delay_ms: number; max_delay_ms: number };
       reviewer_timeout_ms: number;
-      harness_inactivity_timeout_ms: number;
+      harness_inactivity_timeout_ms: number | null;
     };
   };
 }
@@ -389,7 +389,7 @@ export function reviewerTimeoutMs(cfg: ResolvedConfigLike): number {
   return cfg.global.runtime.reviewer_timeout_ms;
 }
 
-export function harnessInactivityTimeoutMs(cfg: ResolvedConfigLike): number {
+export function harnessInactivityTimeoutMs(cfg: ResolvedConfigLike): number | null {
   return cfg.global.runtime.harness_inactivity_timeout_ms;
 }
 

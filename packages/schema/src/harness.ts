@@ -142,8 +142,8 @@ export const HarnessCapabilities = z
       ),
     /**
      * The adapter can surface interactive user questions (interaction_requested
-     * events) and deliver typed answers back into the live session. Claude's
-     * bidirectional stream-json control protocol today; honest false elsewhere.
+     * events) and deliver typed answers back into the live session (including
+     * native approvals). Declared only on transports that implement the channel.
      */
     interactive: z
       .boolean()
@@ -335,7 +335,7 @@ export type ReadonlyMechanism = z.infer<typeof ReadonlyMechanism>;
 export const WriteMechanism = z
   .enum(["fs_sandbox", "tool_policy", "none"])
   .describe(
-    "How workspace_write access is CONFINED for a harness: a filesystem/network sandbox (codex seatbelt), a tool-permission policy with no FS/network fence (claude — an allowed shell is unconfined), or none (write intent is advisory).",
+    "How workspace_write access is CONFINED for a harness: a filesystem/network base sandbox (codex seatbelt; the harness's native automatic reviewer may still admit individual actions outside it, so fs_sandbox does not mean every admitted action stays inside), a tool-permission policy with no FS/network fence (claude — an allowed shell is unconfined), or none (write intent is advisory).",
   );
 export type WriteMechanism = z.infer<typeof WriteMechanism>;
 

@@ -1,5 +1,6 @@
 export * from "./token.js";
 export * from "./server.js";
+export * from "./run-time-limit.js";
 export * from "./delegation-admission.js";
 export * from "./writer-lease.js";
 export * from "./root-authority.js";

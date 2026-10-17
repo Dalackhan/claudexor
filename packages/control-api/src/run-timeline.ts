@@ -252,6 +252,16 @@ function timelineSeverity(
     reason.data === "readiness_preferred"
   )
     return "info";
+  if (type === "control.applied") {
+    const control = payload["control"] as Record<string, unknown> | null | undefined;
+    const timeLimit = payload["timeLimit"] as Record<string, unknown> | null | undefined;
+    if (
+      control?.["kind"] === "time_limit" &&
+      control["action"] === "reached" &&
+      timeLimit?.["mode"] === "soft"
+    )
+      return "warning";
+  }
   if (WARNING_EVENT_TYPES.has(type)) return "warning";
   return "info";
 }

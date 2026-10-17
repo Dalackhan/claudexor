@@ -395,7 +395,15 @@
           "type": "integer",
           "exclusiveMinimum": 0,
           "maximum": 604800,
-          "description": "Hard wall-clock deadline for the whole run (seconds, from scheduler start, max 7 days); on expiry the run is cancelled with reason wall_clock_exceeded and partial artifacts are kept."
+          "description": "Wall-clock limit for the whole run (seconds, max seven days). Omission disables the clock. Explicit limits cancel by default; soft mode warns and continues."
+        },
+        "timeLimitMode": {
+          "type": "string",
+          "enum": [
+            "soft",
+            "hard"
+          ],
+          "description": "Initial timer mode: soft warns and continues; hard cancels. Omission is hard with maxSeconds and soft without it."
         },
         "denyPaths": {
           "type": "array",

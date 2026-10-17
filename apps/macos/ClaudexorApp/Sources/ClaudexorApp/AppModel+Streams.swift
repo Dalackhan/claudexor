@@ -13,6 +13,7 @@ import ClaudexorKit
 extension AppModel {
     static func interactionResolutionActivityTitle(type: String, reason: String?) -> String {
         if type == "interaction.answered" { return "Answer delivered" }
+        if type == "interaction.withdrawn" { return "Question withdrawn by the agent — no answer needed" }
         if reason == "cancelled" { return "Question closed — run cancelled" }
         return "Question timed out — continuing with assumptions"
     }
@@ -540,7 +541,7 @@ extension AppModel {
                 box.appendActivity(ActivityEvent(.system, "Question: \(String(summary.prefix(200)))", at: .now))
                 Notifier.post(title: "Claudexor needs your answer", body: String(summary.prefix(120)))
             }
-        } else if type == "interaction.answered" || type == "interaction.timeout" {
+        } else if ["interaction.answered", "interaction.timeout", "interaction.withdrawn"].contains(type) {
             if let interactionId = payload["interaction_id"]?.stringValue {
                 t.pendingInteractions.removeAll { $0.interactionId == interactionId }
             }

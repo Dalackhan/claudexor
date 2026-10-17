@@ -35,6 +35,30 @@ afterEach(() => {
 });
 
 describe("InteractionRegistry disabled expiry", () => {
+  it("resolves an aborted request without ending its run or leaving a pending row", async () => {
+    const { journal, registry } = storeAndRegistry();
+    const controller = new AbortController();
+    const pending = registry.register({ ...context(null), signal: controller.signal }, {});
+    expect(registry.pendingForRun("run-1")).toHaveLength(1);
+    controller.abort();
+    await expect(pending).resolves.toEqual({ kind: "released", reason: "interrupted" });
+    expect(registry.pendingForRun("run-1")).toEqual([]);
+    expect(registry.answer("run-1", "int-1", { interaction_id: "int-1", answers: [] }).status).toBe(
+      "already_resolved",
+    );
+    journal.close();
+  });
+
+  it("does not persist a request whose signal was already aborted", async () => {
+    const { journal, registry } = storeAndRegistry();
+    const controller = new AbortController();
+    controller.abort();
+    const pending = registry.register({ ...context(null), signal: controller.signal }, {});
+    await expect(pending).resolves.toEqual({ kind: "released", reason: "interrupted" });
+    expect(registry.pendingForRun("run-1")).toEqual([]);
+    journal.close();
+  });
+
   it("does not prune a null expiry and still releases it on run terminal", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-28T00:00:00.000Z"));

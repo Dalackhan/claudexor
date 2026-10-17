@@ -1,5 +1,10 @@
 import { DaemonTransportError } from "./client-errors.js";
-import type { CancelReasonCode, CommandListQuery } from "@claudexor/schema";
+import type {
+  CancelReasonCode,
+  CommandListQuery,
+  RunTimeLimitRequest,
+  RunTimeLimitSnapshot,
+} from "@claudexor/schema";
 import { type Socket, connect } from "node:net";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
@@ -119,6 +124,9 @@ export abstract class DaemonRpcMethods {
   }
   cancel(id: string, reasonCode?: CancelReasonCode) {
     return this.call("claudexor.cancel", reasonCode ? { id, reason_code: reasonCode } : { id });
+  }
+  runTimeLimit(id: string, request: RunTimeLimitRequest) {
+    return this.call<RunTimeLimitSnapshot>("claudexor.runTimeLimit", { id, request });
   }
   fenceDelegationParent(runId: string) {
     return this.call<{ runId: string; fenced: boolean }>("claudexor.delegationFence", { runId });

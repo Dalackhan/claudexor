@@ -2384,6 +2384,8 @@ No memory, loop or store measurements impose automatic admission thresholds.
 - `GET /v2/runs/:id/produced/<path>`
 - `POST /v2/runs/:id/retry`
 - `GET /v2/runs/:id/run-again`
+- `GET /v2/runs/:id/time-limit`
+- `PATCH /v2/runs/:id/time-limit`
 - `GET /v2/secrets`
 - `POST /v2/secrets`
 - `DELETE /v2/secrets/:id`
@@ -2885,7 +2887,7 @@ EventLog at emit time (control-api audit appends continue the same sequence).
 In the daemon composition root, the lifecycle-significant events — `run.created`
 (journaled with the prompt's sha256 digest and byte length in place of the
 prompt text), `interaction.requested`, `interaction.answered`,
-`interaction.timeout`, `output.ready` and the terminal
+`interaction.timeout`, `interaction.withdrawn`, `output.ready` and the terminal
 `run.completed|run.failed|run.blocked` — also commit to the SQL event ledger of
 its global/project partition generation before live bus publication. Per-token
 `harness.event` deltas and every other progress event reach only the per-run
@@ -2948,7 +2950,9 @@ died — fabricated by no first-party site), riding the abort token into the
 terminal writers through one mapper; the projection labels them "Stopped by
 host" / "Owner task gone". `write_mechanism` similarly types how
 workspace_write is confined per harness (`fs_sandbox` | `tool_policy` |
-`none`) so lane choice by confinement never branches on a harness name.
+`none`) so lane choice by confinement never branches on a harness name;
+`fs_sandbox` names the base sandbox, and a native automatic reviewer (Codex
+workspace_write `auto_review`) may still admit single actions outside it.
 Control API, CLI, MCP, ACP, and macOS consume those typed facts rather than
 rewriting every cancellation as user intent; a legacy cancellation with no
 reason stays unknown/cancelled instead of receiving a fabricated cause.
@@ -3533,8 +3537,9 @@ credentials may be stale and need sign-in again.
 
 ### Interactive runs (waiting_on_user)
 
-Harnesses with the `interactive` capability (Claude Code via its bidirectional
-stream-json control protocol) can raise typed user questions mid-run; the
+Harnesses with the `interactive` capability (Claude Code's bidirectional
+stream-json questions and Codex app-server's native action approvals) can raise
+typed requests mid-run; the
 orchestrator OFFERS the interaction channel only to routes whose manifest
 declares `interactive`. The
 engine emits `interaction.requested` (questions, options, nullable timeout deadline),
@@ -3553,6 +3558,13 @@ expiry becomes a benign decline (`interaction.timeout`) so the model can
 continue with stated assumptions. With expiry disabled, answer, Cancel/abort,
 the run's outer deadline, terminal cleanup, daemon restart, or registry release
 still ends the wait; those releases must not be relabeled as timeouts.
+Adapters can also revoke one obsolete native request without cancelling the
+run: a runtime-only per-request abort signal releases the durable interaction as
+`interrupted`, clears the wait and never authorizes a late answer. The engine
+announces that withdrawal once as `interaction.withdrawn` (never a timeout), so
+`claudexor follow` and the macOS card close the obsolete prompt instead of
+letting it block the next question; an answer accepted in the same tick is
+disclosed as `interaction.answer_discarded` (`request_withdrawn`).
 Declined/timed-out interactive flow-control tools are benign timeline events,
 never blocking tool errors.
 
@@ -4841,6 +4853,16 @@ lease. Waiting on a typed user interaction suspends the watchdog under the
 separate finite-or-disabled interaction policy. Long active runs therefore stay
 alive while they make real progress; a tool call that streams nothing for the
 whole window remains indistinguishable from a hang and is killed.
+
+Set `runtime.harness_inactivity_timeout_ms: null` in the config to disable
+only inactivity timing; ordinary cancellation, stream cleanup, resource limits
+and explicit run deadlines remain in effect. The numeric environment override
+still takes precedence over this setting. A numeric window longer than Node's
+single-timer limit (about 24.8 days) is waited in chunks rather than shortened;
+`withInactivityWatchdog` is the one owner of that conversion. No existing persisted value is
+rewritten, and omission retains the 60-minute default. Whole-run limits are
+independent: optional soft/hard deadlines can be changed on the live run through
+the [integration controls](INTEGRATIONS.md#embedder-run-controls-v21).
 
 Run detail includes terminal state and output-ready state. `summary.state` is the
 daemon terminal/lifecycle state. `summary.outputReadyState` is

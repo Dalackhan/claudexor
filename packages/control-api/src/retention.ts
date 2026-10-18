@@ -56,6 +56,7 @@ export interface RetentionRunRecord {
 type DataRootMode = "default" | "override";
 
 export interface RetentionDeps {
+  signal?: AbortSignal;
   projects: () => RetentionProject[];
   /** The daemon's journal-projected command records (terminality truth). */
   records: () => RetentionRunRecord[];
@@ -213,7 +214,7 @@ export async function runRetentionPass(
   let truncated = false;
   let invalidated = false;
   const proofCurrent = () => {
-    if (invalidated) return false;
+    if (invalidated || deps.signal?.aborted) return false;
     try {
       if (deps.referencesCurrent?.() === false) invalidated = true;
     } catch (error) {
@@ -223,7 +224,7 @@ export async function runRetentionPass(
     return !invalidated;
   };
   const refreshProof = async () => {
-    if (invalidated) return;
+    if (invalidated || deps.signal?.aborted) return;
     try {
       await deps.refreshReferences?.();
     } catch (error) {
@@ -232,7 +233,8 @@ export async function runRetentionPass(
     }
   };
   const recoverPending = async (parent: string, kind: "runs" | "reviews", projectRoot: string) => {
-    for await (const retirement of pendingRetirements(parent, kind, dryRun, errors)) {
+    for await (const retirement of pendingRetirements(parent, kind, dryRun, errors, deps.signal)) {
+      if (deps.signal?.aborted) break;
       if (deletions >= maxDeletions) {
         truncated = true;
         break;
@@ -261,10 +263,11 @@ export async function runRetentionPass(
   };
 
   runProjects: for (const project of projects) {
+    if (deps.signal?.aborted) break;
     await refreshProof();
     if (!proofCurrent()) break;
     await recoverPending(project.runsDir, "runs", project.root);
-    if (truncated) break;
+    if (truncated || deps.signal?.aborted) break;
     const candidates: {
       runId: string;
       root: string;
@@ -298,6 +301,7 @@ export async function runRetentionPass(
     const spared = candidates.slice(0, keepLast);
     kept.recent += spared.length;
     for (const candidate of candidates.slice(keepLast)) {
+      if (deps.signal?.aborted) break;
       if (deletions >= maxDeletions) {
         truncated = true;
         break;
@@ -305,7 +309,7 @@ export async function runRetentionPass(
       let retirement: Retirement | undefined;
       try {
         const planned = new Map(dryRun ? plannedUnlinks : undefined);
-        const bytes = await treeReclaimableBytes(candidate.root, planned);
+        const bytes = await treeReclaimableBytes(candidate.root, planned, deps.signal);
         if (!dryRun)
           retirement = await prepareRetirement(
             project.runsDir,
@@ -381,7 +385,7 @@ export async function runRetentionPass(
     // `truncated` is set ONLY where a real candidate was skipped (above), so
     // exhausting the cap on the very last deletable tree never makes the pass
     // claim "run gc again to continue" with nothing left to do.
-    if (truncated) break;
+    if (truncated || deps.signal?.aborted) break;
   }
 
   for (const project of projects) {
@@ -392,7 +396,7 @@ export async function runRetentionPass(
     // Checked BEFORE the cap so a project with nothing to sweep never makes
     // the pass claim it was truncated.
     if (!project.reviewsDir) continue;
-    if (truncated) break;
+    if (truncated || deps.signal?.aborted) break;
     // `.claudexor/reviews` lives inside the USER repo: fence the PARENT before
     // ever walking it. A repo that ships `.claudexor` or `.claudexor/reviews`
     // as a symlink must not redirect readdir/rmSync outside the repo (a real
@@ -406,8 +410,9 @@ export async function runRetentionPass(
     }
     const reviewsDir = fenced.path;
     await recoverPending(reviewsDir, "reviews", project.root);
-    if (truncated) break;
+    if (truncated || deps.signal?.aborted) break;
     for (const name of await listSubdirs(reviewsDir)) {
+      if (deps.signal?.aborted) break;
       // Standalone diff-review trees only — `.claudexor/` in a user repo is
       // user-owned config; the engine deletes nothing there but its own
       // `diff-*` runtime debris, never following a symlinked leaf either.
@@ -419,12 +424,13 @@ export async function runRetentionPass(
         if (statSync(path).mtimeMs > reviewCutoff) continue;
         // The cap is checked once this IS a real deletion candidate, so a
         // truncation disclosure always means work was genuinely left behind.
+        if (deps.signal?.aborted) break;
         if (deletions >= maxDeletions) {
           truncated = true;
           break;
         }
         const planned = new Map(dryRun ? plannedUnlinks : undefined);
-        const bytes = await treeReclaimableBytes(path, planned);
+        const bytes = await treeReclaimableBytes(path, planned, deps.signal);
         if (!dryRun) retirement = await prepareRetirement(reviewsDir, name, null);
         await refreshProof();
         if (!proofCurrent()) break;
@@ -473,8 +479,13 @@ export async function runRetentionPass(
 
   for (const project of projects) {
     try {
-      if (invalidated) break;
-      freedBytes += await prunePatchObjects(dirname(project.runsDir), dryRun, plannedUnlinks);
+      if (invalidated || deps.signal?.aborted) break;
+      freedBytes += await prunePatchObjects(
+        dirname(project.runsDir),
+        dryRun,
+        plannedUnlinks,
+        deps.signal,
+      );
     } catch (error) {
       errors.push(`patch objects: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -487,7 +498,7 @@ export async function runRetentionPass(
   // receipt byte-compatible with pre-feature engines, so an old strict
   // receipt schema never rejects the reply to a mutating verb it already ran.
   let dataRootUnrecognized: string[] | undefined;
-  if (request.data_root_report === true && deps.dataRoot) {
+  if (!deps.signal?.aborted && request.data_root_report === true && deps.dataRoot) {
     try {
       dataRootUnrecognized = await scanDataRootUnrecognized(
         deps.dataRoot,
@@ -498,6 +509,11 @@ export async function runRetentionPass(
         `data root scan (${deps.dataRoot}): ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+  }
+
+  if (deps.signal?.aborted) {
+    deps.onTruncated?.();
+    errors.push("retention cancelled; pass truncated; run gc again to resume remaining work");
   }
 
   return ControlGcReceipt.parse({

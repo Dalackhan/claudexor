@@ -250,6 +250,7 @@ export async function* pendingRetirements(
   kind: "runs" | "reviews",
   dryRun: boolean,
   errors: string[],
+  signal?: AbortSignal,
 ): AsyncGenerator<Retirement> {
   const holding = join(parent, RETIRING);
   let entries;
@@ -263,6 +264,7 @@ export async function* pendingRetirements(
     return;
   }
   for (const entry of entries) {
+    if (signal?.aborted) return;
     const claim = join(holding, entry.name);
     try {
       if (!entry.isDirectory() || !entry.name.startsWith("claim-"))

@@ -12,6 +12,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ArtifactStore } from "@claudexor/artifact-store";
 import { sqlFixture } from "../../daemon/src/store/test-support/sql-fixture.js";
+import { scheduleStartupRetention } from "./retention-schedule.js";
+import type { ControlGcReceipt } from "@claudexor/schema";
 import { createRetentionRunner } from "./retention-service.js";
 
 const hook = vi.hoisted(() => ({
@@ -194,4 +196,46 @@ it("keeps remaining candidates when a changed reference owner becomes unreadable
   expect(receipt.deleted_runs).toEqual([]);
   expect(receipt.errors.join()).toContain("reference refresh failed");
   expect(existsSync(join(held, "final", "failure.yaml"))).toBe(true);
+});
+
+it("stops a scheduled pass promptly and resumes its remaining candidates", async () => {
+  const paths = Array.from({ length: 24 }, (_, i) => oldRun(`cancel-${i}`));
+  const gc = runner();
+  let receipt: ControlGcReceipt | undefined;
+  const scheduled = Object.assign(async (request: Parameters<typeof gc>[0]) => {
+    receipt = await gc(request);
+    return receipt;
+  }, gc);
+  let reached!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  let stopping: Promise<void> | undefined;
+  let stoppedAt = 0;
+  const stop = scheduleStartupRetention(scheduled, {
+    logPath: join(root, "retention.log"),
+    shuttingDown: () => false,
+    delayMs: 1,
+  });
+  hook.afterPrepare = () => {
+    if (stopping) return;
+    stoppedAt = performance.now();
+    stopping = stop();
+    reached();
+  };
+  try {
+    await ready;
+    await stopping;
+    expect(performance.now() - stoppedAt).toBeLessThan(3000);
+    expect(receipt!.deleted_runs.length).toBeLessThan(paths.length);
+    expect(receipt!.errors.join()).toContain("cancelled");
+    expect(gc.hasMore!(receipt)).toBe(true);
+    hook.afterPrepare = undefined;
+    const resumed = await gc({ dry_run: false });
+    expect(resumed.deleted_runs.length + receipt!.deleted_runs.length).toBe(paths.length);
+    expect(resumed.errors).toEqual([]);
+    for (const path of paths) expect(existsSync(join(path, "tombstone.yaml"))).toBe(true);
+  } finally {
+    await stop();
+  }
 });

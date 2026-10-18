@@ -7,6 +7,7 @@ import { join } from "node:path";
 export async function treeReclaimableBytes(
   root: string,
   removed: Map<string, number>,
+  signal?: AbortSignal,
 ): Promise<number> {
   let total = 0;
   const count = (info: Stats) => {
@@ -17,6 +18,7 @@ export async function treeReclaimableBytes(
   };
   const walk = async (dir: string): Promise<void> => {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
+      signal?.throwIfAborted();
       const path = join(dir, entry.name);
       if (entry.isDirectory()) await walk(path);
       else if (entry.isFile()) {

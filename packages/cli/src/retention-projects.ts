@@ -13,16 +13,19 @@ export async function retentionProjects(
   noProjectRoot: string,
   healthyRoots: ReadonlySet<string>,
   errors: string[] = [],
+  signal?: AbortSignal,
 ): Promise<RetentionProject[]> {
   const projects: RetentionProject[] = [];
   const byHash = new Map<string, string>();
   for (const root of references.projectRoots) {
     await yieldToAdmission();
+    signal?.throwIfAborted();
     byHash.set(basename(projectRuntimeDir(root)), root);
   }
   byHash.set(basename(projectRuntimeDir(noProjectRoot)), noProjectRoot);
   const ownedRoots = new Set([noProjectRoot]);
   for (const root of references.registeredProjectRoots) {
+    signal?.throwIfAborted();
     try {
       if ((await stat(root)).isDirectory()) ownedRoots.add(root);
     } catch (error) {
@@ -46,6 +49,7 @@ export async function retentionProjects(
         protectedHashes.has(entry.name)
       )
         continue;
+      signal?.throwIfAborted();
       const runtime = join(directory, entry.name);
       if (references.blocked) {
         errors.push(`namespace ${byHash.get(entry.name) ?? runtime} kept: ${references.blocked}`);
@@ -67,6 +71,7 @@ export async function retentionProjects(
   const inventoriedRoots = new Set(projects.map((project) => project.root));
   // A healthy repository can contain review debris before its first run.
   for (const root of healthyRoots) {
+    signal?.throwIfAborted();
     if (
       references.blocked ||
       references.protectedProjectRoots.has(root) ||

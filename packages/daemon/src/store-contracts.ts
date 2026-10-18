@@ -100,9 +100,10 @@ export interface ProjectThreadPort {
   /** Synchronous live ownership read immediately before a root's lane sweep. */
   retentionLaneThreadIds?(root: string): Set<string>;
   /** Cooperative served listing for maintenance, including unfinished purges. */
-  retentionThreads(): Promise<Thread[]>;
+  retentionThreads(signal?: AbortSignal): Promise<Thread[]>;
   retentionReferences(
     ignoreThreadIds?: ReadonlySet<string>,
+    signal?: AbortSignal,
   ): Promise<import("./store/retention-references.js").DiskRetentionReferences>;
   registerProject(input: RegisterProject): ProjectRegistration;
   relinkProject(id: string, root: string): Project;

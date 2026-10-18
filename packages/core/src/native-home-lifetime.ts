@@ -2,6 +2,7 @@ import type { GcNativeHomeReport } from "@claudexor/schema";
 import type { EnvMap } from "./adapter.js";
 
 export interface NativeHomeRetentionInput {
+  signal?: AbortSignal;
   home: string;
   protectedSessionIds: ReadonlySet<string>;
   olderThan: number;

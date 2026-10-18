@@ -143,3 +143,28 @@ it.each(["changed", "unreadable"])(
     expect(files.some((file) => existsSync(file))).toBe(false);
   },
 );
+
+it("returns a partial resumable receipt when cancelled between native files", async () => {
+  const f = fixture();
+  const files = [f.seed(1), f.seed(2), f.seed(3)];
+  const cancel = new AbortController();
+  const result = await f.lifetime.prune({
+    home: f.home,
+    protectedSessionIds: new Set(),
+    olderThan: Date.now() - 30 * 86400000,
+    dryRun: false,
+    maxDeletions: 500,
+    signal: cancel.signal,
+    canPrune: () => {
+      cancel.abort();
+      return true;
+    },
+  });
+  expect(result.deleted_files).toHaveLength(1);
+  expect(result.truncated).toBe(true);
+  expect(result.errors.join()).toContain("cancelled");
+  const next = await f.prune();
+  expect(next.deleted_files).toHaveLength(2);
+  expect(next.errors).toEqual([]);
+  expect(files.some((file) => existsSync(file))).toBe(false);
+});

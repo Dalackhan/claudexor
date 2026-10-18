@@ -3155,7 +3155,7 @@ writes and unrelated metadata do not restart it. References accumulate during a 
 and lifecycle records refresh before the synchronous last proof and expiration marker.
 Large change batches yield between reads; an unreadable owner, changed project/generation
 topology, or a burst exceeding one final synchronous read page keeps remaining candidates
-and schedules a fresh pass. The pass releases its observer even after failure. Patch-cache
+and schedules a fresh pass. The pass releases its observer even after failure. Stop, restart and storage recovery cancel all admitted retention passes, including queued manual requests. Inventory checks cancellation between rows/projects and deletion between candidates/native files; the receipt is truncated and the next pass resumes unfinished work. A published expiration marker retains its recovery intent until cleanup completes. Patch-cache
 retirement rechecks directory identity and current link counts before unlink.
 It is also exposed as the schema-first control op
 `POST /v2/maintenance/gc` (dry-run first-class, typed receipt disclosing

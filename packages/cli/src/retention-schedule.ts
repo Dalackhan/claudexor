@@ -50,6 +50,7 @@ export function scheduleStartupRetention(
   return async () => {
     stopped = true;
     clearTimeout(timer);
+    await runner.cancel?.();
     await flight;
   };
 }

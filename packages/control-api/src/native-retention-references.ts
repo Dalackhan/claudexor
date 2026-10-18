@@ -35,6 +35,7 @@ async function readOptional(path: string): Promise<string | null> {
 export async function retainedNativeSessions(
   sessions: Map<string, Set<string>>,
   ignoredRunIds: ReadonlySet<string> = new Set(),
+  signal?: AbortSignal,
 ): Promise<Map<string, Set<string>>> {
   const result = new Map([...sessions].map(([harness, ids]) => [harness, new Set(ids)]));
   const add = (harness: string, id: string) => {
@@ -44,9 +45,11 @@ export async function retainedNativeSessions(
   };
   const projects = join(userConfigDir(), "projects");
   for (const hash of await directories(projects)) {
+    signal?.throwIfAborted();
     if (!/^[0-9a-f]{64}$/.test(hash)) continue;
     const runs = join(projects, hash, "runs");
     for (const id of await directories(runs)) {
+      signal?.throwIfAborted();
       if (id === RETIRING || ignoredRunIds.has(id)) continue;
       const run = join(runs, id);
       const final = join(run, "final");
@@ -60,6 +63,7 @@ export async function retainedNativeSessions(
       }
       const attempts = join(run, "attempts");
       for (const attempt of await directories(attempts)) {
+        signal?.throwIfAborted();
         const text = await readOptional(join(attempts, attempt, "session-capsule.json"));
         if (text === null) continue;
         const capsule = SessionCapsule.parse(JSON.parse(text));

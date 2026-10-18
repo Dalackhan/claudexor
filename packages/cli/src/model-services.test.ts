@@ -1275,17 +1275,30 @@ describe("production model service composition", () => {
 
   it("keeps legacy GC receipt shape and exposes model cleanup only on request", async () => {
     const f = await fixture();
-    const gc = f.services.withRetention(async (request) =>
-      ControlGcReceipt.parse({
-        dry_run: request.dry_run,
-        started_at: new Date().toISOString(),
-        finished_at: new Date().toISOString(),
-        policy: { runs_max_age_days: 30, reviews_max_age_days: 14, keep_last_runs_per_project: 1 },
-        examined_runs: 0,
-        kept: {},
-        freed_bytes: 0,
-      }),
+    const cancel = vi.fn(async () => {});
+    const hasMore = () => true;
+    const gc = f.services.withRetention(
+      Object.assign(
+        async (request: { dry_run: boolean }) =>
+          ControlGcReceipt.parse({
+            dry_run: request.dry_run,
+            started_at: new Date().toISOString(),
+            finished_at: new Date().toISOString(),
+            policy: {
+              runs_max_age_days: 30,
+              reviews_max_age_days: 14,
+              keep_last_runs_per_project: 1,
+            },
+            examined_runs: 0,
+            kept: {},
+            freed_bytes: 0,
+          }),
+        { cancel, hasMore },
+      ),
     );
+    await gc.cancel!();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(gc.hasMore).toBe(hasMore);
     const reconcile = vi
       .spyOn(f.services.operations, "reconcileResources")
       .mockReturnValue({ released: ["model-ref"], errors: ["cleanup pending"] });

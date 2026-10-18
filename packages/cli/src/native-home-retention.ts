@@ -11,6 +11,7 @@ import { buildRegistry } from "./registry.js";
 import { retainedNativeSessions } from "@claudexor/control-api";
 
 export interface NativeRetentionRequest {
+  signal?: AbortSignal;
   dryRun: boolean;
   olderThan: number;
   ignoredRunIds: ReadonlySet<string>;
@@ -43,8 +44,12 @@ export function createNativeHomeRetention(deps: {
       let blocked: string | null = null;
       let canPrune = () => false;
       try {
-        const snapshot = await deps.threads.retentionReferences(request.ignoredThreadIds);
+        const snapshot = await deps.threads.retentionReferences(
+          request.ignoredThreadIds,
+          request.signal,
+        );
         closeReferences = () => snapshot.close?.();
+        request.signal?.throwIfAborted();
         if (snapshot.blocked) throw new Error(snapshot.blocked);
         if (
           deps.isBusy() ||
@@ -60,14 +65,22 @@ export function createNativeHomeRetention(deps: {
           );
         canPrune = () => {
           try {
-            return (snapshot.nativeCurrent ?? snapshot.isCurrent)() && !deps.isBusy();
+            return (
+              !request.signal?.aborted &&
+              (snapshot.nativeCurrent ?? snapshot.isCurrent)() &&
+              !deps.isBusy()
+            );
           } catch {
             return false;
           } // Keep partial receipts when a new owner is unreadable.
         };
         await snapshot.refresh?.();
         if (!canPrune()) throw new Error("native retention references changed; homes kept");
-        references = await retainedNativeSessions(snapshot.nativeSessions, request.ignoredRunIds);
+        references = await retainedNativeSessions(
+          snapshot.nativeSessions,
+          request.ignoredRunIds,
+          request.signal,
+        );
         await snapshot.refresh?.();
         if (!canPrune())
           throw new Error(
@@ -83,6 +96,7 @@ export function createNativeHomeRetention(deps: {
       )();
       let remaining = deps.maxDeletions ?? 500;
       for (const [harness, adapter] of registry) {
+        if (request.signal?.aborted) break;
         const lifetime = adapter.nativeHomeLifetime;
         if (!lifetime) continue; // API-only/fake adapters own no native home.
         const seen = new Set<string>();
@@ -94,6 +108,7 @@ export function createNativeHomeRetention(deps: {
           ),
         ];
         for (const profile of homes) {
+          if (request.signal?.aborted) break;
           const report: GcNativeHomeReport = {
             harness_id: harness,
             profile_id: profile?.profile_id ?? null,
@@ -133,6 +148,7 @@ export function createNativeHomeRetention(deps: {
               continue;
             }
             const pruned = await lifetime.prune({
+              signal: request.signal,
               home: report.home,
               protectedSessionIds: references.get(harness) ?? new Set(),
               olderThan: request.olderThan,
@@ -152,6 +168,10 @@ export function createNativeHomeRetention(deps: {
             );
           }
         }
+      }
+      if (request.signal?.aborted) {
+        result.truncated = true;
+        result.errors.push("native retention cancelled; remaining homes kept for next pass");
       }
       return result;
     } finally {

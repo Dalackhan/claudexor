@@ -96,6 +96,7 @@ export async function prunePatchObjects(
   runtimeDir: string,
   dryRun: boolean,
   plannedUnlinks: ReadonlyMap<string, number> = new Map(),
+  signal?: AbortSignal,
 ): Promise<number> {
   const directory = join(runtimeDir, "patches");
   const directoryStat = await lstat(directory).catch((error: NodeJS.ErrnoException) => {
@@ -109,6 +110,7 @@ export async function prunePatchObjects(
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (!entry.isFile() || !/^[0-9a-f]{64}\.patch$/.test(entry.name)) continue;
     await yieldToAdmission();
+    if (signal?.aborted) break;
     const currentDirectory = lstatSync(directory);
     if (
       !currentDirectory.isDirectory() ||

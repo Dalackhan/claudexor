@@ -93,10 +93,11 @@ export function retentionChanges(store: EngineStore) {
     }
   };
   return {
-    async refresh(read: (change: Change) => void) {
+    async refresh(read: (change: Change) => void, signal?: AbortSignal) {
       // Capture a finite batch; newly arriving work is handled by the final
       // synchronous check or the next cooperative refresh.
       for (const key of [...pending.keys()]) {
+        signal?.throwIfAborted();
         readOne(key, read);
         await yieldToAdmission();
       }

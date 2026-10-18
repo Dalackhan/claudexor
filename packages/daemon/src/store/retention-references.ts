@@ -35,7 +35,10 @@ export interface DiskRetentionReferences {
 
 /** Maintenance's served thread listing, including unfinished purges. Unlike
  * public synchronous listing it does not stat every registered project root. */
-export async function diskRetentionThreads(store: EngineStore): Promise<Thread[]> {
+export async function diskRetentionThreads(
+  store: EngineStore,
+  signal?: AbortSignal,
+): Promise<Thread[]> {
   const result: Thread[] = [];
   const served = new Map<number, boolean>();
   const roots = new Map(
@@ -52,9 +55,11 @@ export async function diskRetentionThreads(store: EngineStore): Promise<Thread[]
     store,
     "thread",
     "pid,body",
+    signal,
   )) {
     for (const row of rows) {
       await yieldToAdmission();
+      signal?.throwIfAborted();
       if (!served.has(row.pid)) served.set(row.pid, isServedPid(store, row.pid));
       if (!served.get(row.pid)) continue;
       const thread = Thread.parse(decodeBody(row));
@@ -79,6 +84,7 @@ export async function diskRetentionThreads(store: EngineStore): Promise<Thread[]
 export async function diskRetentionReferences(
   store: EngineStore,
   ignoreThreadIds: ReadonlySet<string> = new Set(),
+  signal?: AbortSignal,
 ): Promise<DiskRetentionReferences> {
   const changesObserved = retentionChanges(store);
   try {
@@ -97,9 +103,11 @@ export async function diskRetentionReferences(
       store,
       "thread",
       "pid,state,body",
+      signal,
     )) {
       for (const row of rows) {
         await yieldToAdmission();
+        signal?.throwIfAborted();
         const thread = reader.thread(row);
         if (!thread) continue;
         for (const sessionRow of store
@@ -115,6 +123,7 @@ export async function diskRetentionReferences(
           .prepare("SELECT pid,thread_id,body FROM turn WHERE thread_id=?")
           .all(thread.id) as Array<{ pid: number; thread_id: string; body: Uint8Array }>) {
           await yieldToAdmission();
+          signal?.throwIfAborted();
           reader.turn(turnRow, thread);
         }
       }
@@ -123,7 +132,7 @@ export async function diskRetentionReferences(
       .prepare("SELECT pid,run_id FROM interaction WHERE state='pending'")
       .all() as Array<{ pid: number; run_id: string }>)
       if (retained(row.pid)) reader.add(row.run_id);
-    const commands = await commandRetentionReferences(store, retained, reader.runs);
+    const commands = await commandRetentionReferences(store, retained, reader.runs, signal);
     const readChange = ({
       table,
       id,
@@ -139,7 +148,7 @@ export async function diskRetentionReferences(
       } else if (table !== "project" && table !== "partition") reader.refresh(table, id);
     };
     const recheck = () => changesObserved.current(readChange);
-    const refresh = () => changesObserved.refresh(readChange);
+    const refresh = () => changesObserved.refresh(readChange, signal);
     await refresh();
     for (const root of reader.roots) roots.add(root);
     return {

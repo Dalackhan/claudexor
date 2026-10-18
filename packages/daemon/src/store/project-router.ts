@@ -292,11 +292,11 @@ export class SqlProjectRouter {
     }
     return { clearedThreads, invalidatedSessions };
   }
-  retentionReferences(ignoreThreadIds?: ReadonlySet<string>) {
-    return diskRetentionReferences(this.store, ignoreThreadIds);
+  retentionReferences(ignoreThreadIds?: ReadonlySet<string>, signal?: AbortSignal) {
+    return diskRetentionReferences(this.store, ignoreThreadIds, signal);
   }
-  retentionThreads() {
-    return diskRetentionThreads(this.store);
+  retentionThreads(signal?: AbortSignal) {
+    return diskRetentionThreads(this.store, signal);
   }
   retentionLaneThreadIds(root: string): Set<string> {
     const global = requireServedGeneration(this.store, this.projects.global().pid);

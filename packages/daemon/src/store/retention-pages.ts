@@ -8,6 +8,7 @@ export async function* retentionPages<T>(
   store: EngineStore,
   table: "thread" | "command",
   columns: string,
+  signal?: AbortSignal,
 ): AsyncGenerator<T[]> {
   const page = store.prepare(
     `SELECT rowid AS retention_rowid,${columns} FROM ${table} NOT INDEXED
@@ -15,6 +16,7 @@ export async function* retentionPages<T>(
   );
   let after = 0;
   for (;;) {
+    signal?.throwIfAborted();
     const rows = page.all(after) as Array<T & { retention_rowid: number }>;
     if (!rows.length) return;
     yield rows;

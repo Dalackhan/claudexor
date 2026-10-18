@@ -22,6 +22,14 @@ async function prune(input: NativeHomeRetentionInput) {
     kept_unknown: 0,
     truncated: false,
   };
+  const cancelled = () => {
+    if (!input.signal?.aborted) return false;
+    result.truncated = true;
+    if (!result.errors.length)
+      result.errors.push(`native retention cancelled for ${input.home}; resume next pass`);
+    return true;
+  };
+  if (cancelled()) return result;
   const protectedIds = new Set(
     [...input.protectedSessionIds].map((id) => {
       if (!SESSION_ID.test(id)) throw new Error("unrecognized Codex session reference; home kept");
@@ -40,6 +48,7 @@ async function prune(input: NativeHomeRetentionInput) {
   const groups = new Map<string, Array<{ path: string; stat: Stats }>>();
   const scan = async (dir: string, depth: number): Promise<void> => {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (cancelled()) return;
       const path = join(dir, entry.name);
       if (
         depth > 0 &&
@@ -63,6 +72,7 @@ async function prune(input: NativeHomeRetentionInput) {
   // Complete inventory before the first unlink; a failed read deletes nothing.
   await scan(sessions, 3);
   for (const [id, parts] of groups) {
+    if (cancelled()) return result;
     if (protectedIds.has(id)) {
       result.kept_referenced += parts.length;
       continue;
@@ -72,6 +82,7 @@ async function prune(input: NativeHomeRetentionInput) {
       continue;
     }
     await yieldToAdmission();
+    if (cancelled()) return result;
     let current: Stats[];
     try {
       current = parts.map((part) => lstatSync(part.path));
@@ -93,6 +104,7 @@ async function prune(input: NativeHomeRetentionInput) {
       continue;
     }
     for (const [i, part] of parts.entries()) {
+      if (cancelled()) return result;
       if (result.deleted_files.length >= input.maxDeletions) {
         result.truncated = true;
         return result;

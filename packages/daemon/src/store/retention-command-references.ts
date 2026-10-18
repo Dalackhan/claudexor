@@ -36,6 +36,7 @@ export async function commandRetentionReferences(
   store: EngineStore,
   retained: (pid: number) => boolean,
   referencedRunIds = new Set<string>(),
+  signal?: AbortSignal,
 ) {
   const blobs = new BlobFiles(store);
   const aliases = new Map<string, string>();
@@ -92,9 +93,10 @@ export async function commandRetentionReferences(
       record(row);
     }
   };
-  for await (const rows of retentionPages<CommandRow>(store, "command", COLUMNS)) {
+  for await (const rows of retentionPages<CommandRow>(store, "command", COLUMNS, signal)) {
     for (const row of rows) {
       await yieldToAdmission();
+      signal?.throwIfAborted();
       read(row);
     }
   }

@@ -1,21 +1,50 @@
-import { existsSync, lstatSync, realpathSync, renameSync } from "node:fs";
-import { lstat, mkdir, mkdtemp, open, readdir, readFile, rm } from "node:fs/promises";
+import { constants, copyFileSync, existsSync, lstatSync, realpathSync } from "node:fs";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  readdir,
+  readFile,
+  rm,
+  rmdir,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { parse as yamlParse } from "yaml";
 import { fsyncDirectoryAsync } from "@claudexor/util";
+import { treeReclaimableBytes } from "./retention-bytes.js";
 
-/** Private, same-filesystem claims; never ordinary run/artifact candidates. */
+/** Private preparation/recovery records, never ordinary artifact candidates. */
 export const RETIRING = ".retiring";
 const TOMBSTONE = "tombstone.yaml";
-type Intent = { version: 1; name: string; tombstone: string | null };
+const REVIEW_MARKER = ".retired-by-retention.json";
+type Intent = {
+  version: 2;
+  name: string;
+  tombstone: string | null;
+  dev: string;
+  ino: string;
+  children: string[];
+};
+const safeName = (name: unknown): name is string =>
+  typeof name === "string" && /^[^/\\\0]+$/.test(name) && name !== "." && name !== "..";
 
 function validateIntent(value: unknown, kind: "runs" | "reviews"): Intent {
   const intent = value as Intent | null;
   if (
     !intent ||
-    intent.version !== 1 ||
+    intent.version !== 2 ||
     typeof intent.name !== "string" ||
-    !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(intent.name)
+    !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(intent.name) ||
+    typeof intent.dev !== "string" ||
+    !/^\d+$/.test(intent.dev) ||
+    typeof intent.ino !== "string" ||
+    !/^\d+$/.test(intent.ino) ||
+    !Array.isArray(intent.children) ||
+    !intent.children.every(safeName) ||
+    new Set(intent.children).size !== intent.children.length
   )
     throw new Error("invalid retirement intent");
   if (kind === "reviews") {
@@ -31,6 +60,8 @@ function validateIntent(value: unknown, kind: "runs" | "reviews"): Intent {
     )
       throw new Error("invalid retirement tombstone");
   }
+  if (intent.children.includes(intent.tombstone === null ? REVIEW_MARKER : TOMBSTONE))
+    throw new Error("retirement marker is not payload");
   return intent;
 }
 
@@ -44,22 +75,27 @@ async function durableText(path: string, text: string): Promise<void> {
   }
 }
 
-/** Preparing may yield. The caller MUST recheck every protection immediately
- * before commit(), which does not yield between detachment and tombstone publish.
- * A crash after detachment leaves an intent the next pass can finish. */
+/** Preparing yields. The caller rechecks all protections immediately before
+ * commit(), which publishes the small expiration marker without yielding.
+ * Readers see the existing tombstone while physical cleanup proceeds. */
 export class Retirement {
   readonly tree: string;
   private committed: boolean;
   private readonly parentReal: string;
   private readonly holdingIdentity;
   private readonly claimIdentity;
+  private readonly marker: string;
+  private readonly markerText: string;
   constructor(
     readonly parent: string,
     readonly claim: string,
     readonly intent: Intent,
   ) {
-    this.tree = join(claim, "tree");
-    this.committed = existsSync(this.tree);
+    this.tree = join(parent, intent.name);
+    this.marker = join(this.tree, intent.tombstone === null ? REVIEW_MARKER : TOMBSTONE);
+    this.markerText =
+      intent.tombstone ?? JSON.stringify({ reason: "retention", name: intent.name });
+    this.committed = existsSync(this.marker);
     this.parentReal = realpathSync(parent);
     this.holdingIdentity = lstatSync(join(parent, RETIRING));
     this.claimIdentity = lstatSync(claim);
@@ -78,60 +114,92 @@ export class Retirement {
     )
       throw new Error("retirement directory changed");
   }
+  private assertSource(): void {
+    const source = lstatSync(this.tree, { bigint: true });
+    if (
+      !source.isDirectory() ||
+      source.dev.toString() !== this.intent.dev ||
+      source.ino.toString() !== this.intent.ino
+    )
+      throw new Error("retirement target has changed; kept payload");
+  }
   commit(): void {
     this.assertHolding();
-    renameSync(join(this.parent, this.intent.name), this.tree);
-    this.committed = true;
-    this.publishTombstone();
-  }
-  private publishTombstone(): void {
-    if (this.intent.tombstone === null) return;
-    const target = join(this.parent, this.intent.name);
-    if (existsSync(target)) throw new Error("retirement target already exists");
-    renameSync(join(this.claim, "marker"), target);
-  }
-  /** Publish was interrupted, or completed before a crash. Never replace new
-   * data at the original path when recovering a claim. */
-  async recover(): Promise<void> {
-    this.assertHolding();
-    const target = join(this.parent, this.intent.name);
-    if (this.intent.tombstone !== null && existsSync(target)) {
-      if (
-        !lstatSync(target).isDirectory() ||
-        (await readdir(target)).join() !== TOMBSTONE ||
-        (await readFile(join(target, TOMBSTONE), "utf8")) !== this.intent.tombstone
-      )
-        throw new Error("retirement target has changed; kept detached tree");
-    } else if (existsSync(target)) {
-      throw new Error("review retirement target has changed; kept detached tree");
-    } else {
-      if (this.intent.tombstone !== null && !existsSync(join(this.claim, "marker"))) {
-        await mkdir(join(this.claim, "marker"), { mode: 0o700 });
-        await durableText(join(this.claim, "marker", TOMBSTONE), this.intent.tombstone);
-        await fsyncDirectoryAsync(join(this.claim, "marker"));
-        await fsyncDirectoryAsync(this.claim);
-      }
-      this.assertHolding();
-      this.publishTombstone();
+    this.assertSource();
+    try {
+      // A tiny, exclusive file publication; never rename a whole directory.
+      // File contents and the entry are flushed asynchronously BEFORE cleanup.
+      copyFileSync(join(this.claim, "marker"), this.marker, constants.COPYFILE_EXCL);
+    } finally {
+      // Even a partial failed publication must retain its recovery evidence.
+      this.committed = existsSync(this.marker);
     }
   }
-  async finish(): Promise<string[]> {
+  async recover(): Promise<void> {
     this.assertHolding();
-    // Persist the detach and tombstone BEFORE removing any detached bytes.
-    await fsyncDirectoryAsync(this.claim);
-    await fsyncDirectoryAsync(this.parent);
-    await rm(this.tree, { recursive: true, force: true });
-    // Physical deletion is now a fact; a failed bookkeeping unlink must not
-    // erase it from the receipt. Empty claims are harmless and retried later.
+    this.assertSource();
+    if (
+      !(await lstat(this.marker)).isFile() ||
+      (await readFile(this.marker, "utf8")) !== this.markerText
+    )
+      throw new Error("retirement marker has changed; kept payload");
+    const permitted = new Set([
+      ...this.intent.children,
+      this.intent.tombstone === null ? REVIEW_MARKER : TOMBSTONE,
+    ]);
+    if ((await readdir(this.tree)).some((name) => !permitted.has(name)))
+      throw new Error("retirement target has changed; kept payload");
+  }
+  async reclaimableBytes(planned: Map<string, number>): Promise<number> {
+    let bytes = 0;
+    for (const name of this.intent.children)
+      bytes += await treeReclaimableBytes(join(this.tree, name), planned);
+    return bytes;
+  }
+  async finish(): Promise<string[]> {
+    await this.recover();
+    const marker = await open(this.marker, "r+");
     try {
+      await marker.sync();
+    } finally {
+      await marker.close();
+    }
+    await fsyncDirectoryAsync(this.tree);
+    this.assertHolding();
+    this.assertSource();
+    for (const name of this.intent.children)
+      await rm(join(this.tree, name), { recursive: true, force: true });
+    // Persist physical cleanup before dropping its recovery record. A crash
+    // during these unlinks leaves the marker and intent for the next pass.
+    try {
+      await fsyncDirectoryAsync(this.tree);
+      if (this.intent.tombstone === null) {
+        await unlink(this.marker);
+        await rmdir(this.tree);
+        await fsyncDirectoryAsync(this.parent);
+      }
       await rm(this.claim, { recursive: true, force: true });
       return [];
     } catch (error) {
-      return [`retirement bookkeeping: ${String(error)}`];
+      return ["retirement bookkeeping: " + String(error)];
     }
   }
   async abandon(): Promise<void> {
     if (!this.committed) await rm(this.claim, { recursive: true, force: true });
+  }
+  isCommitted(): boolean {
+    return this.committed;
+  }
+  async hasPayload(): Promise<boolean> {
+    for (const name of this.intent.children) {
+      try {
+        await lstat(join(this.tree, name));
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    return false;
   }
 }
 
@@ -140,8 +208,17 @@ export async function prepareRetirement(
   name: string,
   tombstone: string | null,
 ): Promise<Retirement> {
+  const source = await lstat(join(parent, name), { bigint: true });
+  if (!source.isDirectory()) throw new Error("retirement requires a plain source directory");
   const intent = validateIntent(
-    { version: 1, name, tombstone },
+    {
+      version: 2,
+      name,
+      tombstone,
+      dev: source.dev.toString(),
+      ino: source.ino.toString(),
+      children: await readdir(join(parent, name)),
+    },
     tombstone === null ? "reviews" : "runs",
   );
   const holding = join(parent, RETIRING);
@@ -151,11 +228,11 @@ export async function prepareRetirement(
   const claim = await mkdtemp(join(holding, "claim-"));
   try {
     await durableText(join(claim, "intent.json"), JSON.stringify(intent));
-    if (tombstone !== null) {
-      await mkdir(join(claim, "marker"), { mode: 0o700 });
-      await durableText(join(claim, "marker", TOMBSTONE), tombstone);
-      await fsyncDirectoryAsync(join(claim, "marker"));
-    }
+    await writeFile(
+      join(claim, "marker"),
+      tombstone ?? JSON.stringify({ reason: "retention", name }),
+      { mode: 0o600, flag: "wx" },
+    );
     await fsyncDirectoryAsync(claim);
     await fsyncDirectoryAsync(holding);
     await fsyncDirectoryAsync(parent);
@@ -166,8 +243,8 @@ export async function prepareRetirement(
   }
 }
 
-/** Recovery only removes claims from a previously committed expiration.
- * Prepared-but-uncommitted claims are discarded without touching the source. */
+/** Only a published expiration marker authorizes recovery. Prepared records
+ * without it are discarded without touching the original payload. */
 export async function* pendingRetirements(
   parent: string,
   kind: "runs" | "reviews",
@@ -182,7 +259,7 @@ export async function* pendingRetirements(
     entries = await readdir(holding, { withFileTypes: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-      errors.push(`${holding}: ${String(error)}`);
+      errors.push(holding + ": " + String(error));
     return;
   }
   for (const entry of entries) {
@@ -195,15 +272,15 @@ export async function* pendingRetirements(
         throw new Error("retirement intent is not a plain file");
       const intent = validateIntent(JSON.parse(await readFile(intentPath, "utf8")), kind);
       const retirement = new Retirement(parent, claim, intent);
-      if (!existsSync(retirement.tree)) {
+      if (!retirement.isCommitted()) {
         if (!dryRun) await retirement.abandon();
-      } else if (!lstatSync(retirement.tree).isDirectory()) {
-        throw new Error("retired tree is not a plain directory");
       } else {
-        yield retirement;
+        await retirement.recover();
+        if (await retirement.hasPayload()) yield retirement;
+        else if (!dryRun) errors.push(...(await retirement.finish()));
       }
     } catch (error) {
-      errors.push(`${claim}: ${String(error)}`);
+      errors.push(claim + ": " + String(error));
     }
   }
 }

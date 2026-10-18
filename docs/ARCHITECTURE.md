@@ -3159,12 +3159,13 @@ ends pending delivery but does not delete artifacts immediately or bypass other
 retention protections. A
 retired run leaves a tombstone projection behind, so its artifacts answer
 with a typed 410 `run_expired_by_retention` — never a mysterious 404. The
-last protection check, same-filesystem detachment and prepared tombstone publish
-do not yield. Recursive deletion then runs asynchronously against the detached
-tree, allowing admission while large trees are removed. A durable intent in the
-parent's private `.retiring` directory lets the next pass finish interrupted run
-or diff-review cleanup within the same deletion cap; preparations that never
-detached a tree leave the source untouched. A failed physical cleanup is disclosed
+last protection check and exclusive publication of the small prepared tombstone
+do not yield. Readers see that expiration while recursive deletion of the previously
+inventoried contents runs asynchronously; no directory rename blocks admission.
+A durable intent in the parent's private `.retiring` directory binds the source
+identity and child names, letting the next pass finish interrupted cleanup within
+the same deletion cap. Diff reviews use a private expiration marker and the same
+owner. Preparations without a published marker leave the source untouched. A failed physical cleanup is disclosed
 and retried, and completed deletions remain in the receipt even if bookkeeping
 cleanup fails. The
 receipt also carries an advisory `data_root_unrecognized` listing — names of

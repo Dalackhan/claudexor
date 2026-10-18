@@ -227,10 +227,10 @@ export async function runRetentionPass(
         break;
       }
       try {
+        await retirement.recover();
         const planned = new Map(dryRun ? plannedUnlinks : undefined);
-        const bytes = await treeReclaimableBytes(retirement.tree, planned);
+        const bytes = await retirement.reclaimableBytes(planned);
         if (!dryRun) {
-          await retirement.recover();
           errors.push(...(await retirement.finish()));
         } else for (const [key, value] of planned) plannedUnlinks.set(key, value);
         if (kind === "runs")

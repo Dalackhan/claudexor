@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -67,12 +68,12 @@ it("admits callbacks with a tombstone already visible while recursive removal is
   const path = seed();
   let observed = false;
   deletion.before = async (pathToRemove) => {
-    if (basename(pathToRemove) !== "tree") return;
+    if (basename(pathToRemove) !== "final") return;
     await new Promise<void>((resolve) =>
       setImmediate(() => {
         expect(readRunTombstone(path)?.run_id).toBe("old");
-        expect(existsSync(join(path, "final"))).toBe(false);
-        expect(existsSync(join(pathToRemove, "final"))).toBe(true);
+        expect(existsSync(join(path, "final"))).toBe(true);
+        expect(existsSync(join(pathToRemove, "failure.yaml"))).toBe(true);
         observed = true;
         resolve();
       }),
@@ -85,22 +86,21 @@ it("admits callbacks with a tombstone already visible while recursive removal is
   expect(receipt.errors).toEqual([]);
 });
 
-it.each(["before publish", "after publish", "lost marker"])(
+it.each(["after publish", "during cleanup"])(
   "recovers interruption %s within the existing batch cap",
   async (point) => {
     const source = seed();
+    writeFileSync(join(source, "leftover"), "leftover");
     const claim = await prepareRetirement(runs, "old", marker("old"));
-    if (point === "after publish") claim.commit();
-    else {
-      renameSync(source, claim.tree);
-      if (point === "lost marker") rmSync(join(claim.claim, "marker"), { recursive: true });
-    }
+    claim.commit();
+    if (point === "during cleanup") rmSync(join(source, "final"), { recursive: true });
     seed("neighbor");
     const preview = await pass(true, 1);
     expect(preview.deleted_runs.map((row) => row.run_id)).toEqual(["old"]);
     expect(existsSync(claim.tree)).toBe(true);
     const first = await pass(false, 1);
     expect(first.deleted_runs.map((row) => row.run_id)).toEqual(["old"]);
+    expect(first.freed_bytes).toBe(point === "after publish" ? 16 : 8);
     expect(first.errors.join()).toContain("truncated");
     expect(readRunTombstone(source)?.run_id).toBe("old");
     expect(existsSync(claim.claim)).toBe(false);
@@ -129,7 +129,7 @@ it("discards an uncommitted preparation without expiring a still-protected sourc
 it("reports failed physical removal and finishes it on the next pass", async () => {
   const source = seed();
   deletion.before = async (path) => {
-    if (basename(path) === "tree") throw new Error("fixture removal refused");
+    if (basename(path) === "final") throw new Error("fixture removal refused");
   };
   const failed = await pass();
   expect(failed.deleted_runs).toEqual([]);
@@ -154,10 +154,14 @@ it("keeps completed deletion facts when only claim bookkeeping fails", async () 
   expect(receipt.freed_bytes).toBe(8);
   expect(receipt.errors.join()).toContain("bookkeeping");
   deletion.before = async () => {};
-  expect((await pass()).deleted_runs).toEqual([]);
+  const next = await pass();
+  expect(next.deleted_runs).toEqual([]);
+  expect(next.freed_bytes).toBe(0);
+  expect(next.errors).toEqual([]);
+  expect(readdirSync(join(runs, RETIRING))).toEqual([]);
 });
 
-it("recovers detached standalone reviews without creating a run tombstone", async () => {
+it("recovers expired standalone reviews without creating a run tombstone", async () => {
   seed("diff-old", reviews);
   const claim = await prepareRetirement(reviews, "diff-old", null);
   claim.commit();
@@ -168,26 +172,42 @@ it("recovers detached standalone reviews without creating a run tombstone", asyn
   expect(receipt.errors).toEqual([]);
 });
 
-it.each(["corrupt intent", "new source", "linked claim"])(
-  "keeps an unsafe %s and still removes a valid neighbor",
-  async (kind) => {
+it.each([
+  "corrupt intent",
+  "new source",
+  "linked claim",
+  "replaced source",
+  "changed marker",
+  "escaped child",
+])("keeps an unsafe %s and still removes a valid neighbor", async (kind) => {
+  seed();
+  const claim = await prepareRetirement(runs, "old", marker("old"));
+  claim.commit();
+  if (kind === "corrupt intent") writeFileSync(join(claim.claim, "intent.json"), "unreadable");
+  if (kind === "new source") writeFileSync(join(runs, "old", "new-data"), "preserve");
+  if (kind === "replaced source") {
+    renameSync(join(runs, "old"), join(root, "preserved"));
     seed();
-    const claim = await prepareRetirement(runs, "old", marker("old"));
-    claim.commit();
-    if (kind === "corrupt intent") writeFileSync(join(claim.claim, "intent.json"), "unreadable");
-    if (kind === "new source") writeFileSync(join(runs, "old", "new-data"), "preserve");
-    if (kind === "linked claim") {
-      const target = join(root, "detached");
-      renameSync(claim.claim, target);
-      symlinkSync(target, claim.claim, "dir");
-    }
-    seed("neighbor");
-    const receipt = await pass();
-    expect(receipt.deleted_runs.map((row) => row.run_id)).toEqual(["neighbor"]);
-    expect(receipt.errors.length).toBeGreaterThan(0);
-    expect(readFileSync(join(claim.tree, "final", "failure.yaml"), "utf8")).toBe("terminal");
-  },
-);
+    writeFileSync(join(runs, "old", "tombstone.yaml"), marker("old"));
+  }
+  if (kind === "changed marker") writeFileSync(join(runs, "old", "tombstone.yaml"), "unreadable");
+  if (kind === "escaped child") {
+    const path = join(claim.claim, "intent.json");
+    const intent = JSON.parse(readFileSync(path, "utf8"));
+    intent.children = ["final", "../neighbor"];
+    writeFileSync(path, JSON.stringify(intent));
+  }
+  if (kind === "linked claim") {
+    const target = join(root, "detached");
+    renameSync(claim.claim, target);
+    symlinkSync(target, claim.claim, "dir");
+  }
+  seed("neighbor");
+  const receipt = await pass();
+  expect(receipt.deleted_runs.map((row) => row.run_id)).toEqual(["neighbor"]);
+  expect(receipt.errors.length).toBeGreaterThan(0);
+  expect(readFileSync(join(claim.tree, "final", "failure.yaml"), "utf8")).toBe("terminal");
+});
 
 it("fences a linked holding directory before preparing a claim", async () => {
   seed();

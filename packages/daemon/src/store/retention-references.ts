@@ -3,7 +3,7 @@ import { setImmediate as yieldToAdmission } from "node:timers/promises";
 import { access } from "node:fs/promises";
 import type { EngineStore } from "./store.js";
 import { decodeBody } from "./thread-rows.js";
-import { SERVED_PIDS_SQL } from "./generations.js";
+import { isServedPid } from "./generations.js";
 import { retentionPages } from "./retention-pages.js";
 
 export interface DiskRetentionReferences {
@@ -24,9 +24,7 @@ const RetainedTurn = ThreadTurn.omit({ prompt: true });
  * public synchronous listing it does not stat every registered project root. */
 export async function diskRetentionThreads(store: EngineStore): Promise<Thread[]> {
   const result: Thread[] = [];
-  const served = new Set(
-    (store.prepare(SERVED_PIDS_SQL).all() as Array<{ id: number }>).map((row) => row.id),
-  );
+  const served = new Map<number, boolean>();
   const roots = new Map(
     (
       store
@@ -43,8 +41,9 @@ export async function diskRetentionThreads(store: EngineStore): Promise<Thread[]
     "pid,body",
   )) {
     for (const row of rows) {
-      if (!served.has(row.pid)) continue;
       await yieldToAdmission();
+      if (!served.has(row.pid)) served.set(row.pid, isServedPid(store, row.pid));
+      if (!served.get(row.pid)) continue;
       const thread = Thread.parse(decodeBody(row));
       const root = roots.get(row.pid);
       if (

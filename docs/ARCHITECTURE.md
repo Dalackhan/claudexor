@@ -3177,11 +3177,16 @@ A `quarantined` generation is retired journal evidence: its rows do not own refe
 ends pending delivery but does not delete artifacts immediately or bypass other
 retention protections. Unsettled delivery commands keep the pass closed: their
 historical params do not reliably identify every source file used after an await. A
-retired run leaves a tombstone projection behind, so its artifacts answer
-with a typed 410 `run_expired_by_retention` — never a mysterious 404. The
+retired run leaves a tombstone projection behind. Tombstone-aware artifact and
+admission surfaces answer with typed 410 `run_expired_by_retention`; the HTTP Apply
+route's patch prerequisite is the existing exception described below. The
 last protection check and exclusive publication of the small prepared tombstone
 do not yield. Continuation admission refuses an expired predecessor. If older links expired, it uses the runtime carrier’s evidence reader to find an intact capsule, resumable or output source; ordinary unexpired admission does not scan evidence bodies. Earlier expired ancestors are excluded from file reads and disclosed in the successor notice. Exact Retry of expired evidence directs the caller to Run Again. Exact Retry, frozen-plan and delivery admission
-use the same expiration fence. Existing idempotent delivery receipts still replay.
+use the same expiration fence. Existing idempotent delivery receipts still replay
+at the command layer. The HTTP Apply route rereads the patch before command replay:
+repeating the same Apply key after retention removed that patch returns 404, while
+the durable command receipt remains reusable. This route behavior predates retention
+changes; receipt replay does not promise that an expired artifact is still available.
 An expired directory cannot become evidence again. Durable `context/continuation.json` lists are published through a private temporary file, file flush, atomic rename and directory flush. Unreadable reference errors name the file or SQL row and partition. A bad run-local work-product or custody file keeps that run; unreadable SQL or continuity owners hold the pass because their references can cross namespaces. Pending recovery remains confined to known project namespaces when its scope is provable.
 Readers see that expiration while recursive deletion of the previously
 inventoried contents runs asynchronously; no directory rename blocks admission.

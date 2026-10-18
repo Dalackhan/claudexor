@@ -1,14 +1,10 @@
 import { CONTINUITY_PROFILE_LOCATOR_ENV, type AdapterRegistry } from "@claudexor/core";
 import { loadConfig } from "@claudexor/config";
 import type { ProjectThreadPort } from "@claudexor/daemon";
-import {
-  isTerminalLifecycle,
-  type CredentialProfile,
-  type GcNativeHomeReport,
-} from "@claudexor/schema";
+import { type CredentialProfile, type GcNativeHomeReport } from "@claudexor/schema";
 import { noProjectRepoRoot } from "@claudexor/util";
 import { buildRegistry } from "./registry.js";
-import { retainedNativeSessions } from "@claudexor/control-api";
+import { collectNativeRunSessions, retainedNativeSessions } from "@claudexor/control-api";
 
 export interface NativeRetentionRequest {
   signal?: AbortSignal;
@@ -51,34 +47,42 @@ export function createNativeHomeRetention(deps: {
         closeReferences = () => snapshot.close?.();
         request.signal?.throwIfAborted();
         if (snapshot.blocked) throw new Error(snapshot.blocked);
-        if (
-          deps.isBusy() ||
-          snapshot.hasActiveCommands?.() ||
-          snapshot.records.some((record) => !isTerminalLifecycle(record.state))
-        )
-          throw new Error(
-            "native homes kept while a run or setup operation is active or unresolved",
-          );
         if (snapshot.protectedProjectRoots.size)
           throw new Error(
             `native homes kept: ${(snapshot.errors ?? [...snapshot.protectedProjectRoots]).join("; ")}`,
           );
-        canPrune = () =>
-          !request.signal?.aborted &&
-          (snapshot.nativeCurrent ?? snapshot.isCurrent)() &&
-          !deps.isBusy();
+        const seenRunDirs = new Set<string>();
+        references = snapshot.nativeSessions;
+        canPrune = () => {
+          if (
+            request.signal?.aborted ||
+            deps.isBusy() ||
+            !(snapshot.recheck ?? snapshot.isCurrent)()
+          )
+            return false;
+          const uncertainty = snapshot.nativeReferenceError?.();
+          if (uncertainty) throw new Error(uncertainty);
+          for (const run of snapshot.nativeWatchRunDirs ?? [])
+            collectNativeRunSessions(
+              run,
+              references,
+              seenRunDirs,
+              request.ignoredRunIds,
+              request.signal,
+            );
+          return true;
+        };
         await snapshot.refresh?.();
-        if (!canPrune()) throw new Error("native retention references changed; homes kept");
-        references = await retainedNativeSessions(
-          snapshot.nativeSessions,
+        if (!canPrune()) throw new Error("native references or setup state changed; homes kept");
+        await retainedNativeSessions(
+          references,
           request.ignoredRunIds,
           request.signal,
+          snapshot.nativeRunDirs,
+          seenRunDirs,
         );
         await snapshot.refresh?.();
-        if (!canPrune())
-          throw new Error(
-            "native retention references or idle state changed during inventory; homes kept",
-          );
+        if (!canPrune()) throw new Error("native references or setup state changed; homes kept");
       } catch (error) {
         blocked = error instanceof Error ? error.message : String(error);
         result.errors.push(`native retention: ${blocked}`);
@@ -133,17 +137,21 @@ export function createNativeHomeRetention(deps: {
             }
             seen.add(report.home);
             if (!blocked && !canPrune()) {
-              blocked = "native retention references or idle state changed; remaining homes kept";
+              blocked = "native retention references or setup state changed; remaining homes kept";
               result.errors.push(`native retention: ${blocked}`);
             }
             if (blocked) {
               report.reason = blocked;
               continue;
             }
+            // Preserve this Set identity: SQL and producer rechecks add to it
+            // while the adapter walks its home.
+            const ids = references.get(harness) ?? new Set<string>();
+            references.set(harness, ids);
             const pruned = await lifetime.prune({
               signal: request.signal,
               home: report.home,
-              protectedSessionIds: references.get(harness) ?? new Set(),
+              protectedSessionIds: ids,
               olderThan: request.olderThan,
               dryRun: request.dryRun,
               maxDeletions: remaining,

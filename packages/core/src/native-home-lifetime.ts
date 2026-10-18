@@ -8,7 +8,7 @@ export interface NativeHomeRetentionInput {
   olderThan: number;
   dryRun: boolean;
   maxDeletions: number;
-  /** Fresh idle/reference proof. Call immediately before each unlink, with no intervening await. */
+  /** Fresh reference/setup proof. Call immediately before each unlink, with no intervening await. */
   canPrune: () => boolean;
 }
 export type NativeHomeRetentionResult = Pick<

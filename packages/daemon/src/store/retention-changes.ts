@@ -68,18 +68,9 @@ export function retentionChanges(store: EngineStore) {
   const pending = new Map<string, Change>();
   let closed = false;
   let topologyChanged = false;
-  let nativeChanged = false;
   const stop = observe(store, (change) => {
     pending.set(`${change.table}:${change.id}`, change);
     if (change.table === "project" || change.table === "partition") topologyChanged = true;
-    // Even work that starts AND finishes during the file walk can write new
-    // native sources. A final idle check alone would miss it.
-    if (
-      change.table === "command" ||
-      change.table === "session" ||
-      ((change.table === "thread" || change.table === "turn") && change.operation === "INSERT")
-    )
-      nativeChanged = true;
   });
   const readOne = (key: string, read: (change: Change) => void) => {
     const change = pending.get(key);
@@ -110,7 +101,6 @@ export function retentionChanges(store: EngineStore) {
       for (const key of pending.keys()) readOne(key, read);
       return !topologyChanged;
     },
-    nativeCurrent: () => !nativeChanged,
     close() {
       closed = true;
       pending.clear();

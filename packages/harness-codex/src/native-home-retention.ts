@@ -30,13 +30,15 @@ async function prune(input: NativeHomeRetentionInput) {
     return true;
   };
   if (cancelled()) return result;
-  const protectedIds = new Set(
-    [...input.protectedSessionIds].map((id) => {
-      if (!SESSION_ID.test(id))
-        throw new Error(`unrecognized Codex session reference ${id}; home ${input.home} kept`);
-      return id.toLowerCase();
-    }),
-  );
+  const protectedIds = () =>
+    new Set(
+      [...input.protectedSessionIds].map((id) => {
+        if (!SESSION_ID.test(id))
+          throw new Error(`unrecognized Codex session reference ${id}; home ${input.home} kept`);
+        return id.toLowerCase();
+      }),
+    );
+  protectedIds(); // Reject unreadable ownership before scanning any files.
   const home = canonicalIsolationLocator(input.home, "Codex retention home");
   const sessions = join(home, "sessions");
   const sessionsStat = await lstat(sessions).catch((error: NodeJS.ErrnoException) => {
@@ -72,9 +74,9 @@ async function prune(input: NativeHomeRetentionInput) {
   };
   // Complete inventory before the first unlink; a failed read deletes nothing.
   await scan(sessions, 3);
-  for (const [id, parts] of groups) {
+  groupsLoop: for (const [id, parts] of groups) {
     if (cancelled()) return result;
-    if (protectedIds.has(id)) {
+    if (protectedIds().has(id)) {
       result.kept_referenced += parts.length;
       continue;
     }
@@ -84,26 +86,6 @@ async function prune(input: NativeHomeRetentionInput) {
     }
     await yieldToAdmission();
     if (cancelled()) return result;
-    let current: Stats[];
-    try {
-      current = parts.map((part) => lstatSync(part.path));
-    } catch (error) {
-      result.errors.push(`${id}: ${error instanceof Error ? error.message : String(error)}`);
-      continue;
-    }
-    if (
-      current.some(
-        (stat, i) =>
-          !stat.isFile() ||
-          stat.dev !== parts[i]!.stat.dev ||
-          stat.ino !== parts[i]!.stat.ino ||
-          stat.mtimeMs !== parts[i]!.stat.mtimeMs ||
-          stat.size !== parts[i]!.stat.size,
-      )
-    ) {
-      result.kept_unknown += parts.length;
-      continue;
-    }
     for (const [i, part] of parts.entries()) {
       if (cancelled()) return result;
       if (result.deleted_files.length >= input.maxDeletions) {
@@ -113,6 +95,10 @@ async function prune(input: NativeHomeRetentionInput) {
       let currentProof: boolean;
       try {
         currentProof = input.canPrune();
+        if (protectedIds().has(id)) {
+          result.kept_referenced += parts.length - i;
+          continue groupsLoop;
+        }
       } catch (error) {
         result.errors.push(
           `native retention proof unreadable; remaining files kept: ${String(error)}`,
@@ -121,16 +107,33 @@ async function prune(input: NativeHomeRetentionInput) {
       }
       if (!currentProof) {
         result.errors.push(
-          "native retention references or idle state changed; remaining files kept",
+          "native retention references or setup state changed; remaining files kept",
         );
         return result;
       }
       try {
-        // No await from this fresh proof through unlink; admission remains
-        // free during the inventory, never between proof and this action.
+        // Recheck remaining inventoried parts after the fresh proof. A changed
+        // part protects the group. No await from proof to unlink.
+        const remaining = parts.slice(i);
+        const current = remaining.map((entry) => lstatSync(entry.path));
+        if (
+          current.some((stat, index) => {
+            const before = remaining[index]!.stat;
+            return (
+              !stat.isFile() ||
+              stat.dev !== before.dev ||
+              stat.ino !== before.ino ||
+              stat.mtimeMs !== before.mtimeMs ||
+              stat.size !== before.size
+            );
+          })
+        ) {
+          result.kept_unknown += remaining.length;
+          continue groupsLoop;
+        }
         if (!input.dryRun) unlinkSync(part.path);
         result.deleted_files.push(part.path);
-        if (current[i]!.nlink === 1) result.freed_bytes += current[i]!.size;
+        if (current[0]!.nlink === 1) result.freed_bytes += current[0]!.size;
       } catch (error) {
         result.errors.push(
           `${part.path}: ${error instanceof Error ? error.message : String(error)}`,

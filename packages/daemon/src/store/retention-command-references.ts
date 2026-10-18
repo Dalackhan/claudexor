@@ -1,4 +1,8 @@
-import { isTerminalLifecycle, RecordedControlRunStartRequest } from "@claudexor/schema";
+import {
+  isTerminalLifecycle,
+  RunLifecycle,
+  RecordedControlRunStartRequest,
+} from "@claudexor/schema";
 import { readContinuationSources } from "@claudexor/workspace";
 import { setImmediate as yieldToAdmission } from "node:timers/promises";
 import { BlobFiles } from "./blob-files.js";
@@ -43,6 +47,9 @@ export async function commandRetentionReferences(
   const records: DiskRetentionReferences["records"] = [];
   const byRun = new Map<string, (typeof records)[number]>();
   const active = new Set<string>();
+  const nativeRunDirs = new Set<string>();
+  const nativeWatchRunDirs = new Set<string>();
+  const uncertainNativeOwners = new Map<string, string>();
   const add = (id: string | null | undefined) => {
     if (!id) return;
     referencedRunIds.add(id);
@@ -59,7 +66,7 @@ export async function commandRetentionReferences(
       byRun.set(row.runId, next);
     }
   };
-  const readRow = (row: CommandRow) => {
+  const readRow = (row: CommandRow, changed: boolean) => {
     if (!retained(row.pid)) {
       // Terminal timestamps can date old payloads without reading retired
       // requests or treating their abandoned work as an active owner.
@@ -77,8 +84,24 @@ export async function commandRetentionReferences(
     if (row.kind === "delivery" && !isTerminalLifecycle(row.state))
       throw new Error("disk retention kept while a delivery command is unsettled");
     if (row.kind !== "product") return;
-    if (isTerminalLifecycle(row.state)) active.delete(row.id);
+    const terminal = isTerminalLifecycle(row.state);
+    if (terminal) active.delete(row.id);
     else active.add(row.id);
+    uncertainNativeOwners.delete(row.id);
+    if (
+      !RunLifecycle.safeParse(row.state).success ||
+      (!terminal && !row.runDir && (row.state !== "queued" || row.runId))
+    )
+      uncertainNativeOwners.set(
+        row.id,
+        `native ownership unknown for command ${row.id} in partition ${row.pid}: ${row.state}, run directory ${row.runDir ?? "unbound"}`,
+      );
+    if (row.runDir) {
+      nativeRunDirs.add(row.runDir);
+      // Active producers can publish a capsule without another SQL write.
+      // A changed producer may already have finished by the final recheck.
+      if (!terminal || changed) nativeWatchRunDirs.add(row.runDir);
+    }
     if (row.runDir)
       for (const source of readContinuationSources(row.runDir, { strict: true })) add(source.runId);
     const params = Dependencies.parse(JSON.parse(blobs.read(row.params_sha).toString("utf8")));
@@ -93,9 +116,9 @@ export async function commandRetentionReferences(
       record(row);
     }
   };
-  const read = (row: CommandRow) => {
+  const read = (row: CommandRow, changed = false) => {
     try {
-      readRow(row);
+      readRow(row, changed);
     } catch (error) {
       throw new Error(
         `retention command ${row.id} in partition ${row.pid}, params ${row.params_sha}: ${String(error)}`,
@@ -114,6 +137,9 @@ export async function commandRetentionReferences(
   return {
     records,
     referencedRunIds,
+    nativeRunDirs,
+    nativeWatchRunDirs,
+    nativeReferenceError: () => [...uncertainNativeOwners.values()].join("; ") || null,
     hasActiveCommands: () => active.size > 0,
     refresh(id: string) {
       const row = store.prepare(`SELECT ${COLUMNS} FROM command WHERE id=?`).get(id) as
@@ -122,7 +148,7 @@ export async function commandRetentionReferences(
       // A newly bound run was absent from the pass's original lifecycle map.
       if (retained(row.pid) && row.kind === "product" && row.runId && !byRun.has(row.runId))
         add(row.runId);
-      read(row);
+      read(row, true);
     },
   };
 }

@@ -11,13 +11,16 @@ import { commandRetentionReferences } from "./retention-command-references.js";
 import { retentionGenerations } from "./retention-generations.js";
 
 export interface DiskRetentionReferences {
-  /** Exact inventory witness, used for lane sweeping that cannot absorb new owners. */
+  /** Legacy exact inventory witness; current retirement rechecks changed owners. */
   isCurrent: () => boolean;
   /** Cooperatively absorb changed owners, then synchronously recheck before expiry. */
   refresh?: () => Promise<void>;
   recheck?: () => boolean;
-  /** Native file scans additionally require no intervening work/session mutation. */
+  /** Native callers absorb the same changed owners before per-file rechecks. */
   nativeCurrent?: () => boolean;
+  nativeRunDirs?: ReadonlySet<string>;
+  nativeWatchRunDirs?: ReadonlySet<string>;
+  nativeReferenceError?: () => string | null;
   hasActiveCommands?: () => boolean;
   /** Caller releases the observation after all deletions, including error paths. */
   close?: () => void;
@@ -95,9 +98,9 @@ export async function diskRetentionReferences(
 ): Promise<DiskRetentionReferences> {
   const changesObserved = retentionChanges(store);
   try {
-    // EngineStore is the sole writer. SQLite's own change count covers every
-    // mutation for lane sweeping, which cannot absorb new owners. Run/native
-    // proofs below reread changed owners instead. No cursor survives a yield.
+    // Keep the legacy exact witness for callers without incremental rechecks.
+    // Run/native proofs reread changed owners; lane sweeping reads live IDs.
+    // No cursor survives a yield.
     const changes = store.prepare("SELECT total_changes() AS n");
     const version = (changes.get() as { n: number }).n;
     const isCurrent = () => (changes.get() as { n: number }).n === version;
@@ -171,8 +174,10 @@ export async function diskRetentionReferences(
       isCurrent,
       refresh,
       recheck,
-      nativeCurrent: () =>
-        recheck() && changesObserved.nativeCurrent() && !commands.hasActiveCommands(),
+      nativeCurrent: recheck,
+      nativeRunDirs: commands.nativeRunDirs,
+      nativeWatchRunDirs: commands.nativeWatchRunDirs,
+      nativeReferenceError: commands.nativeReferenceError,
       hasActiveCommands: commands.hasActiveCommands,
       close: changesObserved.close,
       blocked,

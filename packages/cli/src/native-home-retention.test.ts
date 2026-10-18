@@ -182,7 +182,7 @@ it("keeps all homes on unreadable capsule/session references; valid proof permit
   expect((await gc(request())).errors).toEqual([]);
   expect(existsSync(cold)).toBe(false);
 });
-it("keeps homes during active/setup work, then retires after the idle fence clears", async () => {
+it("keeps homes during setup work, then retires after setup settles", async () => {
   const cold = seed(4);
   const gc = native();
   busy = true;
@@ -193,7 +193,7 @@ it("keeps homes during active/setup work, then retires after the idle fence clea
 });
 
 it.each(["SQL session", "completed run capsule", "active setup"])(
-  "keeps rollouts when %s appears during an asynchronous profile scan",
+  "keeps newly owned rollouts when %s appears during an asynchronous profile scan",
   async (kind) => {
     const held = seed(4);
     const neighbor = seed(5);
@@ -207,17 +207,33 @@ it.each(["SQL session", "completed run capsule", "active setup"])(
           workspace: "in_place",
         });
         if (kind === "SQL session") sql.graph.threads.recordSession(thread.id, "codex", id(4));
-        else capsule(4);
-        // The completed-work case is idle again before the unlink check.
+        else {
+          const path = capsule(4);
+          const commands = sql.graph.commands.current();
+          commands.accept({
+            id: "late",
+            params: { prompt: "Work" },
+            idempotencyKey: "late",
+            clientId: "fixture",
+          });
+          commands.update("late", {
+            state: "succeeded",
+            runId: "run-4",
+            runDir: dirname(dirname(dirname(path))),
+            finishedAt: new Date().toISOString(),
+          });
+        }
+        // The completed producer is already terminal at the unlink check.
         busy = false;
       }
     });
     const interrupted = await gc(request());
     expect(admitted).toBe(true);
-    expect(interrupted.errors.join()).toContain("changed");
-    expect(interrupted.freedBytes).toBe(0);
+    if (kind === "active setup") expect(interrupted.errors.join()).toContain("changed");
+    else expect(interrupted.errors).toEqual([]);
+    expect(interrupted.freedBytes).toBe(kind === "active setup" ? 0 : 9);
     expect(existsSync(held)).toBe(true);
-    expect(existsSync(neighbor)).toBe(true);
+    expect(existsSync(neighbor)).toBe(kind === "active setup");
     busy = false;
     const resumed = await native()(request());
     expect(resumed.errors).toEqual([]);
@@ -256,7 +272,7 @@ it("declares unsupported vendor contracts instead of guessing database ownership
   }
 });
 
-it("prunes under unrelated thread metadata writes but keeps homes for an unbound queued command", async () => {
+it("prunes under unrelated thread metadata writes and unbound queued work", async () => {
   const thread = sql.graph.threads.createThread({ title: "Unrelated", workspace: "in_place" });
   const cold = seed(4);
   const gc = native(() =>
@@ -271,8 +287,8 @@ it("prunes under unrelated thread metadata writes but keeps homes for an unbound
     idempotencyKey: "queued",
     clientId: "fixture",
   });
-  expect((await gc(request())).errors.join()).toContain("active or unresolved");
-  expect(existsSync(cold)).toBe(true);
+  expect((await gc(request())).errors).toEqual([]);
+  expect(existsSync(cold)).toBe(false);
   sql.graph.commands
     .current()
     .update("queued", { state: "failed", finishedAt: new Date().toISOString() });

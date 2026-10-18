@@ -3218,16 +3218,20 @@ session capsule, and every retained run's typed resumable record protect their
 native session IDs across all homes of that harness. Archived threads and pinned
 account continuations retain that protection. Missing artifacts have no reference;
 malformed or unreadable references, linked artifact directories, unavailable
-project generations, active/unknown runs, or active/unconfirmed setup work prevent
-native pruning. SQL rows and filesystem inventory yield to admission. A native inventory additionally witnesses command lifecycle/dependency changes,
-new thread/turn admission, and session mutations (including work that starts and
-finishes during the scan). Queued product commands without run IDs also hold native
-retirement. Unrelated thread metadata, quota and command receipt writes do not
-invalidate that proof. Every native unlink
-rechecks that proof and the current idle state synchronously with file identity,
-without yielding between proof and deletion. An invalidated inventory keeps the
-remaining files and preserves any deletions already recorded in the receipt. It is conservative:
-retaining a run can retain its session even if that run no longer needs resume.
+project generations, uncertain command ownership, or active/unconfirmed setup work prevent
+native pruning. SQL rows and filesystem inventory yield to admission. Active and
+queued product work protects its named sessions and continuation sources, without
+holding unrelated cold sessions. The pass rereads changed SQL owners and each active
+or newly changed command's output files before unlink; this includes a capsule
+published without another SQL update, or work that starts and finishes during the
+scan. Durable continuation addresses include sources outside the hashed run layout.
+Native references accumulate in a live set. Already read terminal ancestry is shared
+within the pass; active output files are reread. A late reference keeps its entire
+session and allows unrelated groups to progress. Each unlink rechecks setup state,
+references and current file identity synchronously, without a yield between proof
+and deletion. An unreadable owner keeps the remaining files and preserves any
+completed deletions in the receipt. Retaining a run can retain its session even if
+that run no longer needs resume.
 
 Codex owns only the recognized `sessions/YYYY/MM/DD/rollout-…-<uuid>.jsonl`
 and `.jsonl.zst` candidates. All parts of a referenced session survive; a recent

@@ -101,6 +101,7 @@ function deps(input: {
     healthyProjectRoots: () => input.healthyRoots,
     retentionReferences: (ignored = new Set<string>()) => ({
       projectRoots: input.projectRoots,
+      registeredProjectRoots: new Set(input.projectRoots),
       protectedProjectRoots: new Set(
         input.projectRoots.filter((root) => !input.healthyRoots.includes(root)),
       ),

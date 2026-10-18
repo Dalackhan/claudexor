@@ -3142,7 +3142,10 @@ project roots are disclosed as their runtime namespace. It is also exposed as th
 every deletion AND why every survivor survived); `claudexor gc` is its thin
 client. It deletes ONLY terminal, unreferenced, non-actionable trees past
 the configured age (`retention.*` in the global config: runs 30d, reviews
-14d, newest N per project always survive): live/blocked records, runs
+14d, newest N for registered active/archived projects whose roots still exist,
+and the built-in no-project scope): an orphaned namespace has no keep-last owner,
+whether its root disappeared or it has no registration. Thread-derived root names
+do not establish that ownership. All other protections remain: live/blocked records, runs
 referenced by any non-purged thread's lineage, undelivered/applyable
 patches or copied-file results, and trees with no terminal evidence are protected
 fail-closed. Partial file delivery retains that protection; explicit discard

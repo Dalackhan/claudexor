@@ -4,6 +4,8 @@ import { decodeBody } from "./thread-rows.js";
 
 export interface DiskRetentionReferences {
   projectRoots: string[];
+  /** Retained active/archived registrations; thread root names alone are not ownership. */
+  registeredProjectRoots: Set<string>;
   protectedProjectRoots: Set<string>;
   referencedRunIds: Set<string>;
   nativeSessions: Map<string, Set<string>>;
@@ -18,9 +20,10 @@ export function diskRetentionReferences(
   store: EngineStore,
   ignoreThreadIds: ReadonlySet<string> = new Set(),
 ): DiskRetentionReferences {
-  const roots = new Set(
+  const registeredProjectRoots = new Set(
     (store.prepare("SELECT root FROM project").all() as Array<{ root: string }>).map((r) => r.root),
   );
+  const roots = new Set(registeredProjectRoots);
   const protectedProjectRoots = new Set<string>();
   const unavailable = store
     .prepare(
@@ -102,6 +105,7 @@ export function diskRetentionReferences(
   }));
   return {
     projectRoots: [...roots],
+    registeredProjectRoots,
     protectedProjectRoots,
     referencedRunIds,
     records,

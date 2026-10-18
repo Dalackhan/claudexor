@@ -313,7 +313,7 @@
               "type": "integer",
               "minimum": 0,
               "default": 20,
-              "description": "The newest N runs per project always survive, regardless of age."
+              "description": "The newest N runs survive for registered projects whose roots remain (including archived projects), and the built-in no-project scope. Orphaned namespaces have no keep-last protection."
             }
           },
           "additionalProperties": false,

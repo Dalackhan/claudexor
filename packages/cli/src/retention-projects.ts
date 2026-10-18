@@ -1,12 +1,12 @@
-import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { ArtifactStore } from "@claudexor/artifact-store";
 import type { DiskRetentionReferences } from "@claudexor/daemon";
 import type { RetentionProject } from "@claudexor/control-api";
 import { projectRuntimeDir, userConfigDir } from "@claudexor/util";
 
-/** The engine directory inventory owns reachability; registry data only names
- * projects and protects unavailable partitions. Never follow a linked namespace. */
+/** Directory inventory owns reachability. Registrations with existing roots own
+ * recent history; retained thread roots only name/protect references. */
 export function retentionProjects(
   references: DiskRetentionReferences,
   noProjectRoot: string,
@@ -16,6 +16,15 @@ export function retentionProjects(
   const byHash = new Map(
     references.projectRoots.map((root) => [basename(projectRuntimeDir(root)), root]),
   );
+  byHash.set(basename(projectRuntimeDir(noProjectRoot)), noProjectRoot);
+  const ownedRoots = new Set([noProjectRoot]);
+  for (const root of references.registeredProjectRoots) {
+    try {
+      if (statSync(root).isDirectory()) ownedRoots.add(root);
+    } catch (error) {
+      if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+    }
+  }
   const protectedHashes = new Set(
     [...references.protectedProjectRoots].map((root) => basename(projectRuntimeDir(root))),
   );
@@ -41,6 +50,7 @@ export function retentionProjects(
         root: root ?? runtime,
         runsDir,
         reviewsDir: root && healthyRoots.has(root) ? join(root, ".claudexor", "reviews") : null,
+        keepLastRuns: root !== undefined && ownedRoots.has(root),
       });
     }
   }
@@ -55,7 +65,12 @@ export function retentionProjects(
     if (existsSync(runtime) && !lstatSync(runtime).isDirectory()) continue;
     const runsDir = new ArtifactStore(root).runsDir();
     if (existsSync(runsDir) && !lstatSync(runsDir).isDirectory()) continue;
-    projects.push({ root, runsDir, reviewsDir: join(root, ".claudexor", "reviews") });
+    projects.push({
+      root,
+      runsDir,
+      reviewsDir: join(root, ".claudexor", "reviews"),
+      keepLastRuns: ownedRoots.has(root),
+    });
   }
   const noProjectRuns = new ArtifactStore(noProjectRoot).runsDir();
   const noProjectRuntime = projectRuntimeDir(noProjectRoot);
@@ -64,6 +79,11 @@ export function retentionProjects(
     (!existsSync(noProjectRuns) || lstatSync(noProjectRuns).isDirectory()) &&
     !projects.some((project) => project.runsDir === noProjectRuns)
   )
-    projects.push({ root: noProjectRoot, runsDir: noProjectRuns, reviewsDir: null });
+    projects.push({
+      root: noProjectRoot,
+      runsDir: noProjectRuns,
+      reviewsDir: null,
+      keepLastRuns: true,
+    });
   return projects;
 }

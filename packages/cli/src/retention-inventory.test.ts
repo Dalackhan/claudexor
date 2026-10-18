@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { ArtifactStore } from "@claudexor/artifact-store";
-import { projectRuntimeDir } from "@claudexor/util";
+import { noProjectRepoRoot, projectRuntimeDir } from "@claudexor/util";
 import { sqlFixture } from "../../daemon/src/store/test-support/sql-fixture.js";
 import { createRetentionRunner } from "./retention-service.js";
 
@@ -26,10 +26,6 @@ beforeEach(async () => {
   configBefore = process.env.CLAUDEXOR_CONFIG_DIR;
   process.env.CLAUDEXOR_CONFIG_DIR = join(root, "engine");
   mkdirSync(process.env.CLAUDEXOR_CONFIG_DIR);
-  writeFileSync(
-    join(process.env.CLAUDEXOR_CONFIG_DIR, "config.yaml"),
-    "retention:\n  keep_last_runs_per_project: 0\n",
-  );
   sql = await sqlFixture(join(root, "sql"));
 });
 afterEach(async () => {
@@ -81,6 +77,10 @@ it("reclaims old unregistered runs, preserves unproven and young runs, previews 
   expect(existsSync(join(young, "final"))).toBe(true);
 });
 it("retains archived thread lineage and pending interactions while deleting an unreferenced neighbor", async () => {
+  writeFileSync(
+    join(process.env.CLAUDEXOR_CONFIG_DIR!, "config.yaml"),
+    "retention:\n  keep_last_runs_per_project: 0\n",
+  );
   const projectRoot = repo("archived");
   const project = sql.graph.projects.register({
     root: projectRoot,
@@ -109,6 +109,84 @@ it("retains archived thread lineage and pending interactions while deleting an u
   const result = await runner()({ dry_run: false });
   expect(result.deleted_runs.map((row) => row.run_id)).toEqual(["unreferenced"]);
   expect(result.kept.referenced).toBe(5);
+});
+
+it.each(["unregistered", "missing-active", "missing-archived"])(
+  "retires three old %s runs below the default keep-last limit",
+  async (kind) => {
+    const projectRoot = repo(kind);
+    if (kind !== "unregistered") {
+      const project = sql.graph.projects.register({
+        root: projectRoot,
+        clientId: "test",
+        idempotencyKey: kind,
+      }).project;
+      if (kind === "missing-archived") sql.graph.projects.unregister(project.id);
+      rmSync(projectRoot, { recursive: true });
+    }
+    const paths = [0, 1, 2].map((n) => run(projectRoot, `orphan-${n}`));
+    const result = await runner()({ dry_run: false });
+    expect(result.policy.keep_last_runs_per_project).toBe(20);
+    expect(result.deleted_runs.map((row) => row.run_id).sort()).toEqual([
+      "orphan-0",
+      "orphan-1",
+      "orphan-2",
+    ]);
+    expect(result.kept.recent).toBe(0);
+    for (const path of paths) {
+      expect(existsSync(join(path, "tombstone.yaml"))).toBe(true);
+      expect(existsSync(join(path, "final"))).toBe(false);
+    }
+  },
+);
+
+it.each(["active", "archived", "no-project"])(
+  "keeps three old %s runs with the default keep-last policy",
+  async (kind) => {
+    const projectRoot = kind === "no-project" ? noProjectRepoRoot() : repo(kind);
+    if (kind !== "no-project") {
+      const project = sql.graph.projects.register({
+        root: projectRoot,
+        clientId: "test",
+        idempotencyKey: kind,
+      }).project;
+      if (kind === "archived") sql.graph.projects.unregister(project.id);
+    }
+    const paths = [0, 1, 2].map((n) => run(projectRoot, `owned-${n}`));
+    const result = await runner()({ dry_run: false });
+    expect(result.policy.keep_last_runs_per_project).toBe(20);
+    expect(result.deleted_runs).toEqual([]);
+    expect(result.kept.recent).toBe(3);
+    for (const path of paths) expect(existsSync(join(path, "final", "failure.yaml"))).toBe(true);
+  },
+);
+
+it("keeps an orphan's referenced run while retiring its unreferenced neighbors at default keep-last", async () => {
+  const projectRoot = repo("referenced-orphan");
+  const project = sql.graph.projects.register({
+    root: projectRoot,
+    clientId: "test",
+    idempotencyKey: "referenced-orphan",
+  }).project;
+  const thread = sql.graph.threads.createThread({
+    title: "retained",
+    repoRoot: projectRoot,
+    workspace: "in_place",
+  });
+  const turn = sql.graph.threads.createTurn(thread.id, "continue");
+  sql.graph.threads.bindTurnRun(turn.id, "held");
+  sql.graph.projects.unregister(project.id);
+  rmSync(projectRoot, { recursive: true });
+  const held = run(projectRoot, "held");
+  for (const id of ["expired-a", "expired-b"]) run(projectRoot, id);
+  const gc = runner();
+  const preview = await gc({ dry_run: true });
+  expect(preview.deleted_runs.map((row) => row.run_id).sort()).toEqual(["expired-a", "expired-b"]);
+  const result = await gc({ dry_run: false });
+  expect(result.policy.keep_last_runs_per_project).toBe(20);
+  expect(result.deleted_runs.map((row) => row.run_id).sort()).toEqual(["expired-a", "expired-b"]);
+  expect(result.kept.referenced).toBe(1);
+  expect(existsSync(join(held, "final", "failure.yaml"))).toBe(true);
 });
 it("fails closed on corrupt archived thread references before deleting any namespace", async () => {
   const projectRoot = repo("broken");

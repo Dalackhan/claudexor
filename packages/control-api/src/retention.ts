@@ -35,6 +35,9 @@ export interface RetentionProject {
   runsDir: string;
   /** Standalone diff-review trees dir (`<root>/.claudexor/reviews`); null = none. */
   reviewsDir: string | null;
+  /** False when inventory proves this namespace has no remaining project owner.
+   * Omitted by older embedders preserves their existing keep-last protection. */
+  keepLastRuns?: boolean;
 }
 
 export interface RetentionRunRecord {
@@ -251,11 +254,12 @@ export async function runRetentionPass(
       }
       candidates.push({ runId, root, ageStamp });
     }
-    // The newest N per project survive regardless of age.
+    // Recent history belongs to a still-owned project, not an orphan namespace.
     candidates.sort((a, b) => b.ageStamp - a.ageStamp);
-    const spared = candidates.slice(0, policy.keepLastRunsPerProject);
+    const keepLast = project.keepLastRuns === false ? 0 : policy.keepLastRunsPerProject;
+    const spared = candidates.slice(0, keepLast);
     kept.recent += spared.length;
-    for (const candidate of candidates.slice(policy.keepLastRunsPerProject)) {
+    for (const candidate of candidates.slice(keepLast)) {
       if (deletions >= maxDeletions) {
         truncated = true;
         break;

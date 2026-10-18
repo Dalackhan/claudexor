@@ -111,36 +111,24 @@ it("retains archived thread lineage and pending interactions while deleting an u
   expect(result.kept.referenced).toBe(5);
 });
 
-it.each(["unregistered", "missing-active", "missing-archived"])(
-  "retires three old %s runs below the default keep-last limit",
-  async (kind) => {
-    const projectRoot = repo(kind);
-    if (kind !== "unregistered") {
-      const project = sql.graph.projects.register({
-        root: projectRoot,
-        clientId: "test",
-        idempotencyKey: kind,
-      }).project;
-      if (kind === "missing-archived") sql.graph.projects.unregister(project.id);
-      rmSync(projectRoot, { recursive: true });
-    }
-    const paths = [0, 1, 2].map((n) => run(projectRoot, `orphan-${n}`));
-    const result = await runner()({ dry_run: false });
-    expect(result.policy.keep_last_runs_per_project).toBe(20);
-    expect(result.deleted_runs.map((row) => row.run_id).sort()).toEqual([
-      "orphan-0",
-      "orphan-1",
-      "orphan-2",
-    ]);
-    expect(result.kept.recent).toBe(0);
-    for (const path of paths) {
-      expect(existsSync(join(path, "tombstone.yaml"))).toBe(true);
-      expect(existsSync(join(path, "final"))).toBe(false);
-    }
-  },
-);
+it("retires three old unregistered runs below the default keep-last limit", async () => {
+  const projectRoot = repo("unregistered");
+  const paths = [0, 1, 2].map((n) => run(projectRoot, `orphan-${n}`));
+  const result = await runner()({ dry_run: false });
+  expect(result.policy.keep_last_runs_per_project).toBe(20);
+  expect(result.deleted_runs.map((row) => row.run_id).sort()).toEqual([
+    "orphan-0",
+    "orphan-1",
+    "orphan-2",
+  ]);
+  expect(result.kept.recent).toBe(0);
+  for (const path of paths) {
+    expect(existsSync(join(path, "tombstone.yaml"))).toBe(true);
+    expect(existsSync(join(path, "final"))).toBe(false);
+  }
+});
 
-it.each(["active", "archived", "no-project"])(
+it.each(["active", "archived", "missing-active", "missing-archived", "no-project"])(
   "keeps three old %s runs with the default keep-last policy",
   async (kind) => {
     const projectRoot = kind === "no-project" ? noProjectRepoRoot() : repo(kind);
@@ -150,7 +138,8 @@ it.each(["active", "archived", "no-project"])(
         clientId: "test",
         idempotencyKey: kind,
       }).project;
-      if (kind === "archived") sql.graph.projects.unregister(project.id);
+      if (kind.endsWith("archived")) sql.graph.projects.unregister(project.id);
+      if (kind.startsWith("missing-")) rmSync(projectRoot, { recursive: true });
     }
     const paths = [0, 1, 2].map((n) => run(projectRoot, `owned-${n}`));
     const result = await runner()({ dry_run: false });
@@ -163,19 +152,11 @@ it.each(["active", "archived", "no-project"])(
 
 it("keeps an orphan's referenced run while retiring its unreferenced neighbors at default keep-last", async () => {
   const projectRoot = repo("referenced-orphan");
-  const project = sql.graph.projects.register({
-    root: projectRoot,
-    clientId: "test",
-    idempotencyKey: "referenced-orphan",
-  }).project;
   const thread = sql.graph.threads.createThread({
     title: "retained",
-    repoRoot: projectRoot,
     workspace: "in_place",
   });
-  const turn = sql.graph.threads.createTurn(thread.id, "continue");
-  sql.graph.threads.bindTurnRun(turn.id, "held");
-  sql.graph.projects.unregister(project.id);
+  sql.graph.threads.createTurn(thread.id, "continue", { parentRunId: "held" });
   rmSync(projectRoot, { recursive: true });
   const held = run(projectRoot, "held");
   for (const id of ["expired-a", "expired-b"]) run(projectRoot, id);

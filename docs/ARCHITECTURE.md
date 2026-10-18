@@ -3152,7 +3152,9 @@ the configured age (`retention.*` in the global config: runs 30d, reviews
 and the built-in no-project scope): an orphaned namespace has no keep-last owner,
 whether its root disappeared or it has no registration. Thread-derived root names
 do not establish that ownership. All other protections remain: live/blocked records, runs
-referenced by any non-purged thread's lineage, undelivered/applyable
+referenced by any non-purged thread's lineage or retained command dependencies
+(queued claims included: continuation predecessors and their full ancestor chains,
+Exact Retry sources and frozen plans), undelivered/applyable
 patches or copied-file results, and trees with no terminal evidence are protected
 fail-closed. Partial file delivery retains that protection; explicit discard
 ends pending delivery but does not delete artifacts immediately or bypass other
@@ -3160,7 +3162,9 @@ retention protections. A
 retired run leaves a tombstone projection behind, so its artifacts answer
 with a typed 410 `run_expired_by_retention` — never a mysterious 404. The
 last protection check and exclusive publication of the small prepared tombstone
-do not yield. Readers see that expiration while recursive deletion of the previously
+do not yield. Continuation admission checks the predecessor chain for that published
+expiration before accepting a new claim; an expired directory cannot become evidence again.
+Readers see that expiration while recursive deletion of the previously
 inventoried contents runs asynchronously; no directory rename blocks admission.
 A durable intent in the parent's private `.retiring` directory binds the source
 identity and child names, letting the next pass finish interrupted cleanup within

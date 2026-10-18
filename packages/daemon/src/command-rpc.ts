@@ -22,6 +22,7 @@ export function admitCommandRequest(
   const request = admitContinuationRequest(
     raw,
     from ? commands.queries.select({ continuationChainOf: from }) : [],
+    (id) => commands.queries.select({ ids: [id] })[0],
   );
   const parentId = delegatedParentOf(request);
   const parent = parentId ? commands.queries.getByRunId(parentId) : undefined;

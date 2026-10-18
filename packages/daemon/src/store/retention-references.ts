@@ -5,6 +5,7 @@ import type { EngineStore } from "./store.js";
 import { decodeBody } from "./thread-rows.js";
 import { isServedPid } from "./generations.js";
 import { retentionPages } from "./retention-pages.js";
+import { commandRetentionReferences } from "./retention-command-references.js";
 
 export interface DiskRetentionReferences {
   /** Any SQL write invalidates this proof, including an admission that already finished. */
@@ -151,29 +152,15 @@ export async function diskRetentionReferences(
     .prepare("SELECT run_id FROM interaction WHERE state='pending'")
     .all() as Array<{ run_id: string }>)
     add(row.run_id);
-  const records: DiskRetentionReferences["records"] = [];
-  for await (const rows of retentionPages<{
-    kind: string;
-    runId: string | null;
-    state: string;
-    finishedAt: string | null;
-  }>(store, "command", "kind,run_id AS runId,state,finished_at AS finishedAt")) {
-    for (const row of rows) {
-      if (row.kind === "product" && row.runId !== null)
-        records.push({
-          runId: row.runId,
-          state: row.state,
-          finishedAt: row.finishedAt ?? undefined,
-        });
-    }
-  }
+  const commands = await commandRetentionReferences(store);
+  commands.referencedRunIds.forEach(add);
   return {
     isCurrent,
     projectRoots: [...roots],
     registeredProjectRoots,
     protectedProjectRoots,
     referencedRunIds,
-    records,
+    records: commands.records,
     nativeSessions,
   };
 }

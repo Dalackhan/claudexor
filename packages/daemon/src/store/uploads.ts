@@ -85,12 +85,15 @@ export class SqlUploads {
     }
   }
 
-  create(raw: unknown, key: string): ControlUploadStatus {
+  /** Omitting a caller key mints a new internal upload, with no historical replay to resolve. */
+  create(raw: unknown, callerKey?: string): ControlUploadStatus {
     const request = ControlUploadCreateRequest.parse(raw);
     if (sensitiveResourcePolicy.classifyPath(request.name).sensitive)
       throw sensitiveResourceError();
     const requestDigest = hashJson(request);
-    const prior = this.bindings.lookup("create", key, requestDigest);
+    const key = callerKey ?? newId("model-create");
+    const prior =
+      callerKey === undefined ? undefined : this.bindings.lookup("create", key, requestDigest);
     if (prior) return ControlUploadStatus.parse(prior.result);
     const uploadId = newId("upl");
     ensureDirectory(this.store, this.store.paths.uploads);

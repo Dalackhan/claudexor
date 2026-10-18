@@ -32,9 +32,14 @@ export class PublishBlob {
     obligations.registerHandler("publish_blob", (row, effects) => this.recover(row, effects));
   }
 
-  finalize(id: string, expectedSha256: string | undefined, key: string): ControlResource {
+  /** Internal publication mints its own key; every supplied caller key keeps strict replay. */
+  finalize(id: string, expectedSha256: string | undefined, callerKey?: string): ControlResource {
     const requestDigest = hashJson({ uploadId: id, expectedSha256: expectedSha256 ?? null });
-    const prior = this.uploads.bindings.lookup("finalize", key, requestDigest, id);
+    const key = callerKey ?? newId("model-finalize");
+    const prior =
+      callerKey === undefined
+        ? undefined
+        : this.uploads.bindings.lookup("finalize", key, requestDigest, id);
     if (prior) {
       const row = readUploadRow(this.store, id);
       if (row?.state === "finalizing") this.complete(row);

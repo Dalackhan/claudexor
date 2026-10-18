@@ -4,7 +4,7 @@ import {
   ModelPayloadRef,
   type ResourceAttachmentRef,
 } from "@claudexor/schema";
-import { newId, sensitiveResourcePolicy } from "@claudexor/util";
+import { sensitiveResourcePolicy } from "@claudexor/util";
 import type { ResourceStorePort } from "../store-contracts.js";
 import { BlobFiles, deleteUnownedInlineInTx, sha256Hex } from "./blob-files.js";
 import { runMutation } from "./mutation.js";
@@ -88,21 +88,16 @@ export class SqlResourceStore implements ResourceStorePort {
     return verifiedResourceBytes(resource, this.blobs.filePath(resourceSha(resource)));
   }
   publishModel(bytes: Uint8Array): ModelPayloadRef {
-    const status = this.create(
-      {
-        purpose: "model",
-        kind: "file",
-        mime: "application/json",
-        name: "model-result.json",
-        sizeBytes: bytes.byteLength,
-      },
-      newId("model-create"),
-    );
+    const status = this.uploads.create({
+      purpose: "model",
+      kind: "file",
+      mime: "application/json",
+      name: "model-result.json",
+      sizeBytes: bytes.byteLength,
+    });
     try {
       this.uploads.writeAll(status.uploadId, bytes);
-      return payloadRef(
-        this.finalize(status.uploadId, `sha256:${sha256Hex(bytes)}`, newId("model-finalize")),
-      );
+      return payloadRef(this.publisher.finalize(status.uploadId, `sha256:${sha256Hex(bytes)}`));
     } catch (error) {
       if (!readUploadRow(this.store, status.uploadId)?.finalization)
         this.uploads.discard(status.uploadId);

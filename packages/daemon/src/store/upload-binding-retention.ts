@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ControlResource, ControlUploadStatus } from "@claudexor/schema";
+import { StoreError } from "./errors.js";
 import {
   bindIdempotencyInTx,
   deleteTargetIdempotencyInTx,
@@ -30,7 +31,7 @@ export function uploadKeyDigest(operation: UploadOperation, key: string): string
   return createHash("sha256").update(`${operation}\0${key}`).digest("hex");
 }
 
-/** Pure parser for the importer's point reads. Malformed historical records were ignored. */
+/** Pure parser for the importer; serving lookup refuses a present invalid record. */
 export function parseLegacyUploadBinding(
   raw: unknown,
   operation: UploadOperation,
@@ -172,20 +173,41 @@ export class UploadBindings {
     key: string,
     digest: string,
   ): LegacyUploadBinding | undefined {
+    let text: string;
     try {
-      return parseLegacyUploadBinding(
-        JSON.parse(
-          readFileSync(
-            join(this.store.paths.resourceStore, "idempotency", `${digest}.json`),
-            "utf8",
-          ),
-        ),
-        operation,
-        key,
+      text = readFileSync(
+        join(this.store.paths.resourceStore, "idempotency", `${digest}.json`),
+        "utf8",
       );
-    } catch {
-      // Preserve the old individual-record refusal: an unreadable record proves no replay.
-      return undefined;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return undefined;
+      throw new StoreError(
+        "legacy_upload_binding_unavailable",
+        503,
+        true,
+        "historical upload binding could not be read; repair it before retrying",
+        { cause: error },
+      );
     }
+    let legacy: LegacyUploadBinding | undefined;
+    try {
+      legacy = parseLegacyUploadBinding(JSON.parse(text), operation, key);
+    } catch (error) {
+      throw new StoreError(
+        "legacy_upload_binding_unavailable",
+        503,
+        true,
+        "historical upload binding is invalid; repair it before retrying",
+        { cause: error },
+      );
+    }
+    if (!legacy)
+      throw new StoreError(
+        "legacy_upload_binding_unavailable",
+        503,
+        true,
+        "historical upload binding is invalid; repair it before retrying",
+      );
+    return legacy;
   }
 }

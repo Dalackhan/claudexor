@@ -3494,7 +3494,11 @@ steady startup still replays retained quota/setup events, not all command histor
 Historical `resource-store/idempotency/<digest>.json` files remain authoritative
 for unreplayed upload keys. SQL probes only the requested digest on an enabled
 miss and adopts that binding in the same mutation; startup never scans this
-large directory. The persisted presence flag disables the fallback when absent.
+large directory. Only a confirmed ENOENT permits a new upload; an unreadable,
+malformed, or identity-mismatched addressed binding instead refuses the request
+with a retryable `legacy_upload_binding_unavailable` (503), so repairing the
+file allows replay on retry. The persisted presence flag disables the fallback
+when absent.
 Bindings expire 30 days after a resource's known release/expiry, never from a
 guessed file timestamp. Manually removing the historical directory can turn a
 later replay into a missing result or a new upload. Retiring serving code does

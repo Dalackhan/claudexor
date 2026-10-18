@@ -215,6 +215,77 @@ describe("upload binding retention and legacy point replay", () => {
     );
     expect(() => f.resources.create(uploadRequest, "conflict")).toThrow(/idempotency key/);
     fs.writeFileSync(join(dir, `${uploadKeyDigest("finalize", "bad")}.json`), "{invalid");
-    expect(() => f.resources.finalize("unknown", undefined, "bad")).toThrow(/no such upload/);
+    expect(() => f.resources.finalize("unknown", undefined, "bad")).toThrow(
+      expect.objectContaining({
+        code: "legacy_upload_binding_unavailable",
+        status: 503,
+        retryable: true,
+      }),
+    );
+  });
+
+  it("refuses present invalid create keys without minting an upload and retries after repair", async () => {
+    const f = await open();
+    legacyMarker(f, "present");
+    const dir = join(f.store.paths.resourceStore, "idempotency");
+    fs.mkdirSync(dir, { recursive: true });
+    const key = "historical";
+    const path = join(dir, `${uploadKeyDigest("create", key)}.json`);
+    const record = {
+      operation: "create",
+      key,
+      requestDigest: hashJson(uploadRequest),
+      result: { uploadId: "upl-legacy", state: "open", receivedBytes: 0, expectedBytes: 4 },
+    };
+    const before = bindings(f);
+    for (const body of [
+      "{invalid",
+      JSON.stringify({ ...record, key: "other" }),
+      JSON.stringify({ ...record, result: {} }),
+    ]) {
+      fs.writeFileSync(path, body);
+      expect(() => f.resources.create(uploadRequest, key)).toThrow(
+        expect.objectContaining({
+          code: "legacy_upload_binding_unavailable",
+          status: 503,
+          retryable: true,
+        }),
+      );
+      expect(bindings(f)).toBe(before);
+      expect(f.store.prepare("SELECT count(*) AS n FROM upload").get()).toEqual({ n: 0 });
+    }
+    fs.writeFileSync(path, JSON.stringify(record));
+    expect(f.resources.create(uploadRequest, key).uploadId).toBe("upl-legacy");
+    expect(bindings(f)).toBe(before + 1);
+    // SQL is now authoritative; a corrupt legacy copy cannot overwrite the adopted receipt.
+    fs.writeFileSync(path, "{invalid");
+    expect(f.resources.create(uploadRequest, key).uploadId).toBe("upl-legacy");
+  });
+
+  it("treats only ENOENT as absence; a non-ENOENT read failure is retryable", async () => {
+    const f = await open();
+    legacyMarker(f, "present");
+    const key = "read-failure";
+    const path = join(
+      f.store.paths.resourceStore,
+      "idempotency",
+      `${uploadKeyDigest("create", key)}.json`,
+    );
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(((name: string, ...args: unknown[]) => {
+      if (String(name) === path) throw Object.assign(new Error("denied"), { code: "EACCES" });
+      return (actual.readFileSync as (...args: unknown[]) => unknown)(name, ...args);
+    }) as typeof fs.readFileSync);
+    expect(() => f.resources.create(uploadRequest, key)).toThrow(
+      expect.objectContaining({
+        code: "legacy_upload_binding_unavailable",
+        status: 503,
+        retryable: true,
+      }),
+    );
+    expect(f.store.prepare("SELECT count(*) AS n FROM upload").get()).toEqual({ n: 0 });
+    vi.mocked(fs.readFileSync).mockImplementation(actual.readFileSync);
+    // The missing file is a confirmed ENOENT, so a new command can now be admitted.
+    expect(f.resources.create(uploadRequest, key).state).toBe("open");
   });
 });

@@ -68,6 +68,7 @@ function fakeManager(
     diff: string;
     binarySecretPaths: string[];
     captureIncomplete: boolean;
+    excludedNestedRepositories?: string[];
   }>,
   retained: string[] = [],
 ): WorkspaceManager {
@@ -363,6 +364,44 @@ describe("exact bytes of an isolated candidate survive its envelope (INV-062)", 
     });
   });
 
+  it("discloses the nested repositories a capture left out, and nothing when there were none", async () => {
+    const patch = textPatch("notes.txt", "plain text");
+    const kept = await capture(
+      fakeManager(async () => ({
+        diff: patch,
+        binarySecretPaths: [],
+        captureIncomplete: false,
+        excludedNestedRepositories: [".review-evidence/base-copy"],
+      })),
+      true,
+    );
+    expect(kept.diff).toBe(patch);
+    expect(attemptDisclosure(kept)).toMatchObject({
+      excluded_nested_repositories: [".review-evidence/base-copy"],
+    });
+    const plain = await capture(
+      fakeManager(async () => ({ diff: patch, binarySecretPaths: [], captureIncomplete: false })),
+      true,
+    );
+    expect(attemptDisclosure(plain)).not.toHaveProperty("excluded_nested_repositories");
+    // A secret-like folder name is redacted in the saved disclosure; the exact
+    // path stays with the capture, which excluded it from the patch.
+    const secretName = `.review-evidence/${fakeKey("n")}`;
+    const named = await capture(
+      fakeManager(async () => ({
+        diff: patch,
+        binarySecretPaths: [],
+        captureIncomplete: false,
+        excludedNestedRepositories: [secretName],
+      })),
+      true,
+    );
+    expect(named.excludedNestedRepositories).toEqual([secretName]);
+    const saved = JSON.stringify(attemptDisclosure(named));
+    expect(saved).not.toContain(fakeKey("n"));
+    expect(saved).toContain(".review-evidence/");
+  });
+
   it("does not write an exact object for an in-place candidate at capture time", async () => {
     const projectRoot = tempRoot("claudexor-v4c-inplace-");
     const patch = textPatch("LEAK.txt", fakeKey("i"));
@@ -429,6 +468,23 @@ describe("persistFinalPatch", () => {
       exact_patch_object: saved.patchSha256,
     });
     expect(readRevertAnchor(repo, saved.patchSha256)).toBe(diff);
+  });
+
+  it("tells the final work product which nested repositories its patch left out, redacted", () => {
+    const { store, paths } = storeFor("claudexor-v4c-final-nested-");
+    const diff = textPatch("SAFE.txt", "safe");
+    const secretName = `.review-evidence/${fakeKey("m")}`;
+
+    const saved = persistFinalPatch(store, paths.finalDir, {
+      diff,
+      excludedNestedRepositories: [secretName, ".review-evidence/copy", ".review-evidence/copy"],
+    });
+
+    expect(readFileSync(join(paths.finalDir, "patch.diff"), "utf8")).toBe(diff);
+    const named = saved.meta["excluded_nested_repositories"] as string[];
+    expect(named).toHaveLength(2);
+    expect(named).toContain(".review-evidence/copy");
+    expect(JSON.stringify(named)).not.toContain(fakeKey("m"));
   });
 
   it("leaves a clean patch byte-exact with no extra meta", () => {

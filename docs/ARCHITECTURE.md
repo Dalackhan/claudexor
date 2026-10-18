@@ -1581,6 +1581,14 @@ persistence classifier.
   capture, a non-Git folder without a baseline, a `diff` that cannot read a
   file) remains a refusal under its own name: `capture_refusal` on the attempt,
   phase `workspace`, `manual_cleanup` for live effects, nothing rolled back.
+- **Nested repositories.** A patch cannot carry another repository, so an
+  untracked folder holding its own Git repository that the worktree's
+  `.gitmodules` does not declare is left out of the candidate capture and of
+  the in-place turn snapshot instead of failing them. The capture names it,
+  top-relative, as `excluded_nested_repositories` (redacted) on the attempt
+  and in the final work product's meta; a declared submodule is captured as
+  its commit link. An isolated envelope is not kept for such a folder: its
+  bytes go with the envelope.
 
 Deliberate limits. A real secret an agent wrote stays in the tree or is applied
 exactly: the agent already had a shell there, and the disclosure names the

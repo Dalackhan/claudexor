@@ -1,55 +1,26 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  CaptureOutputExceeded,
-  assertCaptureComplete,
-  parseUnifiedDiff,
-  runCaptureRaw,
-  WorkspaceError,
-} from "@claudexor/core";
-import { containsSecretLikeToken, isClaudexorOwnedRuntimePath } from "@claudexor/util";
+import { assertCaptureComplete, runCaptureRaw, WorkspaceError } from "@claudexor/core";
+import { isClaudexorOwnedRuntimePath } from "@claudexor/util";
 import {
   initializeGitRepository,
   type EnsureGitRepositoryDependencies,
   type EnsureGitRepositoryResult,
 } from "./git-initialization.js";
+import {
+  nestedRepositoryExcludes,
+  untrackedNestedRepositories,
+} from "./git-nested-repositories.js";
+import { assertNoBinaryStubs, git, gitEnv } from "./git-run.js";
+export { git } from "./git-run.js";
+export { captureWorkingTreeTransient, diffWorkingTreeTransient } from "./git-transient-capture.js";
 export {
   GitBoundaryRootRefusedError,
   GitInitializationError,
   type EnsureGitRepositoryDependencies,
   type EnsureGitRepositoryResult,
 } from "./git-initialization.js";
-
-/** BYTE-FAITHFUL git capture: raw buffers, never readline — CR
- * bytes in CRLF diff content survive, and no trailing newline is fabricated
- * (trim-based consumers like revParse are unaffected: git ends its own
- * output with \n). */
-export async function git(
-  repo: string,
-  args: string[],
-  input?: string,
-): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  const r = await runCaptureRaw("git", ["-C", repo, ...args], { timeoutMs: 60_000, input });
-  assertCaptureComplete(r);
-  return r;
-}
-
-/** `git` with extra environment (e.g. a scratch GIT_INDEX_FILE for snapshots). */
-async function gitEnv(
-  repo: string,
-  args: string[],
-  env: Record<string, string>,
-  input?: string,
-): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  const r = await runCaptureRaw("git", ["-C", repo, ...args], {
-    timeoutMs: 60_000,
-    env,
-    input,
-  });
-  assertCaptureComplete(r);
-  return r;
-}
 
 export async function isGitRepo(repo: string): Promise<boolean> {
   const r = await git(repo, ["rev-parse", "--is-inside-work-tree"]);
@@ -129,7 +100,15 @@ export async function stashCreate(repo: string): Promise<string | null> {
     // Bare add runs only against the scratch index. It respects the project's
     // own ignore policy without changing the live index. `.claudexor/` is not a
     // runtime exception in v2: tracked or untracked project config is user state.
-    const add = await gitEnv(repo, ["add", "-A"], env);
+    // An undeclared nested repository stays out, as in the candidate capture:
+    // `add` refuses one without a commit and would freeze one with a commit as
+    // a commit link (`:/` keeps the whole-tree scope of the bare add).
+    const nested = await untrackedNestedRepositories(repo, env, [":/"], "snapshot");
+    const add = await gitEnv(
+      repo,
+      ["add", "-A", ...(nested.length ? ["--", ":/", ...nestedRepositoryExcludes(nested)] : [])],
+      env,
+    );
     if (add.code !== 0) throw new WorkspaceError(`snapshot add -A failed: ${add.stderr.trim()}`);
     const writeTree = await gitEnv(repo, ["write-tree"], env);
     if (writeTree.code !== 0)
@@ -186,152 +165,6 @@ export async function diffTrees(repo: string, baseSha: string, endSha: string): 
 }
 
 /**
- * Capture the current worktree against an exact base without writing its blobs
- * into the user's Git object database. In-place harness output is untrusted
- * until the secret fence has inspected the resulting patch; `snapshotTree`
- * would otherwise leave a dangling raw-secret blob even when artifact
- * persistence later refused the patch.
- *
- * Git still owns filename, mode, symlink, binary, ignored-file, and untracked
- * semantics. A scratch index plus an isolated temporary object directory holds
- * the candidate tree only for the duration of `git diff`; the real object
- * directory is read-only through Git's alternates mechanism.
- */
-export interface TransientDiffCapture {
-  captureIncomplete: boolean;
-  captureFailure?: CaptureOutputExceeded;
-  patch: string;
-  /** Changed binary files whose pre- or postimage holds secret-like bytes (or
-   * could not be read for inspection). The exact patch still carries their
-   * payload; a persisted COPY withholds it and discloses these paths (INV-062). */
-  binarySecretPaths: string[];
-}
-
-export async function captureWorkingTreeTransient(
-  repo: string,
-  baseSha: string,
-  pathExcludes: string[] = [],
-): Promise<TransientDiffCapture> {
-  const scratchDir = mkdtempSync(join(tmpdir(), "claudexor-transient-diff-"));
-  const objectDir = join(scratchDir, "objects");
-  const indexPath = join(scratchDir, "index");
-  mkdirSync(objectDir, { recursive: true, mode: 0o700 });
-  let primaryError: unknown;
-  try {
-    const actualObjects = await git(repo, [
-      "rev-parse",
-      "--path-format=absolute",
-      "--git-path",
-      "objects",
-    ]);
-    if (actualObjects.code !== 0 || !actualObjects.stdout.trim()) {
-      throw new WorkspaceError(
-        `transient diff could not resolve Git objects: ${actualObjects.stderr.trim()}`,
-      );
-    }
-    const env = {
-      GIT_INDEX_FILE: indexPath,
-      GIT_OBJECT_DIRECTORY: objectDir,
-      // Git parses this as a path-list. C-style quoting keeps a legal `:` in a
-      // macOS path from becoming a separator (and escapes quotes/backslashes).
-      GIT_ALTERNATE_OBJECT_DIRECTORIES: JSON.stringify(actualObjects.stdout.trim()),
-      GIT_OPTIONAL_LOCKS: "0",
-    };
-    const read = await gitEnv(repo, ["read-tree", baseSha], env);
-    if (read.code !== 0) {
-      throw new WorkspaceError(`transient diff read-tree failed: ${read.stderr.trim()}`);
-    }
-    const add = await gitEnv(repo, ["add", "-A", "--", ".", ...pathExcludes], env);
-    if (add.code !== 0) {
-      throw new WorkspaceError(`transient diff add failed: ${add.stderr.trim()}`);
-    }
-    const writeTree = await gitEnv(repo, ["write-tree"], env);
-    if (writeTree.code !== 0 || !writeTree.stdout.trim()) {
-      throw new WorkspaceError(`transient diff write-tree failed: ${writeTree.stderr.trim()}`);
-    }
-    const diff = await gitEnv(repo, ["diff", "--binary", baseSha, writeTree.stdout.trim()], env);
-    if (diff.code !== 0) {
-      throw new WorkspaceError(`transient diff failed: ${diff.stderr.trim()}`);
-    }
-    assertNoBinaryStubs(diff.stdout, `transient git diff ${baseSha}`);
-    const flagged = new Set<string>();
-    for (const file of parseUnifiedDiff(diff.stdout).files.filter((entry) => entry.binary)) {
-      const blobs = [
-        ...(!file.added && file.oldPath ? [{ tree: baseSha, path: file.oldPath }] : []),
-        ...(!file.deleted && file.newPath
-          ? [{ tree: writeTree.stdout.trim(), path: file.newPath }]
-          : []),
-      ];
-      for (const blob of blobs) {
-        try {
-          const content = await gitEnv(repo, ["show", `${blob.tree}:${blob.path}`], env);
-          // An unreadable blob is unprovable, so its payload is withheld too.
-          if (content.code === 0 && !containsSecretLikeToken(content.stdout)) continue;
-        } catch (error) {
-          // A complete compressed patch may carry a much larger blob. Failed
-          // inspection withholds that payload, not the already complete patch.
-          if (!(error instanceof CaptureOutputExceeded)) throw error;
-        }
-        flagged.add(file.newPath ?? file.oldPath ?? blob.path);
-        break;
-      }
-    }
-    return { patch: diff.stdout, binarySecretPaths: [...flagged], captureIncomplete: false };
-  } catch (error) {
-    primaryError = error;
-    if (error instanceof CaptureOutputExceeded)
-      return { patch: "", binarySecretPaths: [], captureIncomplete: true, captureFailure: error };
-    throw error;
-  } finally {
-    // Unlike ordinary best-effort scratch cleanup, this directory may contain
-    // a candidate token blob. A cleanup failure is therefore terminal and must
-    // never be hidden behind the original capture result.
-    try {
-      rmSync(scratchDir, { recursive: true, force: true });
-    } catch (cleanupError) {
-      // A cleanup failure is terminal on its own, but must not erase the typed
-      // capture error that explains the primary failure.
-      if (primaryError === undefined) {
-        const terminal = new WorkspaceError("transient diff scratch cleanup failed", {
-          cause: cleanupError,
-        });
-        Object.defineProperty(terminal, "cleanupError", {
-          value: cleanupError,
-          enumerable: false,
-        });
-        throw terminal;
-      }
-      if (primaryError instanceof Error) {
-        try {
-          Object.defineProperty(primaryError, "cleanupError", {
-            value: cleanupError,
-            enumerable: false,
-          });
-        } catch {
-          // A frozen typed error cannot accept cleanup evidence. Preserve both
-          // through a wrapper, keeping its machine facts and original cause.
-          throw Object.assign(
-            new WorkspaceError(primaryError.message, { cause: primaryError }),
-            primaryError,
-            { cleanupError },
-          );
-        }
-      }
-    }
-  }
-}
-
-export async function diffWorkingTreeTransient(
-  repo: string,
-  baseSha: string,
-  pathExcludes: string[] = [],
-): Promise<string> {
-  const captured = await captureWorkingTreeTransient(repo, baseSha, pathExcludes);
-  if (captured.captureIncomplete) throw captured.captureFailure;
-  return captured.patch;
-}
-
-/**
  * Materialize a patch against an exact base in a scratch index and return the
  * resulting tree id. The live index and worktree are never consulted or
  * changed. Commit-class delivery uses this as its expected candidate tree so a
@@ -376,19 +209,6 @@ export async function materializePatchTree(
     } catch {
       /* scratch index cleanup is best-effort */
     }
-  }
-}
-
-/** Capture-time honesty: with --binary a payload-less "Binary files differ"
- * stub should be impossible; if one appears anyway, fail AT CAPTURE with a
- * typed error instead of shipping a patch that cannot apply. */
-function assertNoBinaryStubs(diff: string, label: string): void {
-  const stubs = parseUnifiedDiff(diff).files.filter((f) => f.binaryStub);
-  if (stubs.length > 0) {
-    const names = stubs.map((f) => f.newPath ?? f.oldPath ?? "(unknown)").join(", ");
-    throw new WorkspaceError(
-      `${label} produced undeliverable binary stub(s) for: ${names}; the work product cannot be applied`,
-    );
   }
 }
 

@@ -45,8 +45,6 @@ import { resolveLatestNpmVersion } from "./harness-latest.js";
 import { confirmOnTty, localPlatformRefusal, runHarnessInstaller } from "./harness-installer.js";
 import { INSTALLABLE_HARNESSES } from "./harness-command-specs.js";
 
-export { resolveLatestNpmVersion } from "./harness-latest.js";
-
 export type HarnessInspection = Omit<HarnessMaintenanceEntry, "previous" | "operation">;
 type Selection = HarnessInspection["selection"];
 

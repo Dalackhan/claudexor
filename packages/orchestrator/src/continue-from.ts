@@ -18,21 +18,19 @@
  * the caller's continuation text, recorded as `context/work-order.md` so the
  * next link reads one file instead of walking the chain.
  */
-import { existsSync, mkdirSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { ArtifactStore } from "@claudexor/artifact-store";
-import { readRunEvents, retainedOutput } from "@claudexor/event-log";
 import {
   HarnessRunSpec as HarnessRunSpecSchema,
-  RunResumable,
-  RunTelemetry,
+  type RunResumable,
   type HarnessRunSpec,
   type ContinuationSources,
   type ResumableCause,
   type SessionCapsule,
 } from "@claudexor/schema";
 import { readTextSafe } from "@claudexor/util";
-import { retainedEnvelopeInChain } from "@claudexor/workspace";
+import { readContinuationEvidence, retainedEnvelopeInChain } from "@claudexor/workspace";
 import {
   decideCarrier,
   prepareCarrier,
@@ -49,12 +47,7 @@ import type { InRunContinuityDeps } from "./inrun-continuity-types.js";
 import { routeListsModel } from "./modelGovernance.js";
 import { uncertainInputFor, type ContinuedTry } from "./inrun-continuity-carrier.js";
 import type { AttemptTelemetry } from "./attemptTelemetry.js";
-import {
-  readSessionCapsule,
-  registryProfile,
-  storeEnvFor,
-  writeSessionCapsule,
-} from "./session-capsule.js";
+import { registryProfile, storeEnvFor, writeSessionCapsule } from "./session-capsule.js";
 
 /** The predecessor a successor continues, resolved by the daemon from its own records. */
 export interface ContinueFromSource {
@@ -68,6 +61,8 @@ export interface ContinueFromSource {
   preference: CarrierPreference;
   /** Earlier chain links, newest first; a refused head may own no carrier yet. */
   ancestors?: ContinuationSources;
+  /** Earlier trees already expired; disclosed but never read as evidence. */
+  expiredAncestors?: string[];
   /** Captured before inheritance/defaults; a caller-selected model always wins. */
   inheritModel?: boolean;
   /** Inherited project scope, used only when no capsule/workspace records the root. */
@@ -99,55 +94,9 @@ interface PredecessorFacts {
   root: string | null;
 }
 
-/** The capsule of the predecessor's session: the attempt matching the
- * terminal `resumable.session`, else the most recently located one. */
-function heldSession(
-  runDir: string,
-  nativeSessionId: string | null,
-): { attemptId: string; capsule: SessionCapsule } | null {
-  const attemptsDir = join(runDir, "attempts");
-  if (!existsSync(attemptsDir)) return null;
-  const held = readdirSync(attemptsDir)
-    .sort()
-    .flatMap((attemptId) => {
-      const capsule = readSessionCapsule(join(attemptsDir, attemptId));
-      return capsule ? [{ attemptId, capsule }] : [];
-    });
-  return (
-    held.find((entry) => entry.capsule.nativeSessionId === nativeSessionId) ??
-    held.reduce<(typeof held)[number] | null>(
-      (newest, entry) =>
-        newest && (newest.capsule.mtimeMs ?? 0) > (entry.capsule.mtimeMs ?? 0) ? newest : entry,
-      null,
-    )
-  );
-}
-
-function readSource(store: ArtifactStore, from: ContinueFromSource): PredecessorFacts {
-  const finalDir = join(from.runDir, "final");
-  const resumable = RunResumable.safeParse(store.readYaml(join(finalDir, "resumable.yaml"))).data;
-  const telemetry = RunTelemetry.safeParse(store.readYaml(join(finalDir, "telemetry.yaml"))).data;
-  const held = heldSession(from.runDir, resumable?.session?.nativeSessionId ?? null);
-  const attemptId = held?.attemptId ?? telemetry?.final_attempt_id ?? "a01";
-  const attempt = telemetry?.attempts.find((entry) => entry.attempt_id === attemptId);
-  const patch =
-    readTextSafe(join(from.runDir, "attempts", attemptId, "patch.diff")) ??
-    readTextSafe(join(finalDir, "patch.diff")) ??
-    "";
-  const events = readRunEvents(join(from.runDir, "events.jsonl"));
-  const output =
-    readTextSafe(join(finalDir, "answer.md"))?.trim() ||
-    readTextSafe(join(finalDir, "retained-output.md"))?.trim() ||
-    retainedOutput(events.events, events.malformed) ||
-    "";
-  const hasEvidence =
-    !!patch.trim() ||
-    !!output ||
-    events.events.some(
-      (event) =>
-        event.type === "harness.event" &&
-        ["tool_call", "file_change"].includes(String(event.payload["type"])),
-    );
+function readSource(from: ContinueFromSource): PredecessorFacts {
+  const { resumable, held, attemptId, attempt, patch, output, hasEvidence } =
+    readContinuationEvidence(from.runDir);
   const cause: ResumableCause =
     resumable?.cause ??
     (from.state === "interrupted"
@@ -179,13 +128,11 @@ function readSource(store: ArtifactStore, from: ContinueFromSource): Predecessor
   };
 }
 
-function readPredecessor(store: ArtifactStore, from: ContinueFromSource): PredecessorFacts {
-  const own = readSource(store, from);
+function readPredecessor(from: ContinueFromSource): PredecessorFacts {
+  const own = readSource(from);
   for (const source of [from, ...(from.ancestors ?? [])]) {
     const facts =
-      source === from
-        ? own
-        : readSource(store, { ...from, ...source, scopeRoot: source.scopeRoot });
+      source === from ? own : readSource({ ...from, ...source, scopeRoot: source.scopeRoot });
     if (facts.capsule || facts.resumable || facts.hasEvidence)
       return { ...facts, workOrder: own.workOrder };
   }
@@ -227,12 +174,12 @@ export async function openContinuity(
   const from = continuation?.from;
   if (!continuation || !from) return { continuity: new InRunContinuity(deps), spec };
   continuation.from = null;
-  const pred = readPredecessor(store, from);
+  const pred = readPredecessor(from);
   const completed = pred.resumable === null && from.state === "succeeded";
   const evidenceSources: PredecessorEvidenceSource[] = [from, ...(from.ancestors ?? [])]
     .reverse()
     .map((source) => {
-      const facts = readSource(store, { ...from, ...source });
+      const facts = readSource({ ...from, ...source });
       return {
         runDir: facts.runDir,
         attemptId: facts.attemptId,
@@ -310,7 +257,11 @@ export async function openContinuity(
       ]
         .filter(Boolean)
         .join("\n");
-  const withNote = (text: string) => [treeNote, text.trim()].filter(Boolean).join("\n\n");
+  const expiredNote = from.expiredAncestors?.length
+    ? `Earlier continuation evidence expired by retention: ${from.expiredAncestors.join(", ")}. Continue using the intact predecessor's evidence; the expired trees are unavailable.`
+    : "";
+  const withNote = (text: string) =>
+    [expiredNote, treeNote, text.trim()].filter(Boolean).join("\n\n");
   const native = prepared.carrier === "native" || prepared.carrier === "native_moved";
   let composed: HarnessRunSpec;
   if (prepared.carrier === "native" || prepared.carrier === "native_moved") {

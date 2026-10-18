@@ -1,5 +1,4 @@
-import { lstatSync } from "node:fs";
-import { join } from "node:path";
+import { runFilesExpired } from "@claudexor/workspace";
 import type { JobRecord } from "./job-record.js";
 
 /** Expiration is irreversible even while its asynchronous cleanup is pending.
@@ -9,16 +8,11 @@ export function assertUnexpiredRunFiles(
   record: Pick<JobRecord, "id" | "runId" | "runDir"> | undefined,
 ): void {
   if (!record?.runDir) return;
-  try {
-    lstatSync(join(record.runDir, "tombstone.yaml"));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw error;
-  }
+  if (!runFilesExpired(record.runDir)) return;
   throw Object.assign(new Error(`run ${record.runId ?? record.id} expired by retention`), {
     code: "run_expired_by_retention",
     status: 410,
     retryable: false,
-    requiredActions: ["Start a new run; expired evidence cannot be reused."],
+    requiredActions: ["Use Run Again to start a new run; expired evidence cannot be reused."],
   });
 }

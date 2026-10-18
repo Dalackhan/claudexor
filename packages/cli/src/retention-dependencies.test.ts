@@ -158,7 +158,7 @@ it.each(["queued", "running"])(
   },
 );
 
-it("refuses a continuation after expiration is published, including an expired ancestor", async () => {
+it("refuses an expired predecessor while allowing intact evidence beyond an expired ancestor", async () => {
   const source = oldRun("expired");
   const gc = runner();
   expect((await gc({ dry_run: false })).deleted_runs.map((r) => r.run_id)).toEqual(["expired"]);
@@ -167,14 +167,11 @@ it("refuses a continuation after expiration is published, including an expired a
     expect.objectContaining({ code: "run_expired_by_retention", status: 410 }),
   );
   expect(sql.graph.commands.current().get("too-late")).toBeUndefined();
-  // Historical chain with an already expired source must not acquire a new
-  // claim either; irreversible cleanup must never revive partial evidence.
+  // A historical intact head supplies its own evidence after upgrade.
   const ancestor = oldRun("ancestor");
   oldRun("head", { continueFrom: "ancestor" });
   writeFileSync(join(ancestor.root, "tombstone.yaml"), "published expiration");
-  expect(() => accept("too-late-chain", { continueFrom: "head" })).toThrow(
-    expect.objectContaining({ code: "run_expired_by_retention" }),
-  );
+  expect(() => accept("intact-chain", { continueFrom: "head" })).not.toThrow();
 });
 
 it("fails closed on unreadable immutable command dependencies", async () => {

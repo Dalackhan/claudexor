@@ -3180,8 +3180,7 @@ historical params do not reliably identify every source file used after an await
 retired run leaves a tombstone projection behind, so its artifacts answer
 with a typed 410 `run_expired_by_retention` — never a mysterious 404. The
 last protection check and exclusive publication of the small prepared tombstone
-do not yield. Continuation admission checks the predecessor chain for that published
-expiration before accepting a new claim; Exact Retry, frozen-plan and delivery admission
+do not yield. Continuation admission refuses an expired predecessor. If older links expired, it uses the runtime carrier’s evidence reader to find an intact capsule, resumable or output source; ordinary unexpired admission does not scan evidence bodies. Earlier expired ancestors are excluded from file reads and disclosed in the successor notice. Exact Retry of expired evidence directs the caller to Run Again. Exact Retry, frozen-plan and delivery admission
 use the same expiration fence. Existing idempotent delivery receipts still replay.
 An expired directory cannot become evidence again.
 Readers see that expiration while recursive deletion of the previously

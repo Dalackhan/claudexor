@@ -8,6 +8,7 @@ import { retentionPages } from "./retention-pages.js";
 import { retentionChanges } from "./retention-changes.js";
 import { RetentionReferenceReader } from "./retention-reference-reader.js";
 import { commandRetentionReferences } from "./retention-command-references.js";
+import { retentionGenerations } from "./retention-generations.js";
 
 export interface DiskRetentionReferences {
   /** Exact inventory witness, used for lane sweeping that cannot absorb new owners. */
@@ -20,6 +21,9 @@ export interface DiskRetentionReferences {
   hasActiveCommands?: () => boolean;
   /** Caller releases the observation after all deletions, including error paths. */
   close?: () => void;
+  /** Recovery holds are receipt facts; completed quarantine is not a hold. */
+  blocked?: string;
+  errors?: string[];
   projectRoots: string[];
   /** Retained active/archived registrations; thread root names alone are not ownership. */
   registeredProjectRoots: Set<string>;
@@ -84,74 +88,53 @@ export async function diskRetentionReferences(
     const changes = store.prepare("SELECT total_changes() AS n");
     const version = (changes.get() as { n: number }).n;
     const isCurrent = () => (changes.get() as { n: number }).n === version;
-    const registeredProjectRoots = new Set(
-      (store.prepare("SELECT root FROM project").all() as Array<{ root: string }>).map(
-        (r) => r.root,
-      ),
-    );
-    const roots = new Set(registeredProjectRoots);
-    const protectedProjectRoots = new Set<string>();
-    const unavailable = store
-      .prepare(
-        `SELECT q.id,q.name,p.root FROM partition q
-    LEFT JOIN project p ON p.id=q.project_id WHERE q.status NOT IN ('ready','archived')`,
-      )
-      .all() as Array<{ id: number; name: string; root: string | null }>;
-    for (const partition of unavailable) {
-      if (partition.root) protectedProjectRoots.add(partition.root);
-      const commandRoots = store
-        .prepare(
-          "SELECT DISTINCT scope_root AS root FROM command WHERE pid=? AND scope_root IS NOT NULL",
-        )
-        .all(partition.id) as Array<{ root: string }>;
-      for (const { root } of commandRoots) protectedProjectRoots.add(root);
-      if (!partition.root && partition.name === "global") {
-        throw new Error("disk retention references require recovery of a global generation");
-      }
-    }
-    // A current project without a ready/archive generation cannot prove absence either.
-    for (const row of store
-      .prepare(
-        `SELECT p.root FROM project p LEFT JOIN partition q ON q.id=p.current_pid
-    WHERE q.id IS NULL OR q.status NOT IN ('ready','archived')`,
-      )
-      .all() as Array<{ root: string }>) {
-      protectedProjectRoots.add(row.root);
-    }
-    const reader = new RetentionReferenceReader(store, ignoreThreadIds);
-    for await (const rows of retentionPages<{ state: string; body: Uint8Array }>(
+    const generations = retentionGenerations(store);
+    const { registeredProjectRoots, protectedProjectRoots, errors, blocked } = generations;
+    const roots = new Set([...registeredProjectRoots, ...protectedProjectRoots]);
+    const retained = blocked ? () => false : generations.retained;
+    const reader = new RetentionReferenceReader(store, ignoreThreadIds, retained);
+    for await (const rows of retentionPages<{ pid: number; state: string; body: Uint8Array }>(
       store,
       "thread",
-      "state,body",
+      "pid,state,body",
     )) {
       for (const row of rows) {
         await yieldToAdmission();
         const thread = reader.thread(row);
         if (!thread) continue;
         for (const sessionRow of store
-          .prepare("SELECT thread_id,harness_id,body FROM session WHERE thread_id=?")
-          .all(thread.id) as Array<{ thread_id: string; harness_id: string; body: Uint8Array }>)
+          .prepare("SELECT pid,thread_id,harness_id,body FROM session WHERE thread_id=?")
+          .all(thread.id) as Array<{
+          pid: number;
+          thread_id: string;
+          harness_id: string;
+          body: Uint8Array;
+        }>)
           reader.session(sessionRow, thread);
         for (const turnRow of store
-          .prepare("SELECT thread_id,body FROM turn WHERE thread_id=?")
-          .all(thread.id) as Array<{ thread_id: string; body: Uint8Array }>) {
+          .prepare("SELECT pid,thread_id,body FROM turn WHERE thread_id=?")
+          .all(thread.id) as Array<{ pid: number; thread_id: string; body: Uint8Array }>) {
           await yieldToAdmission();
           reader.turn(turnRow, thread);
         }
       }
     }
     for (const row of store
-      .prepare("SELECT run_id FROM interaction WHERE state='pending'")
-      .all() as Array<{ run_id: string }>)
-      reader.add(row.run_id);
-    const commands = await commandRetentionReferences(store, reader.runs);
+      .prepare("SELECT pid,run_id FROM interaction WHERE state='pending'")
+      .all() as Array<{ pid: number; run_id: string }>)
+      if (retained(row.pid)) reader.add(row.run_id);
+    const commands = await commandRetentionReferences(store, retained, reader.runs);
     const readChange = ({
       table,
       id,
     }: Parameters<Parameters<typeof changesObserved.current>[0]>[0]) => {
       if (table === "command") commands.refresh(id);
       else if (table === "blob") {
-        const owner = store.prepare("SELECT 1 FROM command WHERE params_sha=? LIMIT 1").get(id);
+        const owner = store
+          .prepare(
+            "SELECT 1 FROM command c JOIN partition q ON q.id=c.pid WHERE params_sha=? AND q.status IN ('ready','archived') LIMIT 1",
+          )
+          .get(id);
         if (owner) throw new Error("immutable retention command body changed during inventory");
       } else if (table !== "project" && table !== "partition") reader.refresh(table, id);
     };
@@ -167,6 +150,8 @@ export async function diskRetentionReferences(
         recheck() && changesObserved.nativeCurrent() && !commands.hasActiveCommands(),
       hasActiveCommands: commands.hasActiveCommands,
       close: changesObserved.close,
+      blocked,
+      errors,
       projectRoots: [...roots],
       registeredProjectRoots,
       protectedProjectRoots,

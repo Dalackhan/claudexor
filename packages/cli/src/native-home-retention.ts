@@ -45,6 +45,7 @@ export function createNativeHomeRetention(deps: {
       try {
         const snapshot = await deps.threads.retentionReferences(request.ignoredThreadIds);
         closeReferences = () => snapshot.close?.();
+        if (snapshot.blocked) throw new Error(snapshot.blocked);
         if (
           deps.isBusy() ||
           snapshot.hasActiveCommands?.() ||
@@ -54,7 +55,9 @@ export function createNativeHomeRetention(deps: {
             "native homes kept while a run or setup operation is active or unresolved",
           );
         if (snapshot.protectedProjectRoots.size)
-          throw new Error("native homes kept until unavailable project generations recover");
+          throw new Error(
+            `native homes kept: ${(snapshot.errors ?? [...snapshot.protectedProjectRoots]).join("; ")}`,
+          );
         canPrune = () => {
           try {
             return (snapshot.nativeCurrent ?? snapshot.isCurrent)() && !deps.isBusy();

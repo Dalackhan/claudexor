@@ -12,6 +12,7 @@ export async function retentionProjects(
   references: DiskRetentionReferences,
   noProjectRoot: string,
   healthyRoots: ReadonlySet<string>,
+  errors: string[] = [],
 ): Promise<RetentionProject[]> {
   const projects: RetentionProject[] = [];
   const byHash = new Map<string, string>();
@@ -46,6 +47,10 @@ export async function retentionProjects(
       )
         continue;
       const runtime = join(directory, entry.name);
+      if (references.blocked) {
+        errors.push(`namespace ${byHash.get(entry.name) ?? runtime} kept: ${references.blocked}`);
+        continue;
+      }
       const runsDir = join(runtime, "runs");
       const runsStat = await optionalStat(runsDir);
       if (runsStat && !runsStat.isDirectory()) continue;
@@ -62,7 +67,12 @@ export async function retentionProjects(
   const inventoriedRoots = new Set(projects.map((project) => project.root));
   // A healthy repository can contain review debris before its first run.
   for (const root of healthyRoots) {
-    if (references.protectedProjectRoots.has(root) || inventoriedRoots.has(root)) continue;
+    if (
+      references.blocked ||
+      references.protectedProjectRoots.has(root) ||
+      inventoriedRoots.has(root)
+    )
+      continue;
     const runtime = projectRuntimeDir(root);
     const runtimeStat = await optionalStat(runtime);
     if (runtimeStat && !runtimeStat.isDirectory()) continue;
@@ -82,6 +92,7 @@ export async function retentionProjects(
   if (noProjectRuntimeStat && !noProjectRuntimeStat.isDirectory()) return projects;
   const noProjectRunsStat = await optionalStat(noProjectRuns);
   if (
+    !references.blocked &&
     (!noProjectRunsStat || noProjectRunsStat.isDirectory()) &&
     !projects.some((project) => project.runsDir === noProjectRuns)
   )

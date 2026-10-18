@@ -139,8 +139,14 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
     const previewPurged = new Set(request.dry_run ? trash.purged : []);
     const references = await deps.threads.retentionReferences(previewPurged);
     try {
-      const healthyRoots = new Set(deps.threads.healthyProjectRoots());
-      const gcProjects = await retentionProjects(references, noProjectRoot, healthyRoots);
+      const healthyRoots = new Set(references.blocked ? [] : deps.threads.healthyProjectRoots());
+      const inventoryErrors = [...(references.errors ?? [])];
+      const gcProjects = await retentionProjects(
+        references,
+        noProjectRoot,
+        healthyRoots,
+        inventoryErrors,
+      );
       // Lane sweeping still uses only served healthy roots; archived lanes can
       // belong to retained threads invisible to the public listing.
       const roots = [...healthyRoots, noProjectRoot];
@@ -149,7 +155,7 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
       // set as the run GC): a quarantined partition contributes no live thread
       // ids, so its lanes are left untouched until it recovers rather than swept
       // as false orphans. Skip in dry-run — a GC preview must not delete bytes.
-      if (!request.dry_run) {
+      if (!request.dry_run && !references.blocked) {
         const liveThreadsByRoot = new Map<string, Set<string>>();
         for (const thread of await deps.threads.retentionThreads()) {
           if (thread.state === "purged") continue;
@@ -212,7 +218,7 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
         morePending ||= native.truncated;
         if (request.native_home_report) receipt.native_homes = native.reports;
       }
-      receipt.errors.unshift(...leftovers.errors, ...trash.errors);
+      receipt.errors.unshift(...leftovers.errors, ...trash.errors, ...inventoryErrors);
       if (request.trash_purge_report) {
         receipt.purged_threads = trash.purged;
         receipt.purge_leftovers = leftovers.finished;

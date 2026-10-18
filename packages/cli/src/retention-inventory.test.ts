@@ -207,14 +207,14 @@ it("fails closed on corrupt archived thread references before deleting any names
   expect(existsSync(join(path, "final"))).toBe(true);
 });
 it("preserves unavailable generations and never follows a linked runtime namespace", async () => {
-  const projectRoot = repo("quarantined");
+  const projectRoot = repo("recovery-pending");
   const project = sql.graph.projects.register({
     root: projectRoot,
     clientId: "test",
     idempotencyKey: "project",
   }).project;
   sql.store
-    .prepare("UPDATE partition SET status='quarantined' WHERE id=?")
+    .prepare("UPDATE partition SET status='recovery_required' WHERE id=?")
     .run(sql.graph.projects.partition(project.id)!.pid);
   const protectedRun = run(projectRoot, "protected");
   const linkedRepo = repo("linked");

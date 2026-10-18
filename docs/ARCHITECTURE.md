@@ -3171,7 +3171,7 @@ referenced by any non-purged thread's lineage or retained command dependencies
 Exact Retry sources and frozen plans, plus durable continuation source lists after
 command-history pruning), undelivered/applyable
 patches or copied-file results, and trees with no terminal evidence are protected
-fail-closed. Partial file delivery retains that protection; explicit discard
+fail-closed. A `quarantined` generation is retired journal evidence: its rows do not own references or keep unsettled commands active, and completed quarantine does not stop retention. Terminal metadata may still date its old payloads. Archived generations remain reference owners. Pending or unknown recovery states keep affected namespaces, named with their partition and status in `errors[]`; pending global recovery holds all namespaces. Partial file delivery retains that protection; explicit discard
 ends pending delivery but does not delete artifacts immediately or bypass other
 retention protections. Unsettled delivery commands keep the pass closed: their
 historical params do not reliably identify every source file used after an await. A

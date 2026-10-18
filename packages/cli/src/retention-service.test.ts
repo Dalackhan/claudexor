@@ -183,9 +183,9 @@ describe("retention service composition", () => {
     expect(overrideReceipt.data_root_unrecognized).toEqual(["v1", "v2", "v3"]);
   });
 
-  it("fails CLOSED for a project whose partition journal is quarantined (W3.6)", async () => {
+  it("fails CLOSED for a project whose partition journal needs recovery (W3.6)", async () => {
     // The reference set (listThreads/turnsFor) only spans READY partitions. If
-    // a quarantined project's runs were still swept, they would be judged
+    // an unavailable project's runs were still swept, they would be judged
     // against an EMPTY reference set and a live thread's history would vanish.
     const root = projectWithAgedRun("run-quarantined");
     const run = await createRetentionRunner(

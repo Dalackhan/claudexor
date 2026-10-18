@@ -20,6 +20,7 @@ const Dependencies = RecordedControlRunStartRequest.pick({
  * chain, including terminal intermediates and archived generations. */
 type CommandRow = {
   id: string;
+  pid: number;
   kind: string;
   runId: string | null;
   runDir: string | null;
@@ -29,10 +30,11 @@ type CommandRow = {
   params_sha: string;
 };
 const COLUMNS =
-  "id,kind,run_id AS runId,run_dir AS runDir,state,finished_at AS finishedAt,continue_from,params_sha";
+  "id,pid,kind,run_id AS runId,run_dir AS runDir,state,finished_at AS finishedAt,continue_from,params_sha";
 
 export async function commandRetentionReferences(
   store: EngineStore,
+  retained: (pid: number) => boolean,
   referencedRunIds = new Set<string>(),
 ) {
   const blobs = new BlobFiles(store);
@@ -46,7 +48,29 @@ export async function commandRetentionReferences(
     const runId = aliases.get(id);
     if (runId) referencedRunIds.add(runId);
   };
+  const record = (row: CommandRow) => {
+    if (row.runId === null) return;
+    const next = { runId: row.runId, state: row.state, finishedAt: row.finishedAt ?? undefined };
+    const previous = byRun.get(row.runId);
+    if (previous) Object.assign(previous, next);
+    else {
+      records.push(next);
+      byRun.set(row.runId, next);
+    }
+  };
   const read = (row: CommandRow) => {
+    if (!retained(row.pid)) {
+      // Terminal timestamps can date old payloads without reading retired
+      // requests or treating their abandoned work as an active owner.
+      if (
+        row.kind === "product" &&
+        isTerminalLifecycle(row.state) &&
+        row.runId &&
+        !byRun.has(row.runId)
+      )
+        record(row);
+      return;
+    }
     // Delivery may read source files after awaits, including a repeated
     // apply. Historical delivery params do not reliably name the source.
     if (row.kind === "delivery" && !isTerminalLifecycle(row.state))
@@ -63,15 +87,9 @@ export async function commandRetentionReferences(
     if (row.runId !== null) {
       aliases.set(row.id, row.runId);
       if (referencedRunIds.has(row.id)) add(row.runId);
-      const next = { runId: row.runId, state: row.state, finishedAt: row.finishedAt ?? undefined };
-      const previous = byRun.get(row.runId);
       // The pass's lookup retains these objects, so final lifecycle/age checks
       // observe changes without rebuilding a map of the entire command store.
-      if (previous) Object.assign(previous, next);
-      else {
-        records.push(next);
-        byRun.set(row.runId, next);
-      }
+      record(row);
     }
   };
   for await (const rows of retentionPages<CommandRow>(store, "command", COLUMNS)) {
@@ -90,7 +108,8 @@ export async function commandRetentionReferences(
         CommandRow | undefined;
       if (!row) return; // Releases are recognized on the next pass.
       // A newly bound run was absent from the pass's original lifecycle map.
-      if (row.kind === "product" && row.runId && !byRun.has(row.runId)) add(row.runId);
+      if (retained(row.pid) && row.kind === "product" && row.runId && !byRun.has(row.runId))
+        add(row.runId);
       read(row);
     },
   };

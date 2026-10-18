@@ -1,4 +1,5 @@
-import { RecordedControlRunStartRequest } from "@claudexor/schema";
+import { isTerminalLifecycle, RecordedControlRunStartRequest } from "@claudexor/schema";
+import { readContinuationSources } from "@claudexor/workspace";
 import { setImmediate as yieldToAdmission } from "node:timers/promises";
 import { BlobFiles } from "./blob-files.js";
 import { retentionPages } from "./retention-pages.js";
@@ -29,6 +30,7 @@ export async function commandRetentionReferences(store: EngineStore): Promise<{
     id: string;
     kind: string;
     runId: string | null;
+    runDir: string | null;
     state: string;
     finishedAt: string | null;
     continue_from: string | null;
@@ -36,11 +38,19 @@ export async function commandRetentionReferences(store: EngineStore): Promise<{
   }>(
     store,
     "command",
-    "id,kind,run_id AS runId,state,finished_at AS finishedAt,continue_from,params_sha",
+    "id,kind,run_id AS runId,run_dir AS runDir,state,finished_at AS finishedAt,continue_from,params_sha",
   )) {
     for (const row of rows) {
+      // Delivery may read source files after awaits, including a repeated
+      // apply of an already delivered result. Historical delivery params do
+      // not reliably name its source run, so absence cannot yet be proved.
+      if (row.kind === "delivery" && !isTerminalLifecycle(row.state))
+        throw new Error("disk retention kept while a delivery command is unsettled");
       if (row.kind !== "product") continue;
       await yieldToAdmission();
+      if (row.runDir)
+        for (const source of readContinuationSources(row.runDir, { strict: true }))
+          referencedRunIds.add(source.runId);
       const params = Dependencies.parse(JSON.parse(blobs.read(row.params_sha).toString("utf8")));
       if ((params.continueFrom ?? null) !== row.continue_from)
         throw new Error(`command ${row.id} retention predecessor disagrees`);

@@ -12,6 +12,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { ArtifactStore } from "@claudexor/artifact-store";
 import { ControlRunStartRequest, WorkProduct } from "@claudexor/schema";
+import { writeContinuationSources } from "@claudexor/workspace";
+import {
+  beginDeliveryCommand,
+  completeDeliveryCommand,
+} from "../../daemon/src/delivery-command.js";
 import { sqlFixture } from "../../daemon/src/store/test-support/sql-fixture.js";
 import { admitCommandRequest } from "../../daemon/src/command-rpc.js";
 import { createRetentionRunner } from "./retention-service.js";
@@ -187,4 +192,49 @@ it("fails closed on unreadable immutable command dependencies", async () => {
   );
   await expect(runner()({ dry_run: false })).rejects.toThrow();
   expect(existsSync(join(source.finalDir, "answer.md"))).toBe(true);
+});
+
+it("retains durable continuation ancestors after intermediate command history is pruned", async () => {
+  const ancestor = oldRun("ancestor");
+  const parent = oldRun("parent", { continueFrom: "ancestor" });
+  const head = oldRun("head", { continueFrom: "parent" });
+  oldRun("neighbor");
+  writeContinuationSources(
+    head.root,
+    [ancestor, parent].map((p) => ({
+      runId: p === ancestor ? "ancestor" : "parent",
+      runDir: p.root,
+      state: "succeeded",
+    })),
+  );
+  sql.store.transaction(() =>
+    sql.store.prepare("DELETE FROM command WHERE id IN ('job-ancestor','job-parent')").run(),
+  );
+  const receipt = await runner()({ dry_run: false });
+  expect(receipt.deleted_runs.map((r) => r.run_id).sort()).toEqual(["head", "neighbor"]);
+  for (const p of [ancestor, parent]) expect(existsSync(join(p.finalDir, "answer.md"))).toBe(true);
+});
+
+it("fails closed on unreadable durable continuation sources", async () => {
+  const head = oldRun("head");
+  const neighbor = oldRun("neighbor");
+  writeFileSync(join(head.root, "context", "continuation.json"), "malformed");
+  await expect(runner()({ dry_run: false })).rejects.toThrow();
+  expect(existsSync(join(neighbor.finalDir, "answer.md"))).toBe(true);
+});
+
+it("keeps delivery source files while unsettled and retires the old unreferenced run after settlement", async () => {
+  const source = oldRun("source");
+  const command = beginDeliveryCommand(sql.graph.commands.current(), params(), {
+    key: "delivery",
+    client: "fixture",
+    operation: "run.apply",
+    request: { runId: "source" },
+  });
+  await expect(runner()({ dry_run: false })).rejects.toThrow("delivery command is unsettled");
+  expect(existsSync(join(source.finalDir, "answer.md"))).toBe(true);
+  completeDeliveryCommand(sql.graph.commands.current(), command.id, { applied: true });
+  expect((await runner()({ dry_run: false })).deleted_runs.map((r) => r.run_id)).toEqual([
+    "source",
+  ]);
 });

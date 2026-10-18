@@ -12,10 +12,16 @@ export function writeContinuationSources(runDir: string, sources: ContinuationSo
   writeFileSync(path, JSON.stringify(ContinuationSources.parse(sources)) + "\n");
 }
 
-export function readContinuationSources(runDir: string): ContinuationSources {
+export function readContinuationSources(
+  runDir: string,
+  options: { strict?: boolean } = {},
+): ContinuationSources {
   try {
     return ContinuationSources.parse(JSON.parse(readFileSync(join(runDir, SOURCES_FILE), "utf8")));
-  } catch {
+  } catch (error) {
+    // Absence is normal for a non-continuation. Retirement must distinguish
+    // that from unreadable evidence instead of proving false non-ownership.
+    if (options.strict && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     return [];
   }
 }

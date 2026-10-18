@@ -3154,11 +3154,13 @@ whether its root disappeared or it has no registration. Thread-derived root name
 do not establish that ownership. All other protections remain: live/blocked records, runs
 referenced by any non-purged thread's lineage or retained command dependencies
 (queued claims included: continuation predecessors and their full ancestor chains,
-Exact Retry sources and frozen plans), undelivered/applyable
+Exact Retry sources and frozen plans, plus durable continuation source lists after
+command-history pruning), undelivered/applyable
 patches or copied-file results, and trees with no terminal evidence are protected
 fail-closed. Partial file delivery retains that protection; explicit discard
 ends pending delivery but does not delete artifacts immediately or bypass other
-retention protections. A
+retention protections. Unsettled delivery commands keep the pass closed: their
+historical params do not reliably identify every source file used after an await. A
 retired run leaves a tombstone projection behind, so its artifacts answer
 with a typed 410 `run_expired_by_retention` — never a mysterious 404. The
 last protection check and exclusive publication of the small prepared tombstone

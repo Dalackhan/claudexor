@@ -138,85 +138,92 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
     const trash = await purgeExpiredTrash(deps, maintenanceThreads, request.dry_run);
     const previewPurged = new Set(request.dry_run ? trash.purged : []);
     const references = await deps.threads.retentionReferences(previewPurged);
-    const healthyRoots = new Set(deps.threads.healthyProjectRoots());
-    const gcProjects = await retentionProjects(references, noProjectRoot, healthyRoots);
-    // Lane sweeping still uses only served healthy roots; archived lanes can
-    // belong to retained threads invisible to the public listing.
-    const roots = [...healthyRoots, noProjectRoot];
-    // INV-034 lifecycle owner (c): remove durable per-lane read-only homes whose
-    // thread no longer exists. Bounded to HEALTHY roots only (same fail-closed
-    // set as the run GC): a quarantined partition contributes no live thread
-    // ids, so its lanes are left untouched until it recovers rather than swept
-    // as false orphans. Skip in dry-run — a GC preview must not delete bytes.
-    if (!request.dry_run) {
-      const liveThreadsByRoot = new Map<string, Set<string>>();
-      for (const thread of await deps.threads.retentionThreads()) {
-        if (thread.state === "purged") continue;
-        const root = thread.repo?.root ?? noProjectRoot;
-        (liveThreadsByRoot.get(root) ?? liveThreadsByRoot.set(root, new Set()).get(root)!).add(
-          thread.id,
-        );
-      }
-      for (const root of roots) {
-        await yieldToAdmission();
-        if (!references.isCurrent()) break;
-        try {
-          sweepOrphanLanes(root, liveThreadsByRoot.get(root) ?? new Set());
-        } catch {
-          /* best-effort: orphan lane dirs are harmless and re-sweepable */
+    try {
+      const healthyRoots = new Set(deps.threads.healthyProjectRoots());
+      const gcProjects = await retentionProjects(references, noProjectRoot, healthyRoots);
+      // Lane sweeping still uses only served healthy roots; archived lanes can
+      // belong to retained threads invisible to the public listing.
+      const roots = [...healthyRoots, noProjectRoot];
+      // INV-034 lifecycle owner (c): remove durable per-lane read-only homes whose
+      // thread no longer exists. Bounded to HEALTHY roots only (same fail-closed
+      // set as the run GC): a quarantined partition contributes no live thread
+      // ids, so its lanes are left untouched until it recovers rather than swept
+      // as false orphans. Skip in dry-run — a GC preview must not delete bytes.
+      if (!request.dry_run) {
+        const liveThreadsByRoot = new Map<string, Set<string>>();
+        for (const thread of await deps.threads.retentionThreads()) {
+          if (thread.state === "purged") continue;
+          const root = thread.repo?.root ?? noProjectRoot;
+          (liveThreadsByRoot.get(root) ?? liveThreadsByRoot.set(root, new Set()).get(root)!).add(
+            thread.id,
+          );
+        }
+        for (const root of roots) {
+          await yieldToAdmission();
+          if (!references.isCurrent()) break;
+          try {
+            sweepOrphanLanes(root, liveThreadsByRoot.get(root) ?? new Set());
+          } catch {
+            /* best-effort: orphan lane dirs are harmless and re-sweepable */
+          }
         }
       }
-    }
-    const receipt = await runRetentionPass(
-      {
-        runsMaxAgeDays: retention.runs_max_age_days,
-        reviewsMaxAgeDays: retention.reviews_max_age_days,
-        keepLastRunsPerProject: retention.keep_last_runs_per_project,
-      },
-      request,
-      {
-        projects: () => gcProjects,
-        records: () => references.records,
-        referencedRunIds: () => references.referencedRunIds,
-        referencesCurrent: references.isCurrent,
-        maxDeletionsPerPass: deps.maxDeletionsPerPass,
-        onTruncated: () => {
-          morePending = true;
+      const receipt = await runRetentionPass(
+        {
+          runsMaxAgeDays: retention.runs_max_age_days,
+          reviewsMaxAgeDays: retention.reviews_max_age_days,
+          keepLastRunsPerProject: retention.keep_last_runs_per_project,
         },
-        // Advisory data-root disclosure: the ONE owned-root derivation
-        // (claudexorOwnedRoot covers both the default ~/.claudexor tree and
-        // an explicit CLAUDEXOR_CONFIG_DIR override) is injected here so the
-        // pass itself never reaches for globals. The mode rides along:
-        // claudexorOwnedRoot() collapses onto userConfigDir() exactly when a
-        // CLAUDEXOR_CONFIG_DIR override is active (in the default mode the
-        // owned root is ~/.claudexor while the config dir is its v3 subtree),
-        // and the override root owns secrets.json/plugins/quota/workspaces at
-        // its top level where the default root does not.
-        dataRoot: claudexorOwnedRoot(),
-        dataRootMode: claudexorOwnedRoot() === userConfigDir() ? "override" : "default",
-      },
-    );
-    const native = await deps.nativeHomes?.({
-      dryRun: request.dry_run,
-      olderThan: Date.now() - retention.runs_max_age_days * 24 * 60 * 60_000,
-      ignoredRunIds: new Set(request.dry_run ? receipt.deleted_runs.map((run) => run.run_id) : []),
-      ignoredThreadIds: previewPurged,
-    });
-    if (native) {
-      receipt.freed_bytes += native.freedBytes;
-      receipt.errors.push(...native.errors);
-      morePending ||= native.truncated;
-      if (request.native_home_report) receipt.native_homes = native.reports;
+        request,
+        {
+          projects: () => gcProjects,
+          records: () => references.records,
+          referencedRunIds: () => references.referencedRunIds,
+          referencesCurrent: references.recheck ?? references.isCurrent,
+          refreshReferences: references.refresh,
+          maxDeletionsPerPass: deps.maxDeletionsPerPass,
+          onTruncated: () => {
+            morePending = true;
+          },
+          // Advisory data-root disclosure: the ONE owned-root derivation
+          // (claudexorOwnedRoot covers both the default ~/.claudexor tree and
+          // an explicit CLAUDEXOR_CONFIG_DIR override) is injected here so the
+          // pass itself never reaches for globals. The mode rides along:
+          // claudexorOwnedRoot() collapses onto userConfigDir() exactly when a
+          // CLAUDEXOR_CONFIG_DIR override is active (in the default mode the
+          // owned root is ~/.claudexor while the config dir is its v3 subtree),
+          // and the override root owns secrets.json/plugins/quota/workspaces at
+          // its top level where the default root does not.
+          dataRoot: claudexorOwnedRoot(),
+          dataRootMode: claudexorOwnedRoot() === userConfigDir() ? "override" : "default",
+        },
+      );
+      const native = await deps.nativeHomes?.({
+        dryRun: request.dry_run,
+        olderThan: Date.now() - retention.runs_max_age_days * 24 * 60 * 60_000,
+        ignoredRunIds: new Set(
+          request.dry_run ? receipt.deleted_runs.map((run) => run.run_id) : [],
+        ),
+        ignoredThreadIds: previewPurged,
+      });
+      if (native) {
+        receipt.freed_bytes += native.freedBytes;
+        receipt.errors.push(...native.errors);
+        morePending ||= native.truncated;
+        if (request.native_home_report) receipt.native_homes = native.reports;
+      }
+      receipt.errors.unshift(...leftovers.errors, ...trash.errors);
+      if (request.trash_purge_report) {
+        receipt.purged_threads = trash.purged;
+        receipt.purge_leftovers = leftovers.finished;
+      }
+      receipt.finished_at = new Date().toISOString();
+      if (morePending) truncatedReceipts.add(receipt);
+      lastReceipt = receipt;
+      return receipt;
+    } finally {
+      references.close?.();
     }
-    receipt.errors.unshift(...leftovers.errors, ...trash.errors);
-    if (request.trash_purge_report) {
-      receipt.purged_threads = trash.purged;
-      receipt.purge_leftovers = leftovers.finished;
-    }
-    receipt.finished_at = new Date().toISOString();
-    if (morePending) truncatedReceipts.add(receipt);
-    lastReceipt = receipt;
-    return receipt;
   };
   const run: RetentionRunner = (request) => {
     const chained = (inFlight ?? Promise.resolve()).then(

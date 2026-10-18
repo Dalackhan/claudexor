@@ -13,10 +13,7 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { ArtifactStore } from "@claudexor/artifact-store";
 import { ControlRunStartRequest, WorkProduct } from "@claudexor/schema";
 import { writeContinuationSources } from "@claudexor/workspace";
-import {
-  beginDeliveryCommand,
-  completeDeliveryCommand,
-} from "../../daemon/src/delivery-command.js";
+import { completeDeliveryCommand } from "../../daemon/src/delivery-command.js";
 import { sqlFixture } from "../../daemon/src/store/test-support/sql-fixture.js";
 import { admitCommandRequest } from "../../daemon/src/command-rpc.js";
 import { createRetentionRunner } from "./retention-service.js";
@@ -225,16 +222,41 @@ it("fails closed on unreadable durable continuation sources", async () => {
 
 it("keeps delivery source files while unsettled and retires the old unreferenced run after settlement", async () => {
   const source = oldRun("source");
-  const command = beginDeliveryCommand(sql.graph.commands.current(), params(), {
+  const input = {
     key: "delivery",
     client: "fixture",
     operation: "run.apply",
     request: { runId: "source" },
-  });
+  };
+  const command = sql.graph.commands.beginDelivery(params(), input);
   await expect(runner()({ dry_run: false })).rejects.toThrow("delivery command is unsettled");
   expect(existsSync(join(source.finalDir, "answer.md"))).toBe(true);
   completeDeliveryCommand(sql.graph.commands.current(), command.id, { applied: true });
   expect((await runner()({ dry_run: false })).deleted_runs.map((r) => r.run_id)).toEqual([
     "source",
   ]);
+  expect(sql.graph.commands.beginDelivery(params(), input).reused).toBe(true);
+  expect(() =>
+    sql.graph.commands.beginDelivery(params(), { ...input, key: "new-delivery" }),
+  ).toThrow(expect.objectContaining({ code: "run_expired_by_retention" }));
 });
+
+it.each(["retryOf", "planRunId", "planRef"])(
+  "refuses a new %s claim on expired evidence while preserving a live source claim",
+  async (dependency) => {
+    const expired = oldRun("expired-source");
+    const live = oldRun("live-source");
+    const ref = (id: string, dir: string) =>
+      dependency === "planRef"
+        ? { runId: id, path: join(dir, "final", "plan.md"), sha256: "a".repeat(64) }
+        : id;
+    accept("allowed", { [dependency]: ref("live-source", live.root) });
+    expect((await runner()({ dry_run: false })).deleted_runs.map((r) => r.run_id)).toEqual([
+      "expired-source",
+    ]);
+    expect(() => accept("too-late", { [dependency]: ref("expired-source", expired.root) })).toThrow(
+      expect.objectContaining({ code: "run_expired_by_retention", status: 410 }),
+    );
+    expect(existsSync(join(live.finalDir, "answer.md"))).toBe(true);
+  },
+);

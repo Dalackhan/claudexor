@@ -5,7 +5,19 @@ export function beginDeliveryCommand(
   store: CommandStorePort,
   params: unknown,
   input: { key: string; client: string; operation: string; request: unknown },
+  admit?: () => void,
 ) {
+  if (
+    admit &&
+    !store.find({
+      params,
+      idempotencyKey: input.key,
+      clientId: input.client,
+      operation: `delivery.${input.operation}`,
+      idempotencyParams: input.request,
+    })
+  )
+    admit();
   const accepted = store.accept({
     id: newId("delivery"),
     params,

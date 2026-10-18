@@ -3139,9 +3139,15 @@ generations (including archived threads and pending interactions); unreadable re
 fail closed, and unavailable project generations protect their namespaces. Unknown
 project roots are disclosed as their runtime namespace. Bulk inventory yields
 to admission; SQL history uses rowid-keyset pages without holding a cursor or
-transaction across a yield. Each run deletion rechecks SQL snapshot validity and mutable
-filesystem protections after its asynchronous byte walk and retirement preparation. A changed SQL owner
-stops remaining deletions and schedules a pass with fresh references. Patch-cache
+transaction across a yield. Each run deletion rereads changed SQL owners and mutable filesystem protections
+after its asynchronous byte walk and retirement preparation. Connection-local TEMP
+triggers observe row identities while the pass runs; no durable schema or writer is
+added. Typed reference reads are shared with the initial inventory. Quota/event
+writes and unrelated metadata do not restart it. References accumulate during a pass
+and lifecycle records refresh before the synchronous last proof and expiration marker.
+Large change batches yield between reads; an unreadable owner, changed project/generation
+topology, or a burst exceeding one final synchronous read page keeps remaining candidates
+and schedules a fresh pass. The pass releases its observer even after failure. Patch-cache
 retirement rechecks directory identity and current link counts before unlink.
 It is also exposed as the schema-first control op
 `POST /v2/maintenance/gc` (dry-run first-class, typed receipt disclosing
@@ -3165,7 +3171,9 @@ retired run leaves a tombstone projection behind, so its artifacts answer
 with a typed 410 `run_expired_by_retention` — never a mysterious 404. The
 last protection check and exclusive publication of the small prepared tombstone
 do not yield. Continuation admission checks the predecessor chain for that published
-expiration before accepting a new claim; an expired directory cannot become evidence again.
+expiration before accepting a new claim; Exact Retry, frozen-plan and delivery admission
+use the same expiration fence. Existing idempotent delivery receipts still replay.
+An expired directory cannot become evidence again.
 Readers see that expiration while recursive deletion of the previously
 inventoried contents runs asynchronously; no directory rename blocks admission.
 A durable intent in the parent's private `.retiring` directory binds the source
@@ -3202,9 +3210,11 @@ native session IDs across all homes of that harness. Archived threads and pinned
 account continuations retain that protection. Missing artifacts have no reference;
 malformed or unreadable references, linked artifact directories, unavailable
 project generations, active/unknown runs, or active/unconfirmed setup work prevent
-native pruning. SQL rows and filesystem inventory yield to admission. The SQL
-snapshot carries SQLite's change count from the sole writer; any intervening
-write (including a run that already finished) invalidates it. Every native unlink
+native pruning. SQL rows and filesystem inventory yield to admission. A native inventory additionally witnesses command lifecycle/dependency changes,
+new thread/turn admission, and session mutations (including work that starts and
+finishes during the scan). Queued product commands without run IDs also hold native
+retirement. Unrelated thread metadata, quota and command receipt writes do not
+invalidate that proof. Every native unlink
 rechecks that proof and the current idle state synchronously with file identity,
 without yielding between proof and deletion. An invalidated inventory keeps the
 remaining files and preserves any deletions already recorded in the receipt. It is conservative:

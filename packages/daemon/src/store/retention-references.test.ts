@@ -49,3 +49,40 @@ it("pages command history even with no threads, admits writes between reads, and
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+it("catches up large reference changes cooperatively, rechecks the last arrival and releases its observer", async () => {
+  const root = mkdtempSync(join(tmpdir(), "retention-catchup-"));
+  const sql = await sqlFixture(root);
+  try {
+    const proof = await sql.graph.threads.retentionReferences();
+    for (let n = 0; n < 150; n++)
+      sql.graph.threads.createThread({ title: `New ${n}`, workspace: "in_place" });
+    expect(proof.recheck!()).toBe(false);
+    const pending = proof.refresh!();
+    let admitted = false;
+    const admission = new Promise<void>((resolve) =>
+      setImmediate(() => {
+        const thread = sql.graph.threads.createThread({
+          title: "Late owner",
+          workspace: "in_place",
+        });
+        sql.graph.threads.createTurn(thread.id, "keep it", { parentRunId: "held" });
+        admitted = true;
+        resolve();
+      }),
+    );
+    await pending;
+    await admission;
+    expect(admitted).toBe(true);
+    expect(proof.recheck!()).toBe(true);
+    expect(proof.referencedRunIds.has("held")).toBe(true);
+    proof.close!();
+    expect(proof.recheck!()).toBe(false);
+    const fresh = await sql.graph.threads.retentionReferences();
+    expect(fresh.recheck!()).toBe(true);
+    fresh.close!();
+  } finally {
+    await sql.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

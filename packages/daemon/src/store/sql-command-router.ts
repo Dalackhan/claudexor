@@ -1,4 +1,5 @@
 import { isJournaledRunEvent } from "../journaled-run-events.js";
+import { assertUnexpiredRunFiles } from "../run-file-admission.js";
 import type { RunEvent, RunTelemetry } from "@claudexor/schema";
 import type { CommandBackend } from "../command-authority.js";
 import {
@@ -112,7 +113,11 @@ export class SqlCommandRouter
     params: unknown,
     input: { key: string; client: string; operation: string; request: unknown },
   ) {
-    return beginDeliveryCommand(this.forRequest(params), params, input);
+    return beginDeliveryCommand(this.forRequest(params), params, input, () => {
+      const request = input.request as { runId?: unknown; runIds?: unknown } | null;
+      for (const id of [request?.runId, ...(Array.isArray(request?.runIds) ? request.runIds : [])])
+        if (typeof id === "string") assertUnexpiredRunFiles(this.queries.select({ ids: [id] })[0]);
+    });
   }
   completeDelivery(id: string, result: unknown): void {
     completeDeliveryCommand(this.findById(id), id, result);

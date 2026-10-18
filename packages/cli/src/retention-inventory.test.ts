@@ -253,7 +253,7 @@ it("keeps each capped receipt's continuation signal across queued manual passes"
   expect(gc.hasMore!()).toBe(false);
 });
 
-it("admits new SQL references during inventory and retries without retiring their runs", async () => {
+it("absorbs new SQL references during inventory while retiring unrelated runs", async () => {
   const projectRoot = repo("admission-during-inventory");
   const held = run(projectRoot, "new-reference");
   const cold = run(projectRoot, "unreferenced-neighbor");
@@ -283,12 +283,13 @@ it("admits new SQL references during inventory and retries without retiring thei
   const gc = runner(undefined, threads);
   const interrupted = await gc({ dry_run: false });
   expect(admitted).toBe(true);
-  expect(interrupted.deleted_runs).toEqual([]);
-  expect(interrupted.errors.join()).toContain("references changed");
-  expect(gc.hasMore!(interrupted)).toBe(true);
-  for (const path of [held, cold]) expect(existsSync(join(path, "final"))).toBe(true);
+  expect(interrupted.deleted_runs.map((row) => row.run_id)).toEqual(["unreferenced-neighbor"]);
+  expect(interrupted.errors).toEqual([]);
+  expect(gc.hasMore!(interrupted)).toBe(false);
+  expect(existsSync(join(held, "final"))).toBe(true);
+  expect(existsSync(join(cold, "final"))).toBe(false);
   const resumed = await gc({ dry_run: false });
-  expect(resumed.deleted_runs.map((row) => row.run_id)).toEqual(["unreferenced-neighbor"]);
+  expect(resumed.deleted_runs).toEqual([]);
   expect(resumed.kept.referenced).toBe(1);
   expect(existsSync(join(held, "final"))).toBe(true);
   expect(gc.hasMore!(resumed)).toBe(false);

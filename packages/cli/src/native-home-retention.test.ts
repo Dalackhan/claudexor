@@ -255,3 +255,27 @@ it("declares unsupported vendor contracts instead of guessing database ownership
     });
   }
 });
+
+it("prunes under unrelated thread metadata writes but keeps homes for an unbound queued command", async () => {
+  const thread = sql.graph.threads.createThread({ title: "Unrelated", workspace: "in_place" });
+  const cold = seed(4);
+  const gc = native(() =>
+    sql.graph.threads.updateThread(thread.id, { title: "Renamed during scan" }),
+  );
+  expect((await gc(request())).errors).toEqual([]);
+  expect(existsSync(cold)).toBe(false);
+  seed(4);
+  sql.graph.commands.current().accept({
+    id: "queued",
+    params: { prompt: "queued" },
+    idempotencyKey: "queued",
+    clientId: "fixture",
+  });
+  expect((await gc(request())).errors.join()).toContain("active or unresolved");
+  expect(existsSync(cold)).toBe(true);
+  sql.graph.commands
+    .current()
+    .update("queued", { state: "failed", finishedAt: new Date().toISOString() });
+  expect((await gc(request())).errors).toEqual([]);
+  expect(existsSync(cold)).toBe(false);
+});

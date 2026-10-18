@@ -63,6 +63,8 @@ export interface RetentionDeps {
   referencedRunIds: () => Set<string>;
   /** Fresh proof that asynchronous inventory still describes the SQL owners. */
   referencesCurrent?: () => boolean;
+  /** Reread changed owners cooperatively before the synchronous final proof. */
+  refreshReferences?: () => Promise<void>;
   now?: () => number;
   /** Bounded batches: one pass deletes at most this many trees (disclosed). */
   maxDeletionsPerPass?: number;
@@ -220,6 +222,15 @@ export async function runRetentionPass(
     }
     return !invalidated;
   };
+  const refreshProof = async () => {
+    if (invalidated) return;
+    try {
+      await deps.refreshReferences?.();
+    } catch (error) {
+      invalidated = true;
+      errors.push(`retention reference refresh failed: ${String(error)}`);
+    }
+  };
   const recoverPending = async (parent: string, kind: "runs" | "reviews", projectRoot: string) => {
     for await (const retirement of pendingRetirements(parent, kind, dryRun, errors)) {
       if (deletions >= maxDeletions) {
@@ -250,6 +261,7 @@ export async function runRetentionPass(
   };
 
   runProjects: for (const project of projects) {
+    await refreshProof();
     if (!proofCurrent()) break;
     await recoverPending(project.runsDir, "runs", project.root);
     if (truncated) break;
@@ -262,6 +274,7 @@ export async function runRetentionPass(
     }[] = [];
     for (const runId of await listSubdirs(project.runsDir)) {
       await yieldToAdmission();
+      await refreshProof();
       if (!proofCurrent()) break runProjects;
       const root = join(project.runsDir, runId);
       if (existsSync(join(root, TOMBSTONE))) continue; // already reclaimed
@@ -307,9 +320,10 @@ export async function runRetentionPass(
               },
             }),
           );
+        await refreshProof();
         if (!proofCurrent()) break runProjects;
         // Re-read every mutable filesystem guard after the asynchronous walk.
-        // SQL-backed callers validate their entire snapshot; older embedders
+        // SQL-backed callers reread changed owners; older embedders
         // without that proof supply fresh references/records here instead.
         const record = deps.referencesCurrent
           ? recordsById.get(candidate.runId)
@@ -372,6 +386,7 @@ export async function runRetentionPass(
 
   for (const project of projects) {
     await yieldToAdmission();
+    await refreshProof();
     if (!proofCurrent()) break;
     // No reviews dir (the no-project root has none) — skip THIS project only.
     // Checked BEFORE the cap so a project with nothing to sweep never makes
@@ -411,6 +426,7 @@ export async function runRetentionPass(
         const planned = new Map(dryRun ? plannedUnlinks : undefined);
         const bytes = await treeReclaimableBytes(path, planned);
         if (!dryRun) retirement = await prepareRetirement(reviewsDir, name, null);
+        await refreshProof();
         if (!proofCurrent()) break;
         const currentFence = canonicalInRepoReviewsDir(project);
         if (

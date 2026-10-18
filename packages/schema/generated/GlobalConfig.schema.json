@@ -313,7 +313,7 @@
               "type": "integer",
               "minimum": 0,
               "default": 20,
-              "description": "The newest N runs survive for registered active/archived projects, and the built-in no-project scope. Orphaned namespaces have no keep-last protection."
+              "description": "The newest N runs survive for active registrations (even with missing roots), archived registrations whose roots exist, and the built-in no-project scope. Orphaned namespaces have no keep-last protection."
             }
           },
           "additionalProperties": false,

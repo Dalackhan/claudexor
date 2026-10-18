@@ -33,13 +33,21 @@ export function retentionGenerations(store: EngineStore) {
   };
   const registered = store
     .prepare(
-      `SELECT p.root FROM project p
+      `SELECT p.root,p.status FROM project p
     JOIN partition g ON g.id=p.pid LEFT JOIN partition q ON q.id=p.current_pid
     WHERE p.status IN ('active','archived') AND g.status IN ('ready','archived')
       AND (q.id IS NULL OR q.status<>'quarantined')`,
     )
-    .all() as Array<{ root: string }>;
+    .all() as Array<{ root: string; status: string }>;
   const registeredProjectRoots = new Set(registered.map((row) => row.root));
+  const activeRoots = new Set(
+    registered.filter((row) => row.status === "active").map((row) => row.root),
+  );
+  const archivedProjectRoots = new Set(
+    registered
+      .filter((row) => row.status === "archived" && !activeRoots.has(row.root))
+      .map((row) => row.root),
+  );
   const protectedProjectRoots = new Set<string>();
   const errors: string[] = [];
   let blocked: string | undefined;
@@ -65,5 +73,12 @@ export function retentionGenerations(store: EngineStore) {
       `namespace ${row.root} kept: missing partition ${row.current_pid} awaits journal recovery`,
     );
   }
-  return { retained, registeredProjectRoots, protectedProjectRoots, errors, blocked };
+  return {
+    retained,
+    registeredProjectRoots,
+    archivedProjectRoots,
+    protectedProjectRoots,
+    errors,
+    blocked,
+  };
 }

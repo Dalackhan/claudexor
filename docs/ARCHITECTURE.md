@@ -3162,9 +3162,9 @@ It is also exposed as the schema-first control op
 every deletion AND why every survivor survived); `claudexor gc` is its thin
 client. It deletes ONLY terminal, unreferenced, non-actionable trees past
 the configured age (`retention.*` in the global config: runs 30d, reviews
-14d, newest N for registered active/archived projects,
+14d, newest N for active registrations and archived registrations whose roots exist,
 and the built-in no-project scope): an orphaned namespace has no keep-last owner,
-when it has no live registration. Root availability does not override an active or archived registration; startup owns ghost-project unregistration. Thread-derived root names
+when it has no live registration. Active registrations keep recent history even when their roots are unavailable. Archived registrations whose roots are gone are orphan namespaces for keep-last; their references still protect runs. Thread-derived root names
 do not establish that ownership. All other protections remain: live/blocked records, runs
 referenced by any non-purged thread's lineage or retained command dependencies
 (queued claims included: continuation predecessors and their full ancestor chains,

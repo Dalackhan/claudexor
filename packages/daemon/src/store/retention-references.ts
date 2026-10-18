@@ -32,6 +32,8 @@ export interface DiskRetentionReferences {
   projectRoots: string[];
   /** Retained active/archived registrations; thread root names alone are not ownership. */
   registeredProjectRoots: Set<string>;
+  /** Archived-only registrations need an extant root to own recent history. */
+  archivedProjectRoots?: Set<string>;
   protectedProjectRoots: Set<string>;
   referencedRunIds: Set<string>;
   nativeSessions: Map<string, Set<string>>;
@@ -107,7 +109,8 @@ export async function diskRetentionReferences(
     const version = (changes.get() as { n: number }).n;
     const isCurrent = () => (changes.get() as { n: number }).n === version;
     const generations = retentionGenerations(store);
-    const { registeredProjectRoots, protectedProjectRoots, errors, blocked } = generations;
+    const { registeredProjectRoots, archivedProjectRoots, protectedProjectRoots, errors, blocked } =
+      generations;
     const roots = new Set([...registeredProjectRoots, ...protectedProjectRoots]);
     const retained = blocked ? () => false : generations.retained;
     const reader = new RetentionReferenceReader(store, ignoreThreadIds, retained);
@@ -191,6 +194,7 @@ export async function diskRetentionReferences(
       errors,
       projectRoots: [...roots],
       registeredProjectRoots,
+      archivedProjectRoots,
       protectedProjectRoots,
       referencedRunIds: reader.runs,
       records: commands.records,

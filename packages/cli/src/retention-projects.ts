@@ -1,4 +1,4 @@
-import { lstat, readdir } from "node:fs/promises";
+import { lstat, readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { setImmediate as yieldToAdmission } from "node:timers/promises";
 import { ArtifactStore } from "@claudexor/artifact-store";
@@ -6,8 +6,8 @@ import type { DiskRetentionReferences } from "@claudexor/daemon";
 import type { RetentionProject } from "@claudexor/control-api";
 import { projectRuntimeDir, userConfigDir } from "@claudexor/util";
 
-/** Directory inventory owns reachability. Active/archived registrations own
- * recent history regardless of root availability; thread roots only name references. */
+/** Directory inventory owns reachability. Active registrations and extant
+ * archives own recent history; thread roots only name references. */
 export async function retentionProjects(
   references: DiskRetentionReferences,
   noProjectRoot: string,
@@ -24,6 +24,11 @@ export async function retentionProjects(
   }
   byHash.set(basename(projectRuntimeDir(noProjectRoot)), noProjectRoot);
   const ownedRoots = new Set([noProjectRoot, ...references.registeredProjectRoots]);
+  for (const root of references.archivedProjectRoots ?? []) {
+    await yieldToAdmission();
+    signal?.throwIfAborted();
+    if (!(await optionalStat(root, stat))) ownedRoots.delete(root);
+  }
   const protectedHashes = new Set(
     [...references.protectedProjectRoots].map((root) => basename(projectRuntimeDir(root))),
   );
@@ -102,9 +107,9 @@ export async function retentionProjects(
   return projects;
 }
 
-async function optionalStat(path: string) {
+async function optionalStat(path: string, inspect: typeof lstat = lstat) {
   try {
-    return await lstat(path);
+    return await inspect(path);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;

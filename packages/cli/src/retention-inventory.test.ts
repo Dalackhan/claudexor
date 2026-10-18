@@ -128,7 +128,7 @@ it("retires three old unregistered runs below the default keep-last limit", asyn
   }
 });
 
-it.each(["active", "archived", "missing-active", "missing-archived", "no-project"])(
+it.each(["active", "archived", "missing-active", "no-project"])(
   "keeps three old %s runs with the default keep-last policy",
   async (kind) => {
     const projectRoot = kind === "no-project" ? noProjectRepoRoot() : repo(kind);

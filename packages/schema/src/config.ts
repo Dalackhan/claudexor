@@ -297,7 +297,7 @@ export const GlobalConfig = z
           .nonnegative()
           .default(20)
           .describe(
-            "The newest N runs survive for registered active/archived projects, and the built-in no-project scope. Orphaned namespaces have no keep-last protection.",
+            "The newest N runs survive for active registrations (even with missing roots), archived registrations whose roots exist, and the built-in no-project scope. Orphaned namespaces have no keep-last protection.",
           ),
       })
       .strict()

@@ -3150,7 +3150,7 @@ to admission; SQL history uses rowid-keyset pages without holding a cursor or
 transaction across a yield. Each run deletion rereads changed SQL owners and mutable filesystem protections
 after its asynchronous byte walk and retirement preparation. Connection-local TEMP
 triggers observe row identities while the pass runs; no durable schema or writer is
-added. Typed reference reads are shared with the initial inventory. Quota/event
+added. Typed reference reads are shared with the initial inventory. Each distinct immutable command request is parsed once per pass by its content digest, including changed-owner refreshes. Combined run/native retention shares one SQL inventory and observer; standalone native retention owns and closes its own inventory. No durable schema changes. Quota/event
 writes and unrelated metadata do not restart it. References accumulate during a pass
 and lifecycle records refresh before the synchronous last proof and expiration marker.
 Large change batches yield between reads; an unreadable owner, changed project/generation

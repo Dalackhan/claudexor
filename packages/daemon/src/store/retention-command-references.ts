@@ -43,6 +43,7 @@ export async function commandRetentionReferences(
   signal?: AbortSignal,
 ) {
   const blobs = new BlobFiles(store);
+  const paramsByDigest = new Map<string, ReturnType<typeof Dependencies.parse>>();
   const aliases = new Map<string, string>();
   const records: DiskRetentionReferences["records"] = [];
   const byRun = new Map<string, (typeof records)[number]>();
@@ -104,7 +105,11 @@ export async function commandRetentionReferences(
     }
     if (row.runDir)
       for (const source of readContinuationSources(row.runDir, { strict: true })) add(source.runId);
-    const params = Dependencies.parse(JSON.parse(blobs.read(row.params_sha).toString("utf8")));
+    let params = paramsByDigest.get(row.params_sha);
+    if (!params) {
+      params = Dependencies.parse(JSON.parse(blobs.read(row.params_sha).toString("utf8")));
+      paramsByDigest.set(row.params_sha, params);
+    }
     if ((params.continueFrom ?? null) !== row.continue_from)
       throw new Error(`command ${row.id} retention predecessor disagrees`);
     [row.continue_from, params.retryOf, params.planRef?.runId, params.planRunId].forEach(add);

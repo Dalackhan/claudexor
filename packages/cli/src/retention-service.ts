@@ -219,6 +219,7 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
         );
         const native = await deps.nativeHomes?.({
           signal,
+          references,
           dryRun: request.dry_run,
           olderThan: Date.now() - retention.runs_max_age_days * 24 * 60 * 60_000,
           ignoredRunIds: new Set(

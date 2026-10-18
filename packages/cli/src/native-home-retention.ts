@@ -1,6 +1,6 @@
 import { CONTINUITY_PROFILE_LOCATOR_ENV, type AdapterRegistry } from "@claudexor/core";
 import { loadConfig } from "@claudexor/config";
-import type { ProjectThreadPort } from "@claudexor/daemon";
+import type { DiskRetentionReferences, ProjectThreadPort } from "@claudexor/daemon";
 import { type CredentialProfile, type GcNativeHomeReport } from "@claudexor/schema";
 import { noProjectRepoRoot } from "@claudexor/util";
 import { buildRegistry } from "./registry.js";
@@ -8,6 +8,8 @@ import { collectNativeRunSessions, retainedNativeSessions } from "@claudexor/con
 
 export interface NativeRetentionRequest {
   signal?: AbortSignal;
+  /** Borrowed from the enclosing run pass; that caller owns observer cleanup. */
+  references?: DiskRetentionReferences;
   dryRun: boolean;
   olderThan: number;
   ignoredRunIds: ReadonlySet<string>;
@@ -40,11 +42,10 @@ export function createNativeHomeRetention(deps: {
       let blocked: string | null = null;
       let canPrune = () => false;
       try {
-        const snapshot = await deps.threads.retentionReferences(
-          request.ignoredThreadIds,
-          request.signal,
-        );
-        closeReferences = () => snapshot.close?.();
+        const snapshot =
+          request.references ??
+          (await deps.threads.retentionReferences(request.ignoredThreadIds, request.signal));
+        if (!request.references) closeReferences = () => snapshot.close?.();
         request.signal?.throwIfAborted();
         if (snapshot.blocked) throw new Error(snapshot.blocked);
         if (snapshot.protectedProjectRoots.size)

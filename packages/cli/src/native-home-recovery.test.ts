@@ -79,7 +79,7 @@ it("resumes native pruning after pending project recovery completes", async () =
   sql.store.transaction(() => setGenerationStatusInTx(sql.store, pid, "recovery_required"));
   const pending = await native(request);
   expect(pruneCalls).toBe(1);
-  expect(pending.errors.join("\n")).toContain(repo);
+  expect(pending.errors.join("\n")).toContain("awaits journal recovery");
   expect(pending.errors.join("\n")).toContain(`(${pid}, recovery_required)`);
   quarantineGeneration(sql.store, sql.graph.blobs, {
     oldPid: pid,

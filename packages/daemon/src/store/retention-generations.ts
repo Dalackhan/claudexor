@@ -2,7 +2,7 @@ import type { EngineStore } from "./store.js";
 
 /** Quarantine completes recovery: those rows are evidence, never live owners.
  * Archived generations remain restorable owners. Unknown/pending states cannot
- * prove absence and name the namespaces they keep. */
+ * prove absence and hold run retirement install-wide. */
 export function retentionGenerations(store: EngineStore) {
   const rows = store
     .prepare(
@@ -36,24 +36,9 @@ export function retentionGenerations(store: EngineStore) {
   for (const row of rows) {
     if (retained(row.id) || row.status === "quarantined") continue;
     const reason = `partition ${row.name} (${row.id}, ${row.status}) awaits journal recovery`;
-    const roots = new Set(
-      (
-        store
-          .prepare(
-            "SELECT DISTINCT scope_root AS root FROM command WHERE pid=? AND scope_root IS NOT NULL",
-          )
-          .all(row.id) as Array<{ root: string }>
-      ).map((command) => command.root),
-    );
-    if (row.root) roots.add(row.root);
-    for (const root of roots) {
-      protectedProjectRoots.add(root);
-      errors.push(`namespace ${root} kept: ${reason}`);
-    }
-    if (row.name === "global" || !roots.size) {
-      blocked = reason;
-      errors.push(`all namespaces kept: ${reason}`);
-    }
+    // Scope roots do not bound dependencies: a continuation may name any namespace.
+    blocked ??= reason;
+    errors.push(`all namespaces kept: ${reason}`);
   }
   for (const row of store
     .prepare(

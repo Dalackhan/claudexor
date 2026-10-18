@@ -206,7 +206,7 @@ it("preserves unavailable generations and never follows a linked runtime namespa
   symlinkSync(outside, projectRuntimeDir(linkedRepo), "dir");
   run(repo("ordinary"), "delete");
   const result = await runner()({ dry_run: false });
-  expect(result.deleted_runs.map((row) => row.run_id)).toEqual(["delete"]);
+  expect(result.deleted_runs).toEqual([]);
   expect(existsSync(join(protectedRun, "final"))).toBe(true);
   expect(existsSync(join(outside, "runs", "old", "final"))).toBe(true);
 });

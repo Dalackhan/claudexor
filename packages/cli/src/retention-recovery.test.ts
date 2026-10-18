@@ -210,7 +210,7 @@ it.each(["recovery_required", "repairing"])(
 );
 
 it.each(["recovery_required", "repairing"])(
-  "names the project namespace held for %s while other namespaces retire",
+  "holds every namespace while a project awaits %s",
   async (status) => {
     const repo = join(root, "pending-project");
     mkdirSync(repo);
@@ -224,9 +224,48 @@ it.each(["recovery_required", "repairing"])(
     const pid = sql.graph.projects.partition(project.id)!.pid;
     sql.store.transaction(() => setGenerationStatusInTx(sql.store, pid, status));
     const receipt = await runner()({ dry_run: false });
-    expect(receipt.deleted_runs.map((run) => run.run_id)).toEqual(["unrelated-old"]);
-    expect(receipt.errors.join("\n")).toContain(`namespace ${repo} kept:`);
+    expect(receipt.deleted_runs).toEqual([]);
+    expect(receipt.errors.join("\n")).toContain("all namespaces kept:");
     expect(receipt.errors.join("\n")).toContain(`(${pid}, ${status}) awaits journal recovery`);
     expect(existsSync(join(paths.finalDir, "answer.md"))).toBe(true);
   },
 );
+
+it("holds a pending owner's cross-project source at default policy, then releases completed recovery", async () => {
+  rmSync(join(process.env.CLAUDEXOR_CONFIG_DIR!, "config.yaml"));
+  const foreign = join(root, "foreign-orphan");
+  mkdirSync(foreign);
+  const source = oldRun(foreign, "foreign-source", {
+    kind: "project",
+    root: foreign,
+    ephemeral: true,
+  });
+  const destination = join(root, "destination");
+  mkdirSync(destination);
+  const project = sql.graph.projects.register({
+    root: destination,
+    idempotencyKey: "destination",
+    clientId: "fixture",
+  }).project;
+  const params = {
+    mode: "ask",
+    prompt: "continue",
+    scope: { kind: "project", root: destination },
+    continueFrom: "foreign-source",
+  };
+  sql.graph.commands
+    .forRequest(params)
+    .accept({ id: "successor", params, idempotencyKey: "successor", clientId: "fixture" });
+  const pid = sql.graph.projects.partition(project.id)!.pid;
+  sql.store.transaction(() => setGenerationStatusInTx(sql.store, pid, "recovery_required"));
+  const receipt = await runner()({ dry_run: false });
+  expect(receipt.policy.keep_last_runs_per_project).toBe(20);
+  expect(receipt.deleted_runs).toEqual([]);
+  expect(receipt.errors.join("\n")).toContain(
+    `(${pid}, recovery_required) awaits journal recovery`,
+  );
+  expect(existsSync(join(source.finalDir, "answer.md"))).toBe(true);
+  journalRecovery(pid, "foreign-owner-recovery");
+  const released = await runner()({ dry_run: false });
+  expect(released.deleted_runs.map((run) => run.run_id)).toEqual(["foreign-source"]);
+});

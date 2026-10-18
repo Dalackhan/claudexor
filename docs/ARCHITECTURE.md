@@ -3173,7 +3173,7 @@ command-history pruning), undelivered/applyable
 patches or copied-file results, and trees with no terminal evidence are protected
 fail-closed. Lane sweeping rereads live thread IDs synchronously immediately before each root’s sweep, so unrelated writes do not starve cleanup. A failed ownership read names the skipped root in the receipt.
 
-A `quarantined` generation is retired journal evidence: its rows do not own references or keep unsettled commands active, and completed quarantine does not stop retention. Terminal metadata may still date its old payloads. Archived generations remain reference owners. Pending or unknown recovery states keep affected namespaces, named with their partition and status in `errors[]`; pending global recovery holds all namespaces. Partial file delivery retains that protection; explicit discard
+A `quarantined` generation is retired journal evidence: its rows do not own references or keep unsettled commands active, and completed quarantine does not stop retention. Terminal metadata may still date its old payloads. Archived generations remain reference owners. Pending or unknown recovery states hold all run namespaces, with one named partition/status hold per pending generation in `errors[]`: scope roots do not bound cross-project dependencies. Partial file delivery retains that protection; explicit discard
 ends pending delivery but does not delete artifacts immediately or bypass other
 retention protections. Unsettled delivery commands keep the pass closed: their
 historical params do not reliably identify every source file used after an await. A
@@ -3187,7 +3187,7 @@ at the command layer. The HTTP Apply route rereads the patch before command repl
 repeating the same Apply key after retention removed that patch returns 404, while
 the durable command receipt remains reusable. This route behavior predates retention
 changes; receipt replay does not promise that an expired artifact is still available.
-An expired directory cannot become evidence again. Durable `context/continuation.json` lists are published through a private temporary file, file flush, atomic rename and directory flush. Unreadable reference errors name the file or SQL row and partition. A bad run-local work-product or custody file keeps that run; unreadable SQL or continuity owners hold the pass because their references can cross namespaces. Pending recovery remains confined to known project namespaces when its scope is provable.
+An expired directory cannot become evidence again. Durable `context/continuation.json` lists are published through a private temporary file, file flush, atomic rename and directory flush. Unreadable reference errors name the file or SQL row and partition. A bad run-local work-product or custody file keeps that run; unreadable SQL or continuity owners hold the pass because their references can cross namespaces. Pending recovery holds run retirement install-wide until recovery completes.
 Readers see that expiration while recursive deletion of the previously
 inventoried contents runs asynchronously; no directory rename blocks admission.
 A durable intent in the parent's private `.retiring` directory binds the source

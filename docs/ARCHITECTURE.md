@@ -3173,7 +3173,7 @@ command-history pruning), undelivered/applyable
 patches or copied-file results, and trees with no terminal evidence are protected
 fail-closed. Lane sweeping rereads live thread IDs synchronously immediately before each root’s sweep, so unrelated writes do not starve cleanup. A failed ownership read names the skipped root in the receipt.
 
-A `quarantined` generation is retired journal evidence: its rows do not own references or keep unsettled commands active, and completed quarantine does not stop retention. Terminal metadata may still date its old payloads. Archived generations remain reference owners. Pending or unknown recovery states hold all run namespaces, with one named partition/status hold per pending generation in `errors[]`: scope roots do not bound cross-project dependencies. Partial file delivery retains that protection; explicit discard
+A `quarantined` generation and project generations owned by its replaced global registry are retired journal evidence: its rows do not own references or keep unsettled commands active, and completed quarantine does not stop retention. Terminal metadata may still date its old payloads. Archived projects in the current registry remain reference owners. Pending or unknown recovery states hold all run namespaces, with one named partition/status hold per pending generation in `errors[]`: scope roots do not bound cross-project dependencies. Partial file delivery retains that protection; explicit discard
 ends pending delivery but does not delete artifacts immediately or bypass other
 retention protections. Unsettled delivery commands keep the pass closed: their
 historical params do not reliably identify every source file used after an await. A

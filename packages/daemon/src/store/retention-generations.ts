@@ -6,20 +6,30 @@ import type { EngineStore } from "./store.js";
 export function retentionGenerations(store: EngineStore) {
   const rows = store
     .prepare(
-      `SELECT q.id,q.name,q.status,p.root FROM partition q
-    LEFT JOIN project p ON p.id=q.project_id`,
+      `SELECT q.id,q.name,q.status,q.project_id,p.root,g.status AS registry_status FROM partition q
+    LEFT JOIN project p ON p.id=q.project_id LEFT JOIN partition g ON g.id=p.pid`,
     )
     .all() as Array<{
     id: number;
     name: string;
     status: string;
     root: string | null;
+    project_id: string | null;
+    registry_status: string | null;
   }>;
-  const known = new Map(rows.map((row) => [row.id, row.status]));
+  const known = new Map(rows.map((row) => [row.id, row]));
+  // A completed global quarantine also retires its project descendants. Their
+  // own ready/archived/pending bits are historical, not an independent owner.
+  const retired = (row: (typeof rows)[number]) =>
+    row.status === "quarantined" || row.registry_status === "quarantined";
   const retained = (pid: number) => {
-    const status = known.get(pid);
-    if (!status) throw new Error(`retention owner names missing partition ${pid}`);
-    return status === "ready" || status === "archived";
+    const row = known.get(pid);
+    if (!row) throw new Error(`retention owner names missing partition ${pid}`);
+    return (
+      !retired(row) &&
+      (!row.project_id || row.registry_status === "ready" || row.registry_status === "archived") &&
+      (row.status === "ready" || row.status === "archived")
+    );
   };
   const registered = store
     .prepare(
@@ -34,7 +44,7 @@ export function retentionGenerations(store: EngineStore) {
   const errors: string[] = [];
   let blocked: string | undefined;
   for (const row of rows) {
-    if (retained(row.id) || row.status === "quarantined") continue;
+    if (retained(row.id) || retired(row)) continue;
     const reason = `partition ${row.name} (${row.id}, ${row.status}) awaits journal recovery`;
     // Scope roots do not bound dependencies: a continuation may name any namespace.
     blocked ??= reason;

@@ -123,6 +123,22 @@ describe("cli args", () => {
 });
 
 describe("boolean flags never eat positionals", () => {
+  it("the Codex release-tested install choice stays boolean and vendor-version stays exact-valued", () => {
+    const baseline = parseArgs(["harness", "install", "codex", "--release-tested", "--dry-run"]);
+    expect(baseline._).toEqual(["harness", "install", "codex"]);
+    expect(flagBool(baseline, "release-tested")).toBe(true);
+    const exact = parseArgs([
+      "harness",
+      "install",
+      "codex",
+      "--vendor-version",
+      "0.163.0",
+      "--yes",
+    ]);
+    expect(flagStr(exact, "vendor-version")).toBe("0.163.0");
+    expect(flagBool(exact, "yes")).toBe(true);
+  });
+
   it("--json before a positional keeps both (audit --json x)", () => {
     const a = parseArgs(["audit", "--json", "x"]);
     expect(a._).toEqual(["audit", "x"]);

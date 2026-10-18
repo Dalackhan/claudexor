@@ -38,9 +38,10 @@ enum RemoteHarnessInstallVerification: String, Decodable, Equatable, Sendable {
 }
 
 /// A pending remote harness install, awaiting the user's confirmation. The
-/// command/location/pin fields are the remote CLI's own `--dry-run --json`
-/// disclosure verbatim (issue #89): the app never re-derives the install
-/// command, so the text the user approves is exactly what will run.
+/// command/location/version fields are the remote CLI's own `--dry-run --json`
+/// disclosure verbatim (issue #89). Confirmation carries the selected npm
+/// version back to the CLI, so a changed registry latest cannot replace the
+/// version the user approved. Script installers have no version to bind.
 struct RemoteHarnessInstallPrompt: Identifiable, Equatable {
     let lease: RemoteActionLease
     let harness: String
@@ -51,6 +52,15 @@ struct RemoteHarnessInstallPrompt: Identifiable, Equatable {
 
     var id: UUID { lease.token }
     var connectionID: UUID { lease.connectionID }
+
+    var confirmedInstallCommand: String {
+        var command = "~/.claudexor/remote/current/bin/claudexor harness install "
+            + SSHCommandFactory.posixQuote(harness)
+        if let pinnedVersion {
+            command += " --vendor-version " + SSHCommandFactory.posixQuote(pinnedVersion)
+        }
+        return command + " --yes"
+    }
 }
 
 extension AppModel {
@@ -351,12 +361,9 @@ extension AppModel {
         do {
             let factory = try await sshConnectionManager.factory(for: connection)
             guard remoteActionIsCurrent(prompt.lease) else { return }
-            let command =
-                "~/.claudexor/remote/current/bin/claudexor harness install "
-                + SSHCommandFactory.posixQuote(prompt.harness) + " --yes"
             settingsRemoteTerminalSheet = RemoteTerminalSheetRequest(
                 title: "Install \(HarnessFamily(rawValue: prompt.harness).label) — \(connection.displayName)",
-                invocation: factory.remoteCommand(command, requestTTY: true),
+                invocation: factory.remoteCommand(prompt.confirmedInstallCommand, requestTTY: true),
                 purpose: .install(prompt.lease, prompt.harness))
         } catch {
             guard remoteActionIsCurrent(prompt.lease) else { return }

@@ -21,7 +21,7 @@ export const INSTALLABLE_HARNESSES = [
 
 /** The `harness` argument shape: rendered by `claudexor help` and reprinted by
  * the dispatcher when a verb is unknown. */
-export const HARNESS_USAGE_ARGS = `list [--all] | install <${INSTALLABLE_HARNESSES.join("|")}> [--target <local|remote>] [--dry-run] [--yes] | inspect [<id>] [--latest] | update <id> [--vendor-version <exact|latest>] [--yes]`;
+export const HARNESS_USAGE_ARGS = `list [--all] | install <${INSTALLABLE_HARNESSES.join("|")}> [--target <local|remote>] [--vendor-version <exact>] [--release-tested] [--dry-run] [--yes] | inspect [<id>] [--latest] | update <id> [--vendor-version <exact|latest>] [--yes]`;
 
 export const HARNESS_COMMAND_SPECS: readonly CliCommandSpec[] = [
   {
@@ -35,10 +35,19 @@ export const HARNESS_COMMAND_SPECS: readonly CliCommandSpec[] = [
     usageArgs: HARNESS_USAGE_ARGS,
     summary:
       "List harnesses, install one vendor CLI through the disclosed producer, or inspect/update an installed one",
-    flags: ["all", "target", "dry-run", "yes", "latest", "vendor-version", "json"],
+    flags: [
+      "all",
+      "target",
+      "dry-run",
+      "yes",
+      "latest",
+      "vendor-version",
+      "release-tested",
+      "json",
+    ],
     subcommandFlags: {
       list: ["all"],
-      install: ["target", "dry-run", "yes"],
+      install: ["target", "dry-run", "yes", "vendor-version", "release-tested"],
       inspect: ["latest"],
       update: ["vendor-version", "yes"],
     },

@@ -2069,10 +2069,12 @@ the official CLI for an expired-token refresh and the raw account's model
 catalog. Discovery varies with the declared client version, so a missing row
 proves no minimum-version or entitlement refusal. The transport declares ITS OWN
 verified level, `CODEX_HTTP_CLIENT_VERSION` (`http-client-version.ts`), raised to
-a newer installed Codex CLI and never below the constant; the managed-installer
-pin is a different fact (moving the installer must never decide which models an
-account sees). The account view carries each catalog's declared `clientVersion` and
-source. Selected-account discovery can negotiate `includeAdmission=true` with
+a newer selected Codex CLI and never below the constant. The release-tested
+native baseline is a different fact from this HTTP minimum and from the
+managed install target. Installing a newer selected CLI CAN raise the HTTP
+catalog's declared client version and change which model rows the same account
+sees; that visibility is not proof of entitlement or generation. The account
+view carries each catalog's declared `clientVersion` and source. Selected-account discovery can negotiate `includeAdmission=true` with
 `requestedModel` for those facts and `admission: {requestedModel,
 inventoryAbsence}`, which permits an attempt without a synthetic model row or
 generation claim; the legacy query keeps its exact shape. The
@@ -5221,12 +5223,20 @@ back through the settled lease.
 
 Vendor harness CLIs land on a host only through the disclosed installer
 (`claudexor harness install`, reachable from Settings → Harnesses for a
-connected host). The npm-distributed harnesses (claude, codex, copilot, opencode)
-ensure the release pin while preserving an already runnable newer managed copy;
-explicit maintenance installs the selected exact version. Each pin aliases that harness package's
-vendor-version constant, and npm checks the registry integrity checksum for
-that exact version; `@latest` is never used. For codex that constant is the
-same value the model-hints and effort freshness gates read; for claude it is
+connected host). Claude, Copilot and OpenCode ensure their exact release
+baselines while preserving an already runnable newer managed copy; explicit
+maintenance installs the selected exact version. Codex's
+ordinary CLI install preserves an already runnable managed copy at or above its
+tested baseline; otherwise it resolves npm latest once into an exact semver
+before disclosure and installation (`cli/src/harness-install-version-selection.ts`
+owns the read-only choice before the install/proof owner mutates anything). An unavailable/malformed registry answer
+refuses without silently substituting the baseline. `--release-tested` selects
+that baseline explicitly for offline or recovery work; `--vendor-version <exact>`
+selects an exact npm version for either target. Every npm recipe installs an
+exact version, never a floating `@latest`; npm checks its integrity checksum.
+The vendor-version constant remains the release-tested EVIDENCE stamp, not the
+Codex install-default ceiling: model-hints and effort snapshots read it only
+as a statement of what was measured. For claude it is
 the effort-snapshot stamp, while the Claude known-model hint list keeps the
 literal version it was last actually re-verified against (a pin bump never
 restamps unrechecked ids). The pin records this release's verified baseline,
@@ -5239,13 +5249,19 @@ its vendor script is downloaded in full (`curl --fail`, never piped to a
 shell), its size and SHA-256 are printed, and it executes in the visible
 embedded PTY where the operator watches it — the human is the verifier, the
 same principle as interactive SSH auth. Nothing installs without disclosure:
-the CLI prints the exact package/version/destination install recipe
+the CLI prints the exact selected package/version/destination install recipe
 (`~/.claudexor/remote/vendor/bin`, which the remote wrapper puts first on
 PATH) and requires a TTY confirmation or an explicit `--yes`, and the macOS
 confirmation dialog shows the remote CLI's own `--dry-run --json` disclosure
-verbatim before opening the terminal sheet, including the typed evidence class
+before opening the terminal sheet, carrying that SAME selected exact npm version
+through `--vendor-version` on confirmation rather than resolving latest again.
+The typed evidence class
 (`release_verified`, `deterministic_only`, or `human_observed`) that selects the
-same honest pin wording as the CLI. Failures are typed and loud — a
+same honest version wording as the CLI: `release_verified` applies only when
+the selected target equals the measured baseline; a newer latest is
+`deterministic_only` even when its package installation succeeds. A remote
+operator-watched npm exit does not prove installed version or native app-server
+compatibility. Failures are typed and loud — a
 failed or unreadable download refuses without executing, a non-zero installer
 exit never reads as success, and Harness Doctor verifies the result
 afterward. Every npm, curl, and vendor-script child receives the shared minimal
@@ -5263,11 +5279,11 @@ unattended Connect action that already carries the user's authorization. Cursor
 is still unpinned in that flow: the typed evidence class is
 `unattended_unpinned`, and the execute receipt records the exact downloaded
 script's SHA-256 and byte length rather than claiming human observation. Local
-installs take a user-scoped cross-process lease and recheck both the exact npm
-pin and its target-contained, non-empty launcher under that lease before
+installs take a user-scoped cross-process lease and recheck both the selected
+exact npm target and its target-contained, non-empty launcher under that lease before
 mutating the shared prefix; a partial package without its shim is repaired.
 Before any success receipt, the absolute launcher must execute `--version` and
-prove the exact npm pin. Cursor similarly rechecks the supported `cursor-agent`
+prove the exact npm version. Cursor similarly rechecks the supported `cursor-agent`
 name through the target-aware normalized harness PATH, permits the vendor's
 official launcher symlink layout, and records its bounded non-empty version
 line. Child exit zero without this proof is the typed
@@ -5292,10 +5308,10 @@ Installer success still requires the declared version to execute, so a placehold
 file left by an incomplete package install cannot certify success. The Windows
 smoke is `scripts/windows-local-install-smoke.mjs`; native Windows login and Agent
 execution are separate acceptance claims, not consequences of package resolution.
-The omitted target remains `remote`,
-so the SSH installer's
-visible disclosure, confirmation, command, destination, and precedence
-contract are unchanged. After any successful local install, the embedding host
+The omitted target remains `remote`; the SSH installer's destination and PATH
+precedence are unchanged. Its approval now binds the disclosed exact version,
+including when the CLI resolved npm latest for the initial dry-run. After any
+successful local install, the embedding host
 must request the existing fresh doctor/status projection before retrying login;
 it must not trust a pre-install readiness cache, and this needs no new setup-job
 or daemon API.
@@ -5303,7 +5319,8 @@ or daemon API.
 Local CLI maintenance uses `harness inspect` and `harness update --vendor-version`
 (`cli/src/harness-maintenance.ts`), the same recipe/proof/lease as Ensure. Codex,
 Claude, Copilot and OpenCode support exact npm targets; latest is resolved once
-before installation. Cursor and Antigravity on supported POSIX installations run
+before installation by the shared bounded resolver in `cli/src/harness-latest.ts`,
+also used by an initial Codex CLI install. Cursor and Antigravity on supported POSIX installations run
 their native foreground updater at the selected canonical launcher under the
 installation HOME. They expose latest only: the vendor resolves the target, and
 unchanged version evidence never means "updated" or proves newest. External

@@ -41,9 +41,11 @@ import {
   type InstallableHarness,
 } from "./harness-install-recipes.js";
 import { installerRuntime, type InstallerRuntime } from "./harness-install-runtime.js";
+import { resolveLatestNpmVersion } from "./harness-latest.js";
 import { confirmOnTty, localPlatformRefusal, runHarnessInstaller } from "./harness-installer.js";
 import { INSTALLABLE_HARNESSES } from "./harness-command-specs.js";
-import { embeddedNpmCli } from "@claudexor/core";
+
+export { resolveLatestNpmVersion } from "./harness-latest.js";
 
 export type HarnessInspection = Omit<HarnessMaintenanceEntry, "previous" | "operation">;
 type Selection = HarnessInspection["selection"];
@@ -59,8 +61,6 @@ export interface MaintenanceOptions {
   lock?: boolean;
   json?: boolean;
 }
-
-const LATEST_TIMEOUT_MS = 30_000;
 
 function runtimeFor(options: MaintenanceOptions): InstallerRuntime {
   return installerRuntime({ ...options, target: "local" });
@@ -99,47 +99,6 @@ function selection(harness: InstallableHarness, runtime: InstallerRuntime): Sele
     version: selectedVersion(binary, runtime),
     overrideEnv: override ? overrideEnv : null,
   };
-}
-
-/** One registry read of the newest published version, through the embedded
- * npm and the clean vendor environment (no credentials). */
-export function resolveLatestNpmVersion(
-  harness: InstallableHarness,
-  runtime: InstallerRuntime,
-): { version: string } | { problem: { code: string; message: string } } {
-  const pin = NPM_PINS[harness];
-  if (!pin)
-    return { problem: { code: "latest_unsupported", message: `${harness} has no npm recipe` } };
-  const result = runtime.spawn(
-    runtime.runnerNodePath,
-    [
-      embeddedNpmCli(runtime.runnerNodePath, runtime.platform),
-      "view",
-      `${pin.npmPackage}@latest`,
-      "version",
-      "--json",
-    ],
-    {
-      env: runtime.environment,
-      encoding: "utf8",
-      timeout: LATEST_TIMEOUT_MS,
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  let value: unknown = null;
-  try {
-    value = JSON.parse(String(result.stdout ?? "").trim());
-  } catch {
-    value = null;
-  }
-  return result.status === 0 && typeof value === "string" && EXACT_VENDOR_VERSION.test(value)
-    ? { version: value }
-    : {
-        problem: {
-          code: "latest_unavailable",
-          message: `the registry did not answer one exact latest version for ${pin.npmPackage} (npm exit ${result.status ?? "none"})`,
-        },
-      };
 }
 
 export function inspectHarness(

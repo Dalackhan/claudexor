@@ -994,7 +994,11 @@ describe("harness install --target local", () => {
   it("--target local projects the local managed destination", () => {
     const stdout = captureStdout();
     const code = harnessInstallCommand(
-      args(["harness", "install", "codex"], { "dry-run": true, target: "local" }),
+      args(["harness", "install", "codex"], {
+        "dry-run": true,
+        target: "local",
+        "release-tested": true,
+      }),
       true,
     );
     stdout.restore();
@@ -1043,7 +1047,7 @@ describe("harness install --target local", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it("emits the unchanged local receipt for a Windows codex install, naming the image dir", () => {
+  it("emits the exact tested-baseline receipt for a Windows codex install, naming the image dir", () => {
     const home = mkdtempSync(join(tmpdir(), "claudexor-win-json-receipt-"));
     const stdout = captureStdout();
     const stderr = captureStderr();
@@ -1051,7 +1055,11 @@ describe("harness install --target local", () => {
     const imageDir = "~/.claudexor/node/node_modules/@openai/codex (npm executable entrypoint)";
     try {
       const dryRunCode = harnessInstallCommand(
-        args(["harness", "install", "codex"], { target: "local", "dry-run": true }),
+        args(["harness", "install", "codex"], {
+          target: "local",
+          "dry-run": true,
+          "release-tested": true,
+        }),
         true,
         { platform: "win32", arch: "x64" },
       );
@@ -1069,7 +1077,11 @@ describe("harness install --target local", () => {
       stdout.restore();
       const executed = captureStdout();
       const code = harnessInstallCommand(
-        args(["harness", "install", "codex"], { target: "local", yes: true }),
+        args(["harness", "install", "codex"], {
+          target: "local",
+          yes: true,
+          "release-tested": true,
+        }),
         true,
         {
           home,
@@ -1116,7 +1128,11 @@ describe("harness install --target local", () => {
     });
     try {
       const code = harnessInstallCommand(
-        args(["harness", "install", "codex"], { yes: true, target: "local" }),
+        args(["harness", "install", "codex"], {
+          yes: true,
+          target: "local",
+          "release-tested": true,
+        }),
         true,
         {
           home,

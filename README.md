@@ -135,8 +135,10 @@ Host integrations may install one vendor CLI into Claudexor's managed local
 toolchain with
 `claudexor harness install <harness> --target local --yes --json`; a host may
 bind that explicit unattended authorization to the user's Connect action.
-Exact npm pins install under `~/.claudexor/node`; Cursor remains unpinned, so
-the JSON receipt records the downloaded installer's SHA-256 and byte length.
+Npm recipes install exact selected versions under `~/.claudexor/node`;
+Codex resolves latest once by default while keeping the separately tested
+baseline as an explicit offline choice. Cursor remains unpinned, so its JSON
+receipt records the downloaded installer's SHA-256 and byte length.
 Every successful executed receipt also records the absolute installed launcher
 and its verified version; a zero-exit installer without that postcondition is a
 typed failure. On Windows, Codex and Claude use the npm package's declared

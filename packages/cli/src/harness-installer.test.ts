@@ -307,7 +307,7 @@ describe("harnessInstallCommand disclosure/confirmation gate", () => {
   it("--dry-run prints the typed disclosure and executes nothing", () => {
     const stdout = captureStdout();
     const code = harnessInstallCommand(
-      args(["harness", "install", "codex"], { "dry-run": true }),
+      args(["harness", "install", "codex"], { "dry-run": true, "release-tested": true }),
       true,
     );
     stdout.restore();
@@ -363,13 +363,20 @@ describe("--json stdout purity on the execute path (--yes)", () => {
   ): { code: number; stdout: string; stderr: string } => {
     const stdout = captureStdout();
     const stderr = captureStderr();
-    const code = harnessInstallCommand(args(["harness", "install", harness], { yes: true }), true, {
-      home: "/tmp/operator",
-      nodePath: "/runtime/node/bin/node",
-      spawn: noisySpawn(status) as never,
-      mkdir: vi.fn(),
-      exists: () => true,
-    });
+    const code = harnessInstallCommand(
+      args(["harness", "install", harness], {
+        yes: true,
+        ...(harness === "codex" ? { "release-tested": true } : {}),
+      }),
+      true,
+      {
+        home: "/tmp/operator",
+        nodePath: "/runtime/node/bin/node",
+        spawn: noisySpawn(status) as never,
+        mkdir: vi.fn(),
+        exists: () => true,
+      },
+    );
     stdout.restore();
     stderr.restore();
     return { code, stdout: stdout.lines(), stderr: stderr.lines() };

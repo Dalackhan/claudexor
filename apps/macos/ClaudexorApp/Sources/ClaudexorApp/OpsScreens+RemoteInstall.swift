@@ -4,12 +4,12 @@ import ClaudexorKit
 /// Settings › Harnesses: install a vendor CLI on a connected SSH host
 /// (issue #89). The confirmation dialog shows the remote runtime's own
 /// `harness install --dry-run --json` disclosure — exact command, install
-/// destination, and version pin — and the installer itself runs in the
+/// destination, and selected version — and the installer itself runs in the
 /// visible embedded terminal, where the user watches it like interactive
-/// SSH auth. Claude and Codex install the exact pinned npm version this
-/// release was verified against; OpenCode and GitHub Copilot install their
-/// exact pins as deterministic install targets (no recorded verification
-/// fixture covers them); the script vendors (Antigravity and Cursor) have their installer
+/// SSH auth. Codex resolves npm latest before confirmation, then installs that
+/// exact approved version. The disclosure distinguishes release-verified
+/// versions from deterministic targets without recorded verification fixtures;
+/// the script vendors (Antigravity and Cursor) have their installer
 /// downloaded in full and executed under the user's eyes because they
 /// cannot be pinned. Every vendor NAME here comes from `HarnessFamily.label`
 /// — never `id.capitalized`, which renders Antigravity as "Agy".
@@ -22,7 +22,7 @@ struct RemoteHarnessInstallSection: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 SectionLabel("Remote Harness Install", systemImage: "arrow.down.circle")
                 Text(
-                    "Puts a vendor CLI on an SSH host. Claude and Codex install the exact npm version this Claudexor release was verified against; OpenCode and GitHub Copilot install their exact pinned versions as deterministic targets (not covered by recorded verification fixtures); the Antigravity and Cursor installer scripts ship no pinnable npm artifact, so each is downloaded in full and runs in the embedded terminal where you watch it. Nothing runs before you confirm the exact command.")
+                    "Puts a vendor CLI on an SSH host. Codex resolves the current npm latest version before confirmation and installs that exact approved version; latest is not automatically release-verified. Claude, OpenCode and GitHub Copilot use exact version targets. The disclosure shows whether the selected version is covered by recorded verification fixtures. Antigravity and Cursor use unpinned installer scripts, downloaded in full and run in the embedded terminal where you watch them. Nothing runs before you confirm the exact command.")
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach(model.remoteConnections) { connection in
                     HStack {
@@ -97,11 +97,11 @@ struct RemoteHarnessInstallSection: View {
         let pin: String
         switch prompt.verification {
         case .releaseVerified:
-            pin = "Pinned version: \(prompt.pinnedVersion!) "
+            pin = "Selected version: \(prompt.pinnedVersion!) "
                 + "(exact; the version this release was verified against; "
                 + "npm verifies its registry integrity checksum)"
         case .deterministicOnly:
-            pin = "Pinned version: \(prompt.pinnedVersion!) "
+            pin = "Selected version: \(prompt.pinnedVersion!) "
                 + "(exact deterministic install target; not covered by recorded "
                 + "verification fixtures; npm verifies its registry integrity checksum)"
         case .humanObserved:

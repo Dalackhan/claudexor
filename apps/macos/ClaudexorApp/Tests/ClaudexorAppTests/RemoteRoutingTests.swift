@@ -170,6 +170,86 @@ import Testing
             contradictoryVerification, lease: lease, harness: "cursor") == nil)
     }
 
+    @Test func confirmedInstallCarriesTheExactDisclosedNpmVersion() throws {
+        let lease = RemoteActionLease(
+            lane: .harnessInstall, connectionID: UUID(), generation: 1, token: UUID())
+        // The parser trusts the remote CLI's verification evidence, not a
+        // local version table. Both evidence classes bind the approved target.
+        for (version, verification) in [
+            ("0.162.1", "release_verified"),
+            ("0.200.0", "deterministic_only"),
+            ("0.201.0-rc.1", "deterministic_only"),
+        ] {
+            let data = Data("""
+            {"ok":true,"dryRun":true,"harness":"codex",
+             "command":"npm install --global --prefix vendor @openai/codex@\(version)",
+             "installLocation":"vendor/bin","pinnedVersion":"\(version)",
+             "verification":"\(verification)"}
+            """.utf8)
+            let prompt = try #require(AppModel.parseHarnessInstallDisclosure(
+                data, lease: lease, harness: "codex"))
+            #expect(prompt.pinnedVersion == version)
+            #expect(prompt.verification.rawValue == verification)
+            #expect(prompt.confirmedInstallCommand ==
+                "~/.claudexor/remote/current/bin/claudexor harness install 'codex'"
+                    + " --vendor-version '\(version)' --yes")
+            #expect(!prompt.confirmedInstallCommand.contains("latest"))
+        }
+    }
+
+    @Test func scriptInstallConfirmationDoesNotInventAVendorVersion() throws {
+        let lease = RemoteActionLease(
+            lane: .harnessInstall, connectionID: UUID(), generation: 1, token: UUID())
+        for harness in ["agy", "cursor"] {
+            let data = Data("""
+            {"ok":true,"dryRun":true,"harness":"\(harness)",
+             "command":"/bin/sh vendor/install.sh","installLocation":"~/.local/bin",
+             "pinnedVersion":null,"verification":"human_observed"}
+            """.utf8)
+            let prompt = try #require(AppModel.parseHarnessInstallDisclosure(
+                data, lease: lease, harness: harness))
+            #expect(prompt.verification == .humanObserved)
+            #expect(prompt.pinnedVersion == nil)
+            #expect(prompt.confirmedInstallCommand ==
+                "~/.claudexor/remote/current/bin/claudexor harness install '\(harness)' --yes")
+            #expect(!prompt.confirmedInstallCommand.contains("--vendor-version"))
+        }
+    }
+
+    @Test func malformedOrMissingNpmDisclosureNeverProducesAConfirmation() throws {
+        let lease = RemoteActionLease(
+            lane: .harnessInstall, connectionID: UUID(), generation: 1, token: UUID())
+        for verification in ["release_verified", "deterministic_only"] {
+            let valid: [String: Any] = [
+                "ok": true, "dryRun": true, "harness": "codex",
+                "command": "npm install --global --prefix vendor @openai/codex@0.200.0",
+                "installLocation": "vendor/bin", "pinnedVersion": "0.200.0",
+                "verification": verification,
+            ]
+            // Each mutation isolates one defect in an otherwise valid payload.
+            for field in valid.keys {
+                var missing = valid
+                missing.removeValue(forKey: field)
+                #expect(AppModel.parseHarnessInstallDisclosure(
+                    try JSONSerialization.data(withJSONObject: missing),
+                    lease: lease, harness: "codex") == nil)
+            }
+            let malformed: [(String, Any)] = [
+                ("ok", false), ("dryRun", false), ("harness", "claude"),
+                ("command", ""), ("verification", "unknown"),
+                ("pinnedVersion", NSNull()), ("pinnedVersion", ""),
+                ("pinnedVersion", " \n\t"), ("pinnedVersion", 200),
+            ]
+            for (field, value) in malformed {
+                var payload = valid
+                payload[field] = value
+                #expect(AppModel.parseHarnessInstallDisclosure(
+                    try JSONSerialization.data(withJSONObject: payload),
+                    lease: lease, harness: "codex") == nil)
+            }
+        }
+    }
+
     /// The install guards refuse on a surface that does not need the
     /// connection's own row: a connection deleted between the disclosure
     /// dialog and the confirmation has no ForEach row left to render a

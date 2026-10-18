@@ -201,9 +201,11 @@ import Testing
             prompt(.humanObserved, pin: nil), model: model)
 
         #expect(verified.contains("this release was verified against"))
-        #expect(verified.contains("Pinned version: 1.2.3"))
+        #expect(verified.contains("Selected version: 1.2.3"))
         #expect(deterministic.contains("deterministic install target"))
         #expect(deterministic.contains("not covered by recorded verification fixtures"))
+        #expect(deterministic.contains("Selected version: 4.5.6"))
+        #expect(!deterministic.contains("this release was verified against"))
         #expect(observed.contains("No version pin"))
         #expect(observed.contains("runs in the embedded terminal where you watch it"))
     }

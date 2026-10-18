@@ -109,7 +109,7 @@ describe("harness maintenance primitive", () => {
     expect(compareVendorVersions("2.0.0+build.1", "2.0.0")).toBe(0);
   });
 
-  it("legacy ensure keeps a runnable NEWER managed copy and its exact legacy keys", () => {
+  it("default Codex install keeps a runnable NEWER managed copy without a registry read", () => {
     const w = world();
     w.installCodex("99.0.0");
     const { spawn, calls } = fakeSpawn(w);
@@ -128,7 +128,8 @@ describe("harness maintenance primitive", () => {
     expect(calls.some((call) => call.includes("install"))).toBe(false);
     const receipt = JSON.parse(out.join("")) as Record<string, unknown>;
     expect(receipt.installedVersion).toBe("99.0.0");
-    expect(receipt.pinnedVersion).toBe(CODEX_VENDOR_CLI_VERSION);
+    expect(receipt.pinnedVersion).toBe("99.0.0");
+    expect(receipt.verification).toBe("deterministic_only");
     // Old strict parsers keep running: no maintenance-only key leaks into Connect.
     expect(Object.keys(receipt).sort()).toEqual(
       [
@@ -147,14 +148,14 @@ describe("harness maintenance primitive", () => {
     );
   });
 
-  it("legacy ensure still upgrades an OLDER managed copy to the pin", () => {
+  it("tested-baseline install still upgrades an OLDER managed copy to the pin", () => {
     const w = world();
     w.installCodex("0.0.1");
     const { spawn, calls } = fakeSpawn(w);
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const code = harnessInstallCommand(
-      args(["harness", "install", "codex"], { target: "local", yes: true }),
+      args(["harness", "install", "codex"], { target: "local", yes: true, "release-tested": true }),
       true,
       { ...opts(w, spawn), exists: () => true },
     );
@@ -162,6 +163,233 @@ describe("harness maintenance primitive", () => {
     expect(calls.find((call) => call.includes("install"))?.at(-1)).toBe(
       `@openai/codex@${CODEX_VENDOR_CLI_VERSION}`,
     );
+  });
+
+  it("a fresh default Codex install resolves one latest version, installs it exactly, and does not inherit native verification", () => {
+    const w = world();
+    const { spawn, calls } = fakeSpawn(w, "0.163.0");
+    const output: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      output.push(String(chunk));
+      return true;
+    });
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const code = harnessInstallCommand(
+      args(["harness", "install", "codex"], { target: "local", yes: true }),
+      true,
+      { ...opts(w, spawn), exists: () => true },
+    );
+    const receipt = JSON.parse(output.join("")) as Record<string, unknown>;
+    expect(code).toBe(0);
+    expect(calls.filter((call) => call.includes("view"))).toHaveLength(1);
+    expect(calls.filter((call) => call.includes("install"))).toHaveLength(1);
+    expect(calls.find((call) => call.includes("install"))?.at(-1)).toBe("@openai/codex@0.163.0");
+    expect(receipt).toMatchObject({
+      ok: true,
+      dryRun: false,
+      pinnedVersion: "0.163.0",
+      verification: "deterministic_only",
+      installedVersion: "0.163.0",
+    });
+    expect(receipt).not.toHaveProperty("previousVersion"); // Connect receipt, not Maintenance rollback data.
+    expect(inspectHarness("codex", opts(w, spawn)).releaseTested.version).toBe(
+      CODEX_VENDOR_CLI_VERSION,
+    );
+  });
+
+  it("remote dry-run selects one exact latest, and confirmation can execute THAT version without another lookup", () => {
+    const w = world();
+    const { spawn, calls } = fakeSpawn(w, "0.163.0");
+    const output: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      output.push(String(chunk));
+      return true;
+    });
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const runtime = { ...opts(w, spawn), exists: () => true };
+    expect(
+      harnessInstallCommand(
+        args(["harness", "install", "codex"], { "dry-run": true }),
+        true,
+        runtime,
+      ),
+    ).toBe(0);
+    const proposed = JSON.parse(output.join("")) as Record<string, unknown>;
+    expect(proposed).toMatchObject({
+      ok: true,
+      target: "remote",
+      dryRun: true,
+      pinnedVersion: "0.163.0",
+      verification: "deterministic_only",
+    });
+    expect(proposed.command).toContain("@openai/codex@0.163.0");
+    expect(calls.filter((call) => call.includes("view"))).toHaveLength(1);
+    output.length = 0;
+    expect(
+      harnessInstallCommand(
+        args(["harness", "install", "codex"], { yes: true, "vendor-version": "0.163.0" }),
+        true,
+        runtime,
+      ),
+    ).toBe(0);
+    const executed = JSON.parse(output.join("")) as Record<string, unknown>;
+    expect(executed).toMatchObject({
+      ok: true,
+      target: "remote",
+      dryRun: false,
+      pinnedVersion: "0.163.0",
+      verification: "deterministic_only",
+    });
+    expect(executed).not.toHaveProperty("installedVersion"); // The watched remote path has no local post-install proof.
+    expect(calls.filter((call) => call.includes("view"))).toHaveLength(1);
+    expect(calls.find((call) => call.includes("install"))?.at(-1)).toBe("@openai/codex@0.163.0");
+  });
+
+  it("an older managed copy takes the new default exact latest, but a malformed registry answer refuses without install", () => {
+    const w = world();
+    w.installCodex("0.0.1");
+    const good = fakeSpawn(w, "0.163.0");
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    expect(
+      harnessInstallCommand(
+        args(["harness", "install", "codex"], { target: "local", yes: true }),
+        true,
+        { ...opts(w, good.spawn), exists: () => true },
+      ),
+    ).toBe(0);
+    expect(good.calls.find((call) => call.includes("install"))?.at(-1)).toBe(
+      "@openai/codex@0.163.0",
+    );
+    const fresh = world();
+    const bad = fakeSpawn(fresh, "not-a-version");
+    const output: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      output.push(String(chunk));
+      return true;
+    });
+    expect(
+      harnessInstallCommand(
+        args(["harness", "install", "codex"], { target: "local", yes: true }),
+        true,
+        { ...opts(fresh, bad.spawn), exists: () => true },
+      ),
+    ).toBe(1);
+    expect(JSON.parse(output.join(""))).toMatchObject({
+      ok: false,
+      code: "latest_unavailable",
+      exitCode: 1,
+    });
+    expect(bad.calls.some((call) => call.includes("install"))).toBe(false);
+  });
+
+  it("a newer managed copy arriving between latest lookup and the install lease is not downgraded", () => {
+    const w = world();
+    const { spawn, calls } = fakeSpawn(w, "0.163.0");
+    const racingSpawn = vi.fn((binary: string, argv: readonly string[]) => {
+      if (argv.includes("view")) w.installCodex("99.0.0");
+      return spawn(binary, argv);
+    });
+    const output: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      output.push(String(chunk));
+      return true;
+    });
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    expect(
+      harnessInstallCommand(
+        args(["harness", "install", "codex"], { target: "local", yes: true }),
+        true,
+        { ...opts(w, racingSpawn), exists: () => true },
+      ),
+    ).toBe(0);
+    const receipt = JSON.parse(output.join("")) as Record<string, unknown>;
+    expect(receipt).toMatchObject({
+      pinnedVersion: "0.163.0",
+      installedVersion: "99.0.0",
+      verification: "deterministic_only",
+    });
+    expect(calls.filter((call) => call.includes("view"))).toHaveLength(1);
+    expect(calls.some((call) => call.includes("install"))).toBe(false);
+  });
+
+  it("a missing registry cannot silently fall back to the tested baseline; explicit offline baseline still discloses it", () => {
+    const w = world();
+    const output: string[] = [];
+    const { spawn, calls } = fakeSpawn(w);
+    const failedRegistry = vi.fn((binary: string, argv: readonly string[]) =>
+      argv.includes("view") ? ({ status: 7, stdout: "" } as never) : spawn(binary, argv),
+    );
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      output.push(String(chunk));
+      return true;
+    });
+    expect(
+      harnessInstallCommand(
+        args(["harness", "install", "codex"], { "dry-run": true }),
+        true,
+        opts(w, failedRegistry),
+      ),
+    ).toBe(1);
+    expect(JSON.parse(output.join(""))).toMatchObject({
+      ok: false,
+      code: "latest_unavailable",
+      exitCode: 1,
+    });
+    expect(calls).toHaveLength(0);
+    output.length = 0;
+    expect(
+      harnessInstallCommand(
+        args(["harness", "install", "codex"], { "dry-run": true, "release-tested": true }),
+        true,
+        opts(w, failedRegistry),
+      ),
+    ).toBe(0);
+    expect(JSON.parse(output.join(""))).toMatchObject({
+      ok: true,
+      pinnedVersion: CODEX_VENDOR_CLI_VERSION,
+      verification: "release_verified",
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("invalid and conflicting vendor-version flags refuse before registry or install", () => {
+    const w = world();
+    const { spawn, calls } = fakeSpawn(w);
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const runtime = opts(w, spawn);
+    expect(
+      harnessInstallCommand(
+        args(["harness", "install", "codex"], { "vendor-version": "latest", yes: true }),
+        true,
+        runtime,
+      ),
+    ).toBe(2);
+    expect(
+      harnessInstallCommand(
+        args(["harness", "install", "codex"], { "vendor-version": "0.163.0;rm", yes: true }),
+        true,
+        runtime,
+      ),
+    ).toBe(2);
+    expect(
+      harnessInstallCommand(
+        args(["harness", "install", "codex"], {
+          "vendor-version": "0.163.0",
+          "release-tested": true,
+        }),
+        true,
+        runtime,
+      ),
+    ).toBe(2);
+    expect(
+      harnessInstallCommand(
+        args(["harness", "install", "cursor"], { "vendor-version": "0.163.0" }),
+        true,
+        runtime,
+      ),
+    ).toBe(2);
+    expect(calls).toHaveLength(0);
   });
 
   it.each(["1.0.0", "2.0.0"])(

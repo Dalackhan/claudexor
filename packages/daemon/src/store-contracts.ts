@@ -97,6 +97,8 @@ export interface InteractionStorePort {
 }
 
 export interface ProjectThreadPort {
+  /** Synchronous live ownership read immediately before a root's lane sweep. */
+  retentionLaneThreadIds?(root: string): Set<string>;
   /** Cooperative served listing for maintenance, including unfinished purges. */
   retentionThreads(): Promise<Thread[]>;
   retentionReferences(

@@ -152,25 +152,27 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
       const roots = [...healthyRoots, noProjectRoot];
       // INV-034 lifecycle owner (c): remove durable per-lane read-only homes whose
       // thread no longer exists. Bounded to HEALTHY roots only (same fail-closed
-      // set as the run GC): a quarantined partition contributes no live thread
-      // ids, so its lanes are left untouched until it recovers rather than swept
-      // as false orphans. Skip in dry-run — a GC preview must not delete bytes.
+      // set as the run GC): a recovery-pending partition cannot
+      // supply live ownership and is excluded until recovery completes. Skip in dry-run — a GC preview must not delete bytes.
       if (!request.dry_run && !references.blocked) {
-        const liveThreadsByRoot = new Map<string, Set<string>>();
-        for (const thread of await deps.threads.retentionThreads()) {
-          if (thread.state === "purged") continue;
-          const root = thread.repo?.root ?? noProjectRoot;
-          (liveThreadsByRoot.get(root) ?? liveThreadsByRoot.set(root, new Set()).get(root)!).add(
-            thread.id,
-          );
-        }
         for (const root of roots) {
           await yieldToAdmission();
-          if (!references.isCurrent()) break;
           try {
-            sweepOrphanLanes(root, liveThreadsByRoot.get(root) ?? new Set());
-          } catch {
-            /* best-effort: orphan lane dirs are harmless and re-sweepable */
+            const ids =
+              deps.threads.retentionLaneThreadIds?.(root) ??
+              new Set(
+                deps.threads
+                  .listThreads()
+                  .filter(
+                    (thread) =>
+                      thread.state !== "purged" && (thread.repo?.root ?? noProjectRoot) === root,
+                  )
+                  .map((thread) => thread.id),
+              );
+            // No yield between the live read and the synchronous sweep.
+            sweepOrphanLanes(root, ids);
+          } catch (error) {
+            inventoryErrors.push(`lane sweep skipped for ${root}: ${String(error)}`);
           }
         }
       }

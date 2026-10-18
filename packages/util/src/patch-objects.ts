@@ -56,12 +56,14 @@ export function writePatchObject(
   const object = join(runtimeDir, "patches", `${id}.patch`);
   ensureDir(dirname(object));
   if (!lstatSync(dirname(object)).isDirectory())
-    throw new Error("patch cache is not a plain directory; publication refused");
-  if (existsSync(object)) {
-    if (sha256(readFileSync(object, "utf8")) !== `sha256:${id}`) {
-      throw new Error(`patch object ${id} failed its content digest`);
-    }
-  } else {
+    throw new Error(`patch cache ${dirname(object)} is not a plain directory; publication refused`);
+  const reusable =
+    existsSync(object) &&
+    lstatSync(object).isFile() &&
+    sha256(readFileSync(object, "utf8")) === `sha256:${id}`;
+  // The cache pathname is advisory. Replace a damaged inode; never mutate it
+  // in place or link a later publication to its mismatching bytes.
+  if (!reusable) {
     const temp = `${object}.tmp-${crypto.randomUUID()}`;
     try {
       const fd = openSync(temp, "wx", 0o600);
@@ -105,7 +107,7 @@ export async function prunePatchObjects(
   });
   if (!directoryStat) return 0;
   if (!directoryStat.isDirectory())
-    throw new Error("patch cache is not a plain directory; objects kept");
+    throw new Error(`patch cache ${directory} is not a plain directory; objects kept`);
   let bytes = 0;
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (!entry.isFile() || !/^[0-9a-f]{64}\.patch$/.test(entry.name)) continue;
@@ -117,7 +119,7 @@ export async function prunePatchObjects(
       currentDirectory.dev !== directoryStat.dev ||
       currentDirectory.ino !== directoryStat.ino
     )
-      throw new Error("patch cache changed during inventory; objects kept");
+      throw new Error(`patch cache ${directory} changed during inventory; objects kept`);
     const path = join(directory, entry.name);
     const stat = lstatSync(path);
     if (!stat.isFile()) continue;

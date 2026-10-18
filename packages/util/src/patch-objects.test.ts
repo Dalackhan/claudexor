@@ -60,14 +60,25 @@ describe("immutable patch publication", () => {
     expect(await prunePatchObjects(dir, false)).toBe(0);
   });
 
-  it("refuses a corrupt object without replacing a readable saved patch", () => {
+  it("replaces a mismatching cache inode without changing any existing hardlink", () => {
     const dir = root();
     const target = join(dir, "patch.diff");
     writePatchObject(dir, target, "first");
+    const original = join(dir, "first.patch");
+    fs.linkSync(target, original);
     const corrupt = join(dir, "patches", `${sha256("next").slice(7)}.patch`);
     fs.writeFileSync(corrupt, "wrong");
-    expect(() => writePatchObject(dir, target, "next")).toThrow("content digest");
-    expect(fs.readFileSync(target, "utf8")).toBe("first");
+    const evidence = join(dir, "bad-old-link.patch");
+    fs.linkSync(corrupt, evidence);
+    const badInode = fs.statSync(evidence).ino;
+    writePatchObject(dir, target, "next");
+    expect(fs.readFileSync(target, "utf8")).toBe("next");
+    expect(fs.readFileSync(corrupt, "utf8")).toBe("next");
+    expect(fs.statSync(target).ino).toBe(fs.statSync(corrupt).ino);
+    expect(fs.statSync(target).ino).not.toBe(badInode);
+    expect(fs.readFileSync(evidence, "utf8")).toBe("wrong");
+    expect(fs.readFileSync(original, "utf8")).toBe("first");
+    expect(fs.readdirSync(join(dir, "patches")).some((name) => name.includes(".tmp-"))).toBe(false);
   });
 
   it("copies when links are unsupported, but surfaces other publication failures", () => {

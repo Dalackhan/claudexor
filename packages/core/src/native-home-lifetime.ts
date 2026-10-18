@@ -7,6 +7,8 @@ export interface NativeHomeRetentionInput {
   olderThan: number;
   dryRun: boolean;
   maxDeletions: number;
+  /** Fresh idle/reference proof. Call immediately before each unlink, with no intervening await. */
+  canPrune: () => boolean;
 }
 export type NativeHomeRetentionResult = Pick<
   GcNativeHomeReport,
@@ -18,13 +20,13 @@ export type NativeHomeRetentionResult = Pick<
   | "kept_unknown"
   | "truncated"
 >;
-/** Synchronous inventory + retirement prevents engine admission interleaving
- * with a proven idle reference snapshot. Unknown formats are never guessed. */
+/** Inventory yields to admission. Each retirement rechecks its proof and file
+ * identity synchronously. Unknown formats are never guessed. */
 export type NativeHomeLifetime =
   | { status: "not_pruned"; reason: string }
   | {
       status: "managed";
       preserves: string;
       home(env: EnvMap): string;
-      prune(input: NativeHomeRetentionInput): NativeHomeRetentionResult;
+      prune(input: NativeHomeRetentionInput): Promise<NativeHomeRetentionResult>;
     };

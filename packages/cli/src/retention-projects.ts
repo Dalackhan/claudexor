@@ -1,5 +1,6 @@
-import { existsSync, lstatSync, readdirSync, statSync } from "node:fs";
+import { lstat, readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { setImmediate as yieldToAdmission } from "node:timers/promises";
 import { ArtifactStore } from "@claudexor/artifact-store";
 import type { DiskRetentionReferences } from "@claudexor/daemon";
 import type { RetentionProject } from "@claudexor/control-api";
@@ -7,20 +8,22 @@ import { projectRuntimeDir, userConfigDir } from "@claudexor/util";
 
 /** Directory inventory owns reachability. Registrations with existing roots own
  * recent history; retained thread roots only name/protect references. */
-export function retentionProjects(
+export async function retentionProjects(
   references: DiskRetentionReferences,
   noProjectRoot: string,
   healthyRoots: ReadonlySet<string>,
-): RetentionProject[] {
+): Promise<RetentionProject[]> {
   const projects: RetentionProject[] = [];
-  const byHash = new Map(
-    references.projectRoots.map((root) => [basename(projectRuntimeDir(root)), root]),
-  );
+  const byHash = new Map<string, string>();
+  for (const root of references.projectRoots) {
+    await yieldToAdmission();
+    byHash.set(basename(projectRuntimeDir(root)), root);
+  }
   byHash.set(basename(projectRuntimeDir(noProjectRoot)), noProjectRoot);
   const ownedRoots = new Set([noProjectRoot]);
   for (const root of references.registeredProjectRoots) {
     try {
-      if (statSync(root).isDirectory()) ownedRoots.add(root);
+      if ((await stat(root)).isDirectory()) ownedRoots.add(root);
     } catch (error) {
       if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
     }
@@ -29,10 +32,11 @@ export function retentionProjects(
     [...references.protectedProjectRoots].map((root) => basename(projectRuntimeDir(root))),
   );
   const directory = join(userConfigDir(), "projects");
-  if (existsSync(directory)) {
-    if (!lstatSync(directory).isDirectory())
+  const directoryStat = await optionalStat(directory);
+  if (directoryStat) {
+    if (!directoryStat.isDirectory())
       throw new Error("retention projects directory is not a plain directory");
-    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
+    for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a, b) =>
       a.name.localeCompare(b.name),
     )) {
       if (
@@ -43,7 +47,8 @@ export function retentionProjects(
         continue;
       const runtime = join(directory, entry.name);
       const runsDir = join(runtime, "runs");
-      if (existsSync(runsDir) && !lstatSync(runsDir).isDirectory()) continue;
+      const runsStat = await optionalStat(runsDir);
+      if (runsStat && !runsStat.isDirectory()) continue;
       const root = byHash.get(entry.name);
       projects.push({
         // Without a retained root, disclose the engine namespace rather than guessing a user path.
@@ -54,17 +59,16 @@ export function retentionProjects(
       });
     }
   }
+  const inventoriedRoots = new Set(projects.map((project) => project.root));
   // A healthy repository can contain review debris before its first run.
   for (const root of healthyRoots) {
-    if (
-      references.protectedProjectRoots.has(root) ||
-      projects.some((project) => project.root === root)
-    )
-      continue;
+    if (references.protectedProjectRoots.has(root) || inventoriedRoots.has(root)) continue;
     const runtime = projectRuntimeDir(root);
-    if (existsSync(runtime) && !lstatSync(runtime).isDirectory()) continue;
+    const runtimeStat = await optionalStat(runtime);
+    if (runtimeStat && !runtimeStat.isDirectory()) continue;
     const runsDir = new ArtifactStore(root).runsDir();
-    if (existsSync(runsDir) && !lstatSync(runsDir).isDirectory()) continue;
+    const runsStat = await optionalStat(runsDir);
+    if (runsStat && !runsStat.isDirectory()) continue;
     projects.push({
       root,
       runsDir,
@@ -74,9 +78,11 @@ export function retentionProjects(
   }
   const noProjectRuns = new ArtifactStore(noProjectRoot).runsDir();
   const noProjectRuntime = projectRuntimeDir(noProjectRoot);
+  const noProjectRuntimeStat = await optionalStat(noProjectRuntime);
+  if (noProjectRuntimeStat && !noProjectRuntimeStat.isDirectory()) return projects;
+  const noProjectRunsStat = await optionalStat(noProjectRuns);
   if (
-    (!existsSync(noProjectRuntime) || lstatSync(noProjectRuntime).isDirectory()) &&
-    (!existsSync(noProjectRuns) || lstatSync(noProjectRuns).isDirectory()) &&
+    (!noProjectRunsStat || noProjectRunsStat.isDirectory()) &&
     !projects.some((project) => project.runsDir === noProjectRuns)
   )
     projects.push({
@@ -86,4 +92,13 @@ export function retentionProjects(
       keepLastRuns: true,
     });
   return projects;
+}
+
+async function optionalStat(path: string) {
+  try {
+    return await lstat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }

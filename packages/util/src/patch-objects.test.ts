@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 describe("immutable patch publication", () => {
-  it("shares identical attempt/final/anchor bytes and replaces only the changed path", () => {
+  it("shares identical attempt/final/anchor bytes and replaces only the changed path", async () => {
     const dir = root();
     const patch = "diff --git a/a b/a\n+" + "ordinary bytes\r\n".repeat(100_000);
     const paths = [
@@ -39,15 +39,15 @@ describe("immutable patch publication", () => {
     expect(fs.readFileSync(paths[2], "utf8")).toBe(patch);
     expect(fs.readFileSync(paths[1], "utf8")).toBe("replacement\n");
     fs.rmSync(join(dir, "runs"), { recursive: true });
-    expect(prunePatchObjects(dir, true)).toBe(Buffer.byteLength("replacement\n"));
-    expect(prunePatchObjects(dir, false)).toBe(Buffer.byteLength("replacement\n"));
+    expect(await prunePatchObjects(dir, true)).toBe(Buffer.byteLength("replacement\n"));
+    expect(await prunePatchObjects(dir, false)).toBe(Buffer.byteLength("replacement\n"));
     expect(fs.readFileSync(paths[2], "utf8")).toBe(patch);
     fs.unlinkSync(paths[2]);
-    expect(prunePatchObjects(dir, false)).toBe(Buffer.byteLength(patch));
+    expect(await prunePatchObjects(dir, false)).toBe(Buffer.byteLength(patch));
     expect(fs.readdirSync(join(dir, "patches"))).toEqual([]);
   });
 
-  it("separates different display/exact bytes and leaves old plain files readable", () => {
+  it("separates different display/exact bytes and leaves old plain files readable", async () => {
     const dir = root();
     const legacy = join(dir, "legacy.patch");
     fs.writeFileSync(legacy, "legacy bytes\n");
@@ -57,7 +57,7 @@ describe("immutable patch publication", () => {
       fs.statSync(join(dir, "exact.patch")).ino,
     );
     expect(fs.readFileSync(legacy, "utf8")).toBe("legacy bytes\n");
-    expect(prunePatchObjects(dir, false)).toBe(0);
+    expect(await prunePatchObjects(dir, false)).toBe(0);
   });
 
   it("refuses a corrupt object without replacing a readable saved patch", () => {
@@ -86,14 +86,14 @@ describe("immutable patch publication", () => {
     expect(fs.readFileSync(target, "utf8")).toBe("same bytes\r\n");
   });
 
-  it("keeps objects outside a linked cache namespace", () => {
+  it("keeps objects outside a linked cache namespace", async () => {
     const dir = root();
     const outside = root();
     const path = join(outside, `${sha256("outside bytes").slice(7)}.patch`);
     fs.writeFileSync(path, "outside bytes");
     fs.symlinkSync(outside, join(dir, "patches"), "dir");
     for (const dryRun of [true, false])
-      expect(() => prunePatchObjects(dir, dryRun)).toThrow("plain directory");
+      await expect(prunePatchObjects(dir, dryRun)).rejects.toThrow("plain directory");
     expect(() => writePatchObject(dir, join(dir, "run.patch"), "outside bytes")).toThrow(
       "plain directory",
     );
@@ -101,7 +101,7 @@ describe("immutable patch publication", () => {
     fs.unlinkSync(join(dir, "patches"));
     fs.mkdirSync(join(dir, "patches"));
     fs.renameSync(path, join(dir, "patches", `${sha256("outside bytes").slice(7)}.patch`));
-    expect(prunePatchObjects(dir, false)).toBe(Buffer.byteLength("outside bytes"));
+    expect(await prunePatchObjects(dir, false)).toBe(Buffer.byteLength("outside bytes"));
   });
 
   it("promotes ordinary run bytes to durable anchor ownership before publication", () => {

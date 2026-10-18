@@ -6,12 +6,13 @@ import {
   linkSync,
   lstatSync,
   openSync,
-  readdirSync,
   readFileSync,
   renameSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { lstat, readdir } from "node:fs/promises";
+import { setImmediate as yieldToAdmission } from "node:timers/promises";
 import { dirname, join } from "node:path";
 import { ensureDir, fsyncDirectory, sha256 } from "./index.js";
 
@@ -91,20 +92,33 @@ export function writePatchObject(
 }
 
 /** Cache entries have no authority of their own. Anchors and run paths own their lifetime. */
-export function prunePatchObjects(
+export async function prunePatchObjects(
   runtimeDir: string,
   dryRun: boolean,
   plannedUnlinks: ReadonlyMap<string, number> = new Map(),
-): number {
+): Promise<number> {
   const directory = join(runtimeDir, "patches");
-  if (!existsSync(directory)) return 0;
-  if (!lstatSync(directory).isDirectory())
+  const directoryStat = await lstat(directory).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!directoryStat) return 0;
+  if (!directoryStat.isDirectory())
     throw new Error("patch cache is not a plain directory; objects kept");
   let bytes = 0;
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (!entry.isFile() || !/^[0-9a-f]{64}\.patch$/.test(entry.name)) continue;
+    await yieldToAdmission();
+    const currentDirectory = lstatSync(directory);
+    if (
+      !currentDirectory.isDirectory() ||
+      currentDirectory.dev !== directoryStat.dev ||
+      currentDirectory.ino !== directoryStat.ino
+    )
+      throw new Error("patch cache changed during inventory; objects kept");
     const path = join(directory, entry.name);
     const stat = lstatSync(path);
+    if (!stat.isFile()) continue;
     if (stat.nlink !== 1 + (dryRun ? (plannedUnlinks.get(`${stat.dev}:${stat.ino}`) ?? 0) : 0))
       continue;
     bytes += stat.size;

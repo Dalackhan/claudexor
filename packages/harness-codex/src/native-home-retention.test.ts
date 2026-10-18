@@ -41,6 +41,7 @@ function fixture() {
       olderThan: Date.now() - 30 * 86400000,
       dryRun,
       maxDeletions,
+      canPrune: () => true,
     });
   return { home, adapter, lifetime, seed, prune };
 }
@@ -64,10 +65,10 @@ it("deletes old unreferenced parts and preserves resume, recent groups, credenti
     mkdirSync(join(p, ".."), { recursive: true });
     writeFileSync(p, `unchanged ${name}`);
   }
-  const preview = f.prune([id(2)], true);
+  const preview = await f.prune([id(2)], true);
   expect(preview.deleted_files.sort()).toEqual([discard, compressed].sort());
   expect(existsSync(discard)).toBe(true);
-  const result = f.prune([id(2)]);
+  const result = await f.prune([id(2)]);
   expect(result.deleted_files.sort()).toEqual(preview.deleted_files);
   expect(result.freed_bytes).toBe(18);
   expect(existsSync(discard)).toBe(false);
@@ -84,33 +85,61 @@ it("deletes old unreferenced parts and preserves resume, recent groups, credenti
     ),
   ).toMatchObject({ found: true, file: held });
 });
-it("fails closed on unrecognized references, then prunes when proof is valid", () => {
+it("fails closed on unrecognized references, then prunes when proof is valid", async () => {
   const f = fixture();
   const file = f.seed(1);
-  expect(() => f.prune(["unknown-reference-format"])).toThrow("unrecognized");
+  await expect(f.prune(["unknown-reference-format"])).rejects.toThrow("unrecognized");
   expect(existsSync(file)).toBe(true);
-  expect(f.prune().deleted_files).toEqual([file]);
+  expect((await f.prune()).deleted_files).toEqual([file]);
 });
-it("never follows linked stores or unknown layouts and rejects an outside home", () => {
+it("never follows linked stores or unknown layouts and rejects an outside home", async () => {
   const f = fixture();
   const outside = fixture();
   const target = outside.seed(4);
   symlinkSync(join(outside.home, "sessions"), join(f.home, "sessions"), "dir");
-  expect(() => f.prune()).toThrow("plain directory");
+  await expect(f.prune()).rejects.toThrow("plain directory");
   expect(existsSync(target)).toBe(true);
   expect(() =>
     f.lifetime.home({ [CONTINUITY_PROFILE_LOCATOR_ENV]: "/outside-owned-root" }),
   ).toThrow();
 });
-it("continues a bounded cold-store pass", () => {
+it("continues a bounded cold-store pass", async () => {
   const f = fixture();
   for (let n = 0; n < 3; n++) f.seed(n);
-  expect(f.prune([], false, 2)).toMatchObject({
+  expect(await f.prune([], false, 2)).toMatchObject({
     truncated: true,
     deleted_files: expect.any(Array),
   });
-  expect(f.prune([], false, 2)).toMatchObject({
+  expect(await f.prune([], false, 2)).toMatchObject({
     truncated: false,
     deleted_files: expect.arrayContaining([expect.stringContaining(id(2))]),
   });
 });
+
+it.each(["changed", "unreadable"])(
+  "preserves its partial receipt when the proof is %s between unlink actions",
+  async (kind) => {
+    const f = fixture();
+    const files = [f.seed(1), f.seed(2)];
+    const result = await f.lifetime.prune({
+      home: f.home,
+      protectedSessionIds: new Set(),
+      olderThan: Date.now() - 30 * 86400000,
+      dryRun: false,
+      maxDeletions: 500,
+      canPrune: () => {
+        const current = files.every((file) => existsSync(file));
+        if (!current && kind === "unreadable") throw new Error("unreadable SQL reference");
+        return current;
+      },
+    });
+    expect(result.deleted_files).toHaveLength(1);
+    expect(result.freed_bytes).toBe(9);
+    expect(result.errors.join()).toContain(kind);
+    expect(files.filter((file) => existsSync(file))).toHaveLength(1);
+    const resumed = await f.prune();
+    expect(resumed.deleted_files).toHaveLength(1);
+    expect(resumed.errors).toEqual([]);
+    expect(files.some((file) => existsSync(file))).toBe(false);
+  },
+);

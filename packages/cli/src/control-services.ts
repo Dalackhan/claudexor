@@ -198,9 +198,9 @@ export function controlServices(
       hasPurgeLeftovers,
       nativeHomes: createNativeHomeRetention({
         threads,
-        isBusy: () =>
-          setupBinding.hasActiveWork() ||
-          daemonJobs().some((job) => !(TERMINAL_LIFECYCLES as ReadonlySet<string>).has(job.state)),
+        // Product admission is covered by the SQL snapshot and its fresh
+        // change proof. Only setup's in-memory activity needs a separate read.
+        isBusy: () => setupBinding.hasActiveWork(),
       }),
     }),
     // Nested projects are disclosed, never refused.

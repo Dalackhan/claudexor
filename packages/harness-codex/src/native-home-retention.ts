@@ -1,4 +1,6 @@
-import { existsSync, lstatSync, readdirSync, unlinkSync, type Stats } from "node:fs";
+import { lstatSync, unlinkSync, type Stats } from "node:fs";
+import { lstat, readdir } from "node:fs/promises";
+import { setImmediate as yieldToAdmission } from "node:timers/promises";
 import { join } from "node:path";
 import type { NativeHomeLifetime, NativeHomeRetentionInput } from "@claudexor/core";
 import { canonicalIsolationLocator } from "@claudexor/core";
@@ -10,7 +12,7 @@ const SESSION_ID = new RegExp(`^${UUID}$`, "i");
 
 /** The same filename/part contract as codexContinuity. SQLite logs and indexes
  * have no proven independent deletion contract and are deliberately untouched. */
-function prune(input: NativeHomeRetentionInput) {
+async function prune(input: NativeHomeRetentionInput) {
   const result = {
     deleted_files: [] as string[],
     errors: [] as string[],
@@ -28,19 +30,23 @@ function prune(input: NativeHomeRetentionInput) {
   );
   const home = canonicalIsolationLocator(input.home, "Codex retention home");
   const sessions = join(home, "sessions");
-  if (!existsSync(sessions)) return result;
-  if (!lstatSync(sessions).isDirectory())
+  const sessionsStat = await lstat(sessions).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!sessionsStat) return result;
+  if (!sessionsStat.isDirectory())
     throw new Error("Codex sessions is not a plain directory; home kept");
   const groups = new Map<string, Array<{ path: string; stat: Stats }>>();
-  const scan = (dir: string, depth: number) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+  const scan = async (dir: string, depth: number): Promise<void> => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
       if (
         depth > 0 &&
         entry.isDirectory() &&
         (depth === 3 ? /^\d{4}$/ : /^\d{2}$/).test(entry.name)
       )
-        scan(path, depth - 1);
+        await scan(path, depth - 1);
       else if (depth === 0 && entry.isFile()) {
         const match = ROLLOUT.exec(entry.name);
         if (!match) {
@@ -49,13 +55,13 @@ function prune(input: NativeHomeRetentionInput) {
         }
         const id = match[1]!.toLowerCase();
         const parts = groups.get(id) ?? [];
-        parts.push({ path, stat: lstatSync(path) });
+        parts.push({ path, stat: await lstat(path) });
         groups.set(id, parts);
       } else result.kept_unknown += 1;
     }
   };
   // Complete inventory before the first unlink; a failed read deletes nothing.
-  scan(sessions, 3);
+  await scan(sessions, 3);
   for (const [id, parts] of groups) {
     if (protectedIds.has(id)) {
       result.kept_referenced += parts.length;
@@ -65,6 +71,7 @@ function prune(input: NativeHomeRetentionInput) {
       result.kept_recent += parts.length;
       continue;
     }
+    await yieldToAdmission();
     let current: Stats[];
     try {
       current = parts.map((part) => lstatSync(part.path));
@@ -90,7 +97,24 @@ function prune(input: NativeHomeRetentionInput) {
         result.truncated = true;
         return result;
       }
+      let currentProof: boolean;
       try {
+        currentProof = input.canPrune();
+      } catch (error) {
+        result.errors.push(
+          `native retention proof unreadable; remaining files kept: ${String(error)}`,
+        );
+        return result;
+      }
+      if (!currentProof) {
+        result.errors.push(
+          "native retention references or idle state changed; remaining files kept",
+        );
+        return result;
+      }
+      try {
+        // No await from this fresh proof through unlink; admission remains
+        // free during the inventory, never between proof and this action.
         if (!input.dryRun) unlinkSync(part.path);
         result.deleted_files.push(part.path);
         if (current[i]!.nlink === 1) result.freed_bytes += current[i]!.size;

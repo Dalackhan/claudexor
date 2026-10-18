@@ -1,8 +1,13 @@
 import { Session, Thread, ThreadTurn } from "@claudexor/schema";
+import { setImmediate as yieldToAdmission } from "node:timers/promises";
+import { access } from "node:fs/promises";
 import type { EngineStore } from "./store.js";
 import { decodeBody } from "./thread-rows.js";
+import { SERVED_PIDS_SQL } from "./generations.js";
 
 export interface DiskRetentionReferences {
+  /** Any SQL write invalidates this proof, including an admission that already finished. */
+  isCurrent: () => boolean;
   projectRoots: string[];
   /** Retained active/archived registrations; thread root names alone are not ownership. */
   registeredProjectRoots: Set<string>;
@@ -14,12 +19,46 @@ export interface DiskRetentionReferences {
 
 const RetainedTurn = ThreadTurn.omit({ prompt: true });
 
+/** Maintenance's served thread listing, including unfinished purges. Unlike
+ * public synchronous listing it does not stat every registered project root. */
+export async function diskRetentionThreads(store: EngineStore): Promise<Thread[]> {
+  const result: Thread[] = [];
+  const rows = store
+    .prepare(
+      `SELECT t.body,p.root FROM thread t
+    JOIN partition q ON q.id=t.pid LEFT JOIN project p ON p.current_pid=q.id
+    WHERE t.pid IN (${SERVED_PIDS_SQL})`,
+    )
+    .all() as Array<{ body: Uint8Array; root: string | null }>;
+  for (const row of rows) {
+    await yieldToAdmission();
+    const thread = Thread.parse(decodeBody(row));
+    if (
+      thread.state !== "purged" &&
+      row.root &&
+      !(await access(row.root).then(
+        () => true,
+        () => false,
+      ))
+    )
+      continue;
+    result.push(thread);
+  }
+  return result;
+}
+
 /** Retirement reads all retained generations, including archived projects. Public
  * listing/admission remains served-generation-only. Any unreadable reference throws. */
-export function diskRetentionReferences(
+export async function diskRetentionReferences(
   store: EngineStore,
   ignoreThreadIds: ReadonlySet<string> = new Set(),
-): DiskRetentionReferences {
+): Promise<DiskRetentionReferences> {
+  // EngineStore is the sole writer. SQLite's own change count covers every
+  // mutation on that connection (even a rolled-back write conservatively
+  // invalidates the proof). No transaction or cursor survives a yield.
+  const changes = store.prepare("SELECT total_changes() AS n");
+  const version = (changes.get() as { n: number }).n;
+  const isCurrent = () => (changes.get() as { n: number }).n === version;
   const registeredProjectRoots = new Set(
     (store.prepare("SELECT root FROM project").all() as Array<{ root: string }>).map((r) => r.root),
   );
@@ -60,6 +99,7 @@ export function diskRetentionReferences(
   for (const row of store
     .prepare("SELECT state,body FROM thread WHERE state<>'purged'")
     .all() as Array<{ state: string; body: Uint8Array }>) {
+    await yieldToAdmission();
     const thread = Thread.parse(decodeBody(row));
     if (thread.state !== row.state)
       throw new Error(`thread ${thread.id} retention state disagrees`);
@@ -82,6 +122,7 @@ export function diskRetentionReferences(
     for (const turnRow of store
       .prepare("SELECT body FROM turn WHERE thread_id=?")
       .all(thread.id) as Array<{ body: Uint8Array }>) {
+      await yieldToAdmission();
       const turn = RetainedTurn.parse(decodeBody(turnRow));
       if (turn.thread_id !== thread.id) throw new Error("retention turn owner disagrees");
       [turn.run_id, turn.parent_run_id, turn.answers_plan_run_id, turn.plan_run_id].forEach(add);
@@ -104,6 +145,7 @@ export function diskRetentionReferences(
     finishedAt: row.finishedAt ?? undefined,
   }));
   return {
+    isCurrent,
     projectRoots: [...roots],
     registeredProjectRoots,
     protectedProjectRoots,

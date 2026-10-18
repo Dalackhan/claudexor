@@ -46,10 +46,10 @@ function run(repoRoot: string, id: string, terminal = true) {
   utimesSync(path, old, old);
   return path;
 }
-function runner(cap?: number) {
+function runner(cap?: number, threads = sql.graph.threads) {
   return createRetentionRunner({
     projects: () => sql.graph.projects,
-    threads: sql.graph.threads,
+    threads,
     daemonJobs: () => [],
     purgeThread: async () => {
       throw new Error("unexpected purge");
@@ -251,4 +251,98 @@ it("keeps each capped receipt's continuation signal across queued manual passes"
   expect(gc.hasMore!(scheduled)).toBe(true);
   expect(gc.hasMore!(manual)).toBe(false);
   expect(gc.hasMore!()).toBe(false);
+});
+
+it("admits new SQL references during inventory and retries without retiring their runs", async () => {
+  const projectRoot = repo("admission-during-inventory");
+  const held = run(projectRoot, "new-reference");
+  const cold = run(projectRoot, "unreferenced-neighbor");
+  let admitted = false;
+  const threads = new Proxy(sql.graph.threads, {
+    get(target, key) {
+      if (key === "retentionReferences")
+        return async (...args: Parameters<typeof target.retentionReferences>) => {
+          const snapshot = await target.retentionReferences(...args);
+          if (!admitted)
+            setImmediate(() => {
+              const thread = target.createThread({
+                title: "Admitted during inventory",
+                workspace: "in_place",
+              });
+              target.createTurn(thread.id, "Continue retained work", {
+                parentRunId: "new-reference",
+              });
+              admitted = true;
+            });
+          return snapshot;
+        };
+      const value = Reflect.get(target, key);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const gc = runner(undefined, threads);
+  const interrupted = await gc({ dry_run: false });
+  expect(admitted).toBe(true);
+  expect(interrupted.deleted_runs).toEqual([]);
+  expect(interrupted.errors.join()).toContain("references changed");
+  expect(gc.hasMore!(interrupted)).toBe(true);
+  for (const path of [held, cold]) expect(existsSync(join(path, "final"))).toBe(true);
+  const resumed = await gc({ dry_run: false });
+  expect(resumed.deleted_runs.map((row) => row.run_id)).toEqual(["unreferenced-neighbor"]);
+  expect(resumed.kept.referenced).toBe(1);
+  expect(existsSync(join(held, "final"))).toBe(true);
+  expect(gc.hasMore!(resumed)).toBe(false);
+});
+
+it("invalidates the SQL snapshot for writes during its cooperative read and after it returns", async () => {
+  const thread = sql.graph.threads.createThread({ title: "Snapshot", workspace: "in_place" });
+  const pending = sql.graph.threads.retentionReferences();
+  sql.graph.threads.createTurn(thread.id, "Admitted before inventory completed", {
+    parentRunId: "held",
+  });
+  expect((await pending).isCurrent()).toBe(false);
+  const current = await sql.graph.threads.retentionReferences();
+  expect(current.isCurrent()).toBe(true);
+  expect(current.referencedRunIds.has("held")).toBe(true);
+  sql.graph.threads.createTurn(thread.id, "Admitted after inventory completed");
+  expect(current.isCurrent()).toBe(false);
+});
+
+it("limits maintenance listing to served threads while retaining unfinished purges with missing roots", async () => {
+  const ids = new Map<string, string>();
+  for (const kind of ["active", "archived", "missing", "purged"]) {
+    const projectRoot = repo(`maintenance-${kind}`);
+    const project = sql.graph.projects.register({
+      root: projectRoot,
+      clientId: "test",
+      idempotencyKey: kind,
+    }).project;
+    const thread = sql.graph.threads.createThread({
+      title: kind,
+      repoRoot: projectRoot,
+      workspace: "in_place",
+    });
+    ids.set(kind, thread.id);
+    if (kind === "archived") sql.graph.projects.unregister(project.id);
+    if (kind === "purged") {
+      sql.graph.threads.trashThread(thread.id);
+      sql.graph.threads.purgeThread(thread.id);
+    }
+    if (kind === "missing" || kind === "purged") rmSync(projectRoot, { recursive: true });
+  }
+  const listed = await sql.graph.threads.retentionThreads();
+  expect(listed.map((thread) => thread.id).sort()).toEqual(
+    [ids.get("active"), ids.get("purged")].sort(),
+  );
+  expect(listed.find((thread) => thread.id === ids.get("purged"))!.state).toBe("purged");
+});
+
+it("keeps a non-directory no-project namespace without probing its children", async () => {
+  const cold = run(repo("ordinary-with-invalid-no-project"), "cold");
+  const invalid = projectRuntimeDir(noProjectRepoRoot());
+  writeFileSync(invalid, "not a runtime directory");
+  const receipt = await runner()({ dry_run: false });
+  expect(receipt.deleted_runs.map((row) => row.run_id)).toEqual(["cold"]);
+  expect(existsSync(join(cold, "tombstone.yaml"))).toBe(true);
+  expect(readFileSync(invalid, "utf8")).toBe("not a runtime directory");
 });

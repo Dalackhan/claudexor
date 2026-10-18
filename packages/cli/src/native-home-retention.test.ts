@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { setImmediate as yieldToAdmission } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { CredentialProfile, SessionCapsule, RunResumable } from "@claudexor/schema";
 import { createCodexAdapter } from "@claudexor/harness-codex";
@@ -92,15 +93,29 @@ const request = (dryRun = false) => ({
   ignoredRunIds: new Set<string>(),
   ignoredThreadIds: new Set<string>(),
 });
-function native() {
+function native(duringProfileScan?: () => void) {
+  const adapter = createCodexAdapter();
+  const lifetime = adapter.nativeHomeLifetime!;
+  if (lifetime.status !== "managed") throw new Error("missing native owner");
+  adapter.nativeHomeLifetime = {
+    ...lifetime,
+    prune: async (input) => {
+      const pending = lifetime.prune(input);
+      if (input.home === profile().isolation_locator && duringProfileScan) {
+        await yieldToAdmission();
+        duringProfileScan();
+      }
+      return pending;
+    },
+  };
   return createNativeHomeRetention({
     threads: sql.graph.threads,
     isBusy: () => busy,
-    registry: () => new Map([["codex", createCodexAdapter()]]),
+    registry: () => new Map([["codex", adapter]]),
     profiles: () => [profile()],
   });
 }
-it("protects archived SQL sessions, retained run capsules and resumable pins, and prunes an idle disabled home", () => {
+it("protects archived SQL sessions, retained run capsules and resumable pins, and prunes an idle disabled home", async () => {
   const repo = join(root, "repo");
   mkdirSync(repo);
   const project = sql.graph.projects.register({
@@ -139,21 +154,21 @@ it("protects archived SQL sessions, retained run capsules and resumable pins, an
   const discard = seed(4);
   const gc = native();
   expect(
-    gc(request(true)).reports.find((row) => row.profile_id === "disabled")!.deleted_files,
+    (await gc(request(true))).reports.find((row) => row.profile_id === "disabled")!.deleted_files,
   ).toEqual([discard]);
   expect(existsSync(discard)).toBe(true);
-  const result = gc(request());
+  const result = await gc(request());
   expect(result.errors).toEqual([]);
   expect(result.freedBytes).toBe(9);
   expect(existsSync(discard)).toBe(false);
   for (const file of [held, heldRun, pinned]) expect(existsSync(file)).toBe(true);
 });
-it("keeps all homes on unreadable capsule/session references; valid proof permits retirement", () => {
+it("keeps all homes on unreadable capsule/session references; valid proof permits retirement", async () => {
   const cold = seed(4);
   const path = capsule(2);
   writeFileSync(path, "torn");
   const gc = native();
-  expect(gc(request()).errors.join()).toContain("native retention");
+  expect((await gc(request())).errors.join()).toContain("native retention");
   expect(existsSync(cold)).toBe(true);
   rmSync(path);
   const thread = sql.graph.threads.createThread({ title: "broken", workspace: "in_place" });
@@ -161,21 +176,55 @@ it("keeps all homes on unreadable capsule/session references; valid proof permit
   sql.store
     .prepare("UPDATE session SET body=? WHERE thread_id=?")
     .run(Buffer.from("bad"), thread.id);
-  expect(gc(request()).errors.length).toBeGreaterThan(0);
+  expect((await gc(request())).errors.length).toBeGreaterThan(0);
   expect(existsSync(cold)).toBe(true);
   sql.store.prepare("DELETE FROM session WHERE thread_id=?").run(thread.id);
-  expect(gc(request()).errors).toEqual([]);
+  expect((await gc(request())).errors).toEqual([]);
   expect(existsSync(cold)).toBe(false);
 });
-it("keeps homes during active/setup work, then retires after the idle fence clears", () => {
+it("keeps homes during active/setup work, then retires after the idle fence clears", async () => {
   const cold = seed(4);
   const gc = native();
   busy = true;
-  expect(gc(request()).reports.every((row) => row.status === "not_pruned")).toBe(true);
+  expect((await gc(request())).reports.every((row) => row.status === "not_pruned")).toBe(true);
   expect(existsSync(cold)).toBe(true);
   busy = false;
-  expect(gc(request()).freedBytes).toBe(9);
+  expect((await gc(request())).freedBytes).toBe(9);
 });
+
+it.each(["SQL session", "completed run capsule", "active setup"])(
+  "keeps rollouts when %s appears during an asynchronous profile scan",
+  async (kind) => {
+    const held = seed(4);
+    const neighbor = seed(5);
+    let admitted = false;
+    const gc = native(() => {
+      admitted = true;
+      if (kind === "active setup") busy = true;
+      else {
+        const thread = sql.graph.threads.createThread({
+          title: "Concurrent admission",
+          workspace: "in_place",
+        });
+        if (kind === "SQL session") sql.graph.threads.recordSession(thread.id, "codex", id(4));
+        else capsule(4);
+        // The completed-work case is idle again before the unlink check.
+        busy = false;
+      }
+    });
+    const interrupted = await gc(request());
+    expect(admitted).toBe(true);
+    expect(interrupted.errors.join()).toContain("changed");
+    expect(interrupted.freedBytes).toBe(0);
+    expect(existsSync(held)).toBe(true);
+    expect(existsSync(neighbor)).toBe(true);
+    busy = false;
+    const resumed = await native()(request());
+    expect(resumed.errors).toEqual([]);
+    expect(existsSync(neighbor)).toBe(false);
+    expect(existsSync(held)).toBe(kind !== "active setup");
+  },
+);
 it("integrates native cleanup with GC even without opt-in and discloses it only when requested", async () => {
   const make = () =>
     createRetentionRunner({

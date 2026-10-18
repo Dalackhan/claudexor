@@ -17,12 +17,13 @@ import { claudexorOwnedRoot, noProjectRepoRoot, userConfigDir } from "@claudexor
 import { sweepOrphanLanes } from "@claudexor/workspace";
 import type { NativeRetentionRequest, NativeRetentionResult } from "./native-home-retention.js";
 import { retentionProjects } from "./retention-projects.js";
+import { setImmediate as yieldToAdmission } from "node:timers/promises";
 export { scheduleStartupRetention } from "./retention-schedule.js";
 
 export interface RetentionRunnerDeps {
   projects: () => ProjectStorePort;
   maxDeletionsPerPass?: number;
-  nativeHomes?: (request: NativeRetentionRequest) => NativeRetentionResult;
+  nativeHomes?: (request: NativeRetentionRequest) => Promise<NativeRetentionResult>;
   threads: ProjectThreadPort;
   daemonJobs: () =>
     | Array<{ runId?: string; state: string; finishedAt?: string; params?: unknown }>
@@ -58,11 +59,12 @@ function expiredTrashThreads(threads: readonly Thread[], now: number): Thread[] 
  */
 async function finishPurgeLeftovers(
   deps: RetentionRunnerDeps,
+  threads: readonly Thread[],
   dryRun: boolean,
 ): Promise<{ finished: string[]; errors: string[] }> {
   const finished: string[] = [];
   const errors: string[] = [];
-  for (const thread of deps.threads.listPurgedThreads()) {
+  for (const thread of threads.filter((thread) => thread.state === "purged")) {
     if (!deps.hasPurgeLeftovers(thread)) continue;
     try {
       if (!dryRun) await deps.purgeThread(thread.id);
@@ -85,12 +87,17 @@ async function finishPurgeLeftovers(
  */
 async function purgeExpiredTrash(
   deps: RetentionRunnerDeps,
-  jobs: Array<{ state: string; params?: unknown }>,
+  threads: readonly Thread[],
   dryRun: boolean,
 ): Promise<{ purged: string[]; errors: string[] }> {
   const purged: string[] = [];
   const errors: string[] = [];
-  for (const thread of expiredTrashThreads(deps.threads.listThreads(), Date.now())) {
+  for (const thread of expiredTrashThreads(threads, Date.now())) {
+    const jobs = await deps.daemonJobs();
+    // The inventory yielded: a thread may have been restored while its old
+    // trash deadline passed. Judge current state immediately before purge.
+    const current = deps.threads.getThread(thread.id);
+    if (!current || expiredTrashThreads([current], Date.now()).length === 0) continue;
     const active = findActiveThreadRun(jobs, thread.id);
     if (active) {
       errors.push(`expired trash thread ${thread.id} kept: a turn is still ${active.state}`);
@@ -122,17 +129,17 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
     // reference set spans EVERY non-purged thread's full run lineage.
     let morePending = false;
     const retention = loadConfig(noProjectRoot).global.retention;
-    const jobs = await deps.daemonJobs();
+    const maintenanceThreads = await deps.threads.retentionThreads();
     // Purges left unfinished by an earlier failure, then expired trash, both
     // FIRST, so the runs only expired trash referenced become ordinary
     // unreferenced candidates of this same pass. A dry run purges nothing, so
     // its reference set skips the would-be-purged threads to preview the same.
-    const leftovers = await finishPurgeLeftovers(deps, request.dry_run);
-    const trash = await purgeExpiredTrash(deps, jobs, request.dry_run);
+    const leftovers = await finishPurgeLeftovers(deps, maintenanceThreads, request.dry_run);
+    const trash = await purgeExpiredTrash(deps, maintenanceThreads, request.dry_run);
     const previewPurged = new Set(request.dry_run ? trash.purged : []);
-    const references = deps.threads.retentionReferences(previewPurged);
+    const references = await deps.threads.retentionReferences(previewPurged);
     const healthyRoots = new Set(deps.threads.healthyProjectRoots());
-    const gcProjects = retentionProjects(references, noProjectRoot, healthyRoots);
+    const gcProjects = await retentionProjects(references, noProjectRoot, healthyRoots);
     // Lane sweeping still uses only served healthy roots; archived lanes can
     // belong to retained threads invisible to the public listing.
     const roots = [...healthyRoots, noProjectRoot];
@@ -143,13 +150,16 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
     // as false orphans. Skip in dry-run — a GC preview must not delete bytes.
     if (!request.dry_run) {
       const liveThreadsByRoot = new Map<string, Set<string>>();
-      for (const thread of deps.threads.listThreads()) {
+      for (const thread of await deps.threads.retentionThreads()) {
+        if (thread.state === "purged") continue;
         const root = thread.repo?.root ?? noProjectRoot;
         (liveThreadsByRoot.get(root) ?? liveThreadsByRoot.set(root, new Set()).get(root)!).add(
           thread.id,
         );
       }
       for (const root of roots) {
+        await yieldToAdmission();
+        if (!references.isCurrent()) break;
         try {
           sweepOrphanLanes(root, liveThreadsByRoot.get(root) ?? new Set());
         } catch {
@@ -168,6 +178,7 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
         projects: () => gcProjects,
         records: () => references.records,
         referencedRunIds: () => references.referencedRunIds,
+        referencesCurrent: references.isCurrent,
         maxDeletionsPerPass: deps.maxDeletionsPerPass,
         onTruncated: () => {
           morePending = true;
@@ -185,7 +196,7 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
         dataRootMode: claudexorOwnedRoot() === userConfigDir() ? "override" : "default",
       },
     );
-    const native = deps.nativeHomes?.({
+    const native = await deps.nativeHomes?.({
       dryRun: request.dry_run,
       olderThan: Date.now() - retention.runs_max_age_days * 24 * 60 * 60_000,
       ignoredRunIds: new Set(request.dry_run ? receipt.deleted_runs.map((run) => run.run_id) : []),

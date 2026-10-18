@@ -386,7 +386,7 @@ describe("persistFinalPatch", () => {
     return { repo, store, paths: store.createRun("run-v4c") };
   }
 
-  it("shares the real attempt, final and anchor writers without changing their readers", () => {
+  it("shares the real attempt, final and anchor writers without changing their readers", async () => {
     const repo = tempRoot("claudexor-shared-patch-");
     const store = new ArtifactStore(repo);
     roots.push(store.claudexorDir);
@@ -407,7 +407,7 @@ describe("persistFinalPatch", () => {
     expect(readRevertAnchor(repo, anchor)).toBe(diff);
     expect(final.patchSha256).toBe(anchor);
     rmSync(paths.root, { recursive: true });
-    expect(prunePatchObjects(store.claudexorDir, false)).toBe(0);
+    expect(await prunePatchObjects(store.claudexorDir, false)).toBe(0);
     expect(readRevertAnchor(repo, anchor)).toBe(diff);
   });
 

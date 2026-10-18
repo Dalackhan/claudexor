@@ -3137,7 +3137,12 @@ It enumerates plain hashed project directories under the owned runtime root, inc
 unregistered and archived projects. A private SQL reference read spans all retained
 generations (including archived threads and pending interactions); unreadable references
 fail closed, and unavailable project generations protect their namespaces. Unknown
-project roots are disclosed as their runtime namespace. It is also exposed as the schema-first control op
+project roots are disclosed as their runtime namespace. Bulk inventory yields
+to admission; each run deletion rechecks SQL snapshot validity and mutable
+filesystem protections after its asynchronous byte walk. A changed SQL owner
+stops remaining deletions and schedules a pass with fresh references. Patch-cache
+retirement rechecks directory identity and current link counts before unlink.
+It is also exposed as the schema-first control op
 `POST /v2/maintenance/gc` (dry-run first-class, typed receipt disclosing
 every deletion AND why every survivor survived); `claudexor gc` is its thin
 client. It deletes ONLY terminal, unreferenced, non-actionable trees past
@@ -3181,8 +3186,12 @@ native session IDs across all homes of that harness. Archived threads and pinned
 account continuations retain that protection. Missing artifacts have no reference;
 malformed or unreadable references, linked artifact directories, unavailable
 project generations, active/unknown runs, or active/unconfirmed setup work prevent
-native pruning. This synchronous idle check, inventory and unlink sequence does
-not yield to engine admission between proof and deletion. It is conservative:
+native pruning. SQL rows and filesystem inventory yield to admission. The SQL
+snapshot carries SQLite's change count from the sole writer; any intervening
+write (including a run that already finished) invalidates it. Every native unlink
+rechecks that proof and the current idle state synchronously with file identity,
+without yielding between proof and deletion. An invalidated inventory keeps the
+remaining files and preserves any deletions already recorded in the receipt. It is conservative:
 retaining a run can retain its session even if that run no longer needs resume.
 
 Codex owns only the recognized `sessions/YYYY/MM/DD/rollout-…-<uuid>.jsonl`

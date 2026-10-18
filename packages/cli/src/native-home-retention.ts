@@ -24,13 +24,13 @@ export interface NativeRetentionResult {
 }
 export function createNativeHomeRetention(deps: {
   threads: ProjectThreadPort;
-  /** Read fresh synchronously: no engine admission may race the retirement snapshot. */
+  /** Rechecked synchronously before every unlink; inventory never fences admission. */
   isBusy: () => boolean;
   registry?: () => AdapterRegistry;
   profiles?: () => CredentialProfile[];
   maxDeletions?: number;
-}): (request: NativeRetentionRequest) => NativeRetentionResult {
-  return (request) => {
+}): (request: NativeRetentionRequest) => Promise<NativeRetentionResult> {
+  return async (request) => {
     const result: NativeRetentionResult = {
       reports: [],
       errors: [],
@@ -39,13 +39,20 @@ export function createNativeHomeRetention(deps: {
     };
     let references = new Map<string, Set<string>>();
     let blocked: string | null = null;
+    let canPrune = () => false;
     try {
-      const snapshot = deps.threads.retentionReferences(request.ignoredThreadIds);
+      const snapshot = await deps.threads.retentionReferences(request.ignoredThreadIds);
       if (deps.isBusy() || snapshot.records.some((record) => !isTerminalLifecycle(record.state)))
         throw new Error("native homes kept while a run or setup operation is active or unresolved");
       if (snapshot.protectedProjectRoots.size)
         throw new Error("native homes kept until unavailable project generations recover");
-      references = retainedNativeSessions(snapshot.nativeSessions, request.ignoredRunIds);
+      canPrune = () => snapshot.isCurrent() && !deps.isBusy();
+      if (!canPrune()) throw new Error("native retention references changed; homes kept");
+      references = await retainedNativeSessions(snapshot.nativeSessions, request.ignoredRunIds);
+      if (!canPrune())
+        throw new Error(
+          "native retention references or idle state changed during inventory; homes kept",
+        );
     } catch (error) {
       blocked = error instanceof Error ? error.message : String(error);
       result.errors.push(`native retention: ${blocked}`);
@@ -97,16 +104,21 @@ export function createNativeHomeRetention(deps: {
             continue;
           }
           seen.add(report.home);
+          if (!blocked && !canPrune()) {
+            blocked = "native retention references or idle state changed; remaining homes kept";
+            result.errors.push(`native retention: ${blocked}`);
+          }
           if (blocked) {
             report.reason = blocked;
             continue;
           }
-          const pruned = lifetime.prune({
+          const pruned = await lifetime.prune({
             home: report.home,
             protectedSessionIds: references.get(harness) ?? new Set(),
             olderThan: request.olderThan,
             dryRun: request.dryRun,
             maxDeletions: remaining,
+            canPrune,
           });
           Object.assign(report, pruned, { status: "checked", reason: lifetime.preserves });
           remaining -= pruned.deleted_files.length;

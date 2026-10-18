@@ -3182,7 +3182,7 @@ with a typed 410 `run_expired_by_retention` — never a mysterious 404. The
 last protection check and exclusive publication of the small prepared tombstone
 do not yield. Continuation admission refuses an expired predecessor. If older links expired, it uses the runtime carrier’s evidence reader to find an intact capsule, resumable or output source; ordinary unexpired admission does not scan evidence bodies. Earlier expired ancestors are excluded from file reads and disclosed in the successor notice. Exact Retry of expired evidence directs the caller to Run Again. Exact Retry, frozen-plan and delivery admission
 use the same expiration fence. Existing idempotent delivery receipts still replay.
-An expired directory cannot become evidence again.
+An expired directory cannot become evidence again. Durable `context/continuation.json` lists are published through a private temporary file, file flush, atomic rename and directory flush. Unreadable reference errors name the file or SQL row and partition. A bad run-local work-product or custody file keeps that run; unreadable SQL or continuity owners hold the pass because their references can cross namespaces. Pending recovery remains confined to known project namespaces when its scope is provable.
 Readers see that expiration while recursive deletion of the previously
 inventoried contents runs asynchronously; no directory rename blocks admission.
 A durable intent in the parent's private `.retiring` directory binds the source

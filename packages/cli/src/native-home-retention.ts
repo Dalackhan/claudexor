@@ -63,17 +63,10 @@ export function createNativeHomeRetention(deps: {
           throw new Error(
             `native homes kept: ${(snapshot.errors ?? [...snapshot.protectedProjectRoots]).join("; ")}`,
           );
-        canPrune = () => {
-          try {
-            return (
-              !request.signal?.aborted &&
-              (snapshot.nativeCurrent ?? snapshot.isCurrent)() &&
-              !deps.isBusy()
-            );
-          } catch {
-            return false;
-          } // Keep partial receipts when a new owner is unreadable.
-        };
+        canPrune = () =>
+          !request.signal?.aborted &&
+          (snapshot.nativeCurrent ?? snapshot.isCurrent)() &&
+          !deps.isBusy();
         await snapshot.refresh?.();
         if (!canPrune()) throw new Error("native retention references changed; homes kept");
         references = await retainedNativeSessions(

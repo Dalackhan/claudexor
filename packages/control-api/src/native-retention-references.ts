@@ -58,7 +58,13 @@ export async function retainedNativeSessions(
         throw new Error(`native references cannot read ${final}`);
       const resumableText = await readOptional(join(final, "resumable.yaml"));
       if (resumableText !== null) {
-        const resumable = RunResumable.parse(yamlParse(resumableText));
+        const path = join(final, "resumable.yaml");
+        let resumable: RunResumable;
+        try {
+          resumable = RunResumable.parse(yamlParse(resumableText));
+        } catch (error) {
+          throw new Error(`native references ${path}: ${String(error)}`, { cause: error });
+        }
         if (resumable.session) add(resumable.session.harness, resumable.session.nativeSessionId);
       }
       const attempts = join(run, "attempts");
@@ -66,7 +72,15 @@ export async function retainedNativeSessions(
         signal?.throwIfAborted();
         const text = await readOptional(join(attempts, attempt, "session-capsule.json"));
         if (text === null) continue;
-        const capsule = SessionCapsule.parse(JSON.parse(text));
+        let capsule: SessionCapsule;
+        try {
+          capsule = SessionCapsule.parse(JSON.parse(text));
+        } catch (error) {
+          throw new Error(
+            `native references ${join(attempts, attempt, "session-capsule.json")}: ${String(error)}`,
+            { cause: error },
+          );
+        }
         add(capsule.harness, capsule.nativeSessionId);
       }
     }

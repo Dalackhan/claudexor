@@ -3,7 +3,7 @@ import type { EngineStore } from "./store.js";
 import { decodeBody } from "./thread-rows.js";
 
 const RetainedTurn = ThreadTurn.omit({ prompt: true });
-type Body = { pid: number; body: Uint8Array };
+type Body = { id: string; pid: number; body: Uint8Array };
 type ThreadRow = Body & { state: string };
 type SessionRow = Body & { harness_id: string; thread_id: string };
 type TurnRow = Body & { thread_id: string };
@@ -27,9 +27,11 @@ export class RetentionReferenceReader {
 
   thread(row: ThreadRow): Thread | undefined {
     if (!this.retained(row.pid) || row.state === "purged") return;
-    const thread = Thread.parse(decodeBody(row));
-    if (thread.state !== row.state)
-      throw new Error(`thread ${thread.id} retention state disagrees`);
+    const thread = this.read("thread", row, () => Thread.parse(decodeBody(row)));
+    if (thread.state !== row.state || thread.id !== row.id)
+      throw new Error(
+        `thread ${row.id} in partition ${row.pid}: retention state or identity disagrees`,
+      );
     if (thread.repo) this.roots.add(thread.repo.root);
     if (this.ignored.has(thread.id) && thread.state === "trashed") return;
     thread.run_ids.forEach(this.add);
@@ -39,16 +41,21 @@ export class RetentionReferenceReader {
 
   turn(row: TurnRow, owner = this.owner(row.thread_id)): void {
     if (!this.retained(row.pid) || !owner) return;
-    const turn = RetainedTurn.parse(decodeBody(row));
-    if (turn.thread_id !== owner.id) throw new Error("retention turn owner disagrees");
+    const turn = this.read("turn", row, () => RetainedTurn.parse(decodeBody(row)));
+    if (turn.thread_id !== owner.id || turn.id !== row.id)
+      throw new Error(`turn ${row.id} in partition ${row.pid}: retention owner disagrees`);
     [turn.run_id, turn.parent_run_id, turn.answers_plan_run_id, turn.plan_run_id].forEach(this.add);
   }
 
   session(row: SessionRow, owner = this.owner(row.thread_id)): void {
     if (!this.retained(row.pid) || !owner) return;
-    const session = Session.parse(decodeBody(row));
-    if (session.thread_id !== owner.id || session.harness_id !== row.harness_id)
-      throw new Error("native session retention owner disagrees");
+    const session = this.read("session", row, () => Session.parse(decodeBody(row)));
+    if (
+      session.thread_id !== owner.id ||
+      session.harness_id !== row.harness_id ||
+      session.id !== row.id
+    )
+      throw new Error(`session ${row.id} in partition ${row.pid}: retention owner disagrees`);
     if (session.native_session_id) {
       const ids = this.sessions.get(session.harness_id) ?? new Set<string>();
       ids.add(session.native_session_id);
@@ -65,23 +72,35 @@ export class RetentionReferenceReader {
     } else if (table === "thread") {
       this.owner(id);
     } else if (table === "turn") {
-      const row = this.store.prepare("SELECT pid,thread_id,body FROM turn WHERE id=?").get(id) as
-        TurnRow | undefined;
+      const row = this.store
+        .prepare("SELECT id,pid,thread_id,body FROM turn WHERE id=?")
+        .get(id) as TurnRow | undefined;
       if (row) this.turn(row);
     } else {
       const row = this.store
-        .prepare("SELECT pid,thread_id,harness_id,body FROM session WHERE id=?")
+        .prepare("SELECT id,pid,thread_id,harness_id,body FROM session WHERE id=?")
         .get(id) as SessionRow | undefined;
       if (row) this.session(row);
     }
   }
 
+  private read<T>(table: string, row: Body, read: () => T): T {
+    try {
+      return read();
+    } catch (error) {
+      throw new Error(`retention ${table} ${row.id} in partition ${row.pid}: ${String(error)}`, {
+        cause: error,
+      });
+    }
+  }
+
   private owner(id: string): Thread | undefined {
-    const row = this.store.prepare("SELECT pid,state,body FROM thread WHERE id=?").get(id) as
+    const row = this.store.prepare("SELECT id,pid,state,body FROM thread WHERE id=?").get(id) as
       ThreadRow | undefined;
     if (!row) return;
     const thread = this.thread(row);
-    if (thread && thread.id !== id) throw new Error("retention thread owner disagrees");
+    if (thread && thread.id !== id)
+      throw new Error(`thread ${id} in partition ${row.pid}: retention owner disagrees`);
     return thread;
   }
 }

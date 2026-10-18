@@ -59,7 +59,7 @@ export async function commandRetentionReferences(
       byRun.set(row.runId, next);
     }
   };
-  const read = (row: CommandRow) => {
+  const readRow = (row: CommandRow) => {
     if (!retained(row.pid)) {
       // Terminal timestamps can date old payloads without reading retired
       // requests or treating their abandoned work as an active owner.
@@ -91,6 +91,16 @@ export async function commandRetentionReferences(
       // The pass's lookup retains these objects, so final lifecycle/age checks
       // observe changes without rebuilding a map of the entire command store.
       record(row);
+    }
+  };
+  const read = (row: CommandRow) => {
+    try {
+      readRow(row);
+    } catch (error) {
+      throw new Error(
+        `retention command ${row.id} in partition ${row.pid}, params ${row.params_sha}: ${String(error)}`,
+        { cause: error },
+      );
     }
   };
   for await (const rows of retentionPages<CommandRow>(store, "command", COLUMNS, signal)) {

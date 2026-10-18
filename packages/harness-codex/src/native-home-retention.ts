@@ -32,7 +32,8 @@ async function prune(input: NativeHomeRetentionInput) {
   if (cancelled()) return result;
   const protectedIds = new Set(
     [...input.protectedSessionIds].map((id) => {
-      if (!SESSION_ID.test(id)) throw new Error("unrecognized Codex session reference; home kept");
+      if (!SESSION_ID.test(id))
+        throw new Error(`unrecognized Codex session reference ${id}; home ${input.home} kept`);
       return id.toLowerCase();
     }),
   );
@@ -44,7 +45,7 @@ async function prune(input: NativeHomeRetentionInput) {
   });
   if (!sessionsStat) return result;
   if (!sessionsStat.isDirectory())
-    throw new Error("Codex sessions is not a plain directory; home kept");
+    throw new Error(`Codex sessions ${sessions} is not a plain directory; home kept`);
   const groups = new Map<string, Array<{ path: string; stat: Stats }>>();
   const scan = async (dir: string, depth: number): Promise<void> => {
     for (const entry of await readdir(dir, { withFileTypes: true })) {

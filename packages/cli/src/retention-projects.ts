@@ -31,7 +31,7 @@ export async function retentionProjects(
   const directoryStat = await optionalStat(directory);
   if (directoryStat) {
     if (!directoryStat.isDirectory())
-      throw new Error("retention projects directory is not a plain directory");
+      throw new Error(`retention projects directory ${directory} is not a plain directory`);
     for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a, b) =>
       a.name.localeCompare(b.name),
     )) {

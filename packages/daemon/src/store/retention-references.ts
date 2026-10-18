@@ -51,10 +51,10 @@ export async function diskRetentionThreads(
         .all() as Array<{ pid: number; root: string }>
     ).map((row) => [row.pid, row.root]),
   );
-  for await (const rows of retentionPages<{ pid: number; body: Uint8Array }>(
+  for await (const rows of retentionPages<{ id: string; pid: number; body: Uint8Array }>(
     store,
     "thread",
-    "pid,body",
+    "id,pid,body",
     signal,
   )) {
     for (const row of rows) {
@@ -62,7 +62,14 @@ export async function diskRetentionThreads(
       signal?.throwIfAborted();
       if (!served.has(row.pid)) served.set(row.pid, isServedPid(store, row.pid));
       if (!served.get(row.pid)) continue;
-      const thread = Thread.parse(decodeBody(row));
+      let thread: Thread;
+      try {
+        thread = Thread.parse(decodeBody(row));
+      } catch (error) {
+        throw new Error(`retention thread ${row.id} in partition ${row.pid}: ${String(error)}`, {
+          cause: error,
+        });
+      }
       const root = roots.get(row.pid);
       if (
         thread.state !== "purged" &&
@@ -99,20 +106,21 @@ export async function diskRetentionReferences(
     const roots = new Set([...registeredProjectRoots, ...protectedProjectRoots]);
     const retained = blocked ? () => false : generations.retained;
     const reader = new RetentionReferenceReader(store, ignoreThreadIds, retained);
-    for await (const rows of retentionPages<{ pid: number; state: string; body: Uint8Array }>(
-      store,
-      "thread",
-      "pid,state,body",
-      signal,
-    )) {
+    for await (const rows of retentionPages<{
+      id: string;
+      pid: number;
+      state: string;
+      body: Uint8Array;
+    }>(store, "thread", "id,pid,state,body", signal)) {
       for (const row of rows) {
         await yieldToAdmission();
         signal?.throwIfAborted();
         const thread = reader.thread(row);
         if (!thread) continue;
         for (const sessionRow of store
-          .prepare("SELECT pid,thread_id,harness_id,body FROM session WHERE thread_id=?")
+          .prepare("SELECT id,pid,thread_id,harness_id,body FROM session WHERE thread_id=?")
           .all(thread.id) as Array<{
+          id: string;
           pid: number;
           thread_id: string;
           harness_id: string;
@@ -120,8 +128,13 @@ export async function diskRetentionReferences(
         }>)
           reader.session(sessionRow, thread);
         for (const turnRow of store
-          .prepare("SELECT pid,thread_id,body FROM turn WHERE thread_id=?")
-          .all(thread.id) as Array<{ pid: number; thread_id: string; body: Uint8Array }>) {
+          .prepare("SELECT id,pid,thread_id,body FROM turn WHERE thread_id=?")
+          .all(thread.id) as Array<{
+          id: string;
+          pid: number;
+          thread_id: string;
+          body: Uint8Array;
+        }>) {
           await yieldToAdmission();
           signal?.throwIfAborted();
           reader.turn(turnRow, thread);
@@ -141,10 +154,13 @@ export async function diskRetentionReferences(
       else if (table === "blob") {
         const owner = store
           .prepare(
-            "SELECT 1 FROM command c JOIN partition q ON q.id=c.pid WHERE params_sha=? AND q.status IN ('ready','archived') LIMIT 1",
+            "SELECT c.id,c.pid FROM command c JOIN partition q ON q.id=c.pid WHERE params_sha=? AND q.status IN ('ready','archived') LIMIT 1",
           )
-          .get(id);
-        if (owner) throw new Error("immutable retention command body changed during inventory");
+          .get(id) as { id: string; pid: number } | undefined;
+        if (owner)
+          throw new Error(
+            `immutable retention command ${owner.id} in partition ${owner.pid}: params blob ${id} changed during inventory`,
+          );
       } else if (table !== "project" && table !== "partition") reader.refresh(table, id);
     };
     const recheck = () => changesObserved.current(readChange);

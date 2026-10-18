@@ -3581,12 +3581,32 @@ The import can take minutes and materializes one legacy partition at a time;
 steady startup still replays retained quota/setup events, not all command history.
 
 Historical `resource-store/idempotency/<digest>.json` files remain authoritative
-for unreplayed upload keys. SQL probes only the requested digest on an enabled
+for unreplayed caller-supplied upload keys. SQL probes only the requested digest on an enabled
 miss and adopts that binding in the same mutation; startup never scans this
-large directory. The persisted presence flag disables the fallback when absent.
+large directory. A confirmed ENOENT or a valid known-expired historical binding
+permits the request to proceed; an unreadable, malformed, or identity-mismatched addressed binding instead
+refuses the request with `legacy_upload_binding_unavailable` (503). The refusal
+mints no upload, part file or receipt and leaves the file untouched. Its problem
+`context` names the operation, key digest, `read_failed`/`invalid` reason and
+any errno code; the message repeats the digest and root-relative file for
+clients that keep only the message. Neither carries the raw key, record bytes,
+absolute path or native error text. `retryable: true` means only that the same
+request and key may be resubmitted after the operator restores that file or its
+read access; waiting does not heal it, and a client that cancels after a failure
+(the CLI cancels its upload when finalize fails) does not resume. A
+directory-level read failure refuses every caller-key SQL miss, including fresh keys; SQL
+hits are unaffected. New daemon-produced model/image results mint their create
+and finalize keys inside the resource owner, without historical replay lookup.
+They keep the same SQL receipts, byte validation, publication obligations and
+cleanup. Caller keys stay strict even with `purpose=model` or internal-looking
+names. The persisted presence flag disables the fallback when absent.
 Bindings expire 30 days after a resource's known release/expiry, never from a
-guessed file timestamp. Manually removing the historical directory can turn a
-later replay into a missing result or a new upload. Retiring serving code does
+guessed file timestamp. An expired lookup deletes that target's SQL bindings
+before the historical read, so a damaged copy still refuses afterwards. Repair
+before expiry replays the receipt; after it, the key is admitted as a new upload
+and an old finalize answers `upload_not_found`, not the expired receipt.
+Manually removing the historical directory can turn a later replay into a
+missing result or a new upload. Retiring serving code does
 not delete legacy journals, account/credential stores or these key files.
 
 Logical archive/quarantine changes status and generation visibility without

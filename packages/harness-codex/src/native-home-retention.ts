@@ -30,14 +30,23 @@ async function prune(input: NativeHomeRetentionInput) {
     return true;
   };
   if (cancelled()) return result;
-  const protectedIds = () =>
-    new Set(
-      [...input.protectedSessionIds].map((id) => {
-        if (!SESSION_ID.test(id))
-          throw new Error(`unrecognized Codex session reference ${id}; home ${input.home} kept`);
-        return id.toLowerCase();
-      }),
-    );
+  let normalizedSize = -1;
+  let normalized = new Set<string>();
+  const protectedIds = () => {
+    // The proof only adds protections within a pass. Keep membership checks
+    // cheap across large homes, but validate every newly published reference.
+    if (input.protectedSessionIds.size !== normalizedSize) {
+      normalized = new Set(
+        [...input.protectedSessionIds].map((id) => {
+          if (!SESSION_ID.test(id))
+            throw new Error(`unrecognized Codex session reference ${id}; home ${input.home} kept`);
+          return id.toLowerCase();
+        }),
+      );
+      normalizedSize = input.protectedSessionIds.size;
+    }
+    return normalized;
+  };
   protectedIds(); // Reject unreadable ownership before scanning any files.
   const home = canonicalIsolationLocator(input.home, "Codex retention home");
   const sessions = join(home, "sessions");

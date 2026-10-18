@@ -3230,7 +3230,7 @@ holding unrelated cold sessions. The pass rereads changed SQL owners and each ac
 or newly changed command's output files before unlink; this includes a capsule
 published without another SQL update, or work that starts and finishes during the
 scan. Durable continuation addresses include sources outside the hashed run layout.
-Native references accumulate in a live set. Already read terminal ancestry is shared
+Native references accumulate in a live set; the adapter normalizes session IDs initially and again only when that set grows. Already read terminal ancestry is shared
 within the pass; active output files are reread. A late reference keeps its entire
 session and allows unrelated groups to progress. Each unlink rechecks setup state,
 references and current file identity synchronously, without a yield between proof

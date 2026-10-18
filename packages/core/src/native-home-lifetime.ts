@@ -4,6 +4,7 @@ import type { EnvMap } from "./adapter.js";
 export interface NativeHomeRetentionInput {
   signal?: AbortSignal;
   home: string;
+  /** Live protections only grow during a pass; rechecks add to this same Set. */
   protectedSessionIds: ReadonlySet<string>;
   olderThan: number;
   dryRun: boolean;

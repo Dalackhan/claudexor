@@ -63,6 +63,26 @@ function legacyMarker(f: ResourceFixture, value: string) {
       .run(value),
   );
 }
+/** The refusal names its operation, digest and reason, never the raw key. */
+function refusal(
+  operation: "create" | "finalize",
+  key: string,
+  reason: "read_failed" | "invalid",
+  errno?: string,
+) {
+  const keyDigest = uploadKeyDigest(operation, key);
+  return expect.objectContaining({
+    code: "legacy_upload_binding_unavailable",
+    status: 503,
+    retryable: true,
+    message: expect.not.stringContaining(key),
+    context: { operation, keyDigest, reason, ...(errno ? { errno } : {}) },
+    requiredActions: [
+      expect.stringContaining(`resource-store/idempotency/${keyDigest}.json`),
+      expect.stringContaining("same Idempotency-Key"),
+    ],
+  });
+}
 
 describe("upload binding retention and legacy point replay", () => {
   it("uses exactly sha256(operation NUL raw key) and validates legacy records without inventing fields", () => {
@@ -214,13 +234,9 @@ describe("upload binding retention and legacy point replay", () => {
       }),
     );
     expect(() => f.resources.create(uploadRequest, "conflict")).toThrow(/idempotency key/);
-    fs.writeFileSync(join(dir, `${uploadKeyDigest("finalize", "bad")}.json`), "{invalid");
-    expect(() => f.resources.finalize("unknown", undefined, "bad")).toThrow(
-      expect.objectContaining({
-        code: "legacy_upload_binding_unavailable",
-        status: 503,
-        retryable: true,
-      }),
+    fs.writeFileSync(join(dir, `${uploadKeyDigest("finalize", "raw-bad-key")}.json`), "{invalid");
+    expect(() => f.resources.finalize("unknown", undefined, "raw-bad-key")).toThrow(
+      refusal("finalize", "raw-bad-key", "invalid"),
     );
   });
 
@@ -229,7 +245,7 @@ describe("upload binding retention and legacy point replay", () => {
     legacyMarker(f, "present");
     const dir = join(f.store.paths.resourceStore, "idempotency");
     fs.mkdirSync(dir, { recursive: true });
-    const key = "historical";
+    const key = "raw-key-historical";
     const path = join(dir, `${uploadKeyDigest("create", key)}.json`);
     const record = {
       operation: "create",
@@ -245,11 +261,7 @@ describe("upload binding retention and legacy point replay", () => {
     ]) {
       fs.writeFileSync(path, body);
       expect(() => f.resources.create(uploadRequest, key)).toThrow(
-        expect.objectContaining({
-          code: "legacy_upload_binding_unavailable",
-          status: 503,
-          retryable: true,
-        }),
+        refusal("create", key, "invalid"),
       );
       expect(bindings(f)).toBe(before);
       expect(f.store.prepare("SELECT count(*) AS n FROM upload").get()).toEqual({ n: 0 });
@@ -272,18 +284,28 @@ describe("upload binding retention and legacy point replay", () => {
       `${uploadKeyDigest("create", key)}.json`,
     );
     const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-    vi.mocked(fs.readFileSync).mockImplementation(((name: string, ...args: unknown[]) => {
-      if (String(name) === path) throw Object.assign(new Error("denied"), { code: "EACCES" });
-      return (actual.readFileSync as (...args: unknown[]) => unknown)(name, ...args);
-    }) as typeof fs.readFileSync);
-    expect(() => f.resources.create(uploadRequest, key)).toThrow(
-      expect.objectContaining({
-        code: "legacy_upload_binding_unavailable",
-        status: 503,
-        retryable: true,
-      }),
-    );
-    expect(f.store.prepare("SELECT count(*) AS n FROM upload").get()).toEqual({ n: 0 });
+    for (const code of ["EACCES", "EIO", "ENOTDIR"]) {
+      vi.mocked(fs.readFileSync).mockImplementation(((name: string, ...args: unknown[]) => {
+        if (String(name) === path) throw Object.assign(new Error(`denied ${path}`), { code, path });
+        return (actual.readFileSync as (...args: unknown[]) => unknown)(name, ...args);
+      }) as typeof fs.readFileSync);
+      expect(() => f.resources.create(uploadRequest, key)).toThrow(
+        refusal("create", key, "read_failed", code),
+      );
+      // The native message and absolute path stay on the local cause only.
+      expect(() => f.resources.create(uploadRequest, key)).toThrow(
+        expect.objectContaining({
+          message: expect.not.stringContaining("denied"),
+          cause: expect.objectContaining({ code }),
+        }),
+      );
+      expect(() => f.resources.create(uploadRequest, key)).toThrow(
+        expect.objectContaining({
+          message: expect.not.stringContaining(f.store.paths.resourceStore),
+        }),
+      );
+      expect(f.store.prepare("SELECT count(*) AS n FROM upload").get()).toEqual({ n: 0 });
+    }
     vi.mocked(fs.readFileSync).mockImplementation(actual.readFileSync);
     // The missing file is a confirmed ENOENT, so a new command can now be admitted.
     expect(f.resources.create(uploadRequest, key).state).toBe("open");

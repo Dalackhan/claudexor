@@ -3138,8 +3138,9 @@ unregistered and archived projects. A private SQL reference read spans all retai
 generations (including archived threads and pending interactions); unreadable references
 fail closed, and unavailable project generations protect their namespaces. Unknown
 project roots are disclosed as their runtime namespace. Bulk inventory yields
-to admission; each run deletion rechecks SQL snapshot validity and mutable
-filesystem protections after its asynchronous byte walk. A changed SQL owner
+to admission; SQL history uses rowid-keyset pages without holding a cursor or
+transaction across a yield. Each run deletion rechecks SQL snapshot validity and mutable
+filesystem protections after its asynchronous byte walk and retirement preparation. A changed SQL owner
 stops remaining deletions and schedules a pass with fresh references. Patch-cache
 retirement rechecks directory identity and current link counts before unlink.
 It is also exposed as the schema-first control op
@@ -3156,8 +3157,16 @@ patches or copied-file results, and trees with no terminal evidence are protecte
 fail-closed. Partial file delivery retains that protection; explicit discard
 ends pending delivery but does not delete artifacts immediately or bypass other
 retention protections. A
-reclaimed run leaves a tombstone projection behind, so its artifacts answer
+retired run leaves a tombstone projection behind, so its artifacts answer
 with a typed 410 `run_expired_by_retention` — never a mysterious 404. The
+last protection check, same-filesystem detachment and prepared tombstone publish
+do not yield. Recursive deletion then runs asynchronously against the detached
+tree, allowing admission while large trees are removed. A durable intent in the
+parent's private `.retiring` directory lets the next pass finish interrupted run
+or diff-review cleanup within the same deletion cap; preparations that never
+detached a tree leave the source untouched. A failed physical cleanup is disclosed
+and retried, and completed deletions remain in the receipt even if bookkeeping
+cleanup fails. The
 receipt also carries an advisory `data_root_unrecognized` listing — names of
 top-level data-root entries the engine does not own and never touches
 (absent, with an `errors[]` entry, when that scan fails). The same pass purges

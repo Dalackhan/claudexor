@@ -4,25 +4,26 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { runRetentionPass, type RetentionRunRecord } from "./retention.js";
 
-let afterWalk: (path: string) => void = () => {};
-vi.mock("./retention-bytes.js", async (original) => {
-  const actual = await original<typeof import("./retention-bytes.js")>();
+let beforeCommit: (path: string) => void = () => {};
+vi.mock("./retention-removal.js", async (original) => {
+  const actual = await original<typeof import("./retention-removal.js")>();
   return {
-    treeReclaimableBytes: async (...args: Parameters<typeof actual.treeReclaimableBytes>) => {
-      const bytes = await actual.treeReclaimableBytes(...args);
-      afterWalk(args[0]);
-      return bytes;
+    ...actual,
+    prepareRetirement: async (...args: Parameters<typeof actual.prepareRetirement>) => {
+      const retirement = await actual.prepareRetirement(...args);
+      beforeCommit(join(args[0], args[1]));
+      return retirement;
     },
   };
 });
 const roots: string[] = [];
 afterEach(() => {
-  afterWalk = () => {};
+  beforeCommit = () => {};
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 it.each(["reference", "active record", "work product", "custody", "age", "terminal evidence"])(
-  "rechecks %s after asynchronous byte inventory, while still retiring an unchanged neighbor",
+  "rechecks %s after asynchronous retirement preparation, while still retiring an unchanged neighbor",
   async (kind) => {
     const root = mkdtempSync(join(tmpdir(), "retention-recheck-"));
     roots.push(root);
@@ -38,7 +39,7 @@ it.each(["reference", "active record", "work product", "custody", "age", "termin
     const referenced = new Set<string>();
     const records: RetentionRunRecord[] = [];
     let changed = false;
-    afterWalk = (path) => {
+    beforeCommit = (path) => {
       if (path !== held) return;
       changed = true;
       if (kind === "reference") referenced.add("held");
@@ -78,7 +79,7 @@ it.each(["reference", "active record", "work product", "custody", "age", "termin
   },
 );
 
-it("keeps an honest partial run receipt when SQL ownership changes during the next byte walk", async () => {
+it("keeps an honest partial run receipt when SQL ownership changes during the next retirement preparation", async () => {
   const root = mkdtempSync(join(tmpdir(), "retention-partial-"));
   roots.push(root);
   const runsDir = join(root, "runs");
@@ -90,7 +91,7 @@ it("keeps an honest partial run receipt when SQL ownership changes during the ne
   }
   let current = true;
   let retry = false;
-  afterWalk = () => {
+  beforeCommit = () => {
     if (paths.some((path) => existsSync(join(path, "tombstone.yaml")))) current = false;
   };
   const receipt = await runRetentionPass(

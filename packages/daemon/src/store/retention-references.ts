@@ -4,6 +4,7 @@ import { access } from "node:fs/promises";
 import type { EngineStore } from "./store.js";
 import { decodeBody } from "./thread-rows.js";
 import { SERVED_PIDS_SQL } from "./generations.js";
+import { retentionPages } from "./retention-pages.js";
 
 export interface DiskRetentionReferences {
   /** Any SQL write invalidates this proof, including an admission that already finished. */
@@ -23,26 +24,40 @@ const RetainedTurn = ThreadTurn.omit({ prompt: true });
  * public synchronous listing it does not stat every registered project root. */
 export async function diskRetentionThreads(store: EngineStore): Promise<Thread[]> {
   const result: Thread[] = [];
-  const rows = store
-    .prepare(
-      `SELECT t.body,p.root FROM thread t
-    JOIN partition q ON q.id=t.pid LEFT JOIN project p ON p.current_pid=q.id
-    WHERE t.pid IN (${SERVED_PIDS_SQL})`,
-    )
-    .all() as Array<{ body: Uint8Array; root: string | null }>;
-  for (const row of rows) {
-    await yieldToAdmission();
-    const thread = Thread.parse(decodeBody(row));
-    if (
-      thread.state !== "purged" &&
-      row.root &&
-      !(await access(row.root).then(
-        () => true,
-        () => false,
-      ))
-    )
-      continue;
-    result.push(thread);
+  const served = new Set(
+    (store.prepare(SERVED_PIDS_SQL).all() as Array<{ id: number }>).map((row) => row.id),
+  );
+  const roots = new Map(
+    (
+      store
+        .prepare(
+          `SELECT current_pid AS pid,root FROM project WHERE status='active'
+       AND pid=CAST((SELECT value FROM meta WHERE key='global_pid') AS INTEGER)`,
+        )
+        .all() as Array<{ pid: number; root: string }>
+    ).map((row) => [row.pid, row.root]),
+  );
+  for await (const rows of retentionPages<{ pid: number; body: Uint8Array }>(
+    store,
+    "thread",
+    "pid,body",
+  )) {
+    for (const row of rows) {
+      if (!served.has(row.pid)) continue;
+      await yieldToAdmission();
+      const thread = Thread.parse(decodeBody(row));
+      const root = roots.get(row.pid);
+      if (
+        thread.state !== "purged" &&
+        root &&
+        !(await access(root).then(
+          () => true,
+          () => false,
+        ))
+      )
+        continue;
+      result.push(thread);
+    }
   }
   return result;
 }
@@ -96,54 +111,63 @@ export async function diskRetentionReferences(
   const add = (id: string | null | undefined) => {
     if (id) referencedRunIds.add(id);
   };
-  for (const row of store
-    .prepare("SELECT state,body FROM thread WHERE state<>'purged'")
-    .all() as Array<{ state: string; body: Uint8Array }>) {
-    await yieldToAdmission();
-    const thread = Thread.parse(decodeBody(row));
-    if (thread.state !== row.state)
-      throw new Error(`thread ${thread.id} retention state disagrees`);
-    if (thread.repo) roots.add(thread.repo.root);
-    if (ignoreThreadIds.has(thread.id)) continue;
-    for (const sessionRow of store
-      .prepare("SELECT harness_id,body FROM session WHERE thread_id=?")
-      .all(thread.id) as Array<{ harness_id: string; body: Uint8Array }>) {
-      const session = Session.parse(decodeBody(sessionRow));
-      if (session.thread_id !== thread.id || session.harness_id !== sessionRow.harness_id)
-        throw new Error("native session retention owner disagrees");
-      if (session.native_session_id) {
-        const ids = nativeSessions.get(session.harness_id) ?? new Set<string>();
-        ids.add(session.native_session_id);
-        nativeSessions.set(session.harness_id, ids);
-      }
-    }
-    thread.run_ids.forEach(add);
-    add(thread.head_run_id);
-    for (const turnRow of store
-      .prepare("SELECT body FROM turn WHERE thread_id=?")
-      .all(thread.id) as Array<{ body: Uint8Array }>) {
+  for await (const rows of retentionPages<{ state: string; body: Uint8Array }>(
+    store,
+    "thread",
+    "state,body",
+  )) {
+    for (const row of rows) {
+      if (row.state === "purged") continue;
       await yieldToAdmission();
-      const turn = RetainedTurn.parse(decodeBody(turnRow));
-      if (turn.thread_id !== thread.id) throw new Error("retention turn owner disagrees");
-      [turn.run_id, turn.parent_run_id, turn.answers_plan_run_id, turn.plan_run_id].forEach(add);
+      const thread = Thread.parse(decodeBody(row));
+      if (thread.state !== row.state)
+        throw new Error(`thread ${thread.id} retention state disagrees`);
+      if (thread.repo) roots.add(thread.repo.root);
+      if (ignoreThreadIds.has(thread.id)) continue;
+      for (const sessionRow of store
+        .prepare("SELECT harness_id,body FROM session WHERE thread_id=?")
+        .all(thread.id) as Array<{ harness_id: string; body: Uint8Array }>) {
+        const session = Session.parse(decodeBody(sessionRow));
+        if (session.thread_id !== thread.id || session.harness_id !== sessionRow.harness_id)
+          throw new Error("native session retention owner disagrees");
+        if (session.native_session_id) {
+          const ids = nativeSessions.get(session.harness_id) ?? new Set<string>();
+          ids.add(session.native_session_id);
+          nativeSessions.set(session.harness_id, ids);
+        }
+      }
+      thread.run_ids.forEach(add);
+      add(thread.head_run_id);
+      for (const turnRow of store
+        .prepare("SELECT body FROM turn WHERE thread_id=?")
+        .all(thread.id) as Array<{ body: Uint8Array }>) {
+        await yieldToAdmission();
+        const turn = RetainedTurn.parse(decodeBody(turnRow));
+        if (turn.thread_id !== thread.id) throw new Error("retention turn owner disagrees");
+        [turn.run_id, turn.parent_run_id, turn.answers_plan_run_id, turn.plan_run_id].forEach(add);
+      }
     }
   }
   for (const row of store
     .prepare("SELECT run_id FROM interaction WHERE state='pending'")
     .all() as Array<{ run_id: string }>)
     add(row.run_id);
-  const records = (
-    store
-      .prepare(
-        `SELECT run_id AS runId,state,finished_at AS finishedAt
-    FROM command WHERE kind='product' AND run_id IS NOT NULL`,
-      )
-      .all() as Array<{ runId: string; state: string; finishedAt: string | null }>
-  ).map((row) => ({
-    runId: row.runId,
-    state: row.state,
-    finishedAt: row.finishedAt ?? undefined,
-  }));
+  const records: DiskRetentionReferences["records"] = [];
+  for await (const rows of retentionPages<{
+    kind: string;
+    runId: string | null;
+    state: string;
+    finishedAt: string | null;
+  }>(store, "command", "kind,run_id AS runId,state,finished_at AS finishedAt")) {
+    for (const row of rows) {
+      if (row.kind === "product" && row.runId !== null)
+        records.push({
+          runId: row.runId,
+          state: row.state,
+          finishedAt: row.finishedAt ?? undefined,
+        });
+    }
+  }
   return {
     isCurrent,
     projectRoots: [...roots],

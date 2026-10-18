@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { parse as yamlParse } from "yaml";
 import { RunResumable, SessionCapsule } from "@claudexor/schema";
 import { userConfigDir } from "@claudexor/util";
+import { RETIRING } from "./retention-removal.js";
 
 async function optionalStat(path: string) {
   try {
@@ -46,7 +47,7 @@ export async function retainedNativeSessions(
     if (!/^[0-9a-f]{64}$/.test(hash)) continue;
     const runs = join(projects, hash, "runs");
     for (const id of await directories(runs)) {
-      if (ignoredRunIds.has(id)) continue;
+      if (id === RETIRING || ignoredRunIds.has(id)) continue;
       const run = join(runs, id);
       const final = join(run, "final");
       const finalStat = await optionalStat(final);

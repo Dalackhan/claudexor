@@ -8,7 +8,7 @@
  * both bugs. The CLI (`claudexor gc`) and the startup maintenance pass are
  * thin callers of this one owner.
  */
-import { existsSync, lstatSync, realpathSync, rmSync, statSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { setImmediate as yieldToAdmission } from "node:timers/promises";
 import { dirname, join } from "node:path";
@@ -19,9 +19,15 @@ import {
   type GcKeepCounts,
   type GcRunDeletion,
 } from "@claudexor/schema";
-import { prunePatchObjects, readTextSafe, writeText } from "@claudexor/util";
+import { prunePatchObjects, readTextSafe } from "@claudexor/util";
 import { treeReclaimableBytes } from "./retention-bytes.js";
 import { ageStampOf, runKeepReason } from "./retention-candidates.js";
+import {
+  pendingRetirements,
+  prepareRetirement,
+  RETIRING,
+  type Retirement,
+} from "./retention-removal.js";
 
 export interface RetentionPolicy {
   runsMaxAgeDays: number;
@@ -214,9 +220,39 @@ export async function runRetentionPass(
     }
     return !invalidated;
   };
+  const recoverPending = async (parent: string, kind: "runs" | "reviews", projectRoot: string) => {
+    for await (const retirement of pendingRetirements(parent, kind, dryRun, errors)) {
+      if (deletions >= maxDeletions) {
+        truncated = true;
+        break;
+      }
+      try {
+        const planned = new Map(dryRun ? plannedUnlinks : undefined);
+        const bytes = await treeReclaimableBytes(retirement.tree, planned);
+        if (!dryRun) {
+          await retirement.recover();
+          errors.push(...(await retirement.finish()));
+        } else for (const [key, value] of planned) plannedUnlinks.set(key, value);
+        if (kind === "runs")
+          deletedRuns.push({
+            run_id: retirement.intent.name,
+            project_root: projectRoot,
+            freed_bytes: bytes,
+          });
+        else
+          deletedReviews.push({ path: join(parent, retirement.intent.name), freed_bytes: bytes });
+        freedBytes += bytes;
+        deletions += 1;
+      } catch (error) {
+        errors.push(`${kind}/${retirement.intent.name}: retired cleanup pending: ${String(error)}`);
+      }
+    }
+  };
 
   runProjects: for (const project of projects) {
     if (!proofCurrent()) break;
+    await recoverPending(project.runsDir, "runs", project.root);
+    if (truncated) break;
     const candidates: {
       runId: string;
       root: string;
@@ -253,9 +289,24 @@ export async function runRetentionPass(
         truncated = true;
         break;
       }
+      let retirement: Retirement | undefined;
       try {
         const planned = new Map(dryRun ? plannedUnlinks : undefined);
         const bytes = await treeReclaimableBytes(candidate.root, planned);
+        if (!dryRun)
+          retirement = await prepareRetirement(
+            project.runsDir,
+            candidate.runId,
+            yamlStringify({
+              run_id: candidate.runId,
+              deleted_at: new Date(now()).toISOString(),
+              reason: "retention",
+              policy: {
+                runs_max_age_days: policy.runsMaxAgeDays,
+                keep_last_runs_per_project: policy.keepLastRunsPerProject,
+              },
+            }),
+          );
         if (!proofCurrent()) break runProjects;
         // Re-read every mutable filesystem guard after the asynchronous walk.
         // SQL-backed callers validate their entire snapshot; older embedders
@@ -287,30 +338,9 @@ export async function runRetentionPass(
           kept[reason] += 1;
           continue;
         }
-        if (!dryRun) {
-          rmSync(candidate.root, { recursive: true, force: true });
-          // The deletion is FACT once rmSync returns — a failed tombstone
-          // write must not erase it from the receipt (release wave round-15
-          // NIT); it degrades to an errors[] entry beside the recorded
-          // deletion instead.
-          try {
-            writeText(
-              join(candidate.root, TOMBSTONE),
-              yamlStringify({
-                run_id: candidate.runId,
-                deleted_at: new Date(now()).toISOString(),
-                reason: "retention",
-                policy: {
-                  runs_max_age_days: policy.runsMaxAgeDays,
-                  keep_last_runs_per_project: policy.keepLastRunsPerProject,
-                },
-              }),
-            );
-          } catch (tombstoneError) {
-            errors.push(
-              `runs/${candidate.runId}: tombstone write failed: ${tombstoneError instanceof Error ? tombstoneError.message : String(tombstoneError)}`,
-            );
-          }
+        if (retirement) {
+          retirement.commit();
+          errors.push(...(await retirement.finish()));
         }
         if (dryRun) for (const [key, value] of planned) plannedUnlinks.set(key, value);
         deletedRuns.push({
@@ -326,6 +356,12 @@ export async function runRetentionPass(
         errors.push(
           `runs/${candidate.runId}: ${error instanceof Error ? error.message : String(error)}`,
         );
+      } finally {
+        try {
+          await retirement?.abandon();
+        } catch (error) {
+          errors.push(`runs/${candidate.runId}: retirement cleanup: ${String(error)}`);
+        }
       }
     }
     // `truncated` is set ONLY where a real candidate was skipped (above), so
@@ -354,12 +390,15 @@ export async function runRetentionPass(
       continue;
     }
     const reviewsDir = fenced.path;
+    await recoverPending(reviewsDir, "reviews", project.root);
+    if (truncated) break;
     for (const name of await listSubdirs(reviewsDir)) {
       // Standalone diff-review trees only — `.claudexor/` in a user repo is
       // user-owned config; the engine deletes nothing there but its own
       // `diff-*` runtime debris, never following a symlinked leaf either.
       if (!name.startsWith("diff-")) continue;
       const path = join(reviewsDir, name);
+      let retirement: Retirement | undefined;
       try {
         if (lstatSync(path).isSymbolicLink()) continue;
         if (statSync(path).mtimeMs > reviewCutoff) continue;
@@ -371,6 +410,7 @@ export async function runRetentionPass(
         }
         const planned = new Map(dryRun ? plannedUnlinks : undefined);
         const bytes = await treeReclaimableBytes(path, planned);
+        if (!dryRun) retirement = await prepareRetirement(reviewsDir, name, null);
         if (!proofCurrent()) break;
         const currentFence = canonicalInRepoReviewsDir(project);
         if (
@@ -380,7 +420,10 @@ export async function runRetentionPass(
           statSync(path).mtimeMs > reviewCutoff
         )
           continue;
-        if (!dryRun) rmSync(path, { recursive: true, force: true });
+        if (retirement) {
+          retirement.commit();
+          errors.push(...(await retirement.finish()));
+        }
         if (dryRun) for (const [key, value] of planned) plannedUnlinks.set(key, value);
         deletedReviews.push({ path, freed_bytes: bytes });
         freedBytes += bytes;
@@ -390,6 +433,12 @@ export async function runRetentionPass(
         await new Promise<void>((resolve) => setImmediate(resolve));
       } catch (error) {
         errors.push(`reviews/${name}: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        try {
+          await retirement?.abandon();
+        } catch (error) {
+          errors.push(`reviews/${name}: retirement cleanup: ${String(error)}`);
+        }
       }
     }
   }
@@ -502,7 +551,7 @@ function canonicalInRepoReviewsDir(
 async function listSubdirs(dir: string): Promise<string[]> {
   try {
     return (await readdir(dir, { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory())
+      .filter((entry) => entry.isDirectory() && entry.name !== RETIRING)
       .map((entry) => entry.name);
   } catch {
     return [];

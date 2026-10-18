@@ -25,6 +25,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -147,6 +148,26 @@ export function fsyncDirectory(path: string, platform: NodeJS.Platform = process
     fsyncDirectoryHandle(fd, platform);
   } finally {
     closeSync(fd);
+  }
+}
+
+/** The same directory durability policy for maintenance I/O that must yield. */
+export async function fsyncDirectoryAsync(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<void> {
+  const handle = await open(
+    path,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
+  try {
+    try {
+      await handle.sync();
+    } catch (error) {
+      if (platform !== "win32") throw error;
+    }
+  } finally {
+    await handle.close();
   }
 }
 

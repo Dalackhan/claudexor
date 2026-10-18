@@ -18,6 +18,8 @@ export interface DiskRetentionReferences {
   recheck?: () => boolean;
   /** Native callers absorb the same changed owners before per-file rechecks. */
   nativeCurrent?: () => boolean;
+  /** Pass-local ownership, refreshed synchronously at each lane sweep boundary. */
+  laneThreadIds?: (root: string) => Set<string>;
   nativeRunDirs?: ReadonlySet<string>;
   nativeWatchRunDirs?: ReadonlySet<string>;
   nativeReferenceError?: () => string | null;
@@ -175,6 +177,11 @@ export async function diskRetentionReferences(
       refresh,
       recheck,
       nativeCurrent: recheck,
+      laneThreadIds: (root) => {
+        if (!recheck())
+          throw new Error("lane ownership changed; a fresh retention pass must resume");
+        return reader.lanes.get(root) ?? new Set<string>();
+      },
       nativeRunDirs: commands.nativeRunDirs,
       nativeWatchRunDirs: commands.nativeWatchRunDirs,
       nativeReferenceError: commands.nativeReferenceError,

@@ -3,10 +3,10 @@ import {
   isEphemeralRunScope,
   PROJECT_NOT_REGISTERED_REQUIRED_ACTIONS,
   type ControlProjectListingProblem,
-  Thread,
+  type Thread,
   type ThreadTurn,
 } from "@claudexor/schema";
-import { hashJson, isClaudexorOwnedRuntimePath, noProjectRepoRoot } from "@claudexor/util";
+import { hashJson, isClaudexorOwnedRuntimePath } from "@claudexor/util";
 import type { CreateThreadInput, CreateTurnInput, UpdateThreadInput } from "../threads.js";
 import { recordInterruptedRunlessTurns } from "../runless-turn-recovery.js";
 import {
@@ -297,33 +297,6 @@ export class SqlProjectRouter {
   }
   retentionThreads(signal?: AbortSignal) {
     return diskRetentionThreads(this.store, signal);
-  }
-  retentionLaneThreadIds(root: string): Set<string> {
-    const global = requireServedGeneration(this.store, this.projects.global().pid);
-    const project = this.store
-      .prepare("SELECT current_pid AS pid FROM project WHERE pid=? AND root=? AND status='active'")
-      .get(global.pid, root) as { pid: number } | undefined;
-    const generation = project ? partitionById(this.store, project.pid) : null;
-    if (project && !generation) throw new Error(`project ${root} has no partition`);
-    if (generation) requireServedGeneration(this.store, generation.pid);
-    const ids = new Set<string>();
-    for (const row of this.store
-      .prepare("SELECT id,pid,body FROM thread WHERE pid IN (?,?) AND state!='purged'")
-      .all(global.pid, generation?.pid ?? global.pid) as Array<{
-      id: string;
-      pid: number;
-      body: Uint8Array;
-    }>) {
-      try {
-        const thread = Thread.parse(decodeBody(row));
-        if ((thread.repo?.root ?? noProjectRepoRoot()) === root) ids.add(row.id);
-      } catch (error) {
-        throw new Error(
-          `lane ownership for ${root}: thread ${row.id} in partition ${row.pid}: ${String(error)}`,
-        );
-      }
-    }
-    return ids;
   }
   healthyProjectRoots(): string[] {
     return (

@@ -70,9 +70,13 @@ it("names the root when live lane ownership cannot be read", async () => {
   const repoRoot = noProjectRepoRoot();
   const lane = join(projectRuntimeDir(repoRoot), "lanes", "th-000000000001", "default", "home");
   mkdirSync(lane, { recursive: true });
-  vi.spyOn(sql.graph.threads, "retentionLaneThreadIds").mockImplementation(() => {
-    throw new Error("partition is pending recovery");
-  });
+  const read = sql.graph.threads.retentionReferences.bind(sql.graph.threads);
+  vi.spyOn(sql.graph.threads, "retentionReferences").mockImplementation(async (...args) => ({
+    ...(await read(...args)),
+    laneThreadIds: () => {
+      throw new Error("partition is pending recovery");
+    },
+  }));
   const gc = createRetentionRunner({
     projects: () => sql.graph.projects,
     threads: sql.graph.threads,

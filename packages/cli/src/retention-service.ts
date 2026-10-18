@@ -169,7 +169,7 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
             if (signal.aborted) break;
             try {
               const ids =
-                deps.threads.retentionLaneThreadIds?.(root) ??
+                references.laneThreadIds?.(root) ??
                 new Set(
                   deps.threads
                     .listThreads()

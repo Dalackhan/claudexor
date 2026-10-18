@@ -1,4 +1,5 @@
 import { Session, Thread, ThreadTurn } from "@claudexor/schema";
+import { noProjectRepoRoot } from "@claudexor/util";
 import type { EngineStore } from "./store.js";
 import { decodeBody } from "./thread-rows.js";
 
@@ -14,6 +15,7 @@ export class RetentionReferenceReader {
   readonly runs = new Set<string>();
   readonly sessions = new Map<string, Set<string>>();
   readonly roots = new Set<string>();
+  readonly lanes = new Map<string, Set<string>>();
 
   constructor(
     private readonly store: EngineStore,
@@ -33,6 +35,10 @@ export class RetentionReferenceReader {
         `thread ${row.id} in partition ${row.pid}: retention state or identity disagrees`,
       );
     if (thread.repo) this.roots.add(thread.repo.root);
+    const root = thread.repo?.root ?? noProjectRepoRoot();
+    const lanes = this.lanes.get(root) ?? new Set<string>();
+    lanes.add(thread.id);
+    this.lanes.set(root, lanes);
     if (this.ignored.has(thread.id) && thread.state === "trashed") return;
     thread.run_ids.forEach(this.add);
     this.add(thread.head_run_id);

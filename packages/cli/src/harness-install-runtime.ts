@@ -6,9 +6,15 @@
  * prefix or PATH they read.
  */
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { composeBaseEnv, pickAllowlistedEnv, WINDOWS_RUNTIME_ENV_KEYS } from "@claudexor/core";
+import {
+  composeBaseEnv,
+  embeddedNpmCli,
+  pickAllowlistedEnv,
+  WINDOWS_RUNTIME_ENV_KEYS,
+} from "@claudexor/core";
 import type { InstallProofRuntime } from "./harness-install-proof.js";
 import type { HarnessInstallTarget } from "./harness-install-recipes.js";
 
@@ -29,6 +35,20 @@ export interface InstallerRuntimeOptions {
 export interface InstallerRuntime extends InstallProofRuntime {
   home: string;
   target: HarnessInstallTarget;
+}
+
+/** The runner's bundled npm entrypoint must exist before any npm child runs.
+ * Its absence is a LOCAL fault: no registry retry or other version helps. */
+export function embeddedNpmProblem(
+  runtime: Pick<InstallerRuntime, "runnerNodePath" | "platform">,
+  exists: (path: string) => boolean = existsSync,
+): { code: "embedded_npm_missing"; message: string } | null {
+  const npmCLI = embeddedNpmCli(runtime.runnerNodePath, runtime.platform);
+  if (exists(npmCLI)) return null;
+  return {
+    code: "embedded_npm_missing",
+    message: `the bundled npm entrypoint is missing at ${npmCLI} (expected inside the pinned Node runtime next to this CLI)`,
+  };
 }
 
 export function installerRuntime(options: InstallerRuntimeOptions = {}): InstallerRuntime {

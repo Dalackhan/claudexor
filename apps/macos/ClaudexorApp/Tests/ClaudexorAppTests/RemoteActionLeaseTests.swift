@@ -142,12 +142,12 @@ import Testing
         model.remoteConnections = [connection]
         let oldLease = model.beginRemoteAction(.harnessInstall, connectionID: connection.id)!
         let oldPrompt = RemoteHarnessInstallPrompt(
-            lease: oldLease, harness: "codex", command: "old", installLocation: "bin",
-            pinnedVersion: "1", verification: .releaseVerified)
+            lease: oldLease, harness: "codex", runtimeTarget: "versions/test", command: "old", installLocation: "bin",
+            pinnedVersion: "1", verification: .releaseVerified, versionBinding: nil)
         let newLease = model.beginRemoteAction(.harnessInstall, connectionID: connection.id)!
         let newPrompt = RemoteHarnessInstallPrompt(
-            lease: newLease, harness: "codex", command: "new", installLocation: "bin",
-            pinnedVersion: "2", verification: .releaseVerified)
+            lease: newLease, harness: "codex", runtimeTarget: "versions/test", command: "new", installLocation: "bin",
+            pinnedVersion: "2", verification: .releaseVerified, versionBinding: nil)
         model.remoteHarnessInstallPrompt = newPrompt
 
         model.dismissRemoteHarnessInstallPrompt(oldPrompt)
@@ -163,8 +163,8 @@ import Testing
         model.remoteConnections = [connection]
         let lease = model.beginRemoteAction(.harnessInstall, connectionID: connection.id)!
         let prompt = RemoteHarnessInstallPrompt(
-            lease: lease, harness: "codex", command: "install", installLocation: "bin",
-            pinnedVersion: "1", verification: .releaseVerified)
+            lease: lease, harness: "codex", runtimeTarget: "versions/test", command: "install", installLocation: "bin",
+            pinnedVersion: "1", verification: .releaseVerified, versionBinding: nil)
         model.remoteHarnessInstallPrompt = prompt
 
         #expect(model.acceptRemoteHarnessInstallPrompt(prompt))
@@ -188,9 +188,9 @@ import Testing
             pin: String?
         ) -> RemoteHarnessInstallPrompt {
             RemoteHarnessInstallPrompt(
-                lease: lease, harness: "tool", command: "install tool",
+                lease: lease, harness: "tool", runtimeTarget: "versions/test", command: "install tool",
                 installLocation: "~/.local/bin", pinnedVersion: pin,
-                verification: verification)
+                verification: verification, versionBinding: nil)
         }
 
         let verified = RemoteHarnessInstallSection.disclosureText(
@@ -201,9 +201,11 @@ import Testing
             prompt(.humanObserved, pin: nil), model: model)
 
         #expect(verified.contains("this release was verified against"))
-        #expect(verified.contains("Pinned version: 1.2.3"))
+        #expect(verified.contains("Selected version: 1.2.3"))
         #expect(deterministic.contains("deterministic install target"))
         #expect(deterministic.contains("not covered by recorded verification fixtures"))
+        #expect(deterministic.contains("Selected version: 4.5.6"))
+        #expect(!deterministic.contains("this release was verified against"))
         #expect(observed.contains("No version pin"))
         #expect(observed.contains("runs in the embedded terminal where you watch it"))
     }
@@ -221,9 +223,9 @@ import Testing
         func observed(_ harness: String) -> String {
             RemoteHarnessInstallSection.disclosureText(
                 RemoteHarnessInstallPrompt(
-                    lease: lease, harness: harness,
+                    lease: lease, harness: harness, runtimeTarget: "versions/test",
                     command: "curl … | /bin/sh", installLocation: "~/.local/bin",
-                    pinnedVersion: nil, verification: .humanObserved),
+                    pinnedVersion: nil, verification: .humanObserved, versionBinding: nil),
                 model: model)
         }
 

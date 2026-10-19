@@ -227,7 +227,7 @@ if [ "${CLAUDEXOR_NO_ENGINE_BUNDLE:-0}" != "1" ]; then
     "$APP/Contents/Resources/node" "$CLI_JS" help --json)"
   CLI_INSTALL_JSON="$(env -i HOME="$CLI_SMOKE_HOME" PATH="/usr/bin:/bin" \
     "$APP/Contents/Resources/node" "$CLI_JS" \
-    harness install codex --target local --dry-run --json)"
+    harness install codex --target local --release-tested --dry-run --json)"
   "$APP/Contents/Resources/node" -e '
     const help = JSON.parse(process.argv[1]);
     const install = JSON.parse(process.argv[2]);

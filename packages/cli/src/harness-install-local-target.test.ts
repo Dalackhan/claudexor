@@ -155,6 +155,31 @@ const installNpmFixture = (
   return { binary, packageRoot };
 };
 
+/** The ambient HOME a test inherits (a developer's real one, in effect), holding
+ * a runnable NEWER managed Codex in both npm layouts. Its POSIX launcher
+ * records that it ran. A hermetic test passes its own home and never reads it. */
+const ambientManagedCodex = (): { home: string; marker: string } => {
+  const home = mkdtempSync(join(tmpdir(), "claudexor-ambient-home-"));
+  const marker = join(home, "ambient-launcher-ran");
+  const packageRoot = join(home, ".claudexor", "node", "lib", "node_modules", "@openai", "codex");
+  writeExecutable(
+    join(packageRoot, "bin", "codex.js"),
+    `#!/usr/bin/env node\nrequire("node:fs").writeFileSync(${JSON.stringify(marker)}, "ran");\nconsole.log("codex-cli 50.0.0");\n`,
+  );
+  writeFileSync(
+    join(packageRoot, "package.json"),
+    JSON.stringify({ name: "@openai/codex", version: "50.0.0" }),
+  );
+  mkdirSync(join(home, ".claudexor", "node", "bin"), { recursive: true });
+  symlinkSync(
+    "../lib/node_modules/@openai/codex/bin/codex.js",
+    join(home, ".claudexor", "node", "bin", "codex"),
+  );
+  installNpmFixture(home, "local", "codex", { layout: "win32", packageVersion: "50.0.0" });
+  vi.stubEnv("HOME", home);
+  return { home, marker };
+};
+
 const installCursorFixture = (home: string): { binary: string; canonicalTarget: string } => {
   const canonicalTarget = join(
     home,
@@ -992,21 +1017,38 @@ describe("harness install --target local", () => {
   });
 
   it("--target local projects the local managed destination", () => {
+    const ambient = ambientManagedCodex();
+    const home = mkdtempSync(join(tmpdir(), "claudexor-local-destination-"));
+    const spawn = vi.fn();
     const stdout = captureStdout();
-    const code = harnessInstallCommand(
-      args(["harness", "install", "codex"], { "dry-run": true, target: "local" }),
-      true,
-    );
-    stdout.restore();
-    const payload = JSON.parse(stdout.lines()) as Record<string, unknown>;
-    expect(code).toBe(0);
-    expect(payload).toMatchObject({
-      ok: true,
-      dryRun: true,
-      harness: "codex",
-      target: "local",
-      installLocation: "~/.claudexor/node/bin",
-    });
+    try {
+      const code = harnessInstallCommand(
+        args(["harness", "install", "codex"], {
+          "dry-run": true,
+          target: "local",
+          "release-tested": true,
+        }),
+        true,
+        { home, spawn: spawn as never },
+      );
+      stdout.restore();
+      const payload = JSON.parse(stdout.lines()) as Record<string, unknown>;
+      expect(code).toBe(0);
+      expect(payload).toMatchObject({
+        ok: true,
+        dryRun: true,
+        harness: "codex",
+        target: "local",
+        installLocation: "~/.claudexor/node/bin",
+        pinnedVersion: CODEX_VENDOR_CLI_VERSION,
+      });
+      expect(spawn).not.toHaveBeenCalled();
+      expect(existsSync(ambient.marker)).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(home, { recursive: true, force: true });
+      rmSync(ambient.home, { recursive: true, force: true });
+    }
   });
 
   it("rejects an absent or unknown --target before any install", () => {
@@ -1043,19 +1085,27 @@ describe("harness install --target local", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it("emits the unchanged local receipt for a Windows codex install, naming the image dir", () => {
+  it("emits the exact tested-baseline receipt for a Windows codex install, naming the image dir", () => {
+    const ambient = ambientManagedCodex();
     const home = mkdtempSync(join(tmpdir(), "claudexor-win-json-receipt-"));
     const stdout = captureStdout();
     const stderr = captureStderr();
     const spawn = installerSpawn({ home, harness: "codex", target: "local", layout: "win32" });
     const imageDir = "~/.claudexor/node/node_modules/@openai/codex (npm executable entrypoint)";
+    // Would prove the ambient 50.0.0 copy if selection read the ambient HOME.
+    const dryRunSpawn = vi.fn(() => ({ status: 0, stdout: "codex-cli 50.0.0\n", stderr: "" }));
     try {
       const dryRunCode = harnessInstallCommand(
-        args(["harness", "install", "codex"], { target: "local", "dry-run": true }),
+        args(["harness", "install", "codex"], {
+          target: "local",
+          "dry-run": true,
+          "release-tested": true,
+        }),
         true,
-        { platform: "win32", arch: "x64" },
+        { home, platform: "win32", arch: "x64", spawn: dryRunSpawn as never },
       );
       expect(dryRunCode).toBe(0);
+      expect(dryRunSpawn).not.toHaveBeenCalled();
       expect(JSON.parse(stdout.lines())).toEqual({
         ok: true,
         dryRun: true,
@@ -1065,11 +1115,17 @@ describe("harness install --target local", () => {
         installLocation: imageDir,
         pinnedVersion: CODEX_VENDOR_CLI_VERSION,
         verification: "release_verified",
+        // Dry-run only: the executed receipt below keeps its exact keys.
+        versionBinding: "vendor-version",
       });
       stdout.restore();
       const executed = captureStdout();
       const code = harnessInstallCommand(
-        args(["harness", "install", "codex"], { target: "local", yes: true }),
+        args(["harness", "install", "codex"], {
+          target: "local",
+          yes: true,
+          "release-tested": true,
+        }),
         true,
         {
           home,
@@ -1099,10 +1155,13 @@ describe("harness install --target local", () => {
         installedBinary: join(WINDOWS_CODEX_IMAGE_DIR(vendorRoot(home, "local")), "codex.exe"),
         installedVersion: CODEX_VENDOR_CLI_VERSION,
       });
+      expect(existsSync(ambient.marker)).toBe(false);
     } finally {
       stdout.restore();
       stderr.restore();
+      vi.unstubAllEnvs();
       rmSync(home, { recursive: true, force: true });
+      rmSync(ambient.home, { recursive: true, force: true });
     }
   });
 
@@ -1116,7 +1175,11 @@ describe("harness install --target local", () => {
     });
     try {
       const code = harnessInstallCommand(
-        args(["harness", "install", "codex"], { yes: true, target: "local" }),
+        args(["harness", "install", "codex"], {
+          yes: true,
+          target: "local",
+          "release-tested": true,
+        }),
         true,
         {
           home,

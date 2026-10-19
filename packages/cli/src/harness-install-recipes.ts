@@ -44,9 +44,13 @@ export const TARGET_LAYOUTS: Record<
   },
 };
 
-/** Exact npm pins. Each version ALIASES the harness package's vendor-version
- * SSOT (vendor-cli-version.ts there). For claude/codex that is the version
- * this release's freshness gates verified; the opencode pin is a
+/** Exact npm release baselines. Each version ALIASES the harness package's
+ * vendor-version SSOT (vendor-cli-version.ts there). For claude/codex that is
+ * the version this release's freshness gates verified; Codex's normal CLI
+ * install resolves the current npm release separately, while the baseline
+ * remains an explicit `--release-tested` target (no latest lookup; a runnable
+ * managed copy at or above it is kept, otherwise npm installs it from the
+ * registry) and snapshot evidence. The opencode pin is a
  * deterministic install target only — no recorded verification fixture
  * vouches for it (its vendor-cli-version.ts discloses this). Cursor and agy
  * are absent deliberately: they ship no npm artifact (see SCRIPT_INSTALLERS
@@ -259,14 +263,15 @@ export function harnessInstallerDisclosure(
   target: HarnessInstallTarget = "remote",
   platform: NodeJS.Platform = process.platform,
   _arch: string = process.arch,
-  /** Explicit exact maintenance target; omitted installs the release pin. The
-   * pin stays reported as `pinnedVersion` either way. */
+  /** Exact version selected for THIS install (either release-tested or a
+   * separately resolved/explicit target). Omitted uses the recipe baseline. */
   version?: string,
 ): HarnessInstallerDisclosure {
   const layout = TARGET_LAYOUTS[target];
   const pin = NPM_PINS[harness];
   const windows = platform === "win32";
   if (pin) {
+    const selectedVersion = version ?? pin.version;
     const installLocation =
       windows && target === "local"
         ? `${layout.displayRoot}/node_modules/${pin.npmPackage} (npm executable entrypoint)`
@@ -274,10 +279,10 @@ export function harnessInstallerDisclosure(
     return {
       harness,
       target,
-      command: `npm install --global --prefix ${layout.displayRoot} ${pin.npmPackage}@${version ?? pin.version}`,
+      command: `npm install --global --prefix ${layout.displayRoot} ${pin.npmPackage}@${selectedVersion}`,
       installLocation,
-      pinnedVersion: pin.version,
-      verification: pin.verification,
+      pinnedVersion: selectedVersion,
+      verification: selectedVersion === pin.version ? pin.verification : "deterministic_only",
     };
   }
   const script = scriptInstaller(harness);
@@ -303,4 +308,21 @@ export function harnessInstallerDisclosure(
     pinnedVersion: null,
     verification: target === "local" ? "unattended_unpinned" : "human_observed",
   };
+}
+
+/** Human wording for the typed version evidence the disclosure owns. */
+export function disclosureVersionLine(disclosure: HarnessInstallerDisclosure): string {
+  if (disclosure.pinnedVersion === null) {
+    if (disclosure.verification === "unattended_unpinned") {
+      return (
+        "Version pin:      none — this vendor ships no pinnable artifact; this authorized " +
+        "unattended install records the downloaded script's size and sha256 instead of a human's attention"
+      );
+    }
+    return `Selected version: ${scriptInstaller(disclosure.harness)?.pinNote ?? "none"}`;
+  }
+  if (disclosure.verification === "deterministic_only") {
+    return `Selected version: ${disclosure.pinnedVersion} (exact; deterministic install target — not covered by recorded verification fixtures; npm verifies its registry integrity checksum)`;
+  }
+  return `Selected version: ${disclosure.pinnedVersion} (exact; the version this release was verified against — npm verifies its registry integrity checksum)`;
 }

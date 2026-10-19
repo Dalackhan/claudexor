@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * Windows managed and ambient npm entrypoint proof, using the exact CI Node.
- * Real pinned Codex/Claude installs must agree with doctor, core launch and
- * idempotent recheck. Authentication remains outside this credential-free smoke.
+ * A real default/latest Codex install and the Claude release baseline must
+ * agree with doctor, core launch and idempotent recheck. Package proof is not
+ * native app-server compatibility; auth stays outside this credential-free smoke.
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync } from "node:fs";
@@ -151,6 +152,10 @@ function parseSingleJson(label, stdout) {
 const core = await import(
   pathToFileURL(join(repoRoot, "packages", "core", "dist", "index.js")).href
 );
+const { CODEX_VENDOR_CLI_VERSION } = await import(
+  pathToFileURL(join(repoRoot, "packages", "harness-codex", "dist", "vendor-cli-version.js")).href
+);
+if (typeof CODEX_VENDOR_CLI_VERSION !== "string") fail("Codex release-tested baseline unavailable");
 const runtimeEnv = core.harnessRuntimeEnv(env, process.execPath);
 const verified = [];
 
@@ -173,6 +178,32 @@ for (const [harness, npmPackage] of [
   ["claude", "@anthropic-ai/claude-code"],
 ]) {
   step(`install ${harness} through the managed npm toolchain`);
+  if (harness === "codex") {
+    // Keep the explicit release-tested selection (no latest lookup; installing
+    // it still needs the npm registry) observable without making it the
+    // default install's target or certification of a newer CLI.
+    const baselineRun = runCli(
+      [
+        "harness",
+        "install",
+        "codex",
+        "--target",
+        "local",
+        "--release-tested",
+        "--dry-run",
+        "--json",
+      ],
+      PROBE_TIMEOUT_MS,
+    );
+    const baseline = parseSingleJson("codex tested-baseline dry-run", baselineRun.stdout);
+    if (
+      baselineRun.status !== 0 ||
+      baseline.ok !== true ||
+      baseline.pinnedVersion !== CODEX_VENDOR_CLI_VERSION ||
+      baseline.verification !== "release_verified"
+    )
+      fail("Codex release-tested baseline disclosure is invalid", baseline);
+  }
   const args = ["harness", "install", harness, "--target", "local", "--yes", "--json"];
   const install = runCli(args, INSTALL_TIMEOUT_MS);
   const receipt = parseSingleJson(`${harness} install`, install.stdout);
@@ -181,12 +212,16 @@ for (const [harness, npmPackage] of [
   if (JSON.stringify(Object.keys(receipt).sort()) !== JSON.stringify(RECEIPT_FIELDS)) {
     fail("receipt keys differ from the embedding-host contract", receipt);
   }
+  const expectedVerification =
+    harness === "codex" && receipt.pinnedVersion !== CODEX_VENDOR_CLI_VERSION
+      ? "deterministic_only"
+      : "release_verified";
   if (
     receipt.dryRun !== false ||
     receipt.exitCode !== 0 ||
     receipt.target !== "local" ||
     receipt.harness !== harness ||
-    receipt.verification !== "release_verified" ||
+    receipt.verification !== expectedVerification ||
     typeof receipt.pinnedVersion !== "string" ||
     receipt.installedVersion !== receipt.pinnedVersion
   ) {
@@ -210,7 +245,7 @@ for (const [harness, npmPackage] of [
   ) {
     fail(`${harness} receipt does not name the npm-declared vendor entrypoint`, receipt);
   }
-  step(`${harness}: exact entrypoint and bare-name core launch report the pin`);
+  step(`${harness}: exact entrypoint and bare-name core launch report the selected version`);
   for (const input of [installedBinary, harness]) {
     let probe;
     try {
@@ -223,7 +258,7 @@ for (const [harness, npmPackage] of [
       fail(`${harness} core launch failed for ${input}: ${error.message}`);
     }
     if (probe.code !== 0 || !probe.stdout.includes(receipt.pinnedVersion)) {
-      fail(`${harness} --version did not report the pin`, probe);
+      fail(`${harness} --version did not report the selected version`, probe);
     }
     console.log(`${input}: ${probe.stdout.trim()}`);
   }

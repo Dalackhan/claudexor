@@ -401,14 +401,14 @@ jobs:
           node --input-type=module -e 'import {readFileSync} from "node:fs"; const r=JSON.parse(readFileSync(process.env.OUT,"utf8").trim().split("\n").at(-1)); if(r.integrity?.ok!==true || !(r.flusher.counters.barriers>0) || !(r.flushed?.n>0)) throw new Error("store load smoke did not prove integrity and flush completion");'
           if ($LASTEXITCODE -ne 0) { throw "store load smoke did not pass" }
 
-      # The local Codex installer on Windows, proven against the REAL pinned
-      # package: the exact embedded Node toolchain (the official zip's
-      # `node.exe` beside its own `node_modules/npm/bin/npm-cli.js`, SHA-256
-      # pinned below for the `.node-version` release), no node/npm on PATH,
-      # an isolated profile/config root, and the package-native `codex.exe`
-      # the shared harness PATH resolves for doctor/login/run. Auth is a
-      # separate lane; this proves install, receipt, version and doctor
-      # readiness only. `scripts/windows-local-install-smoke.mjs` is the proof.
+      # The Windows smoke installs the REAL selected Codex npm latest as one
+      # exact version, beside Claude's release baseline. The embedded Node
+      # toolchain is exact (official zip `node.exe` + its npm-cli.js, SHA-256
+      # pinned below for `.node-version`); no ambient node/npm is used. The
+      # isolated profile and npm-declared vendor entrypoints are proved through
+      # shared harness PATH, receipt, version and doctor. Auth and native Agent
+      # behavior are separate lanes: a newer CLI's --version is no app-server
+      # compatibility verdict. `scripts/windows-local-install-smoke.mjs` owns it.
       - name: Stage the exact embedded Node toolchain (node.exe + its own npm-cli.js)
         shell: pwsh
         run: |
@@ -432,7 +432,7 @@ jobs:
           & $node --version
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "CLAUDEXOR_EMBEDDED_NODE=$node" -Encoding utf8
 
-      - name: Local Codex install proof (exact npm pin, embedded npm, no ambient node/npm, isolated profile)
+      - name: Local Codex/Claude install proof (exact selected npm version, embedded npm, isolated profile)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"

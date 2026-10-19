@@ -18,7 +18,7 @@ import { harnessCommand } from "./harness-command.js";
 
 // `harness list` plus the RESTORED disclosed installer (issue #89): list
 // stays exactly as it was after the PR #82 cut, and install now routes to
-// harness-installer.ts (pinned versions, disclosure-before-execution — its
+// harness-installer.ts (exact selected versions, disclosure-before-execution — its
 // own suite covers the details; here we pin the dispatch and the refusal).
 describe("harnessCommand", () => {
   beforeEach(() => {
@@ -62,7 +62,12 @@ describe("harnessCommand", () => {
   it("still accepts each subcommand's own flags after the ownership check", () => {
     expect(harnessCommand(parseArgs(["harness", "list", "--all"]), true)).toBe(0);
     expect(mocks.printUsageError).not.toHaveBeenCalled();
-    expect(harnessCommand(parseArgs(["harness", "install", "codex", "--dry-run"]), true)).toBe(0);
+    expect(
+      harnessCommand(
+        parseArgs(["harness", "install", "codex", "--release-tested", "--dry-run"]),
+        true,
+      ),
+    ).toBe(0);
     expect(mocks.printUsageError).not.toHaveBeenCalled();
   });
 
@@ -73,14 +78,16 @@ describe("harnessCommand", () => {
     expect(harnessCommand(parseArgs(["harness", "bogus"]), false)).toBe(2);
     expect(mocks.printUsageError).toHaveBeenCalledWith(
       false,
-      "usage: claudexor harness list [--all] | install <agy|claude|codex|copilot|cursor|opencode> [--target <local|remote>] [--dry-run] [--yes] | inspect [<id>] [--latest] | update <id> [--vendor-version <exact|latest>] [--yes]",
+      "usage: claudexor harness list [--all] | install <agy|claude|codex|copilot|cursor|opencode> [--target <local|remote>] [--vendor-version <exact>] [--release-tested] [--dry-run] [--yes] | inspect [<id>] [--latest] | update <id> [--vendor-version <exact|latest>] [--yes]",
     );
   });
 
   it("routes install to the disclosed installer, which refuses without confirmation", () => {
-    // Non-TTY, no --yes: the pinned disclosure prints, then a loud refusal —
+    // Non-TTY, no --yes: the tested-baseline disclosure prints, then a loud refusal —
     // exit 1, and NEVER the usage path (the verb exists again).
-    expect(harnessCommand(parseArgs(["harness", "install", "codex"]), false)).toBe(1);
+    expect(
+      harnessCommand(parseArgs(["harness", "install", "codex", "--release-tested"]), false),
+    ).toBe(1);
     expect(mocks.printUsageError).not.toHaveBeenCalled();
     const printed = mocks.print.mock.calls.map((call) => call[0] as string).join("\n");
     expect(printed).toContain("@openai/codex@");

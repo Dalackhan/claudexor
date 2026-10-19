@@ -135,8 +135,12 @@ Host integrations may install one vendor CLI into Claudexor's managed local
 toolchain with
 `claudexor harness install <harness> --target local --yes --json`; a host may
 bind that explicit unattended authorization to the user's Connect action.
-Exact npm pins install under `~/.claudexor/node`; Cursor remains unpinned, so
-the JSON receipt records the downloaded installer's SHA-256 and byte length.
+Npm recipes install exact selected versions under `~/.claudexor/node`;
+Codex resolves latest once by default; `--release-tested` explicitly selects
+the separately tested baseline instead of that lookup (a runnable managed copy
+at or above it is kept; installing it still needs the npm registry), and an
+unavailable registry refuses instead of falling back. Cursor remains unpinned, so its JSON
+receipt records the downloaded installer's SHA-256 and byte length.
 Every successful executed receipt also records the absolute installed launcher
 and its verified version; a zero-exit installer without that postcondition is a
 typed failure. On Windows, Codex and Claude use the npm package's declared
@@ -164,11 +168,13 @@ connection the app verifies and installs a signed, no-`sudo` runtime under
 `~/.claudexor/remote/`, then reaches its loopback-only control API through an
 SSH local forward. Vendor CLIs and their credentials remain on the server and
 with the vendors. Claudexor can install a harness CLI on the host for you
-through a disclosed, exact-pinned flow — `claudexor harness install`, or
-Settings → Harnesses for a connected host: Claude, Codex, and OpenCode
-install one exact pinned npm version, while the Cursor and Antigravity vendor
+through a disclosed, exact-version flow — `claudexor harness install`, or
+Settings → Harnesses for a connected host: Claude, Codex, GitHub Copilot and
+OpenCode install one exact npm version that the host's runtime selects and
+shows before confirmation (a current runtime resolves Codex's npm latest once;
+the others use their release baseline), while the Cursor and Antigravity vendor
 scripts are downloaded in full and run in the visible terminal where you watch
-them; nothing executes before the exact package/version/destination install
+them; nothing is installed before the exact package/version/destination install
 recipe is disclosed and confirmed. An embedding host may instead pass
 `--target local --yes`, which installs into the managed toolchain root and
 must prove the launcher it installed before reporting success.

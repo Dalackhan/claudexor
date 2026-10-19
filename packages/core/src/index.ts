@@ -36,3 +36,5 @@ export * from "./credential-profile-policy.js";
 export * from "./credential-selection.js";
 export * from "./credential-mutation-window.js";
 export * from "./credential-execution.js";
+
+export type * from "./native-home-lifetime.js";

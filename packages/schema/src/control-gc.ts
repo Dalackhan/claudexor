@@ -34,6 +34,12 @@ export const ControlGcRequest = z
       .describe(
         "Opt in to the advisory data-root scan: when true, the receipt carries data_root_unrecognized. Capability negotiation for engine-version skew — a client omits this unless the serving daemon is the SAME engine version, so an older daemon never sees the unknown request key and an older client never receives the unknown receipt key.",
       ),
+    native_home_report: z
+      .boolean()
+      .optional()
+      .describe(
+        "Include adapter-owned native-home retirement outcomes. Cleanup always runs; lockstep opt-in keeps older strict clients compatible.",
+      ),
     trash_purge_report: z
       .boolean()
       .optional()
@@ -48,7 +54,11 @@ export type ControlGcRequest = z.infer<typeof ControlGcRequest>;
 export const GcRunDeletion = z
   .object({
     run_id: z.string().describe("Deleted (or would-be-deleted) run id."),
-    project_root: z.string().describe("Canonical project root owning the run tree."),
+    project_root: z
+      .string()
+      .describe(
+        "Canonical project root, or the owned runtime namespace when no project record remains.",
+      ),
     freed_bytes: z.number().int().nonnegative().describe("Bytes the tree occupied."),
   })
   .strict();
@@ -66,6 +76,25 @@ export const GcKeepCounts = z
   .strict()
   .describe("Survivor counts per keep reason.");
 export type GcKeepCounts = z.infer<typeof GcKeepCounts>;
+
+/** Adapter-owned native store retirement, including explicit unsupported formats. */
+export const GcNativeHomeReport = z
+  .object({
+    harness_id: z.string(),
+    profile_id: z.string().nullable(),
+    home: z.string().nullable(),
+    status: z.enum(["checked", "not_pruned"]),
+    reason: z.string(),
+    deleted_files: z.array(z.string()),
+    errors: z.array(z.string()),
+    freed_bytes: z.number().int().nonnegative(),
+    kept_referenced: z.number().int().nonnegative(),
+    kept_recent: z.number().int().nonnegative(),
+    kept_unknown: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+  })
+  .strict();
+export type GcNativeHomeReport = z.infer<typeof GcNativeHomeReport>;
 
 export const ControlGcReceipt = z
   .object({
@@ -112,6 +141,12 @@ export const ControlGcReceipt = z
       .optional()
       .describe(
         "Names of top-level entries in the Claudexor-owned data root that the engine does not own and will never touch (advisory only — nothing here is ever deleted). The full sorted list. Present ONLY when the request opted in via data_root_report; ABSENT (not empty) when the request did not opt in, the scan failed, or the serving daemon predates the feature; a scan failure is disclosed in errors instead.",
+      ),
+    native_homes: z
+      .array(GcNativeHomeReport)
+      .optional()
+      .describe(
+        "Per-home adapter retirement decisions; present only when native_home_report was requested. Unknown vendor data and unreadable references are kept with a reason.",
       ),
     model_payloads: z
       .object({

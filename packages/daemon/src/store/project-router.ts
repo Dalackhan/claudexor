@@ -20,6 +20,7 @@ import { SqlProjectStore } from "./projects.js";
 import { findThreadCreationAcross } from "./thread-replay.js";
 import { decodeBody } from "./thread-rows.js";
 import { SqlThreadStore } from "./threads.js";
+import { diskRetentionReferences, diskRetentionThreads } from "./retention-references.js";
 
 /** SQL routing returns one generation, never an array of recovered stores.
  * Command/interaction/decision owners use these same addressed routes. */
@@ -290,6 +291,12 @@ export class SqlProjectRouter {
       invalidatedSessions += result.invalidatedSessions;
     }
     return { clearedThreads, invalidatedSessions };
+  }
+  retentionReferences(ignoreThreadIds?: ReadonlySet<string>, signal?: AbortSignal) {
+    return diskRetentionReferences(this.store, ignoreThreadIds, signal);
+  }
+  retentionThreads(signal?: AbortSignal) {
+    return diskRetentionThreads(this.store, signal);
   }
   healthyProjectRoots(): string[] {
     return (

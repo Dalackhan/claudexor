@@ -59,7 +59,7 @@ import { CLAUDEXOR_VERSION, nowIso, redactSecrets } from "@claudexor/util";
 import { parseCodexEvent, parseCodexStderrFailure, type CodexParseState } from "./parse.js";
 // prettier-ignore
 import { CODEX_ACCESS_PROFILES, probeCodexCredentialProfile, resolveCodexProfileRoute } from "./profile.js";
-import { codexContinuity } from "./continuity.js";
+import { codexPersistence } from "./native-home-retention.js";
 import { smokeIsolatedApiKey } from "./smoke.js";
 export { canonicalCodexProfileHome, codexAccountIdentity } from "./profile.js";
 import { codexImageArgs } from "./attachments.js";
@@ -600,7 +600,7 @@ export function createCodexAdapter(deps: Partial<CodexRuntimeDeps> = {}): Harnes
     review(spec: HarnessRunSpec): AsyncIterable<HarnessEvent> {
       return controlledRun(spec);
     },
-    continuity: codexContinuity,
+    ...codexPersistence,
     async cancel(sessionId: string): Promise<void> {
       await controllers.get(sessionId)?.cancel();
     },

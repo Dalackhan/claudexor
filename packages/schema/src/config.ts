@@ -275,7 +275,7 @@ export const GlobalConfig = z
      * retention service deletes ONLY terminal, unreferenced run trees past
      * their age — active/queued/blocked runs, runs referenced by live
      * threads, and undelivered/applyable work products always survive, and
-     * the newest N runs per project survive regardless of age.
+     * the newest N runs survive for registered active/archived projects, not orphaned runtime namespaces.
      */
     retention: z
       .object({
@@ -296,7 +296,9 @@ export const GlobalConfig = z
           .int()
           .nonnegative()
           .default(20)
-          .describe("The newest N runs per project always survive, regardless of age."),
+          .describe(
+            "The newest N runs survive for active registrations (even with missing roots), archived registrations whose roots exist, and the built-in no-project scope. Orphaned namespaces have no keep-last protection.",
+          ),
       })
       .strict()
       .default({})

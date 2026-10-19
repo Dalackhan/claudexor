@@ -218,7 +218,7 @@ export function persistFinalPatch(
 ): { patchSha256: string; meta: Record<string, unknown> } {
   const copy = run.persistedDiff ?? persistedPatchCopy(run.diff, []).text;
   assertPersistableText("final patch copy", copy);
-  store.writeText(join(finalDir, "patch.diff"), copy);
+  store.writePatch(join(finalDir, "patch.diff"), copy);
   // The final work product says what its patch left out, so a reader of the
   // final artifacts alone sees the omission too.
   const meta: Record<string, unknown> = {

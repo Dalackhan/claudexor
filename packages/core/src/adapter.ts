@@ -1,3 +1,4 @@
+import type { NativeHomeLifetime } from "./native-home-lifetime.js";
 import type {
   AccountIdentity,
   AuthPreference,
@@ -201,6 +202,8 @@ export interface HarnessAdapter {
    * engine-side session-id comparison.
    */
   continuity?: HarnessContinuityCapability;
+  /** Adapter owns its native store format and safe retirement boundary. */
+  nativeHomeLifetime?: NativeHomeLifetime;
 }
 
 /** A registry of available adapters keyed by harness id. */

@@ -99,9 +99,25 @@ function deps(input: {
     input.threads ?? (input.threadRunIds ? [{ id: "t1", run_ids: input.threadRunIds }] : []);
   const threads = {
     healthyProjectRoots: () => input.healthyRoots,
+    retentionThreads: async () => rows,
+    retentionReferences: async (ignored = new Set<string>()) => ({
+      isCurrent: () => true,
+      projectRoots: input.projectRoots,
+      registeredProjectRoots: new Set(input.projectRoots),
+      protectedProjectRoots: new Set(
+        input.projectRoots.filter((root) => !input.healthyRoots.includes(root)),
+      ),
+      referencedRunIds: new Set(
+        rows
+          .filter((row) => row.state !== "purged" && !ignored.has(row.id))
+          .flatMap((row) => [...row.run_ids, ...(row.head_run_id ? [row.head_run_id] : [])]),
+      ),
+      records: input.records.filter((row) => row.runId),
+    }),
     // Like the store, a purged thread drops out of every listing; only the
     // retention pass lists it, to finish a cleanup that failed.
     listThreads: () => rows.filter((thread) => thread.state !== "purged"),
+    getThread: (id: string) => rows.find((thread) => thread.id === id),
     listPurgedThreads: () => rows.filter((thread) => thread.state === "purged"),
     turnsFor: () => [],
   } as unknown as ProjectThreadPort;
@@ -167,9 +183,9 @@ describe("retention service composition", () => {
     expect(overrideReceipt.data_root_unrecognized).toEqual(["v1", "v2", "v3"]);
   });
 
-  it("fails CLOSED for a project whose partition journal is quarantined (W3.6)", async () => {
+  it("fails CLOSED for a project whose partition journal needs recovery (W3.6)", async () => {
     // The reference set (listThreads/turnsFor) only spans READY partitions. If
-    // a quarantined project's runs were still swept, they would be judged
+    // an unavailable project's runs were still swept, they would be judged
     // against an EMPTY reference set and a live thread's history would vanish.
     const root = projectWithAgedRun("run-quarantined");
     const run = await createRetentionRunner(
@@ -212,15 +228,18 @@ describe("retention service composition", () => {
     });
     const runner = createRetentionRunner({
       ...base,
-      daemonJobs: async () => {
-        active += 1;
-        peak = Math.max(peak, active);
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        try {
-          return await base.daemonJobs();
-        } finally {
-          active -= 1;
-        }
+      threads: {
+        ...base.threads,
+        retentionThreads: async () => {
+          active += 1;
+          peak = Math.max(peak, active);
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          try {
+            return await base.threads.retentionThreads();
+          } finally {
+            active -= 1;
+          }
+        },
       },
     });
     // The startup pass and an operator `gc` firing together.
@@ -452,7 +471,7 @@ describe("expired trash purge in the retention pass (owner decision E2)", () => 
     const runner = createRetentionRunner(
       deps({ projectRoots: [], healthyRoots: [], threads: trashThreads, records: [] }),
     );
-    scheduleStartupRetention(
+    const stop = scheduleStartupRetention(
       async (request) => {
         requests.push(request);
         return runner(request);
@@ -463,7 +482,37 @@ describe("expired trash purge in the retention pass (owner decision E2)", () => 
     for (let i = 0; i < 500 && !readLog().includes("retention:"); i += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    expect(requests).toEqual([{ dry_run: false, trash_purge_report: true }]);
+    expect(requests).toEqual([
+      { dry_run: false, trash_purge_report: true, native_home_report: true },
+    ]);
     expect(readLog()).toContain("1 expired trash threads");
+    await stop();
   });
+});
+
+it("rechecks current trash state after inventory before invoking the purge owner", async () => {
+  const row: FakeThread = {
+    id: "restored-during-inventory",
+    run_ids: [],
+    state: "trashed",
+    purge_after: ancient,
+  };
+  const purged: string[] = [];
+  const bindings = deps({
+    projectRoots: [],
+    healthyRoots: [],
+    records: [],
+    threads: [row],
+    purged,
+  });
+  bindings.daemonJobs = async () => {
+    row.state = "active";
+    return [];
+  };
+  const receipt = await createRetentionRunner(bindings)({
+    dry_run: false,
+    trash_purge_report: true,
+  });
+  expect(purged).toEqual([]);
+  expect(receipt.purged_threads).toEqual([]);
 });

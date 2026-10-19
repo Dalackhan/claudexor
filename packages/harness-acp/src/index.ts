@@ -11,6 +11,10 @@ export function createAcpAdapter(entry: AcpEntry): HarnessAdapter {
   const runner = acpRunner(entry);
   const profile = acpCapabilityProfile();
   return {
+    nativeHomeLifetime: {
+      status: "not_pruned",
+      reason: "ACP supplies no vendor-independent native storage retirement contract.",
+    },
     id: entry.id,
     // Only an entry that declares levels has a separate effort knob to resolve.
     ...(entry.effortLevels.length ? { effortParameter: "--effort" } : {}),

@@ -97,6 +97,12 @@ export interface InteractionStorePort {
 }
 
 export interface ProjectThreadPort {
+  /** Cooperative served listing for maintenance, including unfinished purges. */
+  retentionThreads(signal?: AbortSignal): Promise<Thread[]>;
+  retentionReferences(
+    ignoreThreadIds?: ReadonlySet<string>,
+    signal?: AbortSignal,
+  ): Promise<import("./store/retention-references.js").DiskRetentionReferences>;
   registerProject(input: RegisterProject): ProjectRegistration;
   relinkProject(id: string, root: string): Project;
   removeProject(

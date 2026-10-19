@@ -36,7 +36,7 @@ import {
 import { errorCode, noProjectRepoRoot, redactSecrets } from "@claudexor/util";
 import { accountsMigrationGate } from "./accounts-unified-migration.js";
 import { buildRegistry } from "./registry.js";
-import type { RetentionRunner } from "./retention-service.js";
+import { afterRetention, type RetentionRunner } from "./retention-lifetime.js";
 import { catalogProfiles, enumerateAccountCatalogs } from "./account-catalog.js";
 import { bindModelAccountEvidence, withImageAccountEvidence } from "./model-account-evidence.js";
 import { modelOperationControlServices } from "./model-operation-control.js";
@@ -522,15 +522,12 @@ export function createModelServices(deps: Dependencies) {
       },
       ...modelOperationControlServices(operations, deps.admission),
     },
-    withRetention:
-      (run: RetentionRunner): RetentionRunner =>
-      async (request) => {
-        const receipt = await run(request);
+    withRetention: (run: RetentionRunner): RetentionRunner =>
+      afterRetention(run, (request, receipt) => {
         const modelPayloads = operations.reconcileResources(request.dry_run);
         receipt.errors.push(...modelPayloads.errors);
         if (request.model_payload_report) receipt.model_payloads = modelPayloads;
-        return receipt;
-      },
+      }),
     close: () => {
       lifetime.abort("host_cancelled");
       operations.close();

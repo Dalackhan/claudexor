@@ -1,15 +1,6 @@
-import {
-  closeSync,
-  existsSync,
-  fsyncSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeSync,
-} from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ensureDir, fsyncDirectory, projectRuntimeDir, sha256 } from "@claudexor/util";
+import { fsyncDirectory, projectRuntimeDir, sha256, writePatchObject } from "@claudexor/util";
 import { WorkspaceError } from "@claudexor/core";
 import { diffTrees } from "./git.js";
 
@@ -48,7 +39,6 @@ function persistRevertAnchor(repo: string, patch: string): string {
   const id = sha256(patch);
   const target = objectPath(repo, id);
   const targetDir = dirname(target);
-  ensureDir(targetDir);
   if (existsSync(target)) {
     if (sha256(readFileSync(target, "utf8")) !== id) {
       throw new WorkspaceError(`revert anchor ${id} failed its content digest`);
@@ -56,25 +46,7 @@ function persistRevertAnchor(repo: string, patch: string): string {
     fsyncDirectory(targetDir);
     return id;
   }
-  const temp = `${target}.tmp-${process.pid}-${crypto.randomUUID()}`;
-  const fd = openSync(temp, "wx", 0o600);
-  try {
-    writeSync(fd, patch, undefined, "utf8");
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  try {
-    renameSync(temp, target);
-    fsyncDirectory(targetDir);
-  } catch (error) {
-    try {
-      unlinkSync(temp);
-    } catch {
-      // The original rename error is authoritative.
-    }
-    throw error;
-  }
+  writePatchObject(projectRuntimeDir(repo), target, patch);
   return id;
 }
 

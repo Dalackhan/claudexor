@@ -253,6 +253,7 @@ async function chain(
     between?: (runDir: string) => void;
     adopt?: boolean;
     inheritModel?: boolean;
+    expiredAncestors?: string[];
   } = {},
 ) {
   const pred = await runOnce(f, {
@@ -277,6 +278,7 @@ async function chain(
         workOrder: WORK_ORDER,
         preference: opts.preference ?? "auto",
         inheritModel: opts.inheritModel,
+        expiredAncestors: opts.expiredAncestors,
       },
     },
   });
@@ -1101,6 +1103,22 @@ describe("continueFrom model selection", () => {
 });
 
 describe("continueFrom root and completed-work notices", () => {
+  it.each(["auto", "packet"] as const)(
+    "discloses expired ancestors to the %s successor process",
+    async (preference) => {
+      let f!: Fixture;
+      f = fixture(["a"], function* (ctx) {
+        if (ctx.phase === "predecessor") seedSession(f.stores[ctx.profile]!, "sid-A");
+        yield* finishing(ctx.emit, ctx.cwd, "sid-A");
+      });
+      const { succ } = await chain(f, { preference, expiredAncestors: ["expired-ancestor"] });
+      expect(succ.result.lifecycle, succ.result.summary).toBe("succeeded");
+      expect(f.spawns.find((spawn) => spawn.phase === "successor")!.prompt).toContain(
+        "Earlier continuation evidence expired by retention: expired-ancestor",
+      );
+    },
+  );
+
   it("names the saved patch when finished isolated work continues from the project base", async () => {
     let f!: Fixture;
     f = fixture(["a"], function* (ctx) {
@@ -1114,6 +1132,7 @@ describe("continueFrom root and completed-work notices", () => {
     const next = f.spawns.find((s) => s.phase === "successor")!;
     expect(next.prompt).toContain("different working tree");
     expect(next.prompt).toContain(patch);
+    expect(next.prompt).not.toContain("Earlier continuation evidence expired");
     expect(succ.receipts[0]).toMatchObject({ workspace: "different_root" });
   });
 

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ControlResource, ControlUploadStatus } from "@claudexor/schema";
+import { StoreError } from "./errors.js";
 import {
   bindIdempotencyInTx,
   deleteTargetIdempotencyInTx,
@@ -30,7 +31,7 @@ export function uploadKeyDigest(operation: UploadOperation, key: string): string
   return createHash("sha256").update(`${operation}\0${key}`).digest("hex");
 }
 
-/** Pure parser for the importer's point reads. Malformed historical records were ignored. */
+/** Pure parser for the importer; serving lookup refuses a present invalid record. */
 export function parseLegacyUploadBinding(
   raw: unknown,
   operation: UploadOperation,
@@ -46,6 +47,44 @@ export function parseLegacyUploadBinding(
       : ControlResource.safeParse(value.result);
   if (!result.success) return undefined;
   return { operation, key, requestDigest: value.requestDigest, result: result.data };
+}
+
+/**
+ * A present addressed record that cannot prove absence. Its message and problem
+ * context carry the operation, key digest and root-relative file (CLI clients
+ * keep only the message), never the raw key, record bytes, absolute path or
+ * native error text. Retrying means resubmitting the same key after repair.
+ */
+function legacyBindingUnavailable(
+  operation: UploadOperation,
+  keyDigest: string,
+  reason: "read_failed" | "invalid",
+  cause?: unknown,
+): StoreError {
+  const file = `resource-store/idempotency/${keyDigest}.json`;
+  const code = (cause as NodeJS.ErrnoException | undefined)?.code;
+  const errno =
+    reason === "read_failed" && typeof code === "string" && /^E[A-Z0-9]+$/.test(code)
+      ? code
+      : undefined;
+  const state =
+    reason === "invalid" ? "is invalid" : `could not be read${errno ? ` (${errno})` : ""}`;
+  return Object.assign(
+    new StoreError(
+      "legacy_upload_binding_unavailable",
+      503,
+      true,
+      `historical upload ${operation} binding ${keyDigest} ${state}; restore ${file} under the daemon data root, then retry the same request with the same Idempotency-Key`,
+      cause === undefined ? undefined : { cause },
+    ),
+    {
+      requiredActions: [
+        `Restore ${file} under the daemon data root (its original record and read access); deleting it does not repair the binding.`,
+        "Retry the same request with the same Idempotency-Key.",
+      ],
+      context: { operation, keyDigest, reason, ...(errno ? { errno } : {}) },
+    },
+  );
 }
 
 function expired(row: ResourceRow | undefined, now: number): boolean {
@@ -172,20 +211,23 @@ export class UploadBindings {
     key: string,
     digest: string,
   ): LegacyUploadBinding | undefined {
+    let text: string;
     try {
-      return parseLegacyUploadBinding(
-        JSON.parse(
-          readFileSync(
-            join(this.store.paths.resourceStore, "idempotency", `${digest}.json`),
-            "utf8",
-          ),
-        ),
-        operation,
-        key,
+      text = readFileSync(
+        join(this.store.paths.resourceStore, "idempotency", `${digest}.json`),
+        "utf8",
       );
-    } catch {
-      // Preserve the old individual-record refusal: an unreadable record proves no replay.
-      return undefined;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return undefined;
+      throw legacyBindingUnavailable(operation, digest, "read_failed", error);
     }
+    let legacy: LegacyUploadBinding | undefined;
+    try {
+      legacy = parseLegacyUploadBinding(JSON.parse(text), operation, key);
+    } catch (error) {
+      throw legacyBindingUnavailable(operation, digest, "invalid", error);
+    }
+    if (!legacy) throw legacyBindingUnavailable(operation, digest, "invalid");
+    return legacy;
   }
 }

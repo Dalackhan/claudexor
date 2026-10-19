@@ -72,6 +72,7 @@ export async function main(): Promise<void> {
   const admission = new DaemonStartupAdmission();
   const abort = new AbortController();
   let cleanShutdown = true;
+  let stopRetention: () => Promise<void> = async () => {};
   let shutdown: DaemonRuntimeShutdown | null = null;
   let lifecycle: ReturnType<typeof armDaemonLifecycle> | null = null;
   let control: DaemonControlApiServer | null = null;
@@ -183,12 +184,7 @@ export async function main(): Promise<void> {
         caps,
         value.purgeFiles,
       );
-      const retention = executors.models.withRetention(product.runRetention);
-      product.runRetention = async (request) => {
-        const result = await retention(request);
-        if (!request.dry_run) value.resources.pruneUploadBindings();
-        return result;
-      };
+      product.runRetention = executors.retention(product.runRetention);
       executors.harnessMaintenance.bind(product);
       Object.assign(
         services,
@@ -224,6 +220,7 @@ export async function main(): Promise<void> {
       beforeClose: async () => {
         admission.enterRecoveryOnly();
         quotaPoller.stop();
+        await stopRetention();
         setup?.beginDrain();
         executors?.models.close();
         await Promise.all([server.stopForStoreRecovery(), setup?.shutdown()]);
@@ -275,6 +272,7 @@ export async function main(): Promise<void> {
       daemon: {
         stop: async () => {
           abort.abort();
+          await stopRetention();
           executors?.models.close();
           await server.stop();
           await opening?.catch(() => {});
@@ -359,7 +357,8 @@ export async function main(): Promise<void> {
         recordAdmissionMemory();
         quotaPoller.arm();
         lifecycle!.beginPidSnapshots();
-        scheduleStartupRetention(services.runRetention!, {
+        await stopRetention();
+        stopRetention = scheduleStartupRetention(services.runRetention!, {
           logPath: logPath(),
           shuttingDown: () => shutdown!.requested() || admission.snapshot() !== "normal",
         });

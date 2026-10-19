@@ -3140,20 +3140,64 @@ is imported as a project registration. Relink updates project-thread root
 projections without changing their partition identity.
 The daemon also owns DISK RETENTION (W3.6): a bounded GC pass over
 engine-owned runtime artifacts — per-project run trees and standalone
-`.claudexor/reviews/diff-*` debris — scheduled once after ownership+ready
-(never blocking boot) and exposed as the schema-first control op
+`.claudexor/reviews/diff-*` debris — scheduled 60 seconds after ownership+ready
+(never blocking boot), then hourly, with a one-second continuation after a capped
+500-tree pass. Shutdown and store recovery stop the timer and drain its current pass.
+It enumerates plain hashed project directories under the owned runtime root, including
+unregistered and archived projects. A private SQL reference read spans all retained
+generations (including archived threads and pending interactions); unreadable references
+fail closed, and unavailable project generations protect their namespaces. Unknown
+project roots are disclosed as their runtime namespace. Bulk inventory yields
+to admission; SQL history uses rowid-keyset pages without holding a cursor or
+transaction across a yield. Each run deletion rereads changed SQL owners and mutable filesystem protections
+after its asynchronous byte walk and retirement preparation. Connection-local TEMP
+triggers observe row identities while the pass runs; no durable schema or writer is
+added. Typed reference reads are shared with the initial inventory. Each distinct immutable command request is parsed once per pass by its content digest, including changed-owner refreshes. Combined run/native retention shares one SQL inventory and observer; standalone native retention owns and closes its own inventory. No durable schema changes. Quota/event
+writes and unrelated metadata do not restart it. References accumulate during a pass
+and lifecycle records refresh before the synchronous last proof and expiration marker.
+Large change batches yield between reads; an unreadable owner, changed project/generation
+topology, or a burst exceeding one final synchronous read page keeps remaining candidates
+and schedules a fresh pass. The pass releases its observer even after failure. Stop, restart and storage recovery cancel all admitted retention passes, including queued manual requests. Inventory checks cancellation between rows/projects and deletion between candidates/native files; the receipt is truncated and the next pass resumes unfinished work. A published expiration marker retains its recovery intent until cleanup completes. Patch-cache
+retirement rechecks directory identity and current link counts before unlink.
+It is also exposed as the schema-first control op
 `POST /v2/maintenance/gc` (dry-run first-class, typed receipt disclosing
 every deletion AND why every survivor survived); `claudexor gc` is its thin
 client. It deletes ONLY terminal, unreferenced, non-actionable trees past
 the configured age (`retention.*` in the global config: runs 30d, reviews
-14d, newest N per project always survive): live/blocked records, runs
-referenced by any non-purged thread's lineage, undelivered/applyable
+14d, newest N for active registrations and archived registrations whose roots exist,
+and the built-in no-project scope): an orphaned namespace has no keep-last owner,
+when it has no live registration. Active registrations keep recent history even when their roots are unavailable. Archived registrations whose roots are gone (ENOENT or ENOTDIR) are orphan namespaces for keep-last; their references still protect runs. Other root-availability errors preserve keep-last with a named receipt line and do not stop the pass. Thread-derived root names
+do not establish that ownership. All other protections remain: live/blocked records, runs
+referenced by any non-purged thread's lineage or retained command dependencies
+(queued claims included: continuation predecessors and their full ancestor chains,
+Exact Retry sources and frozen plans, plus durable continuation source lists after
+command-history pruning), undelivered/applyable
 patches or copied-file results, and trees with no terminal evidence are protected
-fail-closed. Partial file delivery retains that protection; explicit discard
+fail-closed. Lane sweeping derives root ownership once from the shared thread inventory and synchronously rereads changed owners immediately before each root’s sweep, so unrelated writes do not starve cleanup or multiply global-thread parsing by root count. An invalid shared proof defers lane sweeping with one receipt line, including topology changes during the loop. A per-root ownership failure names only the skipped root.
+
+A `quarantined` generation and project generations owned by its replaced global registry are retired journal evidence: its rows do not own references or keep unsettled commands active, and completed quarantine does not stop retention. Terminal metadata may still date its old payloads. Archived projects in the current registry remain reference owners. Pending or unknown recovery states hold all run namespaces, with one named partition/status hold per pending generation in `errors[]`: scope roots do not bound cross-project dependencies. Partial file delivery retains that protection; explicit discard
 ends pending delivery but does not delete artifacts immediately or bypass other
-retention protections. A
-reclaimed run leaves a tombstone projection behind, so its artifacts answer
-with a typed 410 `run_expired_by_retention` — never a mysterious 404. The
+retention protections. Unsettled delivery commands keep the pass closed: their
+historical params do not reliably identify every source file used after an await. A
+retired run leaves a tombstone projection behind. Tombstone-aware artifact and
+admission surfaces answer with typed 410 `run_expired_by_retention`; the HTTP Apply
+route's patch prerequisite is the existing exception described below. The
+last protection check and exclusive publication of the small prepared tombstone
+do not yield. Continuation admission refuses an expired predecessor. If older links expired, it uses the runtime carrier’s evidence reader to find an intact capsule, resumable or output source; ordinary unexpired admission does not scan evidence bodies. Earlier expired ancestors are excluded from file reads and disclosed in the successor notice. Exact Retry of expired evidence directs the caller to Run Again. Exact Retry, frozen-plan and delivery admission
+use the same expiration fence. Existing idempotent delivery receipts still replay
+at the command layer. The HTTP Apply route rereads the patch before command replay:
+repeating the same Apply key after retention removed that patch returns 404, while
+the durable command receipt remains reusable. This route behavior predates retention
+changes; receipt replay does not promise that an expired artifact is still available.
+An expired directory cannot become evidence again. Durable `context/continuation.json` lists are published through a private temporary file, file flush, atomic rename and directory flush. Unreadable reference errors name the file or SQL row and partition. A bad run-local work-product or custody file keeps that run; unreadable SQL or continuity owners hold the pass because their references can cross namespaces. Pending recovery holds run retirement install-wide until recovery completes.
+Readers see that expiration while recursive deletion of the previously
+inventoried contents runs asynchronously; no directory rename blocks admission.
+A durable intent in the parent's private `.retiring` directory binds the source
+identity and child names, letting the next pass finish interrupted cleanup within
+the same deletion cap. Diff reviews use a private expiration marker and the same
+owner. Preparations without a published marker leave the source untouched. A failed physical cleanup is disclosed
+and retried, and completed deletions remain in the receipt even if bookkeeping
+cleanup fails. The
 receipt also carries an advisory `data_root_unrecognized` listing — names of
 top-level data-root entries the engine does not own and never touches
 (absent, with an `errors[]` entry, when that scan fails). The same pass purges
@@ -3172,6 +3216,51 @@ the purged (or would-be-purged) expired trash and `purge_leftovers` the
 finished (or would-be-finished) purges; like `data_root_unrecognized` both are
 opt-in (`trash_purge_report`, sent only by a lockstep CLI), the startup pass
 requests them for its log line, and `claudexor gc` prints them.
+NATIVE HOME RETENTION uses each adapter's `nativeHomeLifetime` contract. The
+same pass applies the run-age window (30 days by default) to Codex rollout files
+under its owned default home and every registered config-dir profile, including
+disabled profiles. A full reference inventory precedes deletion: all non-purged
+SQL thread sessions across retained generations, every retained attempt's typed
+session capsule, and every retained run's typed resumable record protect their
+native session IDs across all homes of that harness. Archived threads and pinned
+account continuations retain that protection. Missing artifacts have no reference;
+malformed or unreadable references, linked artifact directories, unavailable
+project generations, uncertain command ownership, or active/unconfirmed setup work prevent
+native pruning. SQL rows and filesystem inventory yield to admission. Active and
+queued product work protects its named sessions and continuation sources, without
+holding unrelated cold sessions. The pass rereads changed SQL owners and each active
+or newly changed command's output files before unlink; this includes a capsule
+published without another SQL update, or work that starts and finishes during the
+scan. Durable continuation addresses include sources outside the hashed run layout.
+Native references accumulate in a live set; the adapter normalizes session IDs initially and again only when that set grows. Already read terminal ancestry is shared
+within the pass; active output files are reread. A late reference keeps its entire
+session and allows unrelated groups to progress. Each unlink rechecks setup state,
+references and current file identity synchronously, without a yield between proof
+and deletion. An unreadable owner keeps the remaining files and preserves any
+completed deletions in the receipt. Retaining a run can retain its session even if
+that run no longer needs resume.
+
+Codex owns only the recognized `sessions/YYYY/MM/DD/rollout-…-<uuid>.jsonl`
+and `.jsonl.zst` candidates. All parts of a referenced session survive; a recent
+part protects the whole group. File identity and modification facts are rechecked
+before deletion. Each pass removes at most 500 native files and promptly continues
+when capped. Credentials, configuration, SQLite logs/indexes, archived sessions,
+unknown filenames/layouts and symlinks remain untouched. Codex SQLite reclamation
+is **not pruned: no proven independent row/file lifetime contract**. Claude is
+**not pruned: its CLI owns transcript expiry and the engine has no independent
+sidecar deletion proof**. Cursor, Agy and OpenCode are **not pruned: their native
+session/index relationships have no proven independent pruning contract**. ACP is
+**not pruned: the protocol supplies no vendor-independent native storage contract**.
+The adapter is the owner of those declarations; the engine never guesses a format.
+
+The opt-in `native_home_report` request returns `native_homes` with per-home
+retirement counts, deleted paths, errors, and a reason for retained/unsupported
+formats. Cleanup runs for older clients too; only the disclosure is negotiated.
+The lockstep CLI prints those reasons. Dry-run performs the same proof and previews
+the bytes without unlinking; it accounts for runs/threads that this pass would
+retire. This does not delete conversation records or promise full account-home
+reclamation: unsupported vendor databases and still-referenced sessions remain.
+
 STOPPED ISOLATED WORK IS KEPT for `continueFrom` (A9): a daemon-owned,
 single-candidate, mutating Agent run records `live` custody of its isolated
 envelope (`continuation-custody.json` in the envelope base, written before
@@ -3494,12 +3583,32 @@ The import can take minutes and materializes one legacy partition at a time;
 steady startup still replays retained quota/setup events, not all command history.
 
 Historical `resource-store/idempotency/<digest>.json` files remain authoritative
-for unreplayed upload keys. SQL probes only the requested digest on an enabled
+for unreplayed caller-supplied upload keys. SQL probes only the requested digest on an enabled
 miss and adopts that binding in the same mutation; startup never scans this
-large directory. The persisted presence flag disables the fallback when absent.
+large directory. A confirmed ENOENT or a valid known-expired historical binding
+permits the request to proceed; an unreadable, malformed, or identity-mismatched addressed binding instead
+refuses the request with `legacy_upload_binding_unavailable` (503). The refusal
+mints no upload, part file or receipt and leaves the file untouched. Its problem
+`context` names the operation, key digest, `read_failed`/`invalid` reason and
+any errno code; the message repeats the digest and root-relative file for
+clients that keep only the message. Neither carries the raw key, record bytes,
+absolute path or native error text. `retryable: true` means only that the same
+request and key may be resubmitted after the operator restores that file or its
+read access; waiting does not heal it, and a client that cancels after a failure
+(the CLI cancels its upload when finalize fails) does not resume. A
+directory-level read failure refuses every caller-key SQL miss, including fresh keys; SQL
+hits are unaffected. New daemon-produced model/image results mint their create
+and finalize keys inside the resource owner, without historical replay lookup.
+They keep the same SQL receipts, byte validation, publication obligations and
+cleanup. Caller keys stay strict even with `purpose=model` or internal-looking
+names. The persisted presence flag disables the fallback when absent.
 Bindings expire 30 days after a resource's known release/expiry, never from a
-guessed file timestamp. Manually removing the historical directory can turn a
-later replay into a missing result or a new upload. Retiring serving code does
+guessed file timestamp. An expired lookup deletes that target's SQL bindings
+before the historical read, so a damaged copy still refuses afterwards. Repair
+before expiry replays the receipt; after it, the key is admitted as a new upload
+and an old finalize answers `upload_not_found`, not the expired receipt.
+Manually removing the historical directory can turn a later replay into a
+missing result or a new upload. Retiring serving code does
 not delete legacy journals, account/credential stores or these key files.
 
 Logical archive/quarantine changes status and generation visibility without
@@ -4949,6 +5058,18 @@ final/plan.md?
 plans/<harness>.md?           (plan mode)
 attempts/aNN/events.jsonl?    (read-only modes)
 ```
+
+Patch writers publish identical bytes through a per-project content-addressed
+`patches/<sha256>.patch` cache. Attempt/final `patch.diff` paths and private
+`anchors/objects/<sha256>.patch` paths are ordinary hard links to those bytes;
+replacing a saved patch publishes a new inode atomically. Ordinary saved copies
+retain the existing non-flushing artifact-write contract; an anchor flushes the
+shared inode before publishing its durable authoritative link. The cache path is
+advisory. A mismatching cache object is atomically replaced with fresh supplied bytes before linking a new publication; existing links to the old inode are never rewritten. Filesystems that cannot link receive independent byte-identical copies. Masked display copies
+and their different exact bytes remain separate objects. Existing plain-file
+run trees and anchors stay readable without migration. Retention removes cache
+entries only after their last run/anchor link is gone; an anchor keeps its
+existing independent lifetime.
 
 `final/telemetry.yaml` (`RunTelemetry` in the schema) is the single engine-owned
 record of per-attempt web evidence (requested/effective mode, attempted,

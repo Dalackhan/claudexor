@@ -20,6 +20,8 @@ import { createDelegationDaemonBinding } from "./delegation-daemon-binding.js";
 import { createHarnessMaintenance } from "./harness-maintenance-service.js";
 import { createModelServices } from "./model-services.js";
 
+import { afterRetention, type RetentionRunner } from "./retention-lifetime.js";
+
 type SqlServices = ReturnType<typeof createSqlDaemonServices>;
 type ModelOptions = Pick<
   Parameters<typeof createModelServices>[0],
@@ -134,6 +136,13 @@ export function createSqlDaemonExecutors(
   });
   return {
     models,
+    // Keep the bounded-pass signal through model cleanup and upload pruning.
+    retention: (runner: RetentionRunner): RetentionRunner => {
+      const wrapped = models.withRetention(runner);
+      return afterRetention(wrapped, (request) => {
+        if (!request.dry_run) graph.resources.pruneUploadBindings();
+      });
+    },
     harnessMaintenance,
     onCommandTerminal: (record: JobRecord) => models.operations.onCommandTerminal(record),
     onRunTerminal: (runId: string, threadId?: string) => {

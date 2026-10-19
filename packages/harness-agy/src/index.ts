@@ -230,6 +230,10 @@ export function createAgyAdapter(options: AgyAdapterOptions = {}): HarnessAdapte
     });
   const listModels = (spec: HarnessModelSpec) => listAgyModels(spec, prepareProfileKeychain);
   return {
+    nativeHomeLifetime: {
+      status: "not_pruned",
+      reason: "Agy native session storage has no proven independent pruning contract.",
+    },
     id: "agy",
     // The level is a token of the model id: `prepareProcessing` selects the
     // listed variant of the requested model's family from the pinned

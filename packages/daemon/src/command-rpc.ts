@@ -6,6 +6,7 @@ import {
 } from "./command-authority.js";
 import { publicJobRecord, type JobRecord } from "./job-record.js";
 import { admitContinuationRequest } from "./continuation-admission.js";
+import { assertUnexpiredRunFiles } from "./run-file-admission.js";
 import {
   admitDelegatedRequest,
   type DelegationAdmissionAuthority,
@@ -22,7 +23,15 @@ export function admitCommandRequest(
   const request = admitContinuationRequest(
     raw,
     from ? commands.queries.select({ continuationChainOf: from }) : [],
+    (id) => commands.queries.select({ ids: [id] })[0],
   );
+  const p = request as {
+    retryOf?: unknown;
+    planRunId?: unknown;
+    planRef?: { runId?: unknown };
+  } | null;
+  for (const id of [p?.retryOf, p?.planRunId, p?.planRef?.runId])
+    if (typeof id === "string") assertUnexpiredRunFiles(commands.queries.select({ ids: [id] })[0]);
   const parentId = delegatedParentOf(request);
   const parent = parentId ? commands.queries.getByRunId(parentId) : undefined;
   return admitDelegatedRequest(request, operation, parent ? [parent] : [], delegation);

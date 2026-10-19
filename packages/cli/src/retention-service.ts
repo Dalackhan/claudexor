@@ -164,27 +164,37 @@ export function createRetentionRunner(deps: RetentionRunnerDeps): RetentionRunne
         // set as the run GC): a recovery-pending partition cannot
         // supply live ownership and is excluded until recovery completes. Skip in dry-run — a GC preview must not delete bytes.
         if (!request.dry_run && !references.blocked) {
-          for (const root of roots) {
-            await yieldToAdmission();
-            if (signal.aborted) break;
-            try {
-              const ids =
-                references.laneThreadIds?.(root) ??
-                new Set(
-                  deps.threads
-                    .listThreads()
-                    .filter(
-                      (thread) =>
-                        thread.state !== "purged" && (thread.repo?.root ?? noProjectRoot) === root,
-                    )
-                    .map((thread) => thread.id),
-                );
-              // No yield between the live read and the synchronous sweep.
-              sweepOrphanLanes(root, ids);
-            } catch (error) {
-              inventoryErrors.push(`lane sweep skipped for ${root}: ${String(error)}`);
+          const laneProofCurrent = references.recheck ?? references.isCurrent;
+          const deferred =
+            "lane sweep deferred: ownership changed; a fresh retention pass must resume";
+          if (!laneProofCurrent()) inventoryErrors.push(deferred);
+          else
+            for (const root of roots) {
+              await yieldToAdmission();
+              if (signal.aborted) break;
+              try {
+                const ids =
+                  references.laneThreadIds?.(root) ??
+                  new Set(
+                    deps.threads
+                      .listThreads()
+                      .filter(
+                        (thread) =>
+                          thread.state !== "purged" &&
+                          (thread.repo?.root ?? noProjectRoot) === root,
+                      )
+                      .map((thread) => thread.id),
+                  );
+                // No yield between the live read and the synchronous sweep.
+                sweepOrphanLanes(root, ids);
+              } catch (error) {
+                if (!laneProofCurrent()) {
+                  inventoryErrors.push(deferred);
+                  break;
+                }
+                inventoryErrors.push(`lane sweep skipped for ${root}: ${String(error)}`);
+              }
             }
-          }
         }
         const receipt = await runRetentionPass(
           {

@@ -70,13 +70,22 @@ it("names the root when live lane ownership cannot be read", async () => {
   const repoRoot = noProjectRepoRoot();
   const lane = join(projectRuntimeDir(repoRoot), "lanes", "th-000000000001", "default", "home");
   mkdirSync(lane, { recursive: true });
+  const other = join(root, "healthy");
+  mkdirSync(other);
+  sql.graph.projects.register({ root: other, idempotencyKey: "healthy", clientId: "fixture" });
+  const otherLane = join(projectRuntimeDir(other), "lanes", "th-000000000002", "default", "home");
+  mkdirSync(otherLane, { recursive: true });
   const read = sql.graph.threads.retentionReferences.bind(sql.graph.threads);
-  vi.spyOn(sql.graph.threads, "retentionReferences").mockImplementation(async (...args) => ({
-    ...(await read(...args)),
-    laneThreadIds: () => {
-      throw new Error("partition is pending recovery");
-    },
-  }));
+  vi.spyOn(sql.graph.threads, "retentionReferences").mockImplementation(async (...args) => {
+    const refs = await read(...args);
+    return {
+      ...refs,
+      laneThreadIds: (projectRoot) => {
+        if (projectRoot === repoRoot) throw new Error("root ownership cannot be read");
+        return refs.laneThreadIds!(projectRoot);
+      },
+    };
+  });
   const gc = createRetentionRunner({
     projects: () => sql.graph.projects,
     threads: sql.graph.threads,
@@ -86,5 +95,71 @@ it("names the root when live lane ownership cannot be read", async () => {
   });
   const receipt = await gc({ dry_run: false });
   expect(existsSync(lane)).toBe(true);
-  expect(receipt.errors.join("\n")).toContain(`lane sweep skipped for ${repoRoot}`);
+  expect(receipt.errors.filter((error) => error.startsWith("lane sweep"))).toEqual([
+    expect.stringContaining(`lane sweep skipped for ${repoRoot}`),
+  ]);
+  expect(existsSync(otherLane)).toBe(false);
 });
+
+it.each(["before-loop", "during-loop"])(
+  "defers lanes once after topology changes %s",
+  async (when) => {
+    const lanes: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      const repo = join(root, `repo-${i}`);
+      mkdirSync(repo);
+      sql.graph.projects.register({ root: repo, idempotencyKey: `repo-${i}`, clientId: "fixture" });
+      const lane = join(projectRuntimeDir(repo), "lanes", "th-000000000001", "default", "home");
+      mkdirSync(lane, { recursive: true });
+      lanes.push(lane);
+    }
+    const thread = sql.graph.threads.createThread({ title: "live lane", workspace: "in_place" });
+    const held = join(
+      projectRuntimeDir(noProjectRepoRoot()),
+      "lanes",
+      thread.id,
+      "default",
+      "home",
+    );
+    mkdirSync(held, { recursive: true });
+    const changeTopology = () => {
+      const late = join(root, "late");
+      mkdirSync(late);
+      sql.graph.projects.register({ root: late, idempotencyKey: "late", clientId: "fixture" });
+    };
+    const read = sql.graph.threads.retentionReferences.bind(sql.graph.threads);
+    vi.spyOn(sql.graph.threads, "retentionReferences").mockImplementationOnce(async (...args) => {
+      const refs = await read(...args);
+      if (when === "before-loop") changeTopology();
+      else {
+        const laneIds = refs.laneThreadIds!;
+        let changed = false;
+        refs.laneThreadIds = (projectRoot) => {
+          if (!changed) {
+            changed = true;
+            changeTopology();
+          }
+          return laneIds(projectRoot);
+        };
+      }
+      return refs;
+    });
+    const gc = createRetentionRunner({
+      projects: () => sql.graph.projects,
+      threads: sql.graph.threads,
+      daemonJobs: () => [],
+      purgeThread: async () => {},
+      hasPurgeLeftovers: () => false,
+    });
+    const receipt = await gc({ dry_run: false });
+    expect(receipt.errors.filter((error) => error.startsWith("lane sweep"))).toEqual([
+      expect.stringContaining("lane sweep deferred"),
+    ]);
+    for (const lane of lanes) expect(existsSync(lane)).toBe(true);
+    expect(existsSync(held)).toBe(true);
+    const resumed = await gc({ dry_run: false });
+    expect(resumed.errors).toEqual([]);
+    for (const lane of lanes) expect(existsSync(lane)).toBe(false);
+    expect(existsSync(held)).toBe(true);
+  },
+);

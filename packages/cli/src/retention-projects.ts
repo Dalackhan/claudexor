@@ -27,7 +27,16 @@ export async function retentionProjects(
   for (const root of references.archivedProjectRoots ?? []) {
     await yieldToAdmission();
     signal?.throwIfAborted();
-    if (!(await optionalStat(root, stat))) ownedRoots.delete(root);
+    try {
+      await stat(root);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (code === "ENOENT" || code === "ENOTDIR") ownedRoots.delete(root);
+      else
+        errors.push(
+          `namespace ${root}: archived root availability unknown; keep-last preserved: ${String(error)}`,
+        );
+    }
   }
   const protectedHashes = new Set(
     [...references.protectedProjectRoots].map((root) => basename(projectRuntimeDir(root))),
@@ -107,9 +116,9 @@ export async function retentionProjects(
   return projects;
 }
 
-async function optionalStat(path: string, inspect: typeof lstat = lstat) {
+async function optionalStat(path: string) {
   try {
-    return await inspect(path);
+    return await lstat(path);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;

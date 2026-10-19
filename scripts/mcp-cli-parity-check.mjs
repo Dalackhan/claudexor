@@ -179,6 +179,10 @@ const BOOLEAN_FLAG_MAP = {
       "harness inspect vendor-version lookup, exposed by the maintenance control API; not an Agent run control",
   },
   "dry-run": { mcp: null, reason: "subcommand plumbing" },
+  "release-tested": {
+    mcp: null,
+    reason: "harness install version selection (subcommand plumbing, not a run control)",
+  },
   yes: {
     mcp: null,
     reason: "harness install confirmation (subcommand plumbing, not a run control)",

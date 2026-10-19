@@ -786,6 +786,13 @@ describe("the snapshot fallback drives arg emission ONLY on the version it was c
     // A LONGER dotted token is a different version, not a prefix match.
     expect(codexSnapshotTrustedForVersion("0.156.1.1")).toBe(false);
     expect(codexSnapshotTrustedForVersion("0.156.10")).toBe(false);
+    // A pre-release or build of the same triple is another binary, not the stamp.
+    expect(
+      codexSnapshotTrustedForVersion(`codex-cli ${CODEX_EFFORT_SNAPSHOT_VERIFIED_AGAINST}-rc.1`),
+    ).toBe(false);
+    expect(
+      codexSnapshotTrustedForVersion(`${CODEX_EFFORT_SNAPSHOT_VERIFIED_AGAINST}+different`),
+    ).toBe(false);
     expect(codexSnapshotTrustedForVersion(null)).toBe(false);
     expect(codexSnapshotTrustedForVersion("codex (version unknown)")).toBe(false);
   });
@@ -866,6 +873,27 @@ describe("the snapshot fallback drives arg emission ONLY on the version it was c
     ]);
     expect(disclosure?.payload?.["ignored_settings"]).toEqual([
       expect.stringContaining(CODEX_EFFORT_SNAPSHOT_VERIFIED_AGAINST),
+    ]);
+    clearCodexEffortCache();
+  });
+
+  it("a same-triple PRE-RELEASE snapshot fallback gets the vendor default and the drop disclosure", async () => {
+    clearCodexEffortCache();
+    let cliArgs: string[] | undefined;
+    const adapter = snapshotFallbackAdapter(
+      `codex-cli ${CODEX_EFFORT_SNAPSHOT_VERIFIED_AGAINST}-rc.1`,
+      (args) => {
+        cliArgs = args;
+      },
+    );
+    const events: HarnessEvent[] = [];
+    for await (const ev of adapter.run(ultraSpec("codex-effort-snapshot-prerelease")))
+      events.push(ev);
+    expect(cliArgs).toBeDefined();
+    expect(cliArgs?.some((a) => a.startsWith("model_reasoning_effort="))).toBe(false);
+    const disclosure = events.find((ev) => Array.isArray(ev.payload?.["ignored_settings"]));
+    expect(disclosure?.payload?.["ignored_settings"]).toEqual([
+      expect.stringContaining("effort=ultra"),
     ]);
     clearCodexEffortCache();
   });

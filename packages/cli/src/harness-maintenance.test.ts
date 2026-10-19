@@ -6,6 +6,7 @@
  */
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -20,7 +21,7 @@ import { CODEX_VENDOR_CLI_VERSION } from "@claudexor/harness-codex";
 import type { ParsedArgs } from "./args.js";
 import { harnessInstallCommand, localPlatformRefusal } from "./harness-installer.js";
 import { compareVendorVersions } from "./harness-install-proof.js";
-import { harnessMaintenanceRecipe } from "./harness-install-recipes.js";
+import { harnessMaintenanceRecipe, NPM_PINS } from "./harness-install-recipes.js";
 import { harnessUpdateCommand, inspectHarness, runHarnessUpdate } from "./harness-maintenance.js";
 
 const roots: string[] = [];
@@ -45,19 +46,22 @@ function world() {
   const nodePath = exe(join(root, "runner", "bin", "node"));
   exe(join(root, "runner", "lib", "node_modules", "npm", "bin", "npm-cli.js"));
   const managed = join(home, ".claudexor", "node");
-  /** Lay down a managed npm copy of codex at `version`. */
-  const installCodex = (version: string): string => {
-    const pkg = join(managed, "lib", "node_modules", "@openai", "codex");
+  /** Lay down a managed npm copy of one npm recipe's package at `version`. */
+  const installNpm = (npmPackage: string, version: string): string => {
+    const pin = Object.values(NPM_PINS).find((row) => row.npmPackage === npmPackage)!;
+    const name = pin.binaryNames[0]!;
+    const pkg = join(managed, "lib", "node_modules", ...npmPackage.split("/"));
     mkdirSync(pkg, { recursive: true });
-    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@openai/codex", version }));
-    const binary = exe(join(pkg, "bin", "codex.js"), `#!/bin/sh\necho codex-cli ${version}\n`);
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: npmPackage, version }));
+    const binary = exe(join(pkg, "bin", `${name}.js`), `#!/bin/sh\necho ${name}-cli ${version}\n`);
     mkdirSync(join(managed, "bin"), { recursive: true });
-    rmSync(join(managed, "bin", "codex"), { force: true });
-    exe(join(managed, "bin", "codex"), `#!/bin/sh\nexec ${binary} "$@"\n`);
+    rmSync(join(managed, "bin", name), { force: true });
+    exe(join(managed, "bin", name), `#!/bin/sh\nexec ${binary} "$@"\n`);
     return version;
   };
+  const installCodex = (version: string): string => installNpm("@openai/codex", version);
   const sourceEnv = { HOME: home, PATH: "/usr/bin:/bin" };
-  return { root, home, nodePath, managed, installCodex, sourceEnv };
+  return { root, home, nodePath, managed, installNpm, installCodex, sourceEnv };
 }
 
 /** spawnSync fake: `--version` reads the launcher script's echo, npm view
@@ -78,7 +82,8 @@ function fakeSpawn(w: ReturnType<typeof world>, latest = "99.1.0", installOk = t
     if (argv.includes("install")) {
       if (!installOk) return { status: 1, signal: null } as never;
       const spec = String(argv.at(-1));
-      w.installCodex(spec.slice(spec.lastIndexOf("@") + 1));
+      const at = spec.lastIndexOf("@");
+      w.installNpm(spec.slice(0, at), spec.slice(at + 1));
       return { status: 0 } as never;
     }
     return { status: 0, stdout: "", stderr: "" } as never;
@@ -390,6 +395,418 @@ describe("harness maintenance primitive", () => {
       ),
     ).toBe(2);
     expect(calls).toHaveLength(0);
+  });
+
+  /** stdout/stderr capture for one CLI invocation. */
+  const captured = () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      out.push(String(chunk));
+      return true;
+    });
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      err.push(String(chunk));
+      return true;
+    });
+    return {
+      json: () => JSON.parse(out.join("")) as Record<string, unknown>,
+      stderr: () => err.join(""),
+      reset: () => {
+        out.length = 0;
+        err.length = 0;
+      },
+    };
+  };
+
+  it("an npm dry-run names its exact-version confirmation binding; scripts and executed receipts never carry it", () => {
+    const w = world();
+    const { spawn } = fakeSpawn(w, "0.163.0");
+    const io = captured();
+    const runtime = { ...opts(w, spawn), exists: () => true };
+    const dryRun = (harness: string, flags: ParsedArgs["flags"] = {}) => {
+      io.reset();
+      const code = harnessInstallCommand(
+        args(["harness", "install", harness], { "dry-run": true, ...flags }),
+        true,
+        runtime,
+      );
+      return { code, payload: io.json() };
+    };
+    for (const harness of ["codex", "claude", "copilot", "opencode"]) {
+      const { code, payload } = dryRun(harness);
+      expect(code).toBe(0);
+      expect(typeof payload.pinnedVersion).toBe("string");
+      expect(payload.versionBinding).toBe("vendor-version");
+    }
+    expect(dryRun("codex", { "release-tested": true }).payload).toMatchObject({
+      pinnedVersion: CODEX_VENDOR_CLI_VERSION,
+      versionBinding: "vendor-version",
+    });
+    for (const harness of ["cursor", "agy"]) {
+      const { code, payload } = dryRun(harness);
+      expect(code).toBe(0);
+      expect(payload.pinnedVersion).toBeNull();
+      expect(payload).not.toHaveProperty("versionBinding");
+    }
+    // The strict embedding-host execute receipt keeps its exact historical keys.
+    io.reset();
+    expect(
+      harnessInstallCommand(
+        args(["harness", "install", "codex"], { target: "local", yes: true }),
+        true,
+        runtime,
+      ),
+    ).toBe(0);
+    expect(Object.keys(io.json()).sort()).toEqual(
+      [
+        "ok",
+        "dryRun",
+        "exitCode",
+        "installedBinary",
+        "installedVersion",
+        "harness",
+        "target",
+        "command",
+        "installLocation",
+        "pinnedVersion",
+        "verification",
+      ].sort(),
+    );
+  });
+
+  it("a refused default Codex selection is actionable on stderr for SSH consumers and names no selected baseline", () => {
+    const io = captured();
+    for (const [answer, code] of [
+      [{ status: 1, stdout: "", stderr: "npm error code ENOTFOUND" }, "latest_unavailable"],
+      [{ status: 0, stdout: '"0.0.1"\n', stderr: "" }, "latest_older_than_tested"],
+    ] as const) {
+      const w = world();
+      const { spawn, calls } = fakeSpawn(w);
+      const registry = vi.fn((binary: string, argv: readonly string[]) =>
+        argv.includes("view") ? (answer as never) : spawn(binary, argv),
+      );
+      io.reset();
+      expect(
+        harnessInstallCommand(
+          args(["harness", "install", "codex"], { "dry-run": true }),
+          true,
+          opts(w, registry),
+        ),
+      ).toBe(1);
+      const payload = io.json();
+      // The same pre-selection shape as every other refusal before a version exists.
+      expect(payload).toMatchObject({
+        ok: false,
+        exitCode: 1,
+        code,
+        harness: "codex",
+        target: "remote",
+        installLocation: "~/.claudexor/remote/vendor/bin",
+      });
+      for (const key of ["command", "pinnedVersion", "verification", "versionBinding"])
+        expect(payload).not.toHaveProperty(key);
+      const refusal = String(payload.refusal);
+      expect(refusal).toContain("nothing was executed");
+      expect(refusal).toContain(`--release-tested selects ${CODEX_VENDOR_CLI_VERSION}`);
+      expect(refusal).toContain("installing it still needs the npm registry");
+      expect(refusal).toContain("--vendor-version <exact>");
+      // A remote dry-run exits non-zero, so the SSH consumer only sees stderr.
+      expect(io.stderr()).toBe(`Install refused: ${refusal}\n`);
+      expect(calls.some((call) => call.includes("install"))).toBe(false);
+    }
+  });
+
+  it("a runnable release-tested copy arriving after the latest lookup is kept; older copies and explicit targets still install", () => {
+    const io = captured();
+    for (const [arriving, installs] of [
+      [CODEX_VENDOR_CLI_VERSION, false],
+      ["0.0.1", true],
+    ] as const) {
+      const w = world();
+      const { spawn, calls } = fakeSpawn(w, "99.2.0");
+      const racing = vi.fn((binary: string, argv: readonly string[]) => {
+        if (argv.includes("view")) w.installCodex(arriving);
+        return spawn(binary, argv);
+      });
+      io.reset();
+      expect(
+        harnessInstallCommand(
+          args(["harness", "install", "codex"], { target: "local", yes: true }),
+          true,
+          { ...opts(w, racing), exists: () => true },
+        ),
+      ).toBe(0);
+      expect(calls.filter((call) => call.includes("view"))).toHaveLength(1);
+      expect(calls.some((call) => call.includes("install"))).toBe(installs);
+      expect(io.json().installedVersion).toBe(installs ? "99.2.0" : CODEX_VENDOR_CLI_VERSION);
+    }
+    const w = world();
+    w.installCodex(CODEX_VENDOR_CLI_VERSION);
+    const { spawn, calls } = fakeSpawn(w);
+    io.reset();
+    expect(
+      harnessInstallCommand(
+        args(["harness", "install", "codex"], {
+          target: "local",
+          yes: true,
+          "vendor-version": "99.2.0",
+        }),
+        true,
+        { ...opts(w, spawn), exists: () => true },
+      ),
+    ).toBe(0);
+    expect(calls.find((call) => call.includes("install"))?.at(-1)).toBe("@openai/codex@99.2.0");
+  });
+
+  it("a refusal before Codex's default selection never presents the release-tested baseline as selected", () => {
+    const io = captured();
+    const w = world();
+    const { spawn } = fakeSpawn(w);
+    const unsupported = (flags: ParsedArgs["flags"]) => {
+      io.reset();
+      expect(
+        harnessInstallCommand(
+          args(["harness", "install", "codex"], { target: "local", "dry-run": true, ...flags }),
+          true,
+          { ...opts(w, spawn), platform: "win32", arch: "ia32" },
+        ),
+      ).toBe(1);
+      return io.json();
+    };
+    const undecided = unsupported({});
+    expect(undecided).toMatchObject({ ok: false, code: "unsupported_platform", harness: "codex" });
+    for (const key of ["command", "pinnedVersion", "verification"])
+      expect(undecided).not.toHaveProperty(key);
+    // An explicit baseline request is a real selection and is still disclosed.
+    expect(unsupported({ "release-tested": true })).toMatchObject({
+      code: "unsupported_platform",
+      pinnedVersion: CODEX_VENDOR_CLI_VERSION,
+      verification: "release_verified",
+    });
+
+    w.installCodex(CODEX_VENDOR_CLI_VERSION);
+    const failing = vi.fn((binary: string, argv: readonly string[]) => {
+      if (argv.includes("--version"))
+        throw Object.assign(new Error("exec failed"), { code: "EIO" });
+      return spawn(binary, argv);
+    });
+    io.reset();
+    expect(
+      harnessInstallCommand(
+        args(["harness", "install", "codex"], { target: "local", "dry-run": true }),
+        true,
+        opts(w, failing),
+      ),
+    ).toBe(1);
+    const failed = io.json();
+    expect(failed).toMatchObject({ ok: false, code: "harness_install_failed", harness: "codex" });
+    for (const key of ["command", "pinnedVersion", "verification"])
+      expect(failed).not.toHaveProperty(key);
+  });
+
+  type NpmHarness = "claude" | "codex" | "copilot" | "opencode";
+  const NPM_HARNESSES: NpmHarness[] = ["claude", "codex", "copilot", "opencode"];
+
+  /** One production Ensure (`harness install <id> --target local --yes --json`)
+   * under the REAL install lease. `between` runs once, after the Ensure's
+   * pre-lease selection probe answered and before it acquires that lease.
+   * Every npm install records whether the lease was held. */
+  function ensureAround(
+    harness: NpmHarness,
+    flags: ParsedArgs["flags"],
+    setup: (w: ReturnType<typeof world>) => void,
+    between: (w: ReturnType<typeof world>, spawn: unknown) => void = () => undefined,
+  ) {
+    const w = world();
+    setup(w);
+    const { spawn } = fakeSpawn(w);
+    const lock = join(w.home, ".claudexor", "harness-install.lock");
+    const installs: { spec: string; leased: boolean }[] = [];
+    const recorded = vi.fn((binary: string, argv: readonly string[]) => {
+      if (argv.includes("install"))
+        installs.push({ spec: String(argv.at(-1)), leased: existsSync(lock) });
+      return spawn(binary, argv);
+    });
+    let fired = false;
+    const ensureSpawn = vi.fn((binary: string, argv: readonly string[]) => {
+      const answer = recorded(binary, argv);
+      if (!fired && argv.includes("--version") && !existsSync(lock)) {
+        fired = true;
+        between(w, recorded);
+      }
+      return answer;
+    });
+    const io = captured();
+    const code = harnessInstallCommand(
+      args(["harness", "install", harness], { target: "local", yes: true, ...flags }),
+      true,
+      { ...opts(w, ensureSpawn), lock: true },
+    );
+    const managed = inspectHarness(harness, opts(w, spawn)).installed.version;
+    return { code, receipt: io.json(), installs, fired, managed, released: !existsSync(lock) };
+  }
+
+  it.each(NPM_HARNESSES)(
+    "an ordinary %s Ensure keeps the newer copy a concurrent Maintenance update installed after its selection and before its lease",
+    (harness) => {
+      const pin = NPM_PINS[harness]!;
+      let update: ReturnType<typeof runHarnessUpdate> | undefined;
+      const run = ensureAround(
+        harness,
+        {},
+        (w) => w.installNpm(pin.npmPackage, pin.version),
+        (w, spawn) => {
+          update = runHarnessUpdate(harness, "999.0.0", {
+            ...opts(w, spawn),
+            lock: true,
+            json: true,
+          });
+        },
+      );
+      expect(run.fired).toBe(true);
+      expect(update).toMatchObject({
+        ok: true,
+        mutation: "applied",
+        after: { version: "999.0.0" },
+      });
+      // Only Maintenance installed, under the lease; the Ensure kept its copy.
+      expect(run.installs).toEqual([{ spec: `${pin.npmPackage}@999.0.0`, leased: true }]);
+      expect(run.code).toBe(0);
+      expect(run.receipt).toMatchObject({ ok: true, installedVersion: "999.0.0" });
+      expect(run.managed).toBe("999.0.0");
+      expect(run.released).toBe(true);
+    },
+  );
+
+  it.each(NPM_HARNESSES)(
+    "%s: an explicit --vendor-version stays exact over a newer managed copy, under the lease",
+    (harness) => {
+      const pin = NPM_PINS[harness]!;
+      const run = ensureAround(harness, { "vendor-version": pin.version }, (w) =>
+        w.installNpm(pin.npmPackage, "999.0.0"),
+      );
+      expect(run.installs).toEqual([{ spec: `${pin.npmPackage}@${pin.version}`, leased: true }]);
+      expect(run.receipt).toMatchObject({
+        ok: true,
+        pinnedVersion: pin.version,
+        installedVersion: pin.version,
+      });
+      expect(run.managed).toBe(pin.version);
+    },
+  );
+
+  it.each(NPM_HARNESSES)(
+    "%s: an automatically selected copy that breaks or falls below the baseline before the lease is repaired to that disclosed version",
+    (harness) => {
+      const pin = NPM_PINS[harness]!;
+      const launcher = pin.binaryNames[0]!;
+      for (const between of [
+        (w: ReturnType<typeof world>) => rmSync(join(w.managed, "bin", launcher)),
+        (w: ReturnType<typeof world>) => w.installNpm(pin.npmPackage, "0.0.1"),
+      ]) {
+        const run = ensureAround(
+          harness,
+          {},
+          (w) => w.installNpm(pin.npmPackage, "50.0.0"),
+          between,
+        );
+        expect(run.fired).toBe(true);
+        expect(run.installs).toEqual([{ spec: `${pin.npmPackage}@50.0.0`, leased: true }]);
+        expect(run.receipt).toMatchObject({
+          ok: true,
+          pinnedVersion: "50.0.0",
+          installedVersion: "50.0.0",
+        });
+      }
+    },
+  );
+
+  it.each(NPM_HARNESSES)(
+    "%s --release-tested: a kept copy that disappears before the lease installs the baseline, and the receipt names it",
+    (harness) => {
+      const pin = NPM_PINS[harness]!;
+      const run = ensureAround(
+        harness,
+        { "release-tested": true },
+        (w) => w.installNpm(pin.npmPackage, "50.0.0"),
+        (w) => rmSync(join(w.managed, "lib"), { recursive: true, force: true }),
+      );
+      expect(run.fired).toBe(true);
+      expect(run.installs).toEqual([{ spec: `${pin.npmPackage}@${pin.version}`, leased: true }]);
+      expect(run.receipt).toMatchObject({
+        ok: true,
+        command: expect.stringContaining(`${pin.npmPackage}@${pin.version}`),
+        pinnedVersion: pin.version,
+        verification: pin.verification,
+        installedVersion: pin.version,
+      });
+      // A replacement that is still runnable is kept: nothing executes.
+      const replaced = ensureAround(
+        harness,
+        { "release-tested": true },
+        (w) => w.installNpm(pin.npmPackage, "50.0.0"),
+        (w) => w.installNpm(pin.npmPackage, "999.0.0"),
+      );
+      expect(replaced.installs).toEqual([]);
+      expect(replaced.receipt).toMatchObject({
+        ok: true,
+        pinnedVersion: "50.0.0",
+        installedVersion: "999.0.0",
+      });
+    },
+  );
+
+  it("a missing bundled npm is a local refusal, never a registry outage with a retry remedy", () => {
+    const io = captured();
+    const w = world();
+    const npmCli = join(w.root, "runner", "lib", "node_modules", "npm", "bin", "npm-cli.js");
+    rmSync(npmCli);
+    const { spawn } = fakeSpawn(w);
+    // Like node itself: a missing script makes the lookup fail, not answer.
+    const realistic = vi.fn((binary: string, argv: readonly string[]) =>
+      existsSync(argv[0]!) || !binary.endsWith("node")
+        ? spawn(binary, argv)
+        : ({ status: 1, stdout: "", stderr: "Cannot find module" } as never),
+    );
+    const invocations: ParsedArgs["flags"][] = [
+      { "dry-run": true },
+      { yes: true },
+      { yes: true, "release-tested": true },
+    ];
+    for (const flags of invocations) {
+      io.reset();
+      expect(
+        harnessInstallCommand(
+          args(["harness", "install", "codex"], { target: "local", ...flags }),
+          true,
+          opts(w, realistic),
+        ),
+      ).toBe(1);
+      const payload = io.json();
+      expect(payload).toMatchObject({
+        ok: false,
+        code: "embedded_npm_missing",
+        harness: "codex",
+        installLocation: "~/.claudexor/node/bin",
+      });
+      const refusal = String(payload.refusal);
+      expect(refusal).toContain(npmCli);
+      expect(refusal).toContain("nothing was executed");
+      expect(refusal).not.toContain("retry");
+      expect(refusal).not.toContain("registry");
+    }
+    expect(runHarnessUpdate("codex", "latest", opts(w, realistic))).toMatchObject({
+      ok: false,
+      code: "embedded_npm_missing",
+      mutation: "none",
+    });
+    expect(inspectHarness("codex", { ...opts(w, realistic), latest: true })).toMatchObject({
+      available: null,
+      availableProblem: { code: "embedded_npm_missing", retryable: false },
+    });
+    // No npm child at all: neither the latest lookup nor an install started.
+    expect(realistic).not.toHaveBeenCalled();
   });
 
   it.each(["1.0.0", "2.0.0"])(

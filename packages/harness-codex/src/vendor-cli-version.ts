@@ -3,7 +3,9 @@ import type { PinnedVendorCliVersion } from "@claudexor/util";
 /**
  * The ONE Codex vendor-CLI version this Claudexor release verified. Readers
  * alias it for the effort-snapshot and known-model freshness stamps, and for
- * the EXPLICIT offline/recovery `--release-tested` installer target. An ordinary
+ * the EXPLICIT `--release-tested` installer target, selected without a latest
+ * lookup (a runnable managed copy at or above it is kept; installing it still
+ * needs the npm registry). An ordinary
  * managed Codex install resolves npm latest separately; a newer selected
  * version does not inherit the recorded native compatibility evidence.
  * The HTTP model catalog's `client_version` is NOT a reader: it declares the

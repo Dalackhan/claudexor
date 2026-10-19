@@ -69,8 +69,15 @@ import {
   proveInstalledScriptVendor,
   type HarnessProofResult,
 } from "./harness-install-proof.js";
-import { installerRuntime, type InstallerRuntimeOptions } from "./harness-install-runtime.js";
-import { selectInstallVersion } from "./harness-install-version-selection.js";
+import {
+  embeddedNpmProblem,
+  installerRuntime,
+  type InstallerRuntimeOptions,
+} from "./harness-install-runtime.js";
+import {
+  preselectionDisclosure,
+  selectInstallVersion,
+} from "./harness-install-version-selection.js";
 
 import {
   disclosureVersionLine,
@@ -185,9 +192,10 @@ export function runHarnessInstaller(
      * lookup. Omitted by low-level callers remains the release-tested ensure
      * path; the CLI selects latest for an absent Codex managed copy. */
     version?: string;
-    /** For Codex's default install: a concurrent newer managed install must
-     * win rather than be downgraded between the CLI's read and this lease. */
-    preserveNewerThanWanted?: boolean;
+    /** For an automatic selection: a runnable managed copy at or above the
+     * release-tested baseline that appeared between the CLI's read and this
+     * lease wins, as it would have during that read. */
+    keepRunnableBaselineOrNewer?: boolean;
   } = {},
 ): HarnessInstallRunResult {
   const runtime = installerRuntime(options);
@@ -214,19 +222,14 @@ export function runHarnessInstaller(
       refusal: `${harness} accepts an explicit vendor version only as one exact version of an npm recipe; nothing was executed`,
     };
   }
-  let npmCLI: string | undefined;
-  if (pin) {
-    npmCLI = embeddedNpmCli(runnerNodePath, platform);
-    if (!(options.exists ?? existsSync)(npmCLI)) {
-      return {
-        exitCode: 1,
-        code: "embedded_npm_missing",
-        refusal:
-          `the bundled npm entrypoint is missing at ${npmCLI} ` +
-          "(expected inside the pinned Node runtime next to this CLI); nothing was executed",
-      };
-    }
-  }
+  const npmMissing = pin ? embeddedNpmProblem(runtime, options.exists) : null;
+  if (npmMissing)
+    return {
+      exitCode: 1,
+      code: npmMissing.code,
+      refusal: `${npmMissing.message}; nothing was executed`,
+    };
+  const npmCLI = pin ? embeddedNpmCli(runnerNodePath, platform) : undefined;
   // The remote target runs in a PTY the operator is watching and keeps the
   // historical exit-code contract. Only the unattended local target has to
   // prove what it installed.
@@ -281,15 +284,15 @@ export function runHarnessInstaller(
       const declared = proofRequired
         ? managedNpmPackageVersion(vendorRoot, pin.npmPackage, platform)
         : null;
-      const preserveNewer =
-        options.preserveNewerThanWanted && declared && EXACT_VENDOR_VERSION.test(declared)
-          ? compareVendorVersions(declared, wanted) > 0 && proveInstalled(declared)
+      const keepRunnable =
+        options.keepRunnableBaselineOrNewer && declared && EXACT_VENDOR_VERSION.test(declared)
+          ? compareVendorVersions(declared, pin.version) >= 0 && proveInstalled(declared)
           : false;
-      if (preserveNewer && preserveNewer.ok) {
+      if (keepRunnable && keepRunnable.ok) {
         note(
-          `${harness} ${declared} is already runnable and newer than proposed ${wanted}; nothing to change`,
+          `${harness} ${declared} is already runnable (not older than the tested ${pin.version}); keeping it instead of proposed ${wanted}`,
         );
-        return { exitCode: 0, ...preserveNewer.proof };
+        return { exitCode: 0, ...keepRunnable.proof };
       }
       const newer =
         !explicit && declared && EXACT_VENDOR_VERSION.test(declared)
@@ -450,7 +453,7 @@ export function harnessInstallCommand(
   /** Test seam: forwarded to `runHarnessInstaller` (spawn/home/... fakes). */
   runnerOptions: Omit<
     NonNullable<Parameters<typeof runHarnessInstaller>[1]>,
-    "json" | "target" | "version" | "preserveNewerThanWanted"
+    "json" | "target" | "version" | "keepRunnableBaselineOrNewer"
   > = {},
 ): number {
   const harness = args._[2] ?? "";
@@ -481,14 +484,15 @@ export function harnessInstallCommand(
       `${INSTALL_USAGE}\nclaudexor: select one exact npm --vendor-version or --release-tested`,
     );
   }
+  const dryRun = flagBool(args, "dry-run");
+  const preselection = () =>
+    preselectionDisclosure(harness, target, platform, arch, versionFlag, releaseTested);
   // Refuse the unsupported layout BEFORE the dry run, so a machine caller's
   // disclosure never advertises an install this host cannot perform.
   if (target === "local") {
     const unsupported = localPlatformRefusal(harness, platform, arch);
     if (unsupported) {
-      const disclosure = harnessInstallerDisclosure(harness, target, platform, arch, versionFlag);
-      if (json)
-        printJson({ ok: false, dryRun: flagBool(args, "dry-run"), ...unsupported, ...disclosure });
+      if (json) printJson({ ok: false, dryRun, ...unsupported, ...preselection() });
       else print(`Install refused: ${unsupported.refusal}`);
       return 1;
     }
@@ -500,37 +504,35 @@ export function harnessInstallCommand(
       installerRuntime({ ...runnerOptions, target }),
       versionFlag,
       releaseTested,
+      runnerOptions.exists,
     );
   } catch (error) {
     // An unreadable/execution-failing existing copy is UNKNOWN, not permission
     // to overwrite it as though no copy existed.
     return renderCliFailure(json, harnessInstallException(error), {
       messagePrefix: "claudexor harness install:",
-      extras: {
-        dryRun: flagBool(args, "dry-run"),
-        ...harnessInstallerDisclosure(harness, target, platform, arch, versionFlag),
-      },
+      extras: { dryRun, ...preselection() },
     });
   }
   if ("problem" in selection) {
-    const { problem } = selection;
-    if (json)
-      printJson({
-        ok: false,
-        dryRun: flagBool(args, "dry-run"),
-        exitCode: 1,
-        harness,
-        target,
-        code: problem.code,
-        refusal: `${problem.message}; nothing was executed`,
-      });
-    else print(`Install refused: ${problem.message}; nothing was executed`);
+    const { code, message: refusal } = selection.problem;
+    if (json) {
+      printJson({ ok: false, dryRun, exitCode: 1, ...preselection(), code, refusal });
+      // The SSH dry-run consumer receives only stderr for a non-zero exit.
+      process.stderr.write(`Install refused: ${refusal}\n`);
+    } else print(`Install refused: ${refusal}`);
     return 1;
   }
-  const { selectedVersion, preserveNewerThanWanted } = selection;
+  const { selectedVersion, keepRunnableBaselineOrNewer } = selection;
   const disclosure = harnessInstallerDisclosure(harness, target, platform, arch, selectedVersion);
-  if (flagBool(args, "dry-run")) {
-    if (json) printJson({ ok: true, dryRun: true, ...disclosure });
+  // --release-tested keeps a runnable copy but otherwise installs the baseline.
+  const installTarget = releaseTested ? undefined : selectedVersion;
+  if (dryRun) {
+    // Dry-run only (execute receipts keep the keys strict hosts pin): confirming
+    // with this flag binds the exact version disclosed here; older CLIs lack it.
+    const versionBinding =
+      disclosure.pinnedVersion === null ? {} : { versionBinding: "vendor-version" };
+    if (json) printJson({ ok: true, dryRun: true, ...disclosure, ...versionBinding });
     else printHumanDisclosure(disclosure);
     return 0;
   }
@@ -564,8 +566,8 @@ export function harnessInstallCommand(
       ...runnerOptions,
       json,
       target,
-      version: releaseTested ? undefined : selectedVersion,
-      preserveNewerThanWanted,
+      version: installTarget,
+      keepRunnableBaselineOrNewer,
     });
   } catch (error) {
     return renderCliFailure(json, harnessInstallException(error), {
@@ -573,13 +575,17 @@ export function harnessInstallCommand(
       extras: { dryRun: false, ...disclosure },
     });
   }
-  // The low-level installer also serves Maintenance, where previousVersion is
-  // a rollback fact. Connect's historical install receipt has no such field;
-  // selecting latest must not silently break strict embedding-host parsers.
+  // Maintenance's rollback fact stays out of Connect's pinned receipt keys. The
+  // receipt names the installer's own target unless it kept a different copy
+  // (a kept --release-tested copy can vanish before the lease).
   delete result.previousVersion;
+  const kept = ![undefined, installTarget ?? pin?.version].includes(result.installedVersion);
+  const executed = kept
+    ? disclosure
+    : harnessInstallerDisclosure(harness, target, platform, arch, installTarget);
   const ok = result.exitCode === 0 && result.refusal === undefined;
   if (json) {
-    printJson({ ok, dryRun: false, ...result, ...disclosure });
+    printJson({ ok, dryRun: false, ...result, ...executed });
   } else if (result.refusal !== undefined) {
     print(`Install refused: ${result.refusal}`);
   } else if (!ok) {

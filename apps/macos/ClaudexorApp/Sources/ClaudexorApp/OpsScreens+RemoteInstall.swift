@@ -6,8 +6,10 @@ import ClaudexorKit
 /// `harness install --dry-run --json` disclosure — exact command, install
 /// destination, and selected version — and the installer itself runs in the
 /// visible embedded terminal, where the user watches it like interactive
-/// SSH auth. Codex resolves npm latest before confirmation, then installs that
-/// exact approved version. The disclosure distinguishes release-verified
+/// SSH auth. The host's runtime selects the exact version: a current runtime
+/// resolves Codex's npm latest before confirmation and installs that exact
+/// approved version; an older runtime offers its fixed release version. The
+/// disclosure distinguishes release-verified
 /// versions from deterministic targets without recorded verification fixtures;
 /// the script vendors (Antigravity and Cursor) have their installer
 /// downloaded in full and executed under the user's eyes because they
@@ -22,7 +24,7 @@ struct RemoteHarnessInstallSection: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 SectionLabel("Remote Harness Install", systemImage: "arrow.down.circle")
                 Text(
-                    "Puts a vendor CLI on an SSH host. Codex resolves the current npm latest version before confirmation and installs that exact approved version; latest is not automatically release-verified. Claude, OpenCode and GitHub Copilot use exact version targets. The disclosure shows whether the selected version is covered by recorded verification fixtures. Antigravity and Cursor use unpinned installer scripts, downloaded in full and run in the embedded terminal where you watch them. Nothing runs before you confirm the exact command.")
+                    "Puts a vendor CLI on an SSH host. The host's Claudexor runtime selects the exact version shown for confirmation: a current runtime resolves Codex's npm latest, which is not automatically release-verified; an older runtime offers its fixed release version. Claude, OpenCode and GitHub Copilot use exact version targets. The disclosure shows whether the selected version is covered by recorded verification fixtures. Antigravity and Cursor use unpinned installer scripts, downloaded in full and run in the embedded terminal where you watch them. Nothing is installed before you confirm the exact command, and confirmation uses that same runtime.")
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach(model.remoteConnections) { connection in
                     HStack {
@@ -41,10 +43,13 @@ struct RemoteHarnessInstallSection: View {
                         }
                         .frame(maxWidth: 140)
                         .help(
-                            "Fetches the exact install command from \(connection.displayName) and asks for confirmation before anything runs.")
+                            "Fetches the exact install command from \(connection.displayName) and asks for confirmation before anything is installed.")
                     }
                     if let message = model.remoteConnectionMessages[connection.id] {
-                        Text(message).font(.caption2).foregroundStyle(.secondary).lineLimit(3)
+                        // Unclipped and selectable: a refusal's remedy comes last.
+                        Text(message).font(.caption2).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
                     }
                 }
             }

@@ -319,7 +319,7 @@ export const CLI_FLAGS: readonly CliFlagSpec[] = [
   ),
   booleanFlag(
     "release-tested",
-    "harness install: select this release's tested vendor baseline offline",
+    "harness install: select this release's tested vendor baseline instead of npm latest; a runnable managed copy at or above it is kept",
   ),
   booleanFlag("latest", "harness inspect: also read the newest published vendor version"),
   booleanFlag("help", "Show this help"),

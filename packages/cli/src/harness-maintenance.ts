@@ -170,7 +170,10 @@ export function inspectHarness(
       latest && "problem" in latest
         ? ControlProblem.parse({
             ...latest.problem,
-            retryable: latest.problem.code !== "latest_check_unsupported",
+            // Neither an unimplemented check nor a missing bundled npm heals on retry.
+            retryable: !["latest_check_unsupported", "embedded_npm_missing"].includes(
+              latest.problem.code,
+            ),
           })
         : null,
     observedAt: now,

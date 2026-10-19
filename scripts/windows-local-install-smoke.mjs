@@ -179,8 +179,9 @@ for (const [harness, npmPackage] of [
 ]) {
   step(`install ${harness} through the managed npm toolchain`);
   if (harness === "codex") {
-    // Keep the packaged offline path independently observable without making
-    // it the default install's target or certification of a newer CLI.
+    // Keep the explicit release-tested selection (no latest lookup; installing
+    // it still needs the npm registry) observable without making it the
+    // default install's target or certification of a newer CLI.
     const baselineRun = runCli(
       [
         "harness",
@@ -201,7 +202,7 @@ for (const [harness, npmPackage] of [
       baseline.pinnedVersion !== CODEX_VENDOR_CLI_VERSION ||
       baseline.verification !== "release_verified"
     )
-      fail("Codex offline tested-baseline disclosure is invalid", baseline);
+      fail("Codex release-tested baseline disclosure is invalid", baseline);
   }
   const args = ["harness", "install", harness, "--target", "local", "--yes", "--json"];
   const install = runCli(args, INSTALL_TIMEOUT_MS);

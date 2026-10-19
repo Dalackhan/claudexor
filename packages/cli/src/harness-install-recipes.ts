@@ -48,7 +48,9 @@ export const TARGET_LAYOUTS: Record<
  * vendor-version SSOT (vendor-cli-version.ts there). For claude/codex that is
  * the version this release's freshness gates verified; Codex's normal CLI
  * install resolves the current npm release separately, while the baseline
- * remains an explicit offline/recovery target and snapshot evidence. The opencode pin is a
+ * remains an explicit `--release-tested` target (no latest lookup; a runnable
+ * managed copy at or above it is kept, otherwise npm installs it from the
+ * registry) and snapshot evidence. The opencode pin is a
  * deterministic install target only — no recorded verification fixture
  * vouches for it (its vendor-cli-version.ts discloses this). Cursor and agy
  * are absent deliberately: they ship no npm artifact (see SCRIPT_INSTALLERS

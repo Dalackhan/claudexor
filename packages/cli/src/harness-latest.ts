@@ -4,17 +4,21 @@
 import { embeddedNpmCli } from "@claudexor/core";
 import { EXACT_VENDOR_VERSION } from "./harness-install-proof.js";
 import { NPM_PINS, type InstallableHarness } from "./harness-install-recipes.js";
-import type { InstallerRuntime } from "./harness-install-runtime.js";
+import { embeddedNpmProblem, type InstallerRuntime } from "./harness-install-runtime.js";
 
 const LATEST_TIMEOUT_MS = 30_000;
 
 export function resolveLatestNpmVersion(
   harness: InstallableHarness,
   runtime: InstallerRuntime,
+  exists?: (path: string) => boolean,
 ): { version: string } | { problem: { code: string; message: string } } {
   const pin = NPM_PINS[harness];
   if (!pin)
     return { problem: { code: "latest_unsupported", message: `${harness} has no npm recipe` } };
+  // The lookup runs the bundled npm: without it there is no registry question.
+  const npmMissing = embeddedNpmProblem(runtime, exists);
+  if (npmMissing) return { problem: npmMissing };
   let result: ReturnType<InstallerRuntime["spawn"]>;
   try {
     result = runtime.spawn(

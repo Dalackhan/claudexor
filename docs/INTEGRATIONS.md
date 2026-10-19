@@ -135,14 +135,39 @@ signed-manifest contract above remains fail-closed for every non-exempt
 release.
 
 For a valid `harness install ... --yes --json` invocation, stdout is exactly one
-JSON object. Every executed result carries `ok: boolean`, `dryRun: false`,
-`exitCode: number`, `target: "local" | "remote"`, `harness: string`,
-`command: string`, `installLocation: string`, `pinnedVersion: string | null`, and
-`verification: string`. Every successful `--target local` result additionally carries
+JSON object. Every executed result after version selection carries `ok: boolean`,
+`dryRun: false`, `exitCode: number`, `target: "local" | "remote"`,
+`harness: string`, `command: string`, `installLocation: string`,
+`pinnedVersion: string | null`, and `verification: string`. A refusal before a
+default Codex selection exists (`latest_unavailable`, `latest_older_than_tested`,
+`embedded_npm_missing`, `unsupported_platform`, `harness_install_failed`) carries
+`ok: false`, `dryRun`, `exitCode`, `harness`, `target`, `installLocation`, `code`
+and `refusal` (or `message`), but no `command`, `pinnedVersion` or
+`verification`: no version was selected. The same refusal codes after a decided
+selection retain its disclosure fields. Every successful `--target local` result additionally carries
 `installedBinary` (an absolute launcher path; on Windows the package-native
-image) and `installedVersion` (the exact npm pin, a kept runnable newer managed
-version, or the script vendor's bounded non-empty version line). `pinnedVersion`
-continues to name the release baseline; Ensure never downgrades a newer copy. On the local target,
+image) and `installedVersion` (the exact selected npm version, a kept runnable
+managed version, or the script vendor's bounded non-empty version line).
+`pinnedVersion` names the exact npm version this invocation selected: a default
+Codex install keeps a runnable managed copy at or above its release-tested
+baseline, otherwise resolves one exact npm latest; other npm recipes select their
+release baseline unless a runnable newer copy is kept. `--release-tested` selects
+the baseline instead of that lookup and also keeps a runnable managed copy at or
+above it; installing the baseline still needs the npm registry. `verification` is
+`release_verified` only when that selection equals the measured baseline. Unless
+an exact `--vendor-version` was given, the local install lease also keeps a runnable
+managed copy at or above the baseline that appeared after selection (for example
+from a concurrent Maintenance update); `installedVersion` then names that kept copy.
+Whenever npm itself ran, `command`, `pinnedVersion` and `verification` name the
+version it installed. A `--release-tested` execution refused before installation
+(for example by the install lease) names the baseline target, even if its earlier
+dry-run proposed keeping a newer copy; that failure proves no installation. A
+default Codex install never falls back to the baseline: an unavailable or
+malformed registry answer refuses with `code: "latest_unavailable"` and a
+`refusal` naming the explicit `--release-tested` and `--vendor-version` choices
+(a host that only checks the exit code does not see that remedy). A missing
+bundled npm is the local `embedded_npm_missing` refusal, without a registry or
+retry remedy. On the local target,
 child exit zero is not sufficient: if that launcher/version proof fails, the
 result is `ok: false`, `code: "install_verification_failed"`. A remote success
 keeps the historical contract — `exitCode: 0` with no proof fields. A Cursor result after a
@@ -152,10 +177,18 @@ including when the downloaded script itself exits non-zero or its post-install
 proof fails. A refusal may add `code`, `refusal`, or `message`; child/progress
 output goes only to stderr. If setup throws before producing a typed result,
 the canonical `harness_install_failed` JSON failure still carries every
-disclosure field (and the native `causeCode` when available). Dry-run
-returns the disclosure fields with
-`ok: true` and `dryRun: true`, without executing, proving a binary, or acquiring
-the install lease.
+disclosure field already decided (and the native `causeCode` when available);
+before a default Codex selection that omits `command`, `pinnedVersion` and
+`verification` rather than naming the baseline. Dry-run
+returns the disclosure fields with `ok: true` and `dryRun: true`. It never
+installs or acquires the install lease, but selecting the version is not inert:
+on the local target it executes an existing managed npm copy's bounded
+`--version` probe, and a default Codex selection without a runnable copy makes
+one bounded npm registry read, so a dry-run can also return one of the refusals
+above. An npm dry-run also carries `versionBinding: "vendor-version"`:
+confirming with `--vendor-version <pinnedVersion>` installs exactly the disclosed
+version even if npm latest moved. Executed receipts never carry it, and a CLI
+without the field rejects `install --vendor-version`.
 
 For updates, negotiate the maintenance routes from the operation catalog rather
 than calling Ensure again. `GET /v2/maintenance/harnesses` returns selected-version

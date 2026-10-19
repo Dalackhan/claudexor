@@ -31,38 +31,6 @@ func remoteInstallNextStep(harness: String, displayName: String) -> String {
         : "Use Login → \(displayName)."
 }
 
-enum RemoteHarnessInstallVerification: String, Decodable, Equatable, Sendable {
-    case releaseVerified = "release_verified"
-    case deterministicOnly = "deterministic_only"
-    case humanObserved = "human_observed"
-}
-
-/// A pending remote harness install, awaiting the user's confirmation. The
-/// command/location/version fields are the remote CLI's own `--dry-run --json`
-/// disclosure verbatim (issue #89). Confirmation carries the selected npm
-/// version back to the CLI, so a changed registry latest cannot replace the
-/// version the user approved. Script installers have no version to bind.
-struct RemoteHarnessInstallPrompt: Identifiable, Equatable {
-    let lease: RemoteActionLease
-    let harness: String
-    let command: String
-    let installLocation: String
-    let pinnedVersion: String?
-    let verification: RemoteHarnessInstallVerification
-
-    var id: UUID { lease.token }
-    var connectionID: UUID { lease.connectionID }
-
-    var confirmedInstallCommand: String {
-        var command = "~/.claudexor/remote/current/bin/claudexor harness install "
-            + SSHCommandFactory.posixQuote(harness)
-        if let pinnedVersion {
-            command += " --vendor-version " + SSHCommandFactory.posixQuote(pinnedVersion)
-        }
-        return command + " --yes"
-    }
-}
-
 extension AppModel {
     func startRemoteLogin(
         connectionID: UUID,
@@ -281,14 +249,24 @@ extension AppModel {
         }
         let lease = reboundLease
         do {
-            let dryRun =
-                "~/.claudexor/remote/current/bin/claudexor harness install "
+            let pointer = try await sshConnectionManager.execute(
+                connection, remoteCommand: RemoteRuntimeInstaller.currentPointerProbeCommand)
+            guard remoteActionIsCurrent(lease) else { return }
+            guard let runtimeTarget = try RemoteRuntimeInstaller.currentPointerTarget(
+                fromProbe: pointer.stdout)
+            else {
+                remoteConnectionMessages[connectionID] =
+                    "No Claudexor runtime is installed on this host; nothing was installed."
+                finishRemoteAction(lease)
+                return
+            }
+            let dryRun = remoteRuntimeCLI(runtimeTarget) + " harness install "
                 + SSHCommandFactory.posixQuote(harness) + " --dry-run --json"
             let output = try await sshConnectionManager.execute(
                 connection, remoteCommand: dryRun)
             guard remoteActionIsCurrent(lease) else { return }
             guard let prompt = Self.parseHarnessInstallDisclosure(
-                output.stdout, lease: lease, harness: harness)
+                output.stdout, lease: lease, harness: harness, runtimeTarget: runtimeTarget)
             else {
                 remoteConnectionMessages[connectionID] =
                     "The remote runtime did not return an install disclosure for "
@@ -299,47 +277,11 @@ extension AppModel {
             remoteHarnessInstallPrompt = prompt
         } catch {
             guard remoteActionIsCurrent(lease) else { return }
-            remoteConnectionMessages[connectionID] = userMessageForRemote(error)
+            remoteConnectionMessages[connectionID] =
+                Self.harnessInstallPreparationFailure(error, harness: harness)
+                ?? userMessageForRemote(error)
             finishRemoteAction(lease)
         }
-    }
-
-    /// The remote CLI's `--dry-run --json` answer is the ONLY source of the
-    /// confirmation text. Strict: a non-disclosure payload (ok/dryRun false,
-    /// harness mismatch, empty command) yields nil and therefore no install.
-    nonisolated static func parseHarnessInstallDisclosure(
-        _ data: Data,
-        lease: RemoteActionLease,
-        harness: String
-    ) -> RemoteHarnessInstallPrompt? {
-        struct Disclosure: Decodable {
-            let ok: Bool
-            let dryRun: Bool
-            let harness: String
-            let command: String
-            let installLocation: String
-            let pinnedVersion: String?
-            let verification: RemoteHarnessInstallVerification
-        }
-        guard let parsed = try? JSONDecoder().decode(Disclosure.self, from: data),
-              parsed.ok, parsed.dryRun, parsed.harness == harness,
-              !parsed.command.isEmpty
-        else { return nil }
-        switch parsed.verification {
-        case .releaseVerified, .deterministicOnly:
-            guard parsed.pinnedVersion?.trimmingCharacters(
-                in: .whitespacesAndNewlines).isEmpty == false
-            else { return nil }
-        case .humanObserved:
-            guard parsed.pinnedVersion == nil else { return nil }
-        }
-        return RemoteHarnessInstallPrompt(
-            lease: lease,
-            harness: harness,
-            command: parsed.command,
-            installLocation: parsed.installLocation,
-            pinnedVersion: parsed.pinnedVersion,
-            verification: parsed.verification)
     }
 
     /// Run the CONFIRMED install in the visible embedded PTY. `--yes` is

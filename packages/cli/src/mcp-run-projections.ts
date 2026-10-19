@@ -76,6 +76,8 @@ export function projectRecoveryRunDetail(
   delegationParentRunId?: string,
 ): Record<string, unknown> {
   const summary = (detail["summary"] ?? {}) as Record<string, unknown>;
+  // A queued handle remains usable after the daemon binds its canonical run id.
+  if (summary["jobId"] === runId && typeof summary["runId"] === "string") runId = summary["runId"];
   if (summary["runId"] !== runId) {
     throw new CliError("operational", `run detail identity does not match requested run ${runId}`, {
       code: "invalid_service_response",

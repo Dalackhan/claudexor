@@ -35,6 +35,9 @@ import { readRunDetailResponse } from "./run-detail-response.js";
 import { catalogQuery } from "./mcp-catalog-query.js";
 import { threadQuery } from "./mcp-thread-query.js";
 import { runTimeLimitQuery } from "./mcp-run-time-limit.js";
+import { runMessageQuery } from "./mcp-run-message.js";
+import { runContinueQuery } from "./mcp-run-continue.js";
+import { runWaitQuery } from "./mcp-run-wait.js";
 import { journalRecoveryQuery } from "./mcp-journal-recovery.js";
 
 export interface SurfaceRunnerHooks {
@@ -71,6 +74,12 @@ export interface McpSurfaceRunnerOptions {
 export function mcpSurfaceRunner(options: McpSurfaceRunnerOptions = {}) {
   return async (p: any, hooks?: SurfaceRunnerHooks) => {
     const beltContext = Boolean(options.delegationParentRunId);
+    if (p?.mode === "__run_wait") {
+      const { mode: _mode, ...input } = p;
+      return runWaitQuery(input, beltContext, hooks?.signal);
+    }
+    if (p?.mode === "__run_message") return runMessageQuery(p, beltContext, hooks?.signal);
+    if (p?.mode === "__run_continue") return runContinueQuery(p, beltContext);
     if (p?.mode === "__run_time_limit") return runTimeLimitQuery(p, beltContext);
     if (p?.mode === "__account_resources")
       return accountResourceQuery(
@@ -205,6 +214,7 @@ export function mcpSurfaceRunner(options: McpSurfaceRunnerOptions = {}) {
         : undefined;
     const out = await enqueueAndAwait(client, addr, body, {
       waitForTerminal: p?.deferred !== true,
+      ...(p?.idempotencyKey !== undefined ? { idempotencyKey: p.idempotencyKey } : {}),
       ...(options.delegationParentRunId ? { internalDaemonEnqueue: true } : {}),
       ...(onPollTick ? { onPollTick } : {}),
     });

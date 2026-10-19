@@ -224,11 +224,15 @@ at every wire boundary.
   negotiation down to 2024-10-07, schema-validated arguments, elicitation);
   all three run modes enqueue through the daemon `/v2` control API. Until MCP
   Tasks stabilize, MCP returns a durable run handle and exposes explicit
-  status/result/cancel/interaction tools; it does not hold a tool call open or
-  advertise Tasks. MCP persistent-thread create/turn pass an optional caller key
+  status/result/cancel/interaction tools; launch calls do not wait for terminal,
+  and the server does not advertise Tasks. One-shot launches and MCP
+  persistent-thread create/turn pass an optional caller key
   to the daemon's existing idempotent command authority; read projects its
   thread detail
-  without starting a run or a daemon. ACP uses the official TypeScript SDK at stable protocol v1;
+  without starting a run or a daemon. Existing-run wait, live-message and
+  continuation controllers project the same daemon authority; their bounded
+  observation and receipt contracts live in [MCP controls](INTEGRATIONS.md#observing-and-directing-an-existing-run).
+  ACP uses the official TypeScript SDK at stable protocol v1;
   its session IDs are daemon thread IDs and list/load/resume/close/prompt/cancel
   all project the same `/v2` thread authority. ACP images and embedded resources
   are finalized through the daemon attachment pipeline before a turn enqueues.
@@ -4128,8 +4132,9 @@ refused` lifecycle state before consumption is typed `live_input_refused`
 without failing the run. A one-shot argv run (no interaction channel; never
 the daemon's shape) has no live session and answers `not_active`/`no_live_session`. Cursor declares `none` (no
 persistent live-input channel: its prompt is piped once, then EOF); agy,
-opencode, copilot and raw-api declare `none`. There is no CLI verb or MCP tool for
-messages in this release (`claudexor follow` is the later surface), and the
+opencode, copilot and raw-api declare `none`. MCP exposes the existing channel
+through `claudexor_run_message` (see [MCP controls](INTEGRATIONS.md#observing-and-directing-an-existing-run)).
+There is no CLI message verb yet (`claudexor follow` is the later surface), and the
 ACP server's `session/prompt` on an active session is refused rather than
 bridged into a steer.
 

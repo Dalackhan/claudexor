@@ -177,6 +177,30 @@ describe("MCP run detail projections", () => {
       /identity does not match/,
     );
   });
+  it("resolves a queued job handle only through the daemon's matching job identity", () => {
+    const detail = { summary: { jobId: "job-1", runId: "run-1", state: "running" } };
+    expect(projectRecoveryRunDetail("__run_status", "job-1", detail)).toMatchObject({
+      runId: "run-1",
+      status: "running",
+    });
+    expect(() => projectRecoveryRunDetail("__run_status", "job-other", detail)).toThrow(
+      /identity does not match/,
+    );
+  });
+
+  it("retains Delegate parent checks when resolving a job handle", () => {
+    const detail = {
+      summary: { jobId: "job-1", runId: "run-1", state: "running", delegatedFromRunId: "parent-1" },
+    };
+    expect(projectRecoveryRunDetail("__run_result", "job-1", detail, "parent-1")).toMatchObject({
+      runId: "run-1",
+      status: "running",
+    });
+    expect(() => projectRecoveryRunDetail("__run_result", "job-1", detail, "parent-other")).toThrow(
+      /not a child/,
+    );
+  });
+
   it("keeps compact execution evidence valid on strict MCP recovery outputs", () => {
     const attemptExecution = [
       {

@@ -74,6 +74,11 @@ const acpFields = [...acpAllowMatch[1].matchAll(/"([A-Za-z]+)"/g)].map((m) => m[
 // MCP argument -> CLI flag mapping. Every MCP arg must appear here.
 const MCP_TO_CLI = {
   prompt: { cli: null, reason: "the CLI positional argument, not a flag" },
+  idempotencyKey: {
+    cli: null,
+    reason:
+      "caller-owned MCP launch identity, carried as the existing HTTP Idempotency-Key rather than an engine run-control flag",
+  },
   harness: { cli: "harness" },
   primaryHarness: { cli: "primary-harness" },
   model: { cli: "model" },
@@ -371,7 +376,10 @@ for (const declared of Object.keys(BOOLEAN_FLAG_MAP)) {
 
 // ACP <-> MCP: every MCP run-control argument must be expressible over ACP
 // (same engine contract; repoPath is the ACP session cwd by design).
-const ACP_EQUIVALENT = { repoPath: "session/new cwd anchors the project" };
+const ACP_EQUIVALENT = {
+  repoPath: "session/new cwd anchors the project",
+  idempotencyKey: "caller-owned MCP transport identity; ACP does not expose launch replay keys",
+};
 for (const arg of mcpArgs) {
   if (arg in ACP_EQUIVALENT) continue;
   if (!acpFields.includes(arg)) {
@@ -394,6 +402,8 @@ const MUTATING_TOOLS = new Set([
   "claudexor_thread_create",
   "claudexor_thread_turn",
   "claudexor_run_cancel",
+  "claudexor_run_message",
+  "claudexor_run_continue",
   "claudexor_run_time_limit",
   "claudexor_answer_interaction",
   "claudexor_quarantine_journal",

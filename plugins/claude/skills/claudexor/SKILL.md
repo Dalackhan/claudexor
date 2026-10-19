@@ -70,6 +70,18 @@ Start read-only unless the user explicitly asked to change or create files.
 Run tools enqueue work and return a durable handle, not terminal output or
 proof of completion. Use `claudexor_runs`, `claudexor_inspect`,
 `claudexor_run_status`, and `claudexor_run_result` to recover and follow it.
+Pass a stable `idempotencyKey` on a one-shot launch when its response may need
+recovery; retry the same key and arguments, not a new launch.
+Use `claudexor_run_wait` for bounded event observation and resume with `nextSeq`
+as `afterSeq`. A timeout, disconnect or cancelled observation does not stop
+the worker; read pending interactions and final output through their own tools.
+For an authorized correction to active work, use `claudexor_run_message` with
+an explicit message `idempotencyKey`; `accepted` is not observed delivery.
+Keep the same key and body after an unknown outcome.
+Use `claudexor_run_continue` for an authorized follow-up to a terminal run.
+Its optional prompt may be empty; omitted settings inherit through the daemon.
+Retain its job/run handle and use the same key/body to recover an unknown
+response. These controllers do not restart a daemon or expand Delegate access.
 Use `claudexor_run_interactions` to read pending questions. For a native
 permission request, inspect the exact command/cwd or paths/diff before using
 `claudexor_answer_interaction`: answer only within the user's existing mandate

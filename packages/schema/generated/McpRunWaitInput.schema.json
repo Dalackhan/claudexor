@@ -1,0 +1,40 @@
+{
+  "$ref": "#/definitions/McpRunWaitInput",
+  "definitions": {
+    "McpRunWaitInput": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "afterSeq": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "default": 0,
+          "description": "Last returned durable SSE id, never snapshotSeq."
+        },
+        "waitMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 50000,
+          "default": 25000,
+          "description": "Maximum SSE observation time; zero reads the current snapshot only. Daemon discovery and each snapshot read have separate 5s budgets."
+        },
+        "maxEvents": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "default": 50
+        }
+      },
+      "required": [
+        "runId"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

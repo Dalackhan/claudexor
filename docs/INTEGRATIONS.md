@@ -737,6 +737,7 @@ service, absent for an older engine, and a failed evidence read adds one
 `routingEvidenceProblem` while the listing stays authoritative),
 `claudexor_runs`, `claudexor_inspect`, `claudexor_run_status`,
 `claudexor_run_result`, `claudexor_run_cancel`, `claudexor_run_time_limit`,
+`claudexor_run_wait`, `claudexor_run_message`, `claudexor_run_continue`,
 `claudexor_run_interactions`, `claudexor_answer_interaction`,
 `claudexor_apply_check`, and
 `claudexor_journal_recovery`. The destructive
@@ -756,7 +757,8 @@ Control API section above and SECURITY.md); it is never applied to the project.
 The create result discloses the daemon's current `workspaceMode`,
 `workspaceRoot` and anchored `repoRoot`, including where write turns change
 files.
-Thread create/turn accept an optional caller-owned `idempotencyKey`. An omitted
+One-shot launches and thread create/turn accept an optional caller-owned
+`idempotencyKey`. An omitted
 key is generated per invocation; retry an unknown outcome with the same key
 and body, and use a new key for a deliberately new turn. Changed content under
 the same key conflicts. `claudexor_thread_turn` declares the durable
@@ -765,6 +767,40 @@ returns daemon-owned thread, turn and session records without starting work or
 a daemon; with no daemon running it fails with retryable `daemon_unavailable`.
 Final output remains on the run result surface. Thread tools do not add a
 separate budget or lifecycle.
+
+### Observing and directing an existing run
+
+`claudexor_run_wait` observes an existing `runId` without starting a daemon or
+another run. Pass `afterSeq` from the previous result's `nextSeq`; the snapshot's
+`snapshotSeq` is a separate observation fence, not an event replay cursor.
+`waitMs` bounds the event subscription to at most 50 seconds; zero reads only
+the current snapshot. Events and interaction bodies are byte/count bounded,
+and omission is explicit. Returned events pair the durable SSE `seq` with the
+original `event`. A timeout, disconnected stream or cancelled tool call is not
+a completed or cancelled worker. Read `wakeReason`, `status`, snapshot freshness
+and pending interactions separately; final output still comes from
+`claudexor_run_result`.
+
+`claudexor_run_message` sends `{runId, text, idempotencyKey, expectedAttemptId?}`
+through the existing [live-input channel](ARCHITECTURE.md#live-messages-into-a-running-run).
+Its key is required and identifies this exact message. `accepted` means native
+acceptance, `delivered` means observed consumption, and neither proves obedience.
+An HTTP-successful refusal stays a typed outcome. For an unknown response,
+retain the same key and body; do not create a new message identity to retry.
+Host cancellation stops the HTTP request, not the target run.
+
+`claudexor_run_continue` submits `{runId, prompt?, idempotencyKey?}` to the existing
+`continueFrom` admission. The daemon inherits the predecessor's omitted settings
+and decides whether its history and workspace can continue; the MCP client does
+not substitute its cwd, mode, account or execution defaults. An empty prompt is
+valid. Retain the returned `jobId` or `runId` and pass it as `runId` to the ordinary
+observation tools. This is a successor command, not resurrection of a terminated
+process. Unsupported strategies and an already claimed successor remain typed
+refusals; a retry of an unknown response needs the original key and body.
+
+These existing-run controls are not exposed by the Delegate belt and cannot
+expand a child's authority. They add no automatic retries, worker restarts,
+approval decisions or separate lifecycle.
 
 ### Controller-independent approval handback
 

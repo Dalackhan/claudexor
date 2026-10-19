@@ -1,6 +1,7 @@
 import { mcpToolFailure } from "./tool-failure.js";
 import { accountResourceTools } from "./account-resource-tools.js";
 import { runExecutionSchema } from "./run-execution-schema.js";
+import { idempotencyKeySchema } from "./idempotency-key-schema.js";
 import { isAbsolute } from "node:path";
 import agentCapabilityCatalogSchemaRaw from "@claudexor/schema/generated/AgentCapabilityCatalog.schema.json" with { type: "json" };
 import accountsQuerySchemaRaw from "@claudexor/schema/generated/McpAccountsToolResult.schema.json" with { type: "json" };
@@ -32,6 +33,10 @@ import { assertNoPluginArtifactSkew } from "./plugin-skew.js";
 import { accountsTool } from "./accounts-tool.js";
 import { threadTools } from "./thread-tools.js";
 import { runTimeLimitTool } from "./run-time-limit-tool.js";
+import { runMessageTool } from "./run-message-tool.js";
+import { runContinueTool } from "./run-continue-tool.js";
+import { runWaitTool } from "./run-wait-tool.js";
+import { runStatusTool } from "./run-status-tool.js";
 import { inlineJsonSchemaRefs } from "./inline-json-schema-refs.js";
 import { reviewerPanelEntrySchema, processingPreferenceSchema } from "./reviewer-panel-schema.js";
 const mcpRunToolResultSchema = inlineJsonSchemaRefs(
@@ -74,7 +79,7 @@ const RUN_STRATEGY_PROPERTIES = {
  */
 
 export interface McpToolContext {
-  /** Host cancellation aborts the underlying run, exactly like CLI Ctrl-C. */
+  /** Host cancellation; each controller defines whether it aborts a run or just its request. */
   signal?: AbortSignal;
 }
 
@@ -229,7 +234,7 @@ function validateNoInlineSecrets(value: unknown, context: string): string | null
 export interface RunnerHooks {
   /** Interactive question surface; resolve with answers or null to decline. */
   onInteraction?: (ctx: any) => Promise<any | null>;
-  /** Cooperative cancellation: host `notifications/cancelled` aborts the run. */
+  /** Cooperative cancellation; live-message controllers abort only their HTTP request. */
   signal?: AbortSignal;
 }
 
@@ -250,6 +255,7 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
     type: "object",
     additionalProperties: false,
     properties: {
+      idempotencyKey: idempotencyKeySchema,
       prompt: {
         type: "string",
         minLength: 1,
@@ -468,6 +474,9 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
     ),
     ...threadTools(runner),
     runTimeLimitTool(runner),
+    runMessageTool(runner),
+    runContinueTool(runner),
+    runWaitTool(runner),
     {
       name: "claudexor_status",
       description:
@@ -540,23 +549,7 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
         };
       },
     },
-    {
-      name: "claudexor_run_status",
-      description: "Read the current daemon-acknowledged state of a durable Claudexor run.",
-      inputSchema: runIdSchema,
-      outputSchema: mcpRunHandleResultSchema,
-      annotations: { readOnlyHint: true },
-      handler: async (args) => {
-        const result = await runner({ mode: "__run_status", runId: String(args?.runId ?? "") });
-        return {
-          text: formatRunResult(result),
-          structured: (result && typeof result === "object" ? result : {}) as Record<
-            string,
-            unknown
-          >,
-        };
-      },
-    },
+    runStatusTool(runner, runIdSchema, mcpRunHandleResultSchema),
     {
       name: "claudexor_run_result",
       description:

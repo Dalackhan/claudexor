@@ -283,6 +283,8 @@ export async function enqueueAndAwait(
   body: Record<string, unknown>,
   opts: {
     waitForTerminal: boolean;
+    /** Caller-owned HTTP admission key; omitted keeps transport-generated keys. */
+    idempotencyKey?: string;
     /** Belt-only path: enqueue through the authenticated daemon socket so
      * server-owned delegation lineage never becomes forgeable on POST /runs. */
     internalDaemonEnqueue?: boolean;
@@ -293,6 +295,15 @@ export async function enqueueAndAwait(
     onPollTick?: (info: { runId: string }) => void | Promise<void>;
   } = { waitForTerminal: true },
 ): Promise<DaemonRunOutcome> {
+  // Belt tools do not expose caller keys: their local budget/count admission
+  // is per invocation. Never silently drop a key or bypass that boundary by
+  // moving server-owned Delegate lineage onto public HTTP admission.
+  if (opts.internalDaemonEnqueue && opts.idempotencyKey !== undefined) {
+    throw new CliError("usage", "Caller idempotency keys are not supported by the Delegate belt.", {
+      code: "delegation_idempotency_unsupported",
+      retryable: false,
+    });
+  }
   await ensureRunProject(addr, body);
   // D10 transport split: a thread continuation (`--thread`/`--resume`) ALWAYS
   // goes through POST /threads/:id/turns — the route owns scope resolution,
@@ -319,7 +330,11 @@ export async function enqueueAndAwait(
       : { url: "/runs", postBody: body };
     const startRes = await controlApiFetch(addr, url, {
       method: "POST",
-      headers: { Authorization: `Bearer ${addr.token}`, "content-type": "application/json" },
+      headers: {
+        Authorization: `Bearer ${addr.token}`,
+        "content-type": "application/json",
+        ...(opts.idempotencyKey !== undefined ? { "Idempotency-Key": opts.idempotencyKey } : {}),
+      },
       body: JSON.stringify(postBody),
     });
     const startText = await startRes.text();

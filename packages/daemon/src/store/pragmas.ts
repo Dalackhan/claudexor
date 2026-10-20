@@ -11,12 +11,17 @@ import type { DatabaseSync } from "node:sqlite";
  * reader or large transaction can grow the WAL until the flusher can reclaim it.
  * The busy timeout is a fuse, counted by `busy_waits`.
  *
- * Flusher connection: never writes rows, never waits for a lock (PASSIVE
- * checkpoints never wait for readers), retains the full checkpoint sync class.
+ * Flusher connection: never writes rows or waits for a lock. Normally PASSIVE;
+ * at the reuse target it also tries RESTART with busy_timeout=0 to prevent
+ * continuous writers from starving reuse. A successful RESTART briefly holds
+ * the writer lock; all its full-device syncs remain on the worker.
  */
 export interface PragmaSpec {
   readonly [name: string]: number | string;
 }
+
+/** Reuse target, not a hard bound while a reader or transaction pins the WAL. */
+export const WAL_REUSE_BYTES = 64 * 1024 * 1024;
 
 export const MAIN_CONNECTION_PRAGMAS: PragmaSpec = Object.freeze({
   journal_mode: "wal",
@@ -24,7 +29,7 @@ export const MAIN_CONNECTION_PRAGMAS: PragmaSpec = Object.freeze({
   wal_autocheckpoint: 0,
   checkpoint_fullfsync: 0,
   fullfsync: 0,
-  journal_size_limit: 67108864,
+  journal_size_limit: WAL_REUSE_BYTES,
   busy_timeout: 5000,
   temp_store: 2,
   page_size: 4096,

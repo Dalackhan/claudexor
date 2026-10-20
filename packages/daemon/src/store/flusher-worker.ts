@@ -1,7 +1,8 @@
 import { closeSync, fstatSync, fsyncSync, openSync, statSync } from "node:fs";
 import { isMainThread, parentPort, workerData, type MessagePort } from "node:worker_threads";
 import { fsyncDirectory } from "@claudexor/util";
-import { applyPragmas, FLUSHER_CONNECTION_PRAGMAS } from "./pragmas.js";
+import { applyPragmas, FLUSHER_CONNECTION_PRAGMAS, WAL_REUSE_BYTES } from "./pragmas.js";
+import type { StatementSync } from "node:sqlite";
 import { loadEngineRuntime } from "./runtime.js";
 import {
   FLUSH_INTERVAL_MS,
@@ -19,8 +20,9 @@ import {
  *   2. one F_FULLFSYNC per directory touched by a covered registration;
  *   3. `PRAGMA data_version` → dirty := anything committed since the last
  *      PROVEN barrier (the first pass of a worker life is always dirty);
- *   4. `PRAGMA wal_checkpoint(PASSIVE)` — space reclamation only; its result
- *      is reported as a fact and NEVER decides whether to sync;
+ *   4. PASSIVE checkpoint, then try RESTART at the WAL reuse target to prevent
+ *      continuous writers from starving reuse. Both are space reclamation only;
+ *      their result is reported as a fact and NEVER decides whether to sync;
  *   5. if dirty: the explicit `fsyncSync(walFd)` — the barrier: it fixes the
  *      WAL frames and, as a device-wide barrier on macOS, the O_DSYNC file
  *      data already handed to the drive. Database pages become durable
@@ -40,6 +42,15 @@ export async function runFlusherWorker(port: MessagePort, data: FlusherWorkerDat
   applyPragmas(db, FLUSHER_CONNECTION_PRAGMAS);
   const dataVersion = db.prepare("PRAGMA data_version");
   const passive = db.prepare("PRAGMA wal_checkpoint(PASSIVE)");
+  const restart = db.prepare("PRAGMA wal_checkpoint(RESTART)");
+  const restartPages = hooks.restartThresholdPages ?? WAL_REUSE_BYTES / 4096;
+  const checkpointFacts = (statement: StatementSync) => {
+    const row = statement.get() as
+      { busy: number | bigint; log: number | bigint; checkpointed: number | bigint } | undefined;
+    return row
+      ? { busy: Number(row.busy), log: Number(row.log), checkpointed: Number(row.checkpointed) }
+      : null;
+  };
   const counters: FlusherCounters = {
     passes: 0,
     barriers: 0,
@@ -97,16 +108,13 @@ export async function runFlusherWorker(port: MessagePort, data: FlusherWorkerDat
     counters.dirSyncs += dirsSynced.length;
     const observed = Number((dataVersion.get() as { data_version: number | bigint }).data_version);
     const dirty = lastProvenDataVersion === null || observed !== lastProvenDataVersion;
-    const checkpointRow = passive.get() as
-      { busy: number | bigint; log: number | bigint; checkpointed: number | bigint } | undefined;
-    const checkpoint = checkpointRow
-      ? {
-          busy: Number(checkpointRow.busy),
-          log: Number(checkpointRow.log),
-          checkpointed: Number(checkpointRow.checkpointed),
-        }
-      : null;
+    let checkpoint = checkpointFacts(passive);
     if (checkpoint?.busy) counters.busyPassive += 1;
+    // PASSIVE can finish a captured prefix while the writer appends beyond it,
+    // indefinitely preventing reuse. RESTART acquires the writer lock to finish
+    // the tail. busy_timeout=0 returns immediately when a reader/writer pins it;
+    // the next pass retries, and the explicit barrier still runs below.
+    if (checkpoint && checkpoint.log >= restartPages) checkpoint = checkpointFacts(restart);
     if (hooks.checkpointGate) {
       const gate = new Int32Array(hooks.checkpointGate);
       if (Atomics.compareExchange(gate, 0, 1, 2) === 1) Atomics.wait(gate, 1, 0, 10_000);

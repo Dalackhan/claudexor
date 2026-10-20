@@ -3493,6 +3493,14 @@ kept only for cold import and an independent frozen copy kept for tests.
   the same generation-numbered power-loss barrier. A pinned reader or large
   transaction can grow the WAL; after the reader ends the worker backfills it,
   and the writer's next WAL reuse applies `journal_size_limit` (64 MiB).
+  Continuous writes can append past each PASSIVE checkpoint's captured prefix
+  and starve reuse. At 16,384 frames (64 MiB), the worker follows PASSIVE with
+  RESTART to finish that tail under the writer lock. Its `busy_timeout=0` never
+  waits for a pinned reader or existing writer; BUSY is a checkpoint fact and
+  the next pass retries. A successful RESTART briefly excludes writers, so a
+  request-thread BEGIN may wait for it, but checkpoint/full-device sync work
+  stays on the worker. The target is not a hard limit for a pinned reader or
+  large transaction; neither checkpoint result replaces the explicit barrier.
   Worker death rejects existing barrier waiters and the controller restarts it
   automatically, replaying unacknowledged registrations. Failure callers may
   still save terminal records during a short restart. One second after a death,

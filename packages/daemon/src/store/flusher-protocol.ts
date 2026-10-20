@@ -20,6 +20,8 @@ export interface FlusherHooks {
   passDelayMs?: number;
   /** Test gate after checkpoint: [1,0] pauses at [2,0] until index 1 is notified. */
   checkpointGate?: SharedArrayBuffer;
+  /** Exercise the bounded RESTART path without a 64 MiB test WAL. */
+  restartThresholdPages?: number;
 }
 
 export interface FlusherWorkerData {

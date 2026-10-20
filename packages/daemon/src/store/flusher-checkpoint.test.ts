@@ -129,6 +129,37 @@ describeStore("flusher is the only serving checkpointer", () => {
     expect(statSync(store.paths.wal).size).toBeLessThanOrEqual(1024 * 1024);
   });
 
+  it("restarts a large WAL in the worker, reporting a pinned reader without waiting", async () => {
+    const store = await open({ restartThresholdPages: 1 });
+    store.exec("PRAGMA journal_size_limit=1048576");
+    write(store, 0);
+    await pass(store);
+    const reader = new sqlite!.DatabaseSync(store.paths.database);
+    reader.exec("BEGIN");
+    reader.prepare("SELECT id FROM checkpoint_test").all();
+    try {
+      for (let i = 0; i < 12; i++) write(store, 0);
+      const pinned = await pass(store);
+      // RESTART, unlike PASSIVE, reports BUSY when the reader prevents reuse.
+      expect(pinned.checkpoint!.busy).toBe(1);
+      expect(pinned.barrier).toBe(true);
+      expect(store.facts().flusher.counters.deaths).toBe(0);
+    } finally {
+      reader.exec("COMMIT");
+      reader.close();
+    }
+    const reclaimed = await pass(store);
+    expect(reclaimed.checkpoint!.busy).toBe(0);
+    expect(reclaimed.checkpoint!.checkpointed).toBe(reclaimed.checkpoint!.log);
+    const salt = readFileSync(store.paths.wal).subarray(16, 24);
+    write(store, 1, 16);
+    expect(readFileSync(store.paths.wal).subarray(16, 24).equals(salt)).toBe(false);
+    expect(statSync(store.paths.wal).size).toBeLessThanOrEqual(1024 * 1024);
+    const durable = store.flushed();
+    expect((await pass(store)).barrier).toBe(true);
+    await durable;
+  });
+
   it("bounds an outage, then restarts and reclaims accumulated WAL", async () => {
     const store = await open({ allowExit: true });
     store.exec("PRAGMA journal_size_limit=1048576");

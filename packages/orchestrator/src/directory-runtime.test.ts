@@ -373,32 +373,82 @@ describe("ordinary directory Agent execution", () => {
     },
   );
 
-  it("does not mark an empty readonly directory answer as delivered", async () => {
-    const root = fixture();
-    const author = writer(Buffer.from([1]));
-    author.adapter.run = async function* (spec) {
-      const ts = new Date().toISOString();
-      yield { type: "started", ts, session_id: spec.session_id };
-      yield { type: "completed", ts, session_id: spec.session_id };
-    };
-    const served = vi.spyOn(OrchestratorCredentials.prototype, "noteTryServed");
-    try {
+  it.each([false, true])(
+    "preserves readonly dispatch and HOME selection, delegated=%s",
+    async (delegated) => {
+      const root = fixture(),
+        executionRoot = delegated ? fixture() : root;
+      const author = writer(Buffer.from([1]));
+      const seen: Array<{ cwd: string; access: string; home?: string; homeExists: boolean }> = [];
+      const run = author.adapter.run;
+      author.adapter.run = async function* (spec) {
+        seen.push({
+          cwd: spec.cwd,
+          access: spec.access,
+          home: spec.env?.HOME,
+          homeExists: Boolean(spec.env?.HOME && existsSync(spec.env.HOME)),
+        });
+        yield* run.call(author.adapter, spec);
+      };
       const result = await new Orchestrator({
         registry: new Map([[author.adapter.id, author.adapter]]),
       }).run({
         repoRoot: root,
+        executionRoot,
+        delegated,
         workspaceKind: "directory",
-        scopePaths: ["."],
+        inPlace: true,
+        scopePaths: ["input.txt"],
         access: "readonly",
         harnesses: [author.adapter.id],
-        prompt: "Read only",
+        prompt: "Read the selected folder",
       });
-      expect(served.mock.calls.map(([, , delivered]) => delivered)).toEqual([false]);
+      expect(result.facts.lifecycle).toBe("succeeded");
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).toMatchObject({ cwd: executionRoot, access: "readonly" });
+      if (delegated) {
+        expect(seen[0]!.homeExists).toBe(true);
+        expect(seen[0]!.home).not.toBe(process.env.HOME);
+        expect(seen[0]!.home).not.toBe(executionRoot);
+      } else expect(seen[0]!.home).toBeUndefined();
       expect(existsSync(join(result.runDir, "final/work_product.yaml"))).toBe(false);
-    } finally {
-      served.mockRestore();
-    }
-  });
+      expect(readdirSync(executionRoot).sort()).toEqual(["input.txt", "outside.txt"]);
+    },
+  );
+
+  it.each([["."], ["input.txt"]])(
+    "does not mark an empty readonly answer as delivered with scope %j",
+    async (...scopePaths) => {
+      const root = fixture();
+      const author = writer(Buffer.from([1]));
+      author.adapter.run = async function* (spec) {
+        const ts = new Date().toISOString();
+        yield { type: "started", ts, session_id: spec.session_id };
+        yield { type: "completed", ts, session_id: spec.session_id };
+      };
+      const served = vi.spyOn(OrchestratorCredentials.prototype, "noteTryServed");
+      try {
+        const result = await new Orchestrator({
+          registry: new Map([[author.adapter.id, author.adapter]]),
+        }).run({
+          repoRoot: root,
+          workspaceKind: "directory",
+          scopePaths,
+          access: "readonly",
+          harnesses: [author.adapter.id],
+          prompt: "Read only",
+        });
+        expect(served.mock.calls.map(([, , delivered]) => delivered)).toEqual([false]);
+        const facts = RunFacts.parse(
+          new ArtifactStore(root).readYaml(join(result.runDir, "final/run_facts.yaml")),
+        );
+        expect(facts.deliverable.present).toBe(false);
+        expect(existsSync(join(result.runDir, "final/work_product.yaml"))).toBe(false);
+      } finally {
+        served.mockRestore();
+      }
+    },
+  );
 
   it.each([true, false])(
     "refuses secret output without retained blobs or fake rollback (direct=%s)",

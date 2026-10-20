@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 /** Flusher pass interval (SYNTHESIS_R5 §4.2): a code constant, not a knob. */
 export const FLUSH_INTERVAL_MS = 200;
+/** Preserve the former main autocheckpoint trigger, now enforced by the worker. */
+export const WAL_RESTART_PAGES = 4000;
 
 /** The `workerData` discriminator every store worker is spawned with. The
  * worker modules self-start on it, so the same module graph serves the dev
@@ -20,7 +22,7 @@ export interface FlusherHooks {
   passDelayMs?: number;
   /** Test gate after checkpoint: [1,0] pauses at [2,0] until index 1 is notified. */
   checkpointGate?: SharedArrayBuffer;
-  /** Exercise the bounded RESTART path without a 64 MiB test WAL. */
+  /** Exercise the bounded RESTART path without a 16 MiB test WAL. */
   restartThresholdPages?: number;
 }
 

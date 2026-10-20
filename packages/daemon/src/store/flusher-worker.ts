@@ -1,11 +1,12 @@
 import { closeSync, fstatSync, fsyncSync, openSync, statSync } from "node:fs";
 import { isMainThread, parentPort, workerData, type MessagePort } from "node:worker_threads";
 import { fsyncDirectory } from "@claudexor/util";
-import { applyPragmas, FLUSHER_CONNECTION_PRAGMAS, WAL_REUSE_BYTES } from "./pragmas.js";
+import { applyPragmas, FLUSHER_CONNECTION_PRAGMAS } from "./pragmas.js";
 import type { StatementSync } from "node:sqlite";
 import { loadEngineRuntime } from "./runtime.js";
 import {
   FLUSH_INTERVAL_MS,
+  WAL_RESTART_PAGES,
   STORE_WORKER_DATA_KEY,
   type FlusherCommand,
   type FlusherCounters,
@@ -43,7 +44,7 @@ export async function runFlusherWorker(port: MessagePort, data: FlusherWorkerDat
   const dataVersion = db.prepare("PRAGMA data_version");
   const passive = db.prepare("PRAGMA wal_checkpoint(PASSIVE)");
   const restart = db.prepare("PRAGMA wal_checkpoint(RESTART)");
-  const restartPages = hooks.restartThresholdPages ?? WAL_REUSE_BYTES / 4096;
+  const restartPages = hooks.restartThresholdPages ?? WAL_RESTART_PAGES;
   const checkpointFacts = (statement: StatementSync) => {
     const row = statement.get() as
       { busy: number | bigint; log: number | bigint; checkpointed: number | bigint } | undefined;

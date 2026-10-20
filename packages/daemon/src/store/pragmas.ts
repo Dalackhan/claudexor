@@ -12,7 +12,7 @@ import type { DatabaseSync } from "node:sqlite";
  * The busy timeout is a fuse, counted by `busy_waits`.
  *
  * Flusher connection: never writes rows or waits for a lock. Normally PASSIVE;
- * at the reuse target it also tries RESTART with busy_timeout=0 to prevent
+ * at the former 4,000-frame trigger it tries RESTART with busy_timeout=0 to prevent
  * continuous writers from starving reuse. A successful RESTART briefly holds
  * the writer lock; all its full-device syncs remain on the worker.
  */
@@ -21,7 +21,7 @@ export interface PragmaSpec {
 }
 
 /** Reuse target, not a hard bound while a reader or transaction pins the WAL. */
-export const WAL_REUSE_BYTES = 64 * 1024 * 1024;
+const WAL_REUSE_BYTES = 64 * 1024 * 1024;
 
 export const MAIN_CONNECTION_PRAGMAS: PragmaSpec = Object.freeze({
   journal_mode: "wal",

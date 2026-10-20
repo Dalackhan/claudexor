@@ -202,7 +202,15 @@
             "string",
             "null"
           ],
-          "description": "Daemon run id (recovery handle for inspect/follow/apply/decision); null for in-process read-only runs."
+          "description": "Daemon run id once the accepted job started a run (recovery handle for inspect/follow/apply/decision); null while the job is still queued or after it failed before a run started."
+        },
+        "jobId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "description": "Daemon job id of the accepted launch. While runId is null, pass it as runId to the status, wait and result tools; they report the canonical runId once the run binds."
         },
         "runDir": {
           "type": [
@@ -216,7 +224,7 @@
             "string",
             "null"
           ],
-          "description": "Terminal run LIFECYCLE (succeeded | failed | cancelled | interrupted)."
+          "description": "Run lifecycle state (queued | running | succeeded | failed | cancelled | interrupted); null when an accepted job's state could not be read."
         },
         "runFacts": {
           "anyOf": [

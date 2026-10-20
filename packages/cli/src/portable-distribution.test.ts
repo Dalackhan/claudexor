@@ -53,7 +53,12 @@ describe("portable Agent Skill, Copilot plugin, and MCP distribution", () => {
         join(home, ".codex", "plugins", "claudexor", "skills", "claudexor", "SKILL.md"),
         "utf8",
       );
-      for (const name of ["claudexor_run_wait", "claudexor_run_message", "claudexor_run_continue"])
+      for (const name of [
+        "claudexor_run_wait",
+        "claudexor_run_event_read",
+        "claudexor_run_message",
+        "claudexor_run_continue",
+      ])
         expect(generated, `generated skill omits ${name}`).toContain(`\`${name}\``);
       for (const safety of [
         "NEVER paste live credentials into prompts",

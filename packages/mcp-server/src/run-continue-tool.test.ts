@@ -11,13 +11,27 @@ describe("MCP run continuation", () => {
     const tool = defaultClaudexorTools(runner).find((t) => t.name === "claudexor_run_continue")!;
     expect(tool).toBeDefined();
     expect(tool.inputSchema.required).toEqual(["runId"]);
+    // Explicit canonical successor controls; inherited groups are not restatable here.
     expect(Object.keys(tool.inputSchema.properties as object)).toEqual([
       "runId",
       "prompt",
       "idempotencyKey",
+      "web",
+      "externalContextPolicy",
+      "paidBudget",
+      "credentialProfileId",
+      "access",
+      "maxSeconds",
+      "timeLimitMode",
+      "review",
+      "reviewerPanel",
+      "reviewerModels",
+      "reviewerEfforts",
+      "continueCarrier",
     ]);
     expect(tool.inputSchema.additionalProperties).toBe(false);
     expect(tool.annotations?.readOnlyHint).toBe(false);
+    expect(tool.outputSchema).toBeDefined();
     expect(
       beltClaudexorTools(runner, {
         parentRunId: "parent",
@@ -34,7 +48,8 @@ describe("MCP run continuation", () => {
     async (prompt) => {
       const runner = vi.fn(async () => ({
         jobId: "job-s",
-        state: "queued",
+        runId: "",
+        status: "queued",
         summary: "job-s queued",
       }));
       const result = await runContinueTool(runner).handler(
@@ -51,8 +66,10 @@ describe("MCP run continuation", () => {
         ...(prompt !== undefined ? { prompt } : {}),
         idempotencyKey: "logical-call",
       });
-      expect(result).toMatchObject({ structured: { jobId: "job-s", state: "queued" } });
-      expect((result as { text: string }).text).toContain("job-s");
+      expect(result).toMatchObject({
+        structured: { jobId: "job-s", runId: null, status: "queued" },
+      });
+      expect((result as { text: string }).text).toContain("jobId: job-s");
     },
   );
 
@@ -81,7 +98,8 @@ describe("MCP run continuation", () => {
   it("accepts omitted/empty prompts on the SDK wire and refuses override knobs", async () => {
     const runner = vi.fn(async () => ({
       jobId: "job-s",
-      state: "queued",
+      runId: "",
+      status: "queued",
       summary: "job-s queued",
     }));
     const input = new PassThrough();
@@ -123,13 +141,38 @@ describe("MCP run continuation", () => {
         const reply = await call("tools/call", { name: "claudexor_run_continue", arguments: args });
         expect(reply.error).toBeUndefined();
         expect(reply.result).toMatchObject({
-          structuredContent: { jobId: "job-s", state: "queued" },
+          structuredContent: { jobId: "job-s", runId: null, status: "queued" },
         });
       }
       expect(runner).toHaveBeenCalledTimes(2);
+      const controls = {
+        access: "readonly",
+        web: "off",
+        credentialProfileId: "codex-work",
+        paidBudget: { kind: "finite", maxUsd: 0 },
+        maxSeconds: 600,
+        timeLimitMode: "soft",
+        review: true,
+        continueCarrier: "packet",
+      };
+      const accepted = await call("tools/call", {
+        name: "claudexor_run_continue",
+        arguments: { runId: "run-p", ...controls },
+      });
+      expect(accepted.result?.isError).not.toBe(true);
+      expect(runner).toHaveBeenLastCalledWith({
+        runId: "run-p",
+        ...controls,
+        mode: "__run_continue",
+      });
+      expect(runner).toHaveBeenCalledTimes(3);
       for (const extra of [
         { execution: { isolation: "live" } },
         { access: "full_access" },
+        { harness: "claude" },
+        { model: "fixture-model" },
+        { maxSeconds: 0 },
+        { web: "on", externalContextPolicy: "off" },
         { prompt: null },
         { idempotencyKey: "" },
       ]) {
@@ -139,7 +182,7 @@ describe("MCP run continuation", () => {
         });
         expect(Boolean(reply.error) || reply.result?.isError === true).toBe(true);
       }
-      expect(runner).toHaveBeenCalledTimes(2);
+      expect(runner).toHaveBeenCalledTimes(3);
     } finally {
       await server.close();
       lines.close();

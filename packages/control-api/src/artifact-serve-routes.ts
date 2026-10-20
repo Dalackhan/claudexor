@@ -258,7 +258,7 @@ function serveArtifactFile(
 
 /** The honest post-GC answer (W3.6): the run existed, retention reclaimed its
  * artifacts — a typed 410, never a mysterious 404. */
-function expiredRunBody(tombstone: { run_id: string; deleted_at: string }): {
+export function expiredRunBody(tombstone: { run_id: string; deleted_at: string }): {
   error: string;
   code: string;
   deleted_at: string;

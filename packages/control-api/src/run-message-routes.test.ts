@@ -438,3 +438,63 @@ describe("POST /v2/runs/:id/messages journal-first admission and idempotency (CO
     });
   });
 });
+
+describe("POST /v2/runs/:id/messages for an accepted job that has no run yet", () => {
+  const unbound = (state: string): DaemonRunRecord => ({
+    id: "job-queued",
+    state,
+    params: { prompt: "p", mode: "agent", scope: { kind: "none" } },
+  });
+
+  it("answers a typed not_active receipt instead of a false 404 and sends nothing", async () => {
+    const send = sendStub({ outcome: "delivered" });
+    await withServer([unbound("queued")], { ...ledger(), sendRunMessage: send }, async (base) => {
+      const headers = { "Idempotency-Key": "msg-queued" };
+      const first = await post(base, "job-queued", { text: TEXT }, headers);
+      expect(first.status).toBe(200);
+      const receipt = ControlRunMessageResponse.parse(await first.json());
+      expect(receipt).toMatchObject({
+        accepted: false,
+        outcome: "not_active",
+        reason: "no_live_session",
+        runId: "job-queued",
+        messageId: "msg-queued",
+      });
+      const replay = await post(base, "job-queued", { text: TEXT }, headers);
+      expect(await replay.json()).toEqual(receipt);
+      expect(send).not.toHaveBeenCalled();
+    });
+  });
+
+  it("replays that receipt after the job binds its run, by either id, and still sends nothing", async () => {
+    const send = sendStub({ outcome: "delivered" });
+    const record = unbound("queued");
+    await withServer([record], { ...ledger(), sendRunMessage: send }, async (base) => {
+      const headers = { "Idempotency-Key": "msg-queued" };
+      const receipt = await (await post(base, "job-queued", { text: TEXT }, headers)).json();
+      // The daemon binding gives the same job its run (onRunStart).
+      Object.assign(record, runRecord(), { id: "job-queued" });
+      for (const id of ["job-queued", "run-m1"]) {
+        const replay = await post(base, id, { text: TEXT }, headers);
+        expect(replay.status).toBe(200);
+        expect(await replay.json()).toEqual(receipt);
+      }
+      const changed = await post(base, "run-m1", { text: `${TEXT}!` }, headers);
+      expect(changed.status).toBe(409);
+      expect(send).not.toHaveBeenCalled();
+    });
+  });
+
+  it("answers run_terminal for a job that failed before binding a run", async () => {
+    const send = sendStub({ outcome: "delivered" });
+    await withServer([unbound("failed")], { ...ledger(), sendRunMessage: send }, async (base) => {
+      const response = await post(base, "job-queued", { text: TEXT });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        outcome: "not_active",
+        reason: "run_terminal",
+      });
+      expect(send).not.toHaveBeenCalled();
+    });
+  });
+});

@@ -1,18 +1,45 @@
 import {
   ControlRunStartRequest,
   ControlRunStartResponse,
+  ControlRunState,
   validateOptionalNonEmptyString,
 } from "@claudexor/schema";
-import { connectDaemonIfRunning } from "./daemon-run.js";
+import { connectDaemonIfRunning, type DaemonRunOutcome } from "./daemon-run.js";
 import { controlProblemError } from "./cli-error.js";
 import { controlApiFetch } from "./live.js";
 import { daemonUnavailableError } from "./mcp-daemon-unavailable.js";
+import { projectLaunchHandle } from "./mcp-launch-handle.js";
+import { acceptedPreRunFailure } from "./run-start-acceptance.js";
 
-// Project only the supported request fields: parsing the whole request here
-// would materialize defaults before the daemon can inherit the predecessor.
-const continuationRequest = ControlRunStartRequest.pick({ continueFrom: true, prompt: true })
+/**
+ * The successor controls a caller may state explicitly, by their canonical
+ * request names. Mode, scope, execution, harness and model are inherited by
+ * the daemon; every other omitted control keeps its ordinary new-run default.
+ * Only supported fields are projected: parsing the whole request here would
+ * materialize defaults before the daemon can inherit the predecessor.
+ */
+const continuationRequest = ControlRunStartRequest.pick({
+  continueFrom: true,
+  prompt: true,
+  access: true,
+  web: true,
+  externalContextPolicy: true,
+  credentialProfileId: true,
+  paidBudget: true,
+  maxSeconds: true,
+  timeLimitMode: true,
+  review: true,
+  reviewerPanel: true,
+  reviewerModels: true,
+  reviewerEfforts: true,
+  continueCarrier: true,
+})
   .partial({ prompt: true })
   .required({ continueFrom: true });
+const CALLER_FIELDS = Object.keys(continuationRequest.shape).filter(
+  (key) => key !== "continueFrom",
+);
+const TRANSPORT_FIELDS = new Set(["mode", "runId", "idempotencyKey", "delegatedFromRunId"]);
 
 /** Submit once through the existing control transport; never register cwd or wait for terminal. */
 export async function runContinueQuery(
@@ -25,9 +52,21 @@ export async function runContinueQuery(
       status: 403,
     });
   }
+  // Inherited groups (mode, scope, execution, harness, model) are not caller controls here.
+  const unknown = Object.keys(input).filter(
+    (key) => !TRANSPORT_FIELDS.has(key) && !CALLER_FIELDS.includes(key),
+  );
+  if (unknown.length > 0) {
+    throw Object.assign(new Error(`unsupported continuation field(s): ${unknown.join(", ")}`), {
+      code: "invalid_argument",
+      status: 400,
+    });
+  }
   const body = continuationRequest.parse({
     continueFrom: input["runId"],
-    ...(input["prompt"] !== undefined ? { prompt: input["prompt"] } : {}),
+    ...Object.fromEntries(
+      CALLER_FIELDS.filter((key) => input[key] !== undefined).map((key) => [key, input[key]]),
+    ),
   });
   const key = input["idempotencyKey"];
   const keyError = validateOptionalNonEmptyString(key, "idempotencyKey");
@@ -48,28 +87,49 @@ export async function runContinueQuery(
     body: JSON.stringify(body),
   });
   const result: unknown = await response.json().catch(() => ({}));
+  let out: DaemonRunOutcome | null = null;
   if (!response.ok) {
-    throw controlProblemError(
-      response.status,
-      result,
-      `run continuation failed (HTTP ${response.status})`,
-    );
+    // A successor accepted and then refused before its run started is a handle, not a lost launch.
+    out = acceptedPreRunFailure(response.status, result);
+    if (!out)
+      throw controlProblemError(
+        response.status,
+        result,
+        `run continuation failed (HTTP ${response.status})`,
+      );
+  } else {
+    const parsed = ControlRunStartResponse.safeParse(result);
+    if (!parsed.success) {
+      throw controlProblemError(
+        502,
+        {
+          code: "invalid_response",
+          message: "daemon returned an invalid run continuation handle",
+        },
+        "daemon returned an invalid run continuation handle",
+      );
+    }
+    const handle = parsed.data;
+    if ("runId" in handle) {
+      const jobId = handle.jobId ?? "";
+      const record = jobId ? await connection.client?.status(jobId).catch(() => null) : null;
+      const state = ControlRunState.safeParse(record?.state);
+      out = {
+        jobId,
+        runId: handle.runId,
+        runDir: handle.runDir,
+        status: state.success ? state.data : "",
+      };
+    } else {
+      out = {
+        jobId: handle.jobId,
+        runId: "",
+        runDir: "",
+        status: handle.state,
+        error: handle.error,
+      };
+    }
   }
-  const parsed = ControlRunStartResponse.safeParse(result);
-  if (!parsed.success) {
-    throw controlProblemError(
-      502,
-      {
-        code: "invalid_response",
-        message: "daemon returned an invalid run continuation handle",
-      },
-      "daemon returned an invalid run continuation handle",
-    );
-  }
-  const handle = parsed.data;
-  const id = "runId" in handle ? handle.runId : handle.jobId;
-  return {
-    ...handle,
-    summary: `Continuation accepted: ${id}. Use claudexor_run_status or claudexor_run_result with runId: ${id}.`,
-  };
+  // The successor's mode is the daemon's inherited fact, unknown here.
+  return projectLaunchHandle(connection.addr, out, { deferred: true });
 }

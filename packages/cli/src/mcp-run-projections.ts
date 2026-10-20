@@ -1,6 +1,10 @@
 import {
+  ControlRetainedEnvelope,
+  Id,
   isTerminalLifecycle,
+  RunContinuityReceipt,
   RunFactsInvalidError,
+  RunResumable,
   SecretLikeDisclosure,
   type RunOutcomeFacts,
 } from "@claudexor/schema";
@@ -68,22 +72,49 @@ export function projectSecretLikeDisclosure(
   return parsed.success ? parsed.data : null;
 }
 
+/**
+ * The canonical run id of an addressed detail. A job handle remains usable
+ * after the daemon binds its run, and then converges on that run id; any
+ * other identity is a service fault, never a silent substitution.
+ */
+export function canonicalRunId(requested: string, rawSummary: unknown): string {
+  const summary = (rawSummary ?? {}) as Record<string, unknown>;
+  if (summary["runId"] === requested) return requested;
+  if (summary["jobId"] === requested && typeof summary["runId"] === "string")
+    return summary["runId"];
+  throw new CliError(
+    "operational",
+    `run detail identity does not match requested run ${requested}`,
+    {
+      code: "invalid_service_response",
+      retryable: true,
+    },
+  );
+}
+
+/** Continuation facts verbatim; a key the detail does not carry stays unknown (omitted). */
+function projectContinuationFacts(summary: Record<string, unknown>): Record<string, unknown> {
+  const facts: Record<string, unknown> = {};
+  const continueFrom = Id.nullable().safeParse(summary["continueFrom"]);
+  if ("continueFrom" in summary && continueFrom.success) facts["continueFrom"] = continueFrom.data;
+  const resumable = RunResumable.nullable().safeParse(summary["resumable"]);
+  if ("resumable" in summary && resumable.success) facts["resumable"] = resumable.data;
+  const continuity = RunContinuityReceipt.array().safeParse(summary["continuity"]);
+  if (continuity.success) facts["continuity"] = continuity.data;
+  const retained = ControlRetainedEnvelope.nullable().safeParse(summary["retainedEnvelope"]);
+  if ("retainedEnvelope" in summary && retained.success) facts["retainedEnvelope"] = retained.data;
+  return facts;
+}
+
 /** One typed read projection for inspect/status/result from a single detail snapshot. */
 export function projectRecoveryRunDetail(
   mode: string,
-  runId: string,
+  requestedRunId: string,
   detail: Record<string, unknown>,
   delegationParentRunId?: string,
 ): Record<string, unknown> {
   const summary = (detail["summary"] ?? {}) as Record<string, unknown>;
-  // A queued handle remains usable after the daemon binds its canonical run id.
-  if (summary["jobId"] === runId && typeof summary["runId"] === "string") runId = summary["runId"];
-  if (summary["runId"] !== runId) {
-    throw new CliError("operational", `run detail identity does not match requested run ${runId}`, {
-      code: "invalid_service_response",
-      retryable: true,
-    });
-  }
+  const runId = canonicalRunId(requestedRunId, summary);
   if (
     delegationParentRunId !== undefined &&
     summary["delegatedFromRunId"] !== delegationParentRunId
@@ -131,6 +162,7 @@ export function projectRecoveryRunDetail(
       summary["delegation"] && typeof summary["delegation"] === "object"
         ? summary["delegation"]
         : null,
+    ...projectContinuationFacts(summary),
     secretLike: projectSecretLikeDisclosure(detail),
   };
   if (mode !== "__run_result") {

@@ -10,11 +10,15 @@ import { connectDaemonIfRunning } from "./daemon-run.js";
 import { controlProblemError } from "./cli-error.js";
 import { controlApiFetch, type ControlApiAddress } from "./live.js";
 import { daemonUnavailableError } from "./mcp-daemon-unavailable.js";
-import { observeRunEvents } from "./run-wait-events.js";
+import { canonicalRunId } from "./mcp-run-projections.js";
+import { observeRunEvents, type Observation } from "./run-wait-events.js";
+
+/** Discovery, each snapshot, and a zero-wait replay of available events each get this budget. */
+const STAGE_BUDGET_MS = 5_000;
 
 // Consume only schema-owned snapshot fields, never interpret model/event prose.
 const Snapshot = ControlRunDetail.pick({ lastSeq: true, pendingInteractions: true }).extend({
-  summary: ControlRunDetail.shape.summary.pick({ state: true }),
+  summary: ControlRunDetail.shape.summary.pick({ jobId: true, runId: true, state: true }),
   lastSeq: McpRunWaitResult.shape.snapshotSeq,
   pendingInteractions: ControlRunDetail.shape.pendingInteractions.removeDefault(),
 });
@@ -36,7 +40,7 @@ async function connectForObservation(signal?: AbortSignal) {
             retryable: true,
           }),
         ),
-      5_000,
+      STAGE_BUDGET_MS,
     );
   });
   try {
@@ -52,7 +56,7 @@ async function snapshot(addr: ControlApiAddress, runId: string, signal?: AbortSi
   const abort = () => controller.abort();
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) abort();
-  const timer = setTimeout(abort, 5_000);
+  const timer = setTimeout(abort, STAGE_BUDGET_MS);
   try {
     const response = await controlApiFetch(addr, `/runs/${encodeURIComponent(runId)}`, {
       method: "GET",
@@ -65,12 +69,29 @@ async function snapshot(addr: ControlApiAddress, runId: string, signal?: AbortSi
         body,
         `run snapshot failed (HTTP ${response.status})`,
       );
-    return Snapshot.parse(body);
+    const parsed = Snapshot.parse(body);
+    return { ...parsed, runId: canonicalRunId(runId, parsed.summary) };
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", abort);
     controller.abort();
   }
+}
+
+/** Precedence: abort, terminal lifecycle, a question event in the page, then the stream's own stop. */
+function wakeReason(
+  aborted: boolean,
+  terminal: boolean,
+  observed: Observation | null,
+): McpRunWaitResult["wakeReason"] {
+  if (aborted || observed?.stop === "aborted") return "aborted";
+  if (terminal) return "terminal";
+  if (!observed) return "timeout";
+  if (observed.questionRequested) return "interactions";
+  if (observed.stop === "limit" || (observed.stop === "ready" && observed.events.length > 0))
+    return "events";
+  if (observed.stop === "ended" || observed.stop === "disconnected") return "disconnected";
+  return "timeout";
 }
 
 /** Bounded read-only projection. Aborting observation never invokes makeCancelBridge. */
@@ -91,7 +112,7 @@ export async function runWaitQuery(
   signal?.throwIfAborted();
   let latest = await snapshot(connection.addr, input.runId, signal);
   const result: McpRunWaitResult = {
-    runId: input.runId,
+    runId: latest.runId,
     status: latest.summary.state,
     snapshotSeq: latest.lastSeq,
     snapshotPhase: "before_wait",
@@ -99,19 +120,30 @@ export async function runWaitQuery(
     nextSeq: input.afterSeq,
     events: [],
     eventOmission: null,
+    oversizedEvent: null,
     pendingInteractions: [],
     pendingInteractionCount: 0,
     omittedInteractions: 0,
     wakeReason: "timeout",
   };
-  const unreadTerminalEvents = latest.lastSeq > input.afterSeq;
-  if (
-    (!isTerminalLifecycle(latest.summary.state) || unreadTerminalEvents) &&
-    !latest.pendingInteractions.length &&
-    input.waitMs > 0
-  ) {
-    Object.assign(result, await observeRunEvents(connection.addr, input, signal));
-    if (!signal?.aborted) {
+  // Events already written at the fence are returned whether or not a question
+  // is pending; only a live wait waits for new ones.
+  const live = input.waitMs > 0 && !isTerminalLifecycle(latest.summary.state);
+  let observed: Observation | null = null;
+  if (latest.lastSeq > input.afterSeq || live) {
+    observed = await observeRunEvents(
+      connection.addr,
+      input,
+      {
+        fence: latest.lastSeq,
+        live,
+        deadlineMs: input.waitMs > 0 ? input.waitMs : STAGE_BUDGET_MS,
+      },
+      signal,
+    );
+    const { questionRequested: _question, stop: _stop, ...page } = observed;
+    Object.assign(result, page);
+    if (input.waitMs > 0 && !signal?.aborted) {
       try {
         latest = await snapshot(connection.addr, input.runId, signal);
         result.snapshotPhase = "after_wait";
@@ -120,6 +152,7 @@ export async function runWaitQuery(
       }
     }
   }
+  result.runId = latest.runId;
   result.status = latest.summary.state;
   result.snapshotSeq = latest.lastSeq;
   result.pendingInteractionCount = latest.pendingInteractions.length;
@@ -132,9 +165,11 @@ export async function runWaitQuery(
     result.pendingInteractions.push(pending);
   }
   result.omittedInteractions = result.pendingInteractionCount - result.pendingInteractions.length;
-  if (signal?.aborted) result.wakeReason = "aborted";
-  else if (isTerminalLifecycle(result.status)) result.wakeReason = "terminal";
-  else if (result.pendingInteractionCount) result.wakeReason = "interactions";
+  result.wakeReason = wakeReason(
+    signal?.aborted === true,
+    isTerminalLifecycle(result.status),
+    observed,
+  );
   // The event and interaction budgets leave room for all remaining scalar fields.
   if (Buffer.byteLength(JSON.stringify(result)) > MCP_RUN_WAIT_RESULT_BYTES)
     throw new Error("run observation exceeded its response byte budget");

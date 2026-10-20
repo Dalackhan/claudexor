@@ -245,4 +245,149 @@ describe("enqueueAndAwait caller idempotency", () => {
       }
     },
   );
+
+  it("returns accepted unbound jobs as handles only for durable-handle callers", async () => {
+    const body = { ...request };
+    const client = { status: vi.fn() };
+    const respond = (status: number, value: unknown) =>
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json(value, { status })),
+      );
+    respond(202, { jobId: "job-q", state: "queued" });
+    await expect(
+      enqueueAndAwait(client as never, addr, body, { waitForTerminal: false, acceptUnbound: true }),
+    ).resolves.toEqual({ jobId: "job-q", runId: "", runDir: "", status: "queued" });
+    expect(client.status).not.toHaveBeenCalled();
+    // A typed failure of the accepted job before any run started keeps its identity.
+    const failed = {
+      code: "credential_profile_unknown",
+      message: "profile p1 is unknown",
+      retryable: false,
+      requiredActions: ["Pick a registered profile."],
+      context: { jobId: "job-f", state: "failed" },
+    };
+    respond(400, failed);
+    await expect(
+      enqueueAndAwait(client as never, addr, body, { waitForTerminal: false, acceptUnbound: true }),
+    ).resolves.toMatchObject({
+      jobId: "job-f",
+      runId: "",
+      status: "failed",
+      error: "profile p1 is unknown",
+      errorCode: "credential_profile_unknown",
+      errorStatus: 400,
+      errorRequiredActions: ["Pick a registered profile."],
+    });
+    // Refusals that never accepted a job stay refusals, even in handle mode.
+    for (const refusal of [
+      { code: "idempotency_conflict", message: "changed body", retryable: false },
+      { code: "project_root_missing", message: "gone", retryable: false, context: {} },
+      { code: "invalid_request", message: "x", retryable: false, context: { jobId: "job-x" } },
+    ]) {
+      respond(409, refusal);
+      await expect(
+        enqueueAndAwait(client as never, addr, body, {
+          waitForTerminal: false,
+          acceptUnbound: true,
+        }),
+      ).rejects.toMatchObject({ code: refusal.code });
+    }
+    // Without handle mode the same pre-run failure remains the established typed error.
+    respond(400, failed);
+    await expect(
+      enqueueAndAwait(client as never, addr, body, { waitForTerminal: false }),
+    ).rejects.toMatchObject({ code: "credential_profile_unknown" });
+  });
+
+  it("keeps a bound handle when its state read fails in handle mode only", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ jobId: "job", runId: "run", runDir: "/fixture" })),
+    );
+    const client = { status: vi.fn().mockRejectedValue(new Error("socket lost")) };
+    await expect(
+      enqueueAndAwait(client as never, addr, request, {
+        waitForTerminal: false,
+        acceptUnbound: true,
+      }),
+    ).resolves.toEqual({
+      jobId: "job",
+      runId: "run",
+      runDir: "/fixture",
+      status: "",
+      error: undefined,
+      errorCode: undefined,
+      errorStatus: undefined,
+      errorRetryable: undefined,
+      errorRequiredActions: undefined,
+      errorContext: undefined,
+    });
+    await expect(
+      enqueueAndAwait(client as never, addr, request, { waitForTerminal: false }),
+    ).rejects.toThrow("socket lost");
+  });
+
+  it("replays a durably accepted job that never binds as the same handle over real HTTP", async () => {
+    const root = mkdtempSync(join(tmpdir(), "claudexor-launch-queued-"));
+    const sql = await sqlFixture(root);
+    const commands = sql.graph.commands.current();
+    const queries = sql.graph.commands.queries;
+    const enqueue = vi.fn<DaemonFacadeClient["enqueue"]>(async (params, opts) => {
+      const accepted = commands.accept({
+        id: `job-${queries.count() + 1}`,
+        params,
+        idempotencyKey: opts!.idempotencyKey!,
+        clientId: opts!.clientId!,
+        operation: opts!.operation,
+        idempotencyParams: opts!.idempotencyRequest,
+      });
+      return { id: accepted.record.id, state: "queued" };
+    });
+    const server = new DaemonControlApiServer({
+      token: "fixture",
+      runStartTimeoutMs: 1,
+      pollMs: 1,
+      daemon: {
+        enqueue,
+        findAccepted: async (params, opts) =>
+          commands.find({
+            params,
+            idempotencyKey: opts.idempotencyKey,
+            clientId: opts.clientId!,
+            operation: opts.operation,
+            idempotencyParams: opts.idempotencyRequest,
+          }),
+        async status(id) {
+          return commands.get(id)!;
+        },
+        async list() {
+          return [];
+        },
+        async cancel() {
+          return { ok: false };
+        },
+      },
+    });
+    try {
+      const { host, port } = await server.start();
+      const address = { baseUrl: `http://${host}:${port}`, token: "fixture" };
+      const client = { status: vi.fn() };
+      const opts = { waitForTerminal: false, acceptUnbound: true, idempotencyKey: "queued-key" };
+      const first = await enqueueAndAwait(client as never, address, request, opts);
+      const replay = await enqueueAndAwait(client as never, address, request, opts);
+      expect(first).toEqual({ jobId: "job-1", runId: "", runDir: "", status: "queued" });
+      expect(replay).toEqual(first);
+      await expect(
+        enqueueAndAwait(client as never, address, { ...request, prompt: "changed" }, opts),
+      ).rejects.toMatchObject({ code: "idempotency_conflict" });
+      expect(queries.count()).toBe(1);
+      expect(enqueue).toHaveBeenCalledOnce();
+      expect(client.status).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+      await sql.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

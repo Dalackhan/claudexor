@@ -1,36 +1,22 @@
 import { accountResourceQuery } from "./account-resource-query.js";
 import {
   ControlProblem,
-  isTerminalLifecycle,
   ModeKind,
   RunExecution,
   type ProcessingPreference,
   normalizeCancelReasonCode,
-  type RunOutcomeFacts,
 } from "@claudexor/schema";
-import {
-  connectDaemonIfRunning,
-  daemonOutcomeSummary,
-  ensureDaemon,
-  enqueueAndAwait,
-  fetchRunDetail,
-} from "./daemon-run.js";
-import {
-  describeRunDetailProblem,
-  presentRunPrimaryOutput,
-  projectRunFailure,
-  projectRunPrimaryOutput,
-} from "./run-detail-projections.js";
-import { primaryOutputForCli } from "./primary-output.js";
+import { connectDaemonIfRunning, ensureDaemon, enqueueAndAwait } from "./daemon-run.js";
 import { controlProblemError } from "./cli-error.js";
 import { controlApiFetch, type ControlApiAddress } from "./live.js";
 import { absentDaemonRecovery, daemonUnavailableError } from "./mcp-daemon-unavailable.js";
 import {
   isRecoverableRunDetailIntegrityProblem,
   projectDegradedRecoveryRunDetail,
-  projectImmediateRunDetail,
   projectRecoveryRunDetail,
 } from "./mcp-run-projections.js";
+import { keyedLaunchNeedsProject, projectLaunchHandle } from "./mcp-launch-handle.js";
+import { answerInteraction, projectRunInteractions } from "./mcp-run-interactions.js";
 import { readRunDetailResponse } from "./run-detail-response.js";
 import { catalogQuery } from "./mcp-catalog-query.js";
 import { threadQuery } from "./mcp-thread-query.js";
@@ -38,6 +24,7 @@ import { runTimeLimitQuery } from "./mcp-run-time-limit.js";
 import { runMessageQuery } from "./mcp-run-message.js";
 import { runContinueQuery } from "./mcp-run-continue.js";
 import { runWaitQuery } from "./mcp-run-wait.js";
+import { runEventReadQuery } from "./mcp-run-event-read.js";
 import { journalRecoveryQuery } from "./mcp-journal-recovery.js";
 
 export interface SurfaceRunnerHooks {
@@ -77,6 +64,10 @@ export function mcpSurfaceRunner(options: McpSurfaceRunnerOptions = {}) {
     if (p?.mode === "__run_wait") {
       const { mode: _mode, ...input } = p;
       return runWaitQuery(input, beltContext, hooks?.signal);
+    }
+    if (p?.mode === "__run_event_read") {
+      const { mode: _mode, ...input } = p;
+      return runEventReadQuery(input, beltContext, hooks?.signal);
     }
     if (p?.mode === "__run_message") return runMessageQuery(p, beltContext, hooks?.signal);
     if (p?.mode === "__run_continue") return runContinueQuery(p, beltContext);
@@ -135,6 +126,11 @@ export function mcpSurfaceRunner(options: McpSurfaceRunnerOptions = {}) {
       });
     }
     const mode = ModeKind.parse(p?.mode ?? "agent");
+    // A replayable launch key names one stable project; it never follows
+    // whatever directory this server process happens to run in.
+    const explicitRoot = typeof p?.repoPath === "string" && p.repoPath.trim().length > 0;
+    if (p?.idempotencyKey !== undefined && !options.delegationRepoRoot && !explicitRoot)
+      throw keyedLaunchNeedsProject();
     const connection = options.requireExistingDaemon
       ? await connectDaemonIfRunning()
       : await ensureDaemon();
@@ -214,74 +210,12 @@ export function mcpSurfaceRunner(options: McpSurfaceRunnerOptions = {}) {
         : undefined;
     const out = await enqueueAndAwait(client, addr, body, {
       waitForTerminal: p?.deferred !== true,
+      ...(p?.deferred === true ? { acceptUnbound: true } : {}),
       ...(p?.idempotencyKey !== undefined ? { idempotencyKey: p.idempotencyKey } : {}),
       ...(options.delegationParentRunId ? { internalDaemonEnqueue: true } : {}),
       ...(onPollTick ? { onPollTick } : {}),
     });
-    try {
-      let detail: Record<string, unknown> | null = null;
-      let canonicalPrimary: ReturnType<typeof projectRunPrimaryOutput> = null;
-      let detailProjection = projectImmediateRunDetail(null, { runId: out.runId });
-      let detailProblem: ReturnType<typeof describeRunDetailProblem> | null = null;
-      if (p?.deferred !== true || isTerminalLifecycle(out.status)) {
-        try {
-          detail = await fetchRunDetail(addr, out.runId);
-          detailProjection = projectImmediateRunDetail(detail, {
-            runId: out.runId,
-            ...(isTerminalLifecycle(out.status)
-              ? { lifecycle: out.status as RunOutcomeFacts["lifecycle"] }
-              : {}),
-          });
-          canonicalPrimary = projectRunPrimaryOutput(detail);
-        } catch (error) {
-          detail = null;
-          detailProblem = describeRunDetailProblem(error);
-          detailProjection = projectImmediateRunDetail(null, { runId: out.runId });
-        }
-      }
-      // Local artifacts remain only the established soft-absence fallback.
-      const localFallback =
-        (p?.deferred !== true || isTerminalLifecycle(out.status)) &&
-        !detail &&
-        !detailProblem &&
-        out.runDir
-          ? primaryOutputForCli(out.runDir, mode, {
-              failure: projectRunFailure(detail),
-              lifecycle: isTerminalLifecycle(out.status)
-                ? (out.status as RunOutcomeFacts["lifecycle"])
-                : undefined,
-            })
-          : null;
-      const primary = canonicalPrimary ?? localFallback;
-      const presented = presentRunPrimaryOutput(primary);
-      const reason = daemonOutcomeSummary({
-        ...out,
-        outcomeFacts: detailProjection.outcomeFacts ?? undefined,
-      });
-      const summary =
-        presented ??
-        detailProjection.outcomeBanner ??
-        reason ??
-        (primary?.kind === "patch" ? "patch produced (see artifacts)" : `run ${out.status}`);
-      return {
-        runId: out.runId,
-        runDir: out.runDir,
-        status: out.status,
-        summary,
-        ...detailProjection,
-        ...(detailProblem ? { detailProblem } : {}),
-      };
-    } catch (error) {
-      // The run's terminal is already durable at this point: mark the throw so
-      // the delegation belt keeps the child's slot consumed and reconciles its
-      // spend fail-closed instead of treating the child as never-started.
-      if (error && typeof error === "object") {
-        Object.assign(error, {
-          delegationChildTerminal: { runId: out.runId, status: out.status },
-        });
-      }
-      throw error;
-    }
+    return projectLaunchHandle(addr, out, { deferred: p?.deferred === true, mode });
   };
 }
 
@@ -403,42 +337,9 @@ async function recoveryQuery(
     return { summary: `cancellation acknowledged for run ${runId}`, runId, acknowledged: true };
   }
   if (mode === "__run_interactions") {
-    const detail = await get(`/runs/${encodeURIComponent(runId)}`);
-    const interactions = Array.isArray(detail["pendingInteractions"])
-      ? detail["pendingInteractions"]
-      : [];
-    return {
-      summary: `${interactions.length} pending interaction(s) for run ${runId}`,
-      runId,
-      interactions,
-    };
+    return projectRunInteractions(runId, await get(`/runs/${encodeURIComponent(runId)}`));
   }
-  if (mode === "__run_answer") {
-    const interactionId = String(input["interactionId"] ?? "");
-    if (!interactionId) throw new Error("interactionId is required");
-    const res = await controlApiFetch(
-      addr,
-      `/runs/${encodeURIComponent(runId)}/interactions/${encodeURIComponent(interactionId)}/answer`,
-      {
-        method: "POST",
-        headers: { authorization: `Bearer ${addr.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ answers: input["answers"] }),
-      },
-    );
-    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    if (!res.ok) {
-      throw new Error(
-        typeof body["message"] === "string"
-          ? (body["message"] as string)
-          : `interaction answer failed (HTTP ${res.status})`,
-      );
-    }
-    return {
-      summary: `answer acknowledged for interaction ${interactionId}`,
-      runId,
-      interactionId,
-    };
-  }
+  if (mode === "__run_answer") return answerInteraction(addr, runId, input);
   // __apply_check: the server-side dry gate + patch check (no mutation).
   const res = await controlApiFetch(addr, `/runs/${encodeURIComponent(runId)}/apply/check`, {
     method: "POST",

@@ -430,8 +430,17 @@ for (const tool of tools) {
 // The durable-run READ tools (inspect/status/result) project the same D8 axes
 // as GET /runs/:id and MUST declare a typed outputSchema (McpRunHandleResult),
 // so a new read tool without one fails here rather than silently shipping a
-// free-text-only result.
-for (const readTool of ["claudexor_inspect", "claudexor_run_status", "claudexor_run_result"]) {
+// free-text-only result. Supervision tools that take no prompt (wait, event
+// parts, live messages, successors) carry the same structured contract.
+for (const readTool of [
+  "claudexor_inspect",
+  "claudexor_run_status",
+  "claudexor_run_result",
+  "claudexor_run_wait",
+  "claudexor_run_event_read",
+  "claudexor_run_message",
+  "claudexor_run_continue",
+]) {
   const tool = tools.find((t) => t.name === readTool);
   if (!tool) {
     failures.push(`typed read tool '${readTool}' is missing from defaultClaudexorTools`);

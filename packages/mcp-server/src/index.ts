@@ -7,7 +7,6 @@ import agentCapabilityCatalogSchemaRaw from "@claudexor/schema/generated/AgentCa
 import accountsQuerySchemaRaw from "@claudexor/schema/generated/McpAccountsToolResult.schema.json" with { type: "json" };
 import mcpRunToolResultSchemaRaw from "@claudexor/schema/generated/McpRunToolResult.schema.json" with { type: "json" };
 import mcpRunHandleResultSchemaRaw from "@claudexor/schema/generated/McpRunHandleResult.schema.json" with { type: "json" };
-import paidBudgetSchemaRaw from "@claudexor/schema/generated/PaidBudget.schema.json" with { type: "json" };
 import testCommandInvocationSchemaRaw from "@claudexor/schema/generated/TestCommandInvocation.schema.json" with { type: "json" };
 import type { Readable, Writable } from "node:stream";
 import { McpServer as SdkMcpServer, fromJsonSchema } from "@modelcontextprotocol/server";
@@ -18,10 +17,7 @@ import {
 } from "@modelcontextprotocol/server/stdio";
 import {
   effortJsonSchema,
-  AccessProfile,
-  ExternalContextPolicy,
   type ModeKind,
-  ProviderFamily,
   runControlApplicability,
   validateOptionalNonEmptyString,
   validateSurfaceRunControls,
@@ -37,8 +33,14 @@ import { runMessageTool } from "./run-message-tool.js";
 import { runContinueTool } from "./run-continue-tool.js";
 import { runWaitTool } from "./run-wait-tool.js";
 import { runStatusTool } from "./run-status-tool.js";
+import { runEventReadTool } from "./run-event-read-tool.js";
 import { inlineJsonSchemaRefs } from "./inline-json-schema-refs.js";
-import { reviewerPanelEntrySchema, processingPreferenceSchema } from "./reviewer-panel-schema.js";
+import { processingPreferenceSchema } from "./reviewer-panel-schema.js";
+import {
+  accessAndLimitProperties,
+  externalContextProperties,
+  reviewProperties,
+} from "./run-control-properties.js";
 const mcpRunToolResultSchema = inlineJsonSchemaRefs(
   mcpRunToolResultSchemaRaw as Record<string, unknown>,
 );
@@ -46,7 +48,6 @@ const mcpRunHandleResultSchema = inlineJsonSchemaRefs(
   mcpRunHandleResultSchemaRaw as Record<string, unknown>,
 );
 const testCommandInvocationSchema = inlineJsonSchemaRefs(testCommandInvocationSchemaRaw);
-const paidBudgetSchema = inlineJsonSchemaRefs(paidBudgetSchemaRaw);
 const agentCapabilityCatalogSchema = inlineJsonSchemaRefs(
   agentCapabilityCatalogSchemaRaw as Record<string, unknown>,
 );
@@ -216,8 +217,6 @@ function validateToolArguments(tool: McpTool, args: unknown): string | null {
   return validateNoInlineSecrets(obj, "MCP tool arguments");
 }
 
-const PROVIDER_FAMILIES = ProviderFamily.options;
-
 function validateNoInlineSecrets(value: unknown, context: string): string | null {
   try {
     assertNoInlineSecretValues(value, "$", context);
@@ -242,15 +241,6 @@ export type RunnerFn = (params: any, hooks?: RunnerHooks) => Promise<unknown>;
 
 /** Default Claudexor MCP tool surface: three canonical modes plus strategy controls. */
 export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
-  const reviewerModelProperties = Object.fromEntries(
-    PROVIDER_FAMILIES.map((family) => [family, { type: "string", minLength: 1 }]),
-  );
-  const reviewerEffortProperties = Object.fromEntries(
-    PROVIDER_FAMILIES.map((family) => [
-      family,
-      effortJsonSchema(`Reviewer effort for the ${family} family.`),
-    ]),
-  );
   const promptSchema = (minN = 1, mode: "ask" | "plan" | "agent" = "agent") => ({
     type: "object",
     additionalProperties: false,
@@ -279,16 +269,7 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
       },
       effort: effortJsonSchema("Optional effort override for the primary harness."),
       processingPreference: processingPreferenceSchema,
-      web: {
-        type: "string",
-        enum: ExternalContextPolicy.options,
-        description: "External context policy for this run.",
-      },
-      externalContextPolicy: {
-        type: "string",
-        enum: ExternalContextPolicy.options,
-        description: "Alias of web for control-api parity.",
-      },
+      ...externalContextProperties(),
       n: {
         type: "integer",
         minimum: minN,
@@ -297,66 +278,12 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
       ...RUN_STRATEGY_PROPERTIES[mode],
       repoPath: {
         type: "string",
-        description: "Absolute path of the target project. Defaults to the MCP server cwd.",
+        description:
+          "Absolute path of the target project. Defaults to the MCP server cwd; required with idempotencyKey.",
       },
       execution: runExecutionSchema,
-      paidBudget: paidBudgetSchema,
-      credentialProfileId: {
-        type: "string",
-        minLength: 1,
-        pattern: "\\S",
-        description: "Strict credential profile for this run; never falls back to another account.",
-      },
-      access: {
-        type: "string",
-        enum: AccessProfile.options,
-        description: "Optional access profile for this run.",
-      },
-      maxSeconds: {
-        type: "integer",
-        minimum: 1,
-        maximum: 604800,
-        description:
-          "Initial run time limit in seconds. Explicit limits default to hard unless timeLimitMode is soft.",
-      },
-      timeLimitMode: {
-        type: "string",
-        enum: ["soft", "hard"],
-        description: "With maxSeconds: soft warns and continues; hard cancels on expiry.",
-      },
-      ...(runControlApplicability({ mode }).reviewerPanel.applicable
-        ? {
-            review: {
-              type: "boolean",
-              description:
-                "Enable internal model review. Ordinary Agent defaults to false; true selects reviewers automatically. An explicit reviewer panel or reviewer overrides also enable review. Best-of and until-clean retain review.",
-            },
-            reviewerPanel: {
-              type: "array",
-              minItems: 1,
-              description:
-                "Enable review with explicit panel entries, preserving order and duplicates; no additional review flag is needed.",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                properties: reviewerPanelEntrySchema,
-                required: ["harness"],
-              },
-            },
-            reviewerModels: {
-              type: "object",
-              additionalProperties: false,
-              properties: reviewerModelProperties,
-              description: "Enable review with per-provider reviewer model overrides.",
-            },
-            reviewerEfforts: {
-              type: "object",
-              additionalProperties: false,
-              properties: reviewerEffortProperties,
-              description: "Enable review with per-provider reviewer effort overrides.",
-            },
-          }
-        : {}),
+      ...accessAndLimitProperties(),
+      ...(runControlApplicability({ mode }).reviewerPanel.applicable ? reviewProperties() : {}),
       ...(runControlApplicability({ mode }).protectedPathApprovals.applicable
         ? {
             protectedPathApprovals: {
@@ -477,6 +404,7 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
     runMessageTool(runner),
     runContinueTool(runner),
     runWaitTool(runner),
+    runEventReadTool(runner),
     {
       name: "claudexor_status",
       description:
@@ -587,7 +515,8 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
     },
     {
       name: "claudexor_run_interactions",
-      description: "List daemon-persisted questions that are still awaiting answers for a run.",
+      description:
+        "List the complete daemon-persisted questions still awaiting answers for a run, including bodies claudexor_run_wait omitted; the text content carries the same JSON.",
       inputSchema: runIdSchema,
       annotations: { readOnlyHint: true },
       handler: async (args) => {
@@ -595,30 +524,26 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
           mode: "__run_interactions",
           runId: String(args?.runId ?? ""),
         });
-        return {
-          text: formatRunResult(result),
-          structured: (result && typeof result === "object" ? result : {}) as Record<
-            string,
-            unknown
-          >,
-        };
+        const structured = (result && typeof result === "object" ? result : {}) as Record<
+          string,
+          unknown
+        >;
+        return { text: JSON.stringify(structured), structured };
       },
     },
     {
       name: "claudexor_answer_interaction",
       description:
-        "Answer a daemon-persisted run interaction; success is reported only after the control API acknowledges the journal mutation.",
+        "Answer a daemon-persisted run interaction; success (status delivered) is reported only after the control API acknowledges the journal mutation. Refusals keep their typed status as the failure code: not_found, already_resolved (never proof that this answer landed) or rejected. Answers have no replay key and are not retried.",
       inputSchema: interactionAnswerSchema,
       annotations: { readOnlyHint: false, destructiveHint: false },
       handler: async (args) => {
         const result = await runner({ mode: "__run_answer", ...args });
-        return {
-          text: formatRunResult(result),
-          structured: (result && typeof result === "object" ? result : {}) as Record<
-            string,
-            unknown
-          >,
-        };
+        const structured = (result && typeof result === "object" ? result : {}) as Record<
+          string,
+          unknown
+        >;
+        return { text: JSON.stringify(structured), structured };
       },
     },
     {

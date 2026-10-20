@@ -5,7 +5,8 @@
       "type": "object",
       "properties": {
         "runId": {
-          "type": "string"
+          "type": "string",
+          "description": "Canonical run id; a queued job id converges to its run id once the run binds."
         },
         "status": {
           "type": "string",
@@ -23,7 +24,7 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991,
-          "description": "Snapshot fence, separate from the returned event cursor."
+          "description": "Last event seq at the latest snapshot: a fence, not a cursor. nextSeq below it means events are already written; eventOmission stream_ended reports when the stream cannot serve them."
         },
         "snapshotPhase": {
           "type": "string",
@@ -50,7 +51,7 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991,
-          "description": "Last returned SSE id, or afterSeq when no event was returned."
+          "description": "Last returned event seq, or afterSeq when none was returned. It never advances over an unreturned event."
         },
         "events": {
           "type": "array",
@@ -193,7 +194,7 @@
             "additionalProperties": false
           },
           "maxItems": 200,
-          "description": "Ordered new events, at most 65536 UTF-8 JSON bytes including envelopes. Legacy events retain their body and use the SSE id as seq."
+          "description": "Ordered new events, at most 65536 UTF-8 JSON bytes including envelopes. Legacy events retain their body and use the stream id as seq."
         },
         "eventOmission": {
           "anyOf": [
@@ -203,14 +204,43 @@
                 "event_limit",
                 "byte_limit",
                 "oversized_frame",
-                "invalid_event"
+                "invalid_event",
+                "stream_ended"
               ]
             },
             {
               "type": "null"
             }
           ],
-          "description": "A limit or invalid frame stopped observation; additional event count is unknown. Null means no such limit was reached, not that replay was exhausted. No cursor advances over unreturned events. An oversized first event requires another evidence surface."
+          "description": "Why the page stopped early: event_limit or byte_limit (more events may follow; resume with nextSeq), oversized_frame (the next frame exceeds the 131072-byte stream frame cap), invalid_event (the next frame failed validation and is never skipped), stream_ended (the stream, which ends only for a terminal run, served nothing after nextSeq although snapshotSeq is higher, such as a last line left unterminated by a crash; nothing was skipped, and the same call returns the same page until the log changes, so stop there). Null means no limit was reached, not that replay is exhausted."
+        },
+        "oversizedEvent": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "seq": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991,
+                  "description": "Durable seq of the next unread event."
+                },
+                "type": {
+                  "type": "string",
+                  "description": "Event type the daemon stream names for it."
+                }
+              },
+              "required": [
+                "seq",
+                "type"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The next unread event after nextSeq cannot fit one page. Read its exact bytes in parts with claudexor_run_event_read, then resume with afterSeq set to its seq. Null otherwise."
         },
         "pendingInteractions": {
           "type": "array",
@@ -337,7 +367,7 @@
             "additionalProperties": false,
             "description": "A live interactive question awaiting the user's answer (snapshot projection)."
           },
-          "description": "Current snapshot's pending bodies, bounded to 32768 UTF-8 JSON bytes; use claudexor_run_interactions for omitted bodies."
+          "description": "Current snapshot's pending questions, bounded to 32768 UTF-8 JSON bytes; claudexor_run_interactions returns complete bodies. They never hold back events."
         },
         "pendingInteractionCount": {
           "$ref": "#/definitions/McpRunWaitResult/properties/events/items/properties/seq"
@@ -355,7 +385,7 @@
             "aborted",
             "disconnected"
           ],
-          "description": "Abort takes precedence; otherwise terminal, current interactions, events/omission, then timeout or disconnect. Disconnect is never completion. No worker is cancelled."
+          "description": "Why this observation returned, by precedence: aborted (this read was cancelled; the worker continues), terminal (the run is terminal; events may still follow nextSeq unless eventOmission is stream_ended), interactions (this page includes a question event), events (event mode, a completed zero-wait page, or a page, even an empty one, stopped by event_limit, byte_limit, oversized_frame or invalid_event), timeout (waitMs elapsed, possibly with a partial batch), disconnected (the stream ended early; never completion)."
         }
       },
       "required": [
@@ -367,13 +397,14 @@
         "nextSeq",
         "events",
         "eventOmission",
+        "oversizedEvent",
         "pendingInteractions",
         "pendingInteractionCount",
         "omittedInteractions",
         "wakeReason"
       ],
       "additionalProperties": false,
-      "description": "Read-only run observation, at most 131072 UTF-8 JSON bytes. At most two snapshot GETs and one SSE subscription; no automatic reconnect or worker cancellation. Resume with nextSeq. Snapshot-only/terminal/interaction wakes can leave events unread without changing the cursor."
+      "description": "Read-only run observation, at most 131072 UTF-8 JSON bytes: at most two snapshot reads and one stream subscription, no automatic reconnect or worker cancellation. Events already available at the snapshot fence are returned before any wait, whether or not a question is pending. Resume with nextSeq."
     }
   },
   "$schema": "http://json-schema.org/draft-07/schema#"

@@ -737,7 +737,8 @@ service, absent for an older engine, and a failed evidence read adds one
 `routingEvidenceProblem` while the listing stays authoritative),
 `claudexor_runs`, `claudexor_inspect`, `claudexor_run_status`,
 `claudexor_run_result`, `claudexor_run_cancel`, `claudexor_run_time_limit`,
-`claudexor_run_wait`, `claudexor_run_message`, `claudexor_run_continue`,
+`claudexor_run_wait`, `claudexor_run_event_read`, `claudexor_run_message`,
+`claudexor_run_continue`,
 `claudexor_run_interactions`, `claudexor_answer_interaction`,
 `claudexor_apply_check`, and
 `claudexor_journal_recovery`. The destructive
@@ -745,9 +746,9 @@ service, absent for an older engine, and a failed evidence read adds one
 explicit `quarantine_and_start_fresh` confirmation. One-shot runs and thread
 turns accept `credentialProfileId` (CLI `--profile`) as a strict account pin.
 Create a thread once, enqueue follow-ups with `claudexor_thread_turn`, then
-follow each returned `runId` with the ordinary status/result tools. If a turn
-returns only a queued `jobId`, use `claudexor_runs` to recover its `runId`
-after binding.
+follow each returned `runId` with the ordinary status/result tools. A turn that
+returns only a queued `jobId` is followed the same way: pass the `jobId` as
+`runId`, and the reads report the canonical `runId` once it binds.
 Creation starts no model. The default `workspace: in_place` lets write turns edit
 the project directory directly. Choose `workspace: isolated` for a persistent
 thread worktree created on the first write turn, then use thread Apply to merge
@@ -761,7 +762,8 @@ One-shot launches and thread create/turn accept an optional caller-owned
 `idempotencyKey`. An omitted
 key is generated per invocation; retry an unknown outcome with the same key
 and body, and use a new key for a deliberately new turn. Changed content under
-the same key conflicts. `claudexor_thread_turn` declares the durable
+the same key conflicts. A keyed one-shot launch names its project with an
+explicit `repoPath` (see below). `claudexor_thread_turn` declares the durable
 `McpThreadTurnResult` handle as its outputSchema. `claudexor_thread_read`
 returns daemon-owned thread, turn and session records without starting work or
 a daemon; with no daemon running it fails with retryable `daemon_unavailable`.
@@ -770,33 +772,101 @@ separate budget or lifecycle.
 
 ### Observing and directing an existing run
 
-`claudexor_run_wait` observes an existing `runId` without starting a daemon or
-another run. Pass `afterSeq` from the previous result's `nextSeq`; the snapshot's
-`snapshotSeq` is a separate observation fence, not an event replay cursor.
-`waitMs` bounds the event subscription to at most 50 seconds; zero reads only
-the current snapshot. Events and interaction bodies are byte/count bounded,
-and omission is explicit. Returned events pair the durable SSE `seq` with the
-original `event`. A timeout, disconnected stream or cancelled tool call is not
-a completed or cancelled worker. Read `wakeReason`, `status`, snapshot freshness
-and pending interactions separately; final output still comes from
-`claudexor_run_result`.
+A controller saves the exact launch arguments and key before calling a run
+tool, keeps the returned handle, observes it, answers questions or sends
+independent messages, reads the terminal result, and only then starts an
+explicit successor. Each step projects the daemon's existing authority: MCP adds
+no scheduler, handle registry, automatic retry or reconnect.
 
-`claudexor_run_message` sends `{runId, text, idempotencyKey, expectedAttemptId?}`
-through the existing [live-input channel](ARCHITECTURE.md#live-messages-into-a-running-run).
-Its key is required and identifies this exact message. `accepted` means native
-acceptance, `delivered` means observed consumption, and neither proves obedience.
-An HTTP-successful refusal stays a typed outcome. For an unknown response,
-retain the same key and body; do not create a new message identity to retry.
-Host cancellation stops the HTTP request, not the target run.
+**Launch handles.** Run tools return the accepted `jobId` beside `runId`. A job
+still queued after the daemon's binding wait (about 30 seconds) returns
+`runId: null` and `status: "queued"`; a job that failed before any run started
+returns `status: "failed"` with its typed `failure`. Pass the `jobId` as `runId`
+to the wait, status, result and message tools: reads report the canonical
+`runId` once the run binds, and a message to a still-queued job answers
+`not_active`/`no_live_session` with nothing sent. Refusals before acceptance stay
+tool errors.
 
-`claudexor_run_continue` submits `{runId, prompt?, idempotencyKey?}` to the existing
-`continueFrom` admission. The daemon inherits the predecessor's omitted settings
-and decides whether its history and workspace can continue; the MCP client does
-not substitute its cwd, mode, account or execution defaults. An empty prompt is
-valid. Retain the returned `jobId` or `runId` and pass it as `runId` to the ordinary
-observation tools. This is a successor command, not resurrection of a terminated
-process. Unsupported strategies and an already claimed successor remain typed
-refusals; a retry of an unknown response needs the original key and body.
+**Replay.** A keyed one-shot launch requires an explicit absolute `repoPath`
+(`idempotency_repo_path_required`); it never follows the MCP server's working
+directory. After an unknown response, repeat the identical arguments and key
+from any MCP process or directory: the daemon returns the accepted handle and
+starts nothing new, while changed arguments conflict (`idempotency_conflict`).
+Recovery assumes the same registered project root is still available at that
+path. A missing, moved or unmounted root is refused (`project_root_missing`)
+before the replay lookup, so nothing is replayed or started; `claudexor_runs`
+still lists the earlier run.
+
+**Waiting.** `claudexor_run_wait` reads the run's event stream after `afterSeq`
+(the previous `nextSeq`, never `snapshotSeq`). Events already written at its
+first snapshot, the `snapshotSeq` fence, are returned first in a bounded page
+(50 events and 64 KiB by default), whether or not a question is pending. Then
+`wake: "batch"` (default) keeps collecting until the page fills, the page
+includes a question event (`interaction.requested`, also one written before the
+wait), the run ends, or `waitMs` elapses; `wake: "event"` returns as soon as
+any event is available. A question already pending before the cursor never ends
+a wait by itself: `pendingInteractions` reports it (bodies bounded to 32 KiB;
+`claudexor_run_interactions` returns them complete). `waitMs: 0` returns only
+the already available page. `wakeReason` names why the call returned; `terminal`
+ends the run, not its events, so keep reading until `nextSeq` reaches
+`snapshotSeq` or a page returns no events with
+`eventOmission: "stream_ended"`: the stream, which ends only for a terminal run,
+cannot serve the rest, for example a last line a crash left unterminated (the
+event-part route answers it `run_event_not_found` too). Nothing was skipped,
+and the same call returns the same page until the log changes. `waitMs` bounds
+only the event stage: discovery, each snapshot read and a zero wait's replay
+have separate 5-second budgets, so a call can take `waitMs` plus about 15
+seconds; keep `waitMs` below the host's tool-call timeout. A timeout,
+disconnect or cancelled call closes only that read; the worker continues.
+
+**Oversized events.** An event no page can hold, such as a `run.created` whose
+prompt exceeds the page or a long message, is named in `oversizedEvent`, and the
+cursor stays before it. `claudexor_run_event_read {runId, seq, offset?,
+maxBytes?}` reads bounded parts (32 KiB by default, at most 64 KiB) of the exact
+redacted line the event stream delivers, with `totalBytes`, `nextOffset` and the
+whole event's `sha256`; parts never split a character, and the text content
+repeats the part after one header line. A partial read does not consume the
+event: after the last part (`nextOffset` equals `totalBytes`) and verification,
+resume the wait with `afterSeq` set to that `seq`. Reads are addressed by run
+and seq only (`GET /v2/runs/:id/events/:seq`), never by path, artifact or whole
+log; an absent or invalid event is refused (`run_event_not_found`,
+`run_event_invalid`), and an invalid stream frame still stops a page
+(`invalid_event`) instead of being skipped.
+
+**Questions and messages.** Answer a pending question with
+`claudexor_answer_interaction`, using the ids and option labels from
+`claudexor_run_interactions` (its text content is the complete JSON). A refusal
+keeps its typed status as the failure code: `not_found`, `already_resolved` or
+`rejected`. Answers carry no replay key, and `already_resolved` never proves
+that this answer was the one delivered. `claudexor_run_message` sends an
+independent message `{runId, text, idempotencyKey, expectedAttemptId?}` through
+the [live-input channel](ARCHITECTURE.md#live-messages-into-a-running-run); its
+required key is the message id. While a question is pending it answers
+`not_active`/`interaction_pending` and answers nothing. `accepted` means native
+acceptance only; consumption later appears as a `harness.event` status
+`live_input_delivered` carrying the same `message_id`. `delivered` means
+consumption was observed; neither proves obedience. After `delivery_unknown`,
+keep the same key and body; after `not_active` nothing was sent, so a later
+attempt needs a new key. Host cancellation stops the HTTP request, not the run.
+
+**Successors.** `claudexor_run_continue` starts one successor of a terminal
+single-candidate Agent or Ask run through the existing `continueFrom` admission
+and returns the launch handle. The engine inherits only the mode, scope,
+execution, harness and model groups. Every other control takes its ordinary
+new-run default, not the predecessor's value, unless restated: `access`, `web`
+or `externalContextPolicy`, `credentialProfileId`, `paidBudget`, `maxSeconds`
+and `timeLimitMode`, `review`, `reviewerPanel`, `reviewerModels`,
+`reviewerEfforts`, and `continueCarrier` (`auto` or `packet`). A successor of a
+`readonly` Agent run therefore resolves the project's default access, normally
+`workspace_write`, unless `access: "readonly"` is restated. Budget and time
+limits govern that successor alone, never the chain's remaining allowance. An
+empty prompt is valid. `claudexor_run_status` and `claudexor_run_result` project
+`continueFrom`, `resumable`, `continuity` and `retainedEnvelope` (omitted when
+the daemon detail did not carry them) for deciding whether and how to continue.
+A second successor of the same predecessor is refused `continuation_superseded`
+with the chain `head` to continue instead; recover an unknown response with the
+original key and arguments. A successor is a new command, not resurrection of a
+terminated process.
 
 These existing-run controls are not exposed by the Delegate belt and cannot
 expand a child's authority. They add no automatic retries, worker restarts,

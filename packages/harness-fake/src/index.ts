@@ -10,6 +10,8 @@ import type {
 } from "@claudexor/schema";
 import type { DoctorSpec, HarnessAdapter } from "@claudexor/core";
 import { CLAUDEXOR_VERSION, nowIso } from "@claudexor/util";
+import { runFakeInteractive } from "./interactive.js";
+import { FAKE_TURN_ID, FakeLiveInput } from "./live-input.js";
 
 export type FakeKind =
   | "fake-success"
@@ -32,6 +34,8 @@ export type FakeKind =
   | "fake-context-then-error"
   // Live-input fixture: the run parks until one message arrives (never echoed).
   | "fake-steerable"
+  // Supervision fixture: questions around one accepted live message (interactive.ts).
+  | "fake-interactive"
   // Native-session fixture: reports a native session id (the resumed one when
   // the engine carries one) and a probe of the environment it was handed.
   | "fake-session";
@@ -55,40 +59,12 @@ export const FAKE_KINDS: FakeKind[] = [
   "fake-context-then-complete",
   "fake-context-then-error",
   "fake-steerable",
+  "fake-interactive",
   "fake-session",
 ];
 
-/** The one native turn id the steerable fake reports on its receipts. */
-const FAKE_TURN_ID = "fake-turn-1";
-
-/**
- * Per-session waiter of the `fake-steerable` kind. The run parks in `park`
- * until ONE live message (or the abort) arrives; `deliver` hands the message
- * id to the parked run and answers whether a run was there to take it. Only
- * the id crosses: the text is never read, so it can never be echoed.
- */
-class FakeLiveInput {
-  private readonly waiters = new Map<string, (messageId: string | null) => void>();
-
-  park(sessionId: string, abort: AbortSignal | undefined): Promise<string | null> {
-    return new Promise<string | null>((resolve) => {
-      const settle = (messageId: string | null): void => {
-        this.waiters.delete(sessionId);
-        resolve(messageId);
-      };
-      if (abort?.aborted) return settle(null);
-      abort?.addEventListener("abort", () => settle(null), { once: true });
-      this.waiters.set(sessionId, settle);
-    });
-  }
-
-  deliver(sessionId: string, messageId: string): boolean {
-    const waiter = this.waiters.get(sessionId);
-    if (!waiter) return false;
-    waiter(messageId);
-    return true;
-  }
-}
+/** Kinds with a live-input channel (`message()` and `live_input: mid_turn`). */
+const LIVE_INPUT_KINDS: ReadonlySet<string> = new Set(["fake-steerable", "fake-interactive"]);
 
 /** The D-16 kinds that declare a schema-constrained WorkReport transport and
  * emit a (possibly malformed) envelope final message. */
@@ -152,9 +128,9 @@ function buildManifest(id: string, provider: ProviderFamily): HarnessManifest {
       },
       access_control: { readonly_mechanism: "none", write_mechanism: "none" },
       isolation: { supported_containment: ["env_or_file_injection"] },
-      // Only the steerable fixture has a live-input channel; every other fake
-      // keeps `none` so the engine answers `unsupported` without a native write.
-      live_input: id === "fake-steerable" ? "mid_turn" : "none",
+      // Only the live-input fixtures have a channel; every other fake keeps
+      // `none` so the engine answers `unsupported` without a native write.
+      live_input: LIVE_INPUT_KINDS.has(id) ? "mid_turn" : "none",
       // The offline fixture declares MCP injection so the engine's delegate-belt
       // path (agent --delegate) is exercisable deterministically; the fake spawns
       // no subprocess, so it simply ignores the injected belt descriptor (as it
@@ -178,7 +154,7 @@ function buildManifest(id: string, provider: ProviderFamily): HarnessManifest {
       web_policy: "none",
       max_turns: false,
       tool_lists: false,
-      interactive: false,
+      interactive: id === "fake-interactive",
       // D-16: the work-report emit knobs advertise a constrained transport (which
       // rides the native json_schema flag) so the orchestrator compiles the
       // envelope and the finalizer canaries can drive completed / needs_input /
@@ -342,6 +318,9 @@ async function* runFake(
       });
       return;
     }
+    case "fake-interactive":
+      yield* runFakeInteractive(spec, observedModel, live!);
+      return;
     case "fake-steerable": {
       // Live-input fixture (`POST /v2/runs/:id/messages`): the run parks until
       // ONE message reaches it through `message()`, then emits the same typed
@@ -535,7 +514,7 @@ function maybeWriteFakeChange(spec: HarnessRunSpec): void {
 export function createFakeHarness(kind: FakeKind, opts: FakeOptions = {}): HarnessAdapter {
   const provider: ProviderFamily = opts.provider ?? "local";
   const observedModel = opts.observedModel ?? `${kind}-model`;
-  const live = kind === "fake-steerable" ? new FakeLiveInput() : null;
+  const live = LIVE_INPUT_KINDS.has(kind) ? new FakeLiveInput() : null;
   return {
     id: kind,
     async discover(): Promise<HarnessManifest> {
@@ -588,9 +567,12 @@ export function createFakeHarness(kind: FakeKind, opts: FakeOptions = {}): Harne
     ...(live
       ? {
           async message(sessionId: string, input: { messageId: string; text: string }) {
-            return live.deliver(sessionId, input.messageId)
-              ? { outcome: "delivered" as const, nativeTurnId: FAKE_TURN_ID }
-              : { outcome: "not_active" as const, reason: "no_active_turn" as const };
+            // fake-interactive only crosses the acceptance boundary here; its
+            // consumption arrives later as the run's live_input_delivered status.
+            if (!live.deliver(sessionId, input.messageId))
+              return { outcome: "not_active" as const, reason: "no_active_turn" as const };
+            const outcome = kind === "fake-interactive" ? "accepted" : "delivered";
+            return { outcome: outcome as "accepted" | "delivered", nativeTurnId: FAKE_TURN_ID };
           },
         }
       : {}),

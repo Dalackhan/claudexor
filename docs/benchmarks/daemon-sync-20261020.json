@@ -1,5 +1,5 @@
 {
-  "gate": "blocked: final event-loop maximum is not lower and COMMIT p99 is mixed",
+  "gate": "passed: quiet-host rerun (6 ABBA rounds) - every candidate COMMIT p99 below every base p99, lower COMMIT max and worst-window loop p99, loop max tied",
   "phases": [
     {
       "phase": "PASSIVE only",
@@ -325,6 +325,656 @@
           },
           "loopMaxMs": 2661.286,
           "walMaxMiB": 16.72637176513672
+        }
+      ]
+    },
+    {
+      "phase": "Quiet-host rerun",
+      "base": "0919faac45dc34f67439bfb55443777143c9cfd0",
+      "candidate": "7910d11ef99e3be2916984b212c2f2f83f9998ad",
+      "node": "v24.16.0",
+      "seconds": 30,
+      "rounds": 6,
+      "rate": 200,
+      "readsPerSecond": 60,
+      "instrumentation": "identical post-COMMIT histogram, BEGIN wait, external-write and run-detail timers on both builds; per-window maxima captured at the native loop roll via IPC",
+      "attribution": "worst labelled synchronous section in each loop window; temporal association, not proof of the exact cause of its maximum delay",
+      "trials": [
+        {
+          "label": "base",
+          "round": 1,
+          "pid": 47765,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30064.414042,
+          "loadStart": 8.12939453125,
+          "loadEnd": 7.8837890625,
+          "pragmas": {
+            "wal_autocheckpoint": 4000,
+            "checkpoint_fullfsync": 1,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.036,
+            "max_ms": 147.674,
+            "p50_ms": 0.098,
+            "p99_ms": 6.079
+          },
+          "eventLoop": {
+            "worstWindowP99Ms": 75.76,
+            "maxMs": 190.841,
+            "maxWindow": {
+              "windowEndedAt": "2026-10-20T02:34:04.330Z",
+              "windowMs": 10001.533,
+              "worstSync": {
+                "operation": "store.commit",
+                "durationMs": 147.674,
+                "startedAt": "2026-10-20T02:34:00.909Z",
+                "at": "2026-10-20T02:34:01.057Z"
+              }
+            }
+          },
+          "loopMaxMs": 190.841,
+          "walMaxMiB": 15.95233154296875,
+          "flusher": {
+            "passes": 174,
+            "barriers": 124,
+            "dirSyncs": 125,
+            "busyPassive": 0,
+            "walReopens": 0,
+            "restarts": 0,
+            "deaths": 0
+          },
+          "busyWaits": 0
+        },
+        {
+          "label": "candidate",
+          "round": 1,
+          "pid": 49622,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30107.879125,
+          "loadStart": 7.8837890625,
+          "loadEnd": 7.9482421875,
+          "pragmas": {
+            "wal_autocheckpoint": 0,
+            "checkpoint_fullfsync": 0,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.039,
+            "max_ms": 20.503,
+            "p50_ms": 0.107,
+            "p99_ms": 3.327
+          },
+          "eventLoop": {
+            "worstWindowP99Ms": 26.526,
+            "maxMs": 78.774,
+            "maxWindow": {
+              "windowEndedAt": "2026-10-20T02:34:45.902Z",
+              "windowMs": 10001.252,
+              "worstSync": {
+                "operation": "store.begin_immediate",
+                "durationMs": 62.906,
+                "startedAt": "2026-10-20T02:34:44.290Z",
+                "at": "2026-10-20T02:34:44.353Z"
+              }
+            }
+          },
+          "loopMaxMs": 78.774,
+          "walMaxMiB": 22.561141967773438,
+          "flusher": {
+            "passes": 176,
+            "barriers": 127,
+            "dirSyncs": 128,
+            "busyPassive": 0,
+            "walReopens": 0,
+            "restarts": 0,
+            "deaths": 0
+          },
+          "busyWaits": 0
+        },
+        {
+          "label": "candidate",
+          "round": 2,
+          "pid": 51285,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30195.720542,
+          "loadStart": 7.9482421875,
+          "loadEnd": 8.16845703125,
+          "pragmas": {
+            "wal_autocheckpoint": 0,
+            "checkpoint_fullfsync": 0,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.052,
+            "max_ms": 89.633,
+            "p50_ms": 0.102,
+            "p99_ms": 4.319
+          },
+          "eventLoop": {
+            "worstWindowP99Ms": 32.408,
+            "maxMs": 146.538,
+            "maxWindow": {
+              "windowEndedAt": "2026-10-20T02:35:06.416Z",
+              "windowMs": 10000.483,
+              "worstSync": {
+                "operation": "store.commit",
+                "durationMs": 89.633,
+                "startedAt": "2026-10-20T02:35:01.157Z",
+                "at": "2026-10-20T02:35:01.247Z"
+              }
+            }
+          },
+          "loopMaxMs": 146.538,
+          "walMaxMiB": 30.050079345703125,
+          "flusher": {
+            "passes": 175,
+            "barriers": 126,
+            "dirSyncs": 126,
+            "busyPassive": 0,
+            "walReopens": 0,
+            "restarts": 0,
+            "deaths": 0
+          },
+          "busyWaits": 0
+        },
+        {
+          "label": "base",
+          "round": 2,
+          "pid": 53694,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30145.555292,
+          "loadStart": 8.16845703125,
+          "loadEnd": 7.77880859375,
+          "pragmas": {
+            "wal_autocheckpoint": 4000,
+            "checkpoint_fullfsync": 1,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.045,
+            "max_ms": 54.244,
+            "p50_ms": 0.107,
+            "p99_ms": 6.303
+          },
+          "eventLoop": {
+            "worstWindowP99Ms": 32.719,
+            "maxMs": 81.461,
+            "maxWindow": {
+              "windowEndedAt": "2026-10-20T02:35:46.933Z",
+              "windowMs": 10003.438,
+              "worstSync": {
+                "operation": "store.commit",
+                "durationMs": 54.244,
+                "startedAt": "2026-10-20T02:35:44.305Z",
+                "at": "2026-10-20T02:35:44.360Z"
+              }
+            }
+          },
+          "loopMaxMs": 81.461,
+          "walMaxMiB": 15.850173950195312,
+          "flusher": {
+            "passes": 180,
+            "barriers": 131,
+            "dirSyncs": 132,
+            "busyPassive": 3,
+            "walReopens": 0,
+            "restarts": 0,
+            "deaths": 0
+          },
+          "busyWaits": 0
+        },
+        {
+          "label": "base",
+          "round": 3,
+          "pid": 56349,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30150.714583,
+          "loadStart": 7.77880859375,
+          "loadEnd": 8.30126953125,
+          "pragmas": {
+            "wal_autocheckpoint": 4000,
+            "checkpoint_fullfsync": 1,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.083,
+            "max_ms": 56.479,
+            "p50_ms": 0.096,
+            "p99_ms": 7.807
+          },
+          "eventLoop": {
+            "worstWindowP99Ms": 46.629,
+            "maxMs": 118.292,
+            "maxWindow": {
+              "windowEndedAt": "2026-10-20T02:36:48.552Z",
+              "windowMs": 10000.676,
+              "worstSync": {
+                "operation": "store.external_write",
+                "durationMs": 96.402,
+                "startedAt": "2026-10-20T02:36:45.649Z",
+                "at": "2026-10-20T02:36:45.746Z"
+              }
+            }
+          },
+          "loopMaxMs": 118.292,
+          "walMaxMiB": 15.88946533203125,
+          "flusher": {
+            "passes": 178,
+            "barriers": 128,
+            "dirSyncs": 128,
+            "busyPassive": 5,
+            "walReopens": 0,
+            "restarts": 0,
+            "deaths": 0
+          },
+          "busyWaits": 0
+        },
+        {
+          "label": "candidate",
+          "round": 3,
+          "pid": 58175,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30196.396375,
+          "loadStart": 7.95654296875,
+          "loadEnd": 8.1337890625,
+          "pragmas": {
+            "wal_autocheckpoint": 0,
+            "checkpoint_fullfsync": 0,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.113,
+            "max_ms": 27.706,
+            "p50_ms": 0.091,
+            "p99_ms": 3.983
+          },
+          "eventLoop": {
+            "worstWindowP99Ms": 36.864,
+            "maxMs": 106.562,
+            "maxWindow": {
+              "windowEndedAt": "2026-10-20T02:37:20.186Z",
+              "windowMs": 10010.019,
+              "worstSync": {
+                "operation": "store.begin_immediate",
+                "durationMs": 92.906,
+                "startedAt": "2026-10-20T02:37:13.558Z",
+                "at": "2026-10-20T02:37:13.651Z"
+              }
+            }
+          },
+          "loopMaxMs": 106.562,
+          "walMaxMiB": 20.61621856689453,
+          "flusher": {
+            "passes": 170,
+            "barriers": 121,
+            "dirSyncs": 122,
+            "busyPassive": 0,
+            "walReopens": 0,
+            "restarts": 0,
+            "deaths": 0
+          },
+          "busyWaits": 0
+        },
+        {
+          "label": "candidate",
+          "round": 4,
+          "pid": 61266,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30242.396416,
+          "loadStart": 8.1337890625,
+          "loadEnd": 5.84375,
+          "pragmas": {
+            "wal_autocheckpoint": 0,
+            "checkpoint_fullfsync": 0,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.039,
+            "max_ms": 25.052,
+            "p50_ms": 0.09,
+            "p99_ms": 3.935
+          },
+          "eventLoop": {
+            "worstWindowP99Ms": 45.318,
+            "maxMs": 131.465,
+            "maxWindow": {
+              "windowEndedAt": "2026-10-20T02:38:10.784Z",
+              "windowMs": 10000.191,
+              "worstSync": {
+                "operation": "store.begin_immediate",
+                "durationMs": 116.959,
+                "startedAt": "2026-10-20T02:38:09.262Z",
+                "at": "2026-10-20T02:38:09.379Z"
+              }
+            }
+          },
+          "loopMaxMs": 131.465,
+          "walMaxMiB": 22.749740600585938,
+          "flusher": {
+            "passes": 172,
+            "barriers": 123,
+            "dirSyncs": 123,
+            "busyPassive": 0,
+            "walReopens": 0,
+            "restarts": 0,
+            "deaths": 0
+          },
+          "busyWaits": 0
+        },
+        {
+          "label": "base",
+          "round": 4,
+          "pid": 62555,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30174.28475,
+          "loadStart": 5.84375,
+          "loadEnd": 5.845703125,
+          "pragmas": {
+            "wal_autocheckpoint": 4000,
+            "checkpoint_fullfsync": 1,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.076,
+            "max_ms": 196.407,
+            "p50_ms": 0.081,
+            "p99_ms": 7.551
+          },
+          "eventLoop": {
+            "worstWindowP99Ms": 42.959,
+            "maxMs": 365.429,
+            "maxWindow": {
+              "windowEndedAt": "2026-10-20T02:38:31.514Z",
+              "windowMs": 10000.571,
+              "worstSync": {
+                "operation": "store.external_write",
+                "durationMs": 237.227,
+                "startedAt": "2026-10-20T02:38:25.974Z",
+                "at": "2026-10-20T02:38:26.212Z"
+              }
+            }
+          },
+          "loopMaxMs": 365.429,
+          "walMaxMiB": 15.834457397460938,
+          "flusher": {
+            "passes": 173,
+            "barriers": 124,
+            "dirSyncs": 124,
+            "busyPassive": 1,
+            "walReopens": 0,
+            "restarts": 0,
+            "deaths": 0
+          },
+          "busyWaits": 0
+        },
+        {
+          "label": "base",
+          "round": 5,
+          "pid": 63810,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30205.482125,
+          "loadStart": 5.845703125,
+          "loadEnd": 6.74853515625,
+          "pragmas": {
+            "wal_autocheckpoint": 4000,
+            "checkpoint_fullfsync": 1,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 15.588,
+            "max_ms": 136.346,
+            "p50_ms": 0.09,
+            "p99_ms": 7.423
+          },
+          "eventLoop": {
+            "worstWindowP99Ms": 63.668,
+            "maxMs": 176.161,
+            "maxWindow": {
+              "windowEndedAt": "2026-10-20T02:39:33.138Z",
+              "windowMs": 10001.409,
+              "worstSync": {
+                "operation": "store.commit",
+                "durationMs": 136.346,
+                "startedAt": "2026-10-20T02:39:25.271Z",
+                "at": "2026-10-20T02:39:25.408Z"
+              }
+            }
+          },
+          "loopMaxMs": 176.161,
+          "walMaxMiB": 16.144859313964844,
+          "flusher": {
+            "passes": 173,
+            "barriers": 124,
+            "dirSyncs": 124,
+            "busyPassive": 2,
+            "walReopens": 0,
+            "restarts": 0,
+            "deaths": 0
+          },
+          "busyWaits": 0
+        },
+        {
+          "label": "candidate",
+          "round": 5,
+          "pid": 65878,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30186.020999999997,
+          "loadStart": 6.4482421875,
+          "loadEnd": 7.8115234375,
+          "pragmas": {
+            "wal_autocheckpoint": 0,
+            "checkpoint_fullfsync": 0,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.057,
+            "max_ms": 41.019,
+            "p50_ms": 0.09,
+            "p99_ms": 4.799
+          },
+          "eventLoop": {
+            "worstWindowP99Ms": 32.571,
+            "maxMs": 88.801,
+            "maxWindow": {
+              "windowEndedAt": "2026-10-20T02:39:54.625Z",
+              "windowMs": 10002.588,
+              "worstSync": {
+                "operation": "store.begin_immediate",
+                "durationMs": 62.692,
+                "startedAt": "2026-10-20T02:39:50.554Z",
+                "at": "2026-10-20T02:39:50.617Z"
+              }
+            }
+          },
+          "loopMaxMs": 88.801,
+          "walMaxMiB": 21.005203247070312,
+          "flusher": {
+            "passes": 173,
+            "barriers": 124,
+            "dirSyncs": 124,
+            "busyPassive": 0,
+            "walReopens": 0,
+            "restarts": 0,
+            "deaths": 0
+          },
+          "busyWaits": 0
+        },
+        {
+          "label": "candidate",
+          "round": 6,
+          "pid": 67881,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30252.015832999998,
+          "loadStart": 7.8115234375,
+          "loadEnd": 6.009765625,
+          "pragmas": {
+            "wal_autocheckpoint": 0,
+            "checkpoint_fullfsync": 0,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.031,
+            "max_ms": 121.053,
+            "p50_ms": 0.084,
+            "p99_ms": 4.895
+          },
+          "eventLoop": {
+            "worstWindowP99Ms": 51.282,
+            "maxMs": 363.069,
+            "maxWindow": {
+              "windowEndedAt": "2026-10-20T02:40:35.059Z",
+              "windowMs": 10001.529,
+              "worstSync": {
+                "operation": "store.commit",
+                "durationMs": 121.053,
+                "startedAt": "2026-10-20T02:40:31.437Z",
+                "at": "2026-10-20T02:40:31.559Z"
+              }
+            }
+          },
+          "loopMaxMs": 363.069,
+          "walMaxMiB": 44.03388214111328,
+          "flusher": {
+            "passes": 169,
+            "barriers": 120,
+            "dirSyncs": 120,
+            "busyPassive": 0,
+            "walReopens": 0,
+            "restarts": 0,
+            "deaths": 0
+          },
+          "busyWaits": 0
+        },
+        {
+          "label": "base",
+          "round": 6,
+          "pid": 68888,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30306.041583000002,
+          "loadStart": 6.009765625,
+          "loadEnd": 6.6552734375,
+          "pragmas": {
+            "wal_autocheckpoint": 4000,
+            "checkpoint_fullfsync": 1,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.109,
+            "max_ms": 159.462,
+            "p50_ms": 0.096,
+            "p99_ms": 6.783
+          },
+          "eventLoop": {
+            "worstWindowP99Ms": 41.681,
+            "maxMs": 199.492,
+            "maxWindow": {
+              "windowEndedAt": "2026-10-20T02:41:35.709Z",
+              "windowMs": 10055.448,
+              "worstSync": {
+                "operation": "store.commit",
+                "durationMs": 159.462,
+                "startedAt": "2026-10-20T02:41:34.491Z",
+                "at": "2026-10-20T02:41:34.651Z"
+              }
+            }
+          },
+          "loopMaxMs": 199.492,
+          "walMaxMiB": 15.869819641113281,
+          "flusher": {
+            "passes": 175,
+            "barriers": 127,
+            "dirSyncs": 127,
+            "busyPassive": 7,
+            "walReopens": 0,
+            "restarts": 0,
+            "deaths": 0
+          },
+          "busyWaits": 0
+        }
+      ],
+      "buildSummaries": [
+        {
+          "kind": "build_summary",
+          "build": "base",
+          "runs": 6,
+          "commit": {
+            "worstRunP99Ms": 7.807,
+            "maxMs": 196.407
+          },
+          "eventLoop": {
+            "worstWindowP99Ms": 75.76,
+            "maxMs": 365.429,
+            "maxWindow": {
+              "windowEndedAt": "2026-10-20T02:38:31.514Z",
+              "windowMs": 10000.571,
+              "worstSync": {
+                "operation": "store.external_write",
+                "durationMs": 237.227,
+                "startedAt": "2026-10-20T02:38:25.974Z",
+                "at": "2026-10-20T02:38:26.212Z"
+              }
+            }
+          }
+        },
+        {
+          "kind": "build_summary",
+          "build": "candidate",
+          "runs": 6,
+          "commit": {
+            "worstRunP99Ms": 4.895,
+            "maxMs": 121.053
+          },
+          "eventLoop": {
+            "worstWindowP99Ms": 51.282,
+            "maxMs": 363.069,
+            "maxWindow": {
+              "windowEndedAt": "2026-10-20T02:40:35.059Z",
+              "windowMs": 10001.529,
+              "worstSync": {
+                "operation": "store.commit",
+                "durationMs": 121.053,
+                "startedAt": "2026-10-20T02:40:31.437Z",
+                "at": "2026-10-20T02:40:31.559Z"
+              }
+            }
+          }
         }
       ]
     }

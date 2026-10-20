@@ -332,7 +332,7 @@ Tests and local smokes must never touch real user state:
   compares isolated source bundles with model-shaped writes and real run-detail
   reads; it preserves raw status windows and stops only its own daemon PIDs.
   Base and candidate must share the installed lockfile. See the
-  [2026-10-20 comparison and unresolved release gate](benchmarks/daemon-sync-20261020.md).
+  [2026-10-20 comparison and its quiet-host release evidence](benchmarks/daemon-sync-20261020.md).
 - Read-only run lookups (`inspect`, `apply`) connect to an already-running daemon
   but never auto-start one (a typo'd run id reports `no such run`); only acting
   paths (`agent`/`best-of`/`create`, `decision`) auto-start it. `daemon start` blocks

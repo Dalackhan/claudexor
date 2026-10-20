@@ -1,8 +1,8 @@
 # Request-thread sync comparison, 2026-10-20
 
-**Release gate: blocked.** The final candidate lowers COMMIT maxima and fixes runaway WAL growth in this workload, but does not establish a consistently lower p99 or event-loop tail. Do not merge/release on this evidence.
+**Release gate: passed on the quiet-host rerun.** In twelve alternating 30-second trials at host load1 5.8–8.3, every candidate trial had a lower COMMIT p99 than every base trial (3.3–4.9 ms against 6.1–7.8 ms), the worst COMMIT fell from 196.4 to 121.1 ms, and the worst ten-second event-loop p99 fell from 75.8 to 51.3 ms. The single worst event-loop delay was a tie (363.1 against 365.4 ms). The earlier comparisons on a heavily loaded host, further below, did not establish a lower tail and stay recorded unchanged.
 
-Base: `0919faac45dc34f67439bfb55443777143c9cfd0`. Final measured production tree: `fc6e52aa112271a41766454242f7019118270a3c`. macOS, Node 24.16.0, shared host. No managed daemon was contacted or changed.
+Base: `0919faac45dc34f67439bfb55443777143c9cfd0`. Quiet-host candidate: `7910d11ef99e3be2916984b212c2f2f83f9998ad`; the later merge of `main` into this branch changes no store, health, status or benchmark code. Loaded-host final candidate: `fc6e52aa112271a41766454242f7019118270a3c`. macOS, Node 24.16.0, shared host. No managed daemon was contacted or changed.
 
 ## Reproduction
 
@@ -20,9 +20,35 @@ Each 30-second trial performs 6,000 model-shaped transactions over nine partitio
 
 The base predates COMMIT percentiles. An identical benchmark-only histogram observes the existing measured native COMMIT durations on both trees, after the timed call, and adds p50/p99 to the base status schema. It changes no SQL calls or pragmas. The candidate’s production request/synchronous timings remain enabled. Percentiles use two-significant-digit microsecond histograms; maxima are direct measurements. All numbers below come from status; loop maximum is the largest completed-window maximum, not an average of maxima.
 
-## Quiet-host rerun handoff
+## Quiet-host rerun (release evidence)
 
-The orchestrator owns the next full comparison. No 30-second comparison was rerun for the follow-up while eight implementation lanes shared the Mac (load1 28–43 in the final original comparison). The release blocker above remains until the quiet-host evidence establishes a lower tail. The original tables and JSON below are unchanged.
+`--seconds 30 --rounds 6`: twelve trials in three ABBA blocks, run 05:33–05:41 local time after the implementation lanes had finished. Every trial completed 6,000 writes and 1,800 detail reads with 6,001 COMMIT attempts, zero COMMIT failures and no flusher deaths. Main-connection pragmas read back 4000/1/0 (`wal_autocheckpoint`/`checkpoint_fullfsync`/`fullfsync`) on base and 0/0/0 on the candidate in every trial. Times are milliseconds.
+
+| Order | Build | Round | COMMIT p99 | COMMIT max | Loop worst-window p99 | Loop max | Longest labelled section in the loop-max window | WAL max MiB | load1 start → end |
+|---:|---|---:|---:|---:|---:|---:|---|---:|---|
+| 1 | base | 1 | 6.079 | 147.674 | 75.760 | 190.841 | `store.commit` 147.674 | 15.95 | 8.13 → 7.88 |
+| 2 | candidate | 1 | 3.327 | 20.503 | 26.526 | 78.774 | `store.begin_immediate` 62.906 | 22.56 | 7.88 → 7.95 |
+| 3 | candidate | 2 | 4.319 | 89.633 | 32.408 | 146.538 | `store.commit` 89.633 | 30.05 | 7.95 → 8.17 |
+| 4 | base | 2 | 6.303 | 54.244 | 32.719 | 81.461 | `store.commit` 54.244 | 15.85 | 8.17 → 7.78 |
+| 5 | base | 3 | 7.807 | 56.479 | 46.629 | 118.292 | `store.external_write` 96.402 | 15.89 | 7.78 → 8.30 |
+| 6 | candidate | 3 | 3.983 | 27.706 | 36.864 | 106.562 | `store.begin_immediate` 92.906 | 20.62 | 7.96 → 8.13 |
+| 7 | candidate | 4 | 3.935 | 25.052 | 45.318 | 131.465 | `store.begin_immediate` 116.959 | 22.75 | 8.13 → 5.84 |
+| 8 | base | 4 | 7.551 | 196.407 | 42.959 | 365.429 | `store.external_write` 237.227 | 15.83 | 5.84 → 5.85 |
+| 9 | base | 5 | 7.423 | 136.346 | 63.668 | 176.161 | `store.commit` 136.346 | 16.14 | 5.85 → 6.75 |
+| 10 | candidate | 5 | 4.799 | 41.019 | 32.571 | 88.801 | `store.begin_immediate` 62.692 | 21.01 | 6.45 → 7.81 |
+| 11 | candidate | 6 | 4.895 | 121.053 | 51.282 | 363.069 | `store.commit` 121.053 | 44.03 | 7.81 → 6.01 |
+| 12 | base | 6 | 6.783 | 159.462 | 41.681 | 199.492 | `store.commit` 159.462 | 15.87 | 6.01 → 6.66 |
+
+| Build | Worst trial COMMIT p99 | COMMIT max | Worst window loop p99 | Loop max | Longest labelled section in that window |
+|---|---:|---:|---:|---:|---|
+| base | 7.807 | 196.407 | 75.760 | 365.429 | `store.external_write` 237.227 |
+| candidate | 4.895 | 121.053 | 51.282 | 363.069 | `store.commit` 121.053 |
+
+Base loop-max windows were led by `store.commit` in four trials and by `store.external_write` (O_DSYNC body files, which this change does not touch) in two. Candidate loop-max windows were led by `store.begin_immediate` in four trials (62.7–117.0 ms), that is, the request thread waiting for the writer lock, which the worker holds while it checkpoints, and by `store.commit` in two. The tied loop maximum belongs to different sections on the two builds: an external write in base round 4, a COMMIT in candidate round 6, whose WAL also peaked at 44.0 MiB against 20.6–30.1 MiB in the other candidate trials. As below, a label is the longest measured section in the same window, not proof of the exact cause of its maximum delay.
+
+Raw per-trial status samples and every loop window are kept with the run (`acceptance.json` and its sibling status files); the machine-readable summary is the last phase of [daemon-sync-20261020.json](daemon-sync-20261020.json).
+
+## Harness output
 
 The updated harness prints one JSON `run_summary` line per trial to stdout, with separate `commit` p99/max and `eventLoop` tails, plus WAL and host-load observations. Start/stop PID messages go to stderr. The result file retains every trial, raw status samples in sibling files, and two `build_summary` records (also printed at the end). Build summaries report `worstRunP99Ms` for COMMIT, `worstWindowP99Ms` for the loop, and maxima separately. These are explicitly worst observed percentiles, not pooled p99s or averages; individual trial/window values remain available for comparison.
 
@@ -30,7 +56,11 @@ Every completed native loop window retains its worst labelled synchronous sectio
 
 Labels distinguish `store.external_write` (including O_DSYNC writes, unchanged by H1), `store.commit` (including base autocheckpoints/WAL-header syncs), `store.begin_immediate` (including writer-lock waits), and `control.run_detail`. The summary's maximum-loop window includes its worst section's label, duration and timestamps; each trial's `loops` array retains that attribution for every window. A worker checkpoint runs on another thread, so it is not labelled as a synchronous request-thread stall; any writer-lock wait appears under BEGIN. These labels identify the longest measured section **in the same window**, not proof that it caused the exact maximum delay sample. GC, uninstrumented work and host scheduling can also contribute. This attribution is available on both builds and does not depend on the production lifetime top-32 list.
 
-## COMMIT latency (milliseconds)
+## Earlier loaded-host comparisons
+
+These trials ran while eight implementation lanes shared the Mac. Their tables and JSON phases are unchanged.
+
+### COMMIT latency (milliseconds)
 
 | Candidate phase | Trial | Build | p99 | Max |
 |---|---:|---|---:|---:|
@@ -47,7 +77,7 @@ Labels distinguish `store.external_write` (including O_DSYNC writes, unchanged b
 | RESTART at 4,000 frames (final) | 2 | candidate | 18.687 | 393.881 |
 | RESTART at 4,000 frames (final) | 2 | base | 28.671 | 2585.840 |
 
-## Event-loop delay and WAL
+### Event-loop delay and WAL
 
 | Candidate phase | Trial | Build | Loop max ms | Sampled WAL max MiB | Host load1 start → end |
 |---|---:|---|---:|---:|---|
@@ -64,15 +94,15 @@ Labels distinguish `store.external_write` (including O_DSYNC writes, unchanged b
 | RESTART at 4,000 frames (final) | 2 | candidate | 1086.325 | 29.649 | 43.17 → 36.53 |
 | RESTART at 4,000 frames (final) | 2 | base | 2661.286 | 16.726 | 36.53 → 28.38 |
 
-## Findings
+### Findings
 
 Removing the main autocheckpoint while keeping only background PASSIVE checkpoints allowed continuing writes to append past each captured checkpoint prefix. WAL grew to about 410 MiB. A worker RESTART attempt prevents indefinite reuse starvation when readers/writers permit it. The final trigger preserves the former 4,000-frame threshold, while the retained-file limit remains 64 MiB. Main `wal_autocheckpoint=0`, `checkpoint_fullfsync=0` and `fullfsync=0` were verified in every candidate; base readbacks were 4000/1/0.
 
 RESTART can briefly exclude writers, while `busy_timeout=0` returns BUSY for an existing writer or pinned reader; it remains a soft target. It keeps checkpoint full syncs on the worker and retains the explicit WAL barrier. See [SQLite’s checkpoint mode contract](https://sqlite.org/pragma.html#pragma_wal_checkpoint). The pinned-reader regression exercises BUSY, release, reuse and the subsequent barrier.
 
-The final comparison reduced worst COMMIT from 2,585.840 ms to 393.881 ms, but worst event-loop delay increased from 2,661.286 ms to 3,539.993 ms. Final p99 was slightly worse in round 1 (21.375 vs 20.863 ms), better in round 2 (18.687 vs 28.671 ms). The final candidate’s longest labelled synchronous sections were external file writes of 3,187.806 ms and 995.338 ms. These observed O_DSYNC stalls remain; moving checkpoint full syncs does not eliminate all synchronous filesystem waits. Host load1 varied substantially, reaching 43.17, so these trials cannot isolate environmental effects from the change.
+On the loaded host, the final comparison reduced worst COMMIT from 2,585.840 ms to 393.881 ms, but worst event-loop delay increased from 2,661.286 ms to 3,539.993 ms. Final p99 was slightly worse in round 1 (21.375 vs 20.863 ms), better in round 2 (18.687 vs 28.671 ms). The final candidate’s longest labelled synchronous sections were external file writes of 3,187.806 ms and 995.338 ms. These observed O_DSYNC stalls remain; moving checkpoint full syncs does not eliminate all synchronous filesystem waits. Host load1 varied substantially, reaching 43.17, so these trials cannot isolate environmental effects from the change.
 
-All failed intermediate comparisons are retained above. The next release decision needs a controlled-host rerun of this harness; if that also fails, remaining synchronous external-file/storage work needs a separate implementation investigation. No passing result is claimed.
+All failed intermediate comparisons are retained above. At load1 up to 43 they could not separate host effects from the change; the quiet-host rerun at the top is the release evidence. Synchronous external-file writes (O_DSYNC, unchanged here) still reach hundreds of milliseconds on a loaded host and remain a separate investigation.
 
 Durability/compatibility validation: all 398 store tests and all 577 control-API tests passed; timing/status/scope tests, build, test typecheck and generated schema validation also passed. Physical power failure was not simulated; barrier ordering, WAL recovery, process-kill recovery, pinned readers, worker restart and close ordering were exercised.
 

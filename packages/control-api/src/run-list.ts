@@ -115,9 +115,11 @@ export function lruSet<K, V>(map: Map<K, V>, key: K, value: V, cap: number): voi
 export async function summarizeRunPage<T>(
   page: readonly DaemonRunRecord[],
   summarize: (record: DaemonRunRecord) => T,
+  active: () => boolean = () => true,
 ): Promise<T[]> {
   const summaries: T[] = [];
   for (const [i, record] of page.entries()) {
+    if (!active()) break;
     summaries.push(summarize(record));
     if (i + 1 < page.length) await setImmediate();
   }

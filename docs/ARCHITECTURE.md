@@ -2306,6 +2306,13 @@ period is not cut; none of these limits applies to responses or SSE streams.
 Once stopping, it closes each kept-alive socket as soon as its response finishes,
 so the longer keep-alive window never delays shutdown.
 
+HTTP handlers stop at entry when the client has already disconnected. Run detail
+checks again after addressed lookups and before its cursor/artifact projection;
+yielding run pages and thread projections stop before further expensive reads.
+A normally consumed request body is not a disconnect: Node may mark it destroyed
+while its response socket remains live. Already-running synchronous work cannot
+be interrupted, and disconnect does not undo a mutation already admitted.
+
 An admitted continuation whose predecessor record or run directory disappears
 before execution fails with `continuation_predecessor_unavailable` (404, not
 retryable), before orchestrator or harness startup. It never becomes a fresh run.

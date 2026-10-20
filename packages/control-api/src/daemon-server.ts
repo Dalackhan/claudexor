@@ -1,3 +1,4 @@
+import { requestGone } from "./request-liveness.js";
 import { measureSync } from "@claudexor/util";
 import { trackRequest } from "./request-timing.js";
 import { serveRunDetail } from "./run-detail-route.js";
@@ -662,6 +663,7 @@ export class DaemonControlApiServer {
     body: unknown,
     contentType = "application/json",
   ): void {
+    if (res.destroyed) return;
     if (status >= 400 && contentType === "application/json") {
       const error = controlProblemError(status, body);
       return this.problem(res, status, error, error.code, false, error.message);
@@ -696,6 +698,7 @@ export class DaemonControlApiServer {
     trackRequest(req, res);
     const tracked: Promise<void> = this.handle(req, res)
       .catch((err) => {
+        if (requestGone(req, res)) return;
         try {
           if (!res.headersSent) {
             this.problem(
@@ -719,6 +722,7 @@ export class DaemonControlApiServer {
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (requestGone(req, res)) return;
     const url = new URL(req.url ?? "/", "http://localhost");
     const requestPath = url.pathname;
     const method = req.method ?? "GET";
@@ -810,7 +814,7 @@ export class DaemonControlApiServer {
     }
 
     if (method === "GET" && path === "/runs") {
-      return this.handleRunList(url, res);
+      return this.handleRunList(url, req, res);
     }
 
     if (
@@ -886,6 +890,7 @@ export class DaemonControlApiServer {
           json: (response, status, body) => this.json(response, status, body),
         },
         decodeURIComponent(runDetailMatch[1] as string),
+        req,
         res,
       );
     }
@@ -967,7 +972,12 @@ export class DaemonControlApiServer {
       return this.json(
         res,
         200,
-        await projectThreadList(this.opts.daemon, await svc(), (r) => this.runNeedsAttention(r)),
+        await projectThreadList(
+          this.opts.daemon,
+          await svc(),
+          (r) => this.runNeedsAttention(r),
+          () => !requestGone(req, res),
+        ),
       );
     }
 
@@ -981,6 +991,7 @@ export class DaemonControlApiServer {
         const runs = await this.opts.daemon.list({
           threadId: decodeURIComponent(threadDetailMatch[1] as string),
         });
+        if (requestGone(req, res)) return;
         const byRun = new Map(runs.map((r) => [r.runId ?? r.id, r]));
         const thread = detail.thread as { head_run_id?: string | null };
         const cards = projectTurnRunCards(
@@ -1985,7 +1996,7 @@ export class DaemonControlApiServer {
    * newest `RUN_LIST_DEFAULT_LIMIT` runs with `hasMore`/`nextCursor` to page the
    * rest.
    */
-  private async handleRunList(url: URL, res: ServerResponse): Promise<void> {
+  private async handleRunList(url: URL, req: IncomingMessage, res: ServerResponse): Promise<void> {
     let query: RunListQuery;
     try {
       query = parseRunListQuery(url);
@@ -1996,11 +2007,18 @@ export class DaemonControlApiServer {
       await this.opts.daemon.list({ page: query }),
       query,
     );
+    if (requestGone(req, res)) return;
+    const runs = await summarizeRunPage(
+      page,
+      (r) => this.summarizeRunOrDiagnostic(r),
+      () => !requestGone(req, res),
+    );
+    if (requestGone(req, res)) return;
     return this.json(
       res,
       200,
       ControlRunListResponse.parse({
-        runs: await summarizeRunPage(page, (r) => this.summarizeRunOrDiagnostic(r)),
+        runs,
         nextCursor,
         hasMore,
       }),

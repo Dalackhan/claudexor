@@ -2,6 +2,10 @@
 
 ## 4.4.0
 
+### Minor Changes
+
+- Declares its native sessions not pruned, because independent deletion safety is not proven, so engine retention leaves them in place (#477).
+
 ### Patch Changes
 
 - Updated dependencies

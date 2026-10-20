@@ -4,7 +4,7 @@
 
 ### Minor Changes
 
-- Engine retention retires unregistered and archived project histories, orphaned run trees and unreferenced native session parts in recurring bounded maintenance and never removes anything still referenced; immutable attempt, final and anchor patches share one content-addressed object per project (#477).
+- Declares its native sessions not pruned, because independent deletion safety is not proven, so engine retention leaves them in place (#477).
 
 ### Patch Changes
 

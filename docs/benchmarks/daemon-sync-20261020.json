@@ -1,5 +1,5 @@
 {
-  "gate": "not adopted: every candidate lowered COMMIT p99/max, none lowered the event-loop tail consistently; base checkpointing kept (owner decision, 2026-10-20)",
+  "gate": "not adopted: every quiet-host candidate lowered COMMIT p99/max, none lowered the event-loop tail consistently; base checkpointing kept (owner decision, 2026-10-20)",
   "phases": [
     {
       "phase": "PASSIVE only",

@@ -2119,8 +2119,10 @@ billing retain their existing channels. A pinned operation returns the typed
 refusal without a retry signal or new mark. The host may submit one separate,
 identical auto request with `retryOfOperationId`; the engine keeps one dispatch
 and one route per operation. Success on the other account confirms the original
-mark. An equivalent refusal retracts only that pair's contribution and returns
-the first problem with both accounts' reasons. Correlation requires the same
+mark. An equivalent refusal retains both accounts' provisional evidence and
+returns the first problem with both accounts' reasons; the next request can then
+reach an unmarked third account. The host retry signal requires an unmarked
+eligible alternative, so known deficiencies cannot authorize another retry. Correlation requires the same
 source, model, messages, tools, options and continuation, and can be claimed once.
 History continuation bound to the refusing account withholds the signal
 (`retryBlockedBy=native_continuation`): another account rejects it before inference.

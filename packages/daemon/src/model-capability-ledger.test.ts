@@ -170,16 +170,17 @@ describe("temporary model capability evidence", () => {
     f.refuse("late", middle);
     expect(f.ledger.live()).toEqual([]);
   });
-  it("confirms and retracts only the producer belonging to a differential pair", () => {
+  it("retains provisional equivalent-refusal evidence and independently confirms service", () => {
     const f = fixture();
     f.refuse("one");
+    f.ledger.settleRetry("one", "equivalent_refusal");
+    expect(f.ledger.state("codex", "a", "m")).toBe("provisional");
     f.refuse("two");
     f.ledger.settleRetry("one", "confirmed");
     expect(f.ledger.state("codex", "a", "m")).toBe("confirmed");
     f.ledger.settleRetry("two", "equivalent_refusal");
     expect(f.ledger.live()).toHaveLength(1);
-    f.ledger.settleRetry("one", "equivalent_refusal");
-    expect(f.ledger.live()).toEqual([]);
+    expect(f.ledger.state("codex", "a", "m")).toBe("confirmed");
   });
   it("claims one matching auto retry atomically and rejects a second caller", () => {
     const f = fixture();

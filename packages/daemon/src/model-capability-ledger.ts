@@ -74,7 +74,7 @@ function modelRetryDigest(request: ModelCallRequest): string {
 
 /** Catalog fingerprints are invalidation tokens, NEVER cached admission. Every
  * selection still reads a fresh per-account catalog. Producer-bound contributions
- * let overlapping differential pairs retract only their own evidence. */
+ * let a successful differential confirm only its own evidence. */
 export class ModelCapabilityLedger {
   private catalogs = new Map<string, CatalogIdentity>();
   private rows = new Map<string, Row>();
@@ -257,16 +257,15 @@ export class ModelCapabilityLedger {
   }
 
   settleRetry(parentId: string, outcome: "confirmed" | "equivalent_refusal"): void {
+    // Equivalent refusals leave the first contribution provisional. The retry
+    // contributes its own refusal through refuse(), under its own binding.
+    if (outcome === "equivalent_refusal") return;
     const attempt = this.attempts.get(parentId);
     if (!attempt || !this.current(attempt.binding)) return;
     const row = this.rows.get(key(attempt.binding));
     const contribution = row?.contributions.get(parentId);
     if (!row || !contribution) return;
-    if (outcome === "confirmed") contribution.confirmed = true;
-    else {
-      row.contributions.delete(parentId);
-      if (!row.contributions.size) this.rows.delete(key(attempt.binding));
-    }
+    contribution.confirmed = true;
   }
 
   live(): ModelCapabilityMark[] {

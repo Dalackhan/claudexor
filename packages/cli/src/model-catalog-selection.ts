@@ -38,6 +38,8 @@ export async function selectModelCatalog(args: {
   excludedFingerprint?: string | null;
   /** A differential needs a comparator with no known model deficiency first. */
   correlatedRetry?: boolean;
+  /** Only a clean alternative can authorize the host's one differential retry. */
+  unmarkedOnly?: boolean;
   pick: (
     excluded: Set<string>,
     refusals: Map<string, ControlProblem>,
@@ -86,6 +88,7 @@ export async function selectModelCatalog(args: {
     }
     if (args.account.mode === "pin") return { profile, catalog, reason: "pinned" };
     const state = args.capabilities.state(args.harnessId, profile.profile_id, args.model);
+    if (args.unmarkedOnly && state !== null) continue;
     const marked =
       state === "provisional" ||
       state === "confirmed" ||

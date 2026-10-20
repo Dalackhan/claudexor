@@ -95,6 +95,14 @@ export async function modelCapabilityOutcome(args: {
   };
   if (equivalent) {
     ledger.settleRetry(request.retryOfOperationId!, "equivalent_refusal");
+    // Two deficient accounts do not establish that the request is invalid.
+    // Retain A's provisional evidence and record B's own reason/binding.
+    ledger.refuse(
+      binding,
+      args.operationId,
+      { ...problem, context: { ...problem.context, retryOnOtherAccount: false } },
+      request,
+    );
     routing.differentialOutcome = "equivalent_refusal";
   } else if (request.account.mode === "auto") {
     ledger.refuse(binding, args.operationId, decorated, request);

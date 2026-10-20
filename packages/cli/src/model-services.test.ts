@@ -1441,10 +1441,10 @@ describe("account/model capability routing", () => {
     ).toBe("a");
     expect(f.capabilities.live()).toHaveLength(1);
   });
-  it("an equivalent refusal on the single host retry returns the original problem and retracts the pair", async () => {
+  it("an equivalent refusal returns the original problem and retains both provisional marks", async () => {
     const f = await refusing();
     f.failures.b = "model_capability_refused";
-    f.failureContext.b = refusal;
+    f.failureContext.b = { ...refusal, providerReason: "B cannot serve this model either" };
     const first = await f.run();
     const second = await f.run({ mode: "auto" }, { retryOfOperationId: first.id });
     expect(second.problem).toMatchObject({
@@ -1457,7 +1457,14 @@ describe("account/model capability routing", () => {
         accountsTried: [{ credentialProfileId: "a" }, { credentialProfileId: "b" }],
       },
     });
-    expect(f.capabilities.live()).toEqual([]);
+    expect(f.capabilities.live()).toMatchObject([
+      { profile_id: "a", state: "provisional", provider_reason: refusal.providerReason },
+      {
+        profile_id: "b",
+        state: "provisional",
+        provider_reason: "B cannot serve this model either",
+      },
+    ]);
     expect(f.refusals.live()).toEqual([]);
     const third = await f.run({ mode: "auto" }, { retryOfOperationId: second.id });
     expect(third.problem?.code).toBe("model_retry_invalid");
@@ -1538,6 +1545,34 @@ describe("account/model capability routing", () => {
     expect(elsewhere.problem?.context.retryOnOtherAccount).toBe(true);
     expect(elsewhere.problem?.context).not.toHaveProperty("retryBlockedBy");
   });
+  it.each(["provisional", "confirmed", "probe_due", "probing"])(
+    "does not offer a fresh retry when the only alternative is %s",
+    async (state) => {
+      const f = await refusing();
+      f.failures.b = "model_capability_refused";
+      f.failureContext.b = refusal;
+      const prior = await f.run({ mode: "auto", preferredProfileId: "b" });
+      if (state === "confirmed") f.capabilities.settleRetry(prior.id, "confirmed");
+      if (state === "probe_due" || state === "probing") f.clock.now += 4 * 60 * 60_000;
+      if (state === "probing") {
+        const catalog = await f.catalog({
+          profile: f.profiles[1]!,
+          signal: new AbortController().signal,
+        });
+        expect(
+          f.capabilities.reserve(
+            f.capabilities.bind("codex", catalog, "test-model"),
+            "other-probe",
+          ),
+        ).toBe(true);
+      }
+      expect(f.capabilities.state("codex", "b", "test-model")).toBe(state);
+      const first = await f.run({ mode: "auto", preferredProfileId: "a" });
+      expect(first.problem?.context.retryOnOtherAccount).toBe(false);
+      expect(first.dispatch.route?.credentialProfileId).toBe("a");
+      expect(f.invoke).toHaveBeenCalledTimes(2);
+    },
+  );
   it("allows a marked account as the last fallback instead of disabling it", async () => {
     const f = await refusing();
     await f.run();
@@ -1670,6 +1705,8 @@ describe("account/model capability routing", () => {
     const first = await f.run({ mode: "auto", preferredProfileId: "a" });
     expect(first.dispatch.route?.credentialProfileId).toBe("a");
     expect(f.capabilities.state("codex", "b", "test-model")).toBe("probe_due");
+    // The retry signal must scan past B's expired row to find clean C.
+    expect(first.problem?.context.retryOnOtherAccount).toBe(true);
     const retry = await f.run({ mode: "auto" }, { retryOfOperationId: first.id });
     expect(retry.dispatch.route?.credentialProfileId).toBe("c");
     expect(retry.routing?.selectionReason).toBe("unlisted_fallback");
@@ -1720,6 +1757,110 @@ describe("account/model capability routing", () => {
     });
     expect((await f.run()).problem?.code).toBe("auth_changed");
     expect(f.invoke).not.toHaveBeenCalled();
+  });
+  it("reaches serving C after A and B refuse equivalently through the real Codex adapter", async () => {
+    const posts: string[] = [];
+    const reason =
+      "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.";
+    const adapter = createCodexModelAdapter({
+      clientVersion: async () => ({ version: "0.156.1", source: "verified_transport" }),
+      readAuthFile: async (path) => {
+        const id = basename(dirname(path));
+        const jwt = (value: unknown) =>
+          `fixture.${Buffer.from(JSON.stringify(value)).toString("base64url")}.signature`;
+        return JSON.stringify({
+          auth_mode: "chatgpt",
+          tokens: {
+            account_id: id,
+            access_token: jwt({ exp: 2100000000 }),
+            id_token: jwt({
+              sub: id,
+              "https://api.openai.com/auth": { chatgpt_plan_type: id === "c" ? "pro" : "free" },
+            }),
+          },
+        });
+      },
+      fetch: async (_url, init) => {
+        if (init?.method !== "POST") return Response.json({ models: [{ slug: "gpt-6.1-sol" }] });
+        const id = new Headers(init.headers).get("chatgpt-account-id")!;
+        posts.push(id);
+        if (id !== "c") return Response.json({ detail: reason }, { status: 400 });
+        return new Response(
+          `data: ${JSON.stringify({ type: "response.completed", response: { model: "gpt-6.1-sol", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "served by C" }] }], usage: { input_tokens: 2, output_tokens: 3 } } })}\n\n`,
+        );
+      },
+    });
+    const f = await fixture({ adapter });
+    f.cfg.credential_profiles.push({
+      ...f.profiles[1]!,
+      profile_id: "c",
+      isolation_locator: join(f.root, "c"),
+    });
+    process.env.CLAUDEXOR_CONFIG_DIR = f.root;
+    updateGlobalConfig(() => f.cfg);
+    for (const [id, used] of [
+      ["a", 0.01],
+      ["b", 0.02],
+      ["c", 0.4],
+    ] as const)
+      f.quota.upsert(
+        QuotaSnapshot.parse({
+          subject: {
+            harness: "codex",
+            subject_id: id,
+            credential_route: "vendor_native",
+            plan_label: null,
+          },
+          constraints: [
+            {
+              id: "five_hour",
+              label: "5h",
+              used_ratio: used,
+              window_seconds: 18000,
+              resets_at: null,
+              cooldown_until: null,
+            },
+          ],
+          source: "codex_app_server",
+          observed_at: new Date().toISOString(),
+          freshness: "fresh",
+        }),
+      );
+    const first = await f.run({ mode: "auto" }, { model: "gpt-6.1-sol" });
+    expect(first.problem?.context).toMatchObject({
+      credentialProfileId: "a",
+      retryOnOtherAccount: true,
+    });
+    const retry = await f.run(
+      { mode: "auto" },
+      { model: "gpt-6.1-sol", retryOfOperationId: first.id },
+    );
+    expect(retry.problem).toMatchObject({
+      code: first.problem!.code,
+      message: first.problem!.message,
+      context: {
+        credentialProfileId: "a",
+        providerReason: reason,
+        retryOnOtherAccount: false,
+        differentialOutcome: "equivalent_refusal",
+        accountsTried: [
+          { credentialProfileId: "a", providerReason: reason },
+          { credentialProfileId: "b", providerReason: reason },
+        ],
+      },
+    });
+    expect(retry.routing?.differentialOutcome).toBe("equivalent_refusal");
+    expect(f.capabilities.live()).toMatchObject([
+      { profile_id: "a", state: "provisional" },
+      { profile_id: "b", state: "provisional" },
+    ]);
+    const third = await f.run({ mode: "auto" }, { model: "gpt-6.1-sol" });
+    expect(third.state).toBe("succeeded");
+    expect(third.dispatch.route?.credentialProfileId).toBe("c");
+    expect(third.routing?.selectionReason).toBe("listed");
+    expect(posts).toEqual(["a", "b", "c"]);
+    expect(f.unusable.live()).toEqual([]);
+    expect(f.cfg.credential_profiles.every((profile) => profile.enabled)).toBe(true);
   });
   it("serves the real Codex HTTP refusal through daemon operations, receipts and Accounts status", async () => {
     const posts: Array<{ account: string; body: unknown }> = [];

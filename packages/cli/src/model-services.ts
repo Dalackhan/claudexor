@@ -102,6 +102,7 @@ export function createModelServices(deps: Dependencies) {
       excluded?: Set<string>;
       excludedFingerprint?: string | null;
       correlatedRetry?: boolean;
+      unmarkedOnly?: boolean;
       poolEvents?: ModelRoutingEvidence["poolEvents"];
     } = {},
   ) => {
@@ -252,6 +253,7 @@ export function createModelServices(deps: Dependencies) {
       excluded?: Set<string>;
       excludedFingerprint?: string | null;
       correlatedRetry?: boolean;
+      unmarkedOnly?: boolean;
       poolEvents?: ModelRoutingEvidence["poolEvents"];
     } = {},
   ) =>
@@ -444,6 +446,7 @@ export function createModelServices(deps: Dependencies) {
                       await resolve(source, { mode: "auto" }, input.model, signal, {
                         excluded: new Set([profile.profile_id]),
                         excludedFingerprint: binding.fingerprint,
+                        unmarkedOnly: true,
                       });
                       return true;
                     } catch {

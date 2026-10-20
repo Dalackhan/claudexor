@@ -24,7 +24,7 @@ Read these fields from `problem.context`:
 | Field | Meaning |
 | --- | --- |
 | `generationStarted` | `false` for this refusal |
-| `retryOnOtherAccount` | Whether one separate auto operation may try another eligible account |
+| `retryOnOtherAccount` | Whether one separate auto operation may try an unmarked eligible alternative |
 | `retryBlockedBy` | `native_continuation` when history continuation bound to the refusing account withholds the signal; absent otherwise |
 | `operationId` | Operation that returned this problem |
 | `source`, `requestedModel` | Requested transport and model |
@@ -40,8 +40,12 @@ Read these fields from `problem.context`:
 `problem.retryable` remains false: retrying the same route is not requested.
 The separate signal is false for a pin, after the correlated retry, when
 history continuation is bound to the refusing account, or when fresh admission
-cannot find another account. A catalog only establishes eligibility to attempt;
-it cannot guarantee that the provider will serve.
+cannot find an unmarked eligible alternative. Unmarked means no
+capability row of any state, including `probe_due` and `probing`, after live
+catalog discovery. Excluded or unusable accounts do not qualify. The check scans
+past marked candidates to find an unmarked one; a marked fallback never grants
+the signal. A catalog only establishes eligibility to attempt; it cannot
+guarantee that the provider will serve.
 
 Send `retryOfOperationId` ONLY in response to `context.retryOnOtherAccount=true`.
 Only engines supporting the field emit that signal; older engines with strict
@@ -82,11 +86,15 @@ A top-level `codex.turn.v1` transport continuation from another route resets to
 none and is not sent, so it never blocks.
 
 Success confirms the first account's mark. A refusal of the same capability kind
-on the other account retracts this pair's evidence. The returned problem keeps
+on the other account leaves the first mark provisional and adds a provisional
+mark for the second account under its own identity and operation binding. Two
+deficient accounts do not prove the request is invalid: retaining both marks
+lets a later request reach a serving third account. The returned problem keeps
 the first refusal's code, message and provider reason, with both accounts in
-`accountsTried` and `differentialOutcome=equivalent_refusal`. Independent
-concurrent failures retain their own evidence. A different failure or uncertain
-outcome is inconclusive; it neither confirms nor retracts the first mark. The
+`accountsTried`, `differentialOutcome=equivalent_refusal` and
+`retryOnOtherAccount=false`. Independent concurrent failures retain their own
+evidence. A different failure or uncertain outcome is inconclusive; it neither
+confirms nor retracts the first mark. The
 host must stop after this one retry and can use the combined diagnostics in its
 owner-facing error. The engine sends no chat messages.
 

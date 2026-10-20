@@ -1,5 +1,14 @@
 # @claudexor/harness-fake
 
+## 4.4.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/util@4.4.0
+  - @claudexor/schema@4.4.0
+  - @claudexor/core@4.4.0
+
 ## 4.3.1
 
 ### Patch Changes

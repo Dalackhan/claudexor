@@ -1,5 +1,26 @@
 # @claudexor/orchestrator
 
+## 4.4.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/util@4.4.0
+  - @claudexor/schema@4.4.0
+  - @claudexor/artifact-store@4.4.0
+  - @claudexor/budget@4.4.0
+  - @claudexor/config@4.4.0
+  - @claudexor/context@4.4.0
+  - @claudexor/core@4.4.0
+  - @claudexor/delivery@4.4.0
+  - @claudexor/event-log@4.4.0
+  - @claudexor/policy@4.4.0
+  - @claudexor/review@4.4.0
+  - @claudexor/workspace@4.4.0
+  - @claudexor/arbitration@4.4.0
+  - @claudexor/gateway@4.4.0
+  - @claudexor/synthesis@4.4.0
+
 ## 4.3.1
 
 ### Patch Changes

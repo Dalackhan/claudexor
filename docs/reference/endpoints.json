@@ -221,7 +221,19 @@
       "summary": "Negotiate the control protocol major before product calls.",
       "auth": "loopback_bearer",
       "request_schema": "ControlHandshakeRequest",
-      "parameters": [],
+      "parameters": [
+        {
+          "name": "x-claudexor-store-identity",
+          "in": "header",
+          "required": false,
+          "repeatable": false,
+          "enum": [
+            "1"
+          ],
+          "schema_ref": null,
+          "description": "Send `1` to receive the durable engine store identity as `storeId`; without it the response keeps its earlier shape."
+        }
+      ],
       "response_schema": "ControlHandshakeResponse",
       "error_schema": "ControlProblem"
     },

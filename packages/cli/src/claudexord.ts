@@ -243,6 +243,7 @@ export async function main(): Promise<void> {
         daemon: selfClient,
         port: Number(process.env.CLAUDEXOR_CONTROL_PORT ?? 0),
         servingMode: admission.snapshot,
+        storeId: () => storage.storeId(),
         bus,
         services,
         terminalFilesPending: (id) => graph().terminalFiles.pending(id),

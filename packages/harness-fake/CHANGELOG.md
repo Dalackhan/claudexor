@@ -1,5 +1,18 @@
 # @claudexor/harness-fake
 
+## 4.4.0
+
+### Minor Changes
+
+- MCP controllers get idempotent one-shot launches and durable run supervision: `claudexor_run_wait`, `claudexor_run_message`, `claudexor_run_continue` and bounded `claudexor_run_event_read` parts. Thanks to @IlidanNaga (#478).
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/util@4.4.0
+  - @claudexor/schema@4.4.0
+  - @claudexor/core@4.4.0
+
 ## 4.3.1
 
 ### Patch Changes

@@ -1,5 +1,41 @@
 # @claudexor/cli
 
+## 4.4.0
+
+### Minor Changes
+
+- Daemon status reports per-route request latency (one count of completed responses or disconnects with p50, p99 and max for the lifetime and the last loop window, keyed by HTTP method and operation-catalog template) and the 32 longest labelled synchronous sections since start (store BEGIN and COMMIT, external writes, run detail and summary projections, scope persistence), plus lifetime COMMIT p50 and p99. A request whose client has already hung up skips its pending heavy read projections; an admitted mutation still completes. `POST /v2/handshake` returns the durable engine store id as `storeId` to a client that sends `X-Claudexor-Store-Identity: 1`, and every other client keeps the earlier response shape. `scripts/daemon-load-bench.mjs` compares an exact base against the working tree in alternating trials inside temporary roots it owns. Moving checkpoints off the request thread was measured and not adopted: it lowered COMMIT tails but not the event-loop tail consistently (`docs/benchmarks/daemon-sync-20261020.md`).
+- Engine retention retires unregistered and archived project histories, orphaned run trees and unreferenced native session parts in recurring bounded maintenance and never removes anything still referenced; immutable attempt, final and anchor patches share one content-addressed object per project where hard links are supported (#477).
+- A fresh managed Codex install resolves npm `latest` once to an exact version, discloses it and installs exactly that version; `--release-tested` uses the release baseline, a latest older than that baseline refuses (`latest_older_than_tested`), and `pinnedVersion` now names the selected install target. Thanks to @josephsteuerjr (#476).
+- MCP controllers get idempotent one-shot launches and durable run supervision: `claudexor_run_wait`, `claudexor_run_message`, `claudexor_run_continue` and bounded `claudexor_run_event_read` parts. Thanks to @IlidanNaga (#478).
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/control-api@4.4.0
+  - @claudexor/daemon@4.4.0
+  - @claudexor/util@4.4.0
+  - @claudexor/schema@4.4.0
+  - @claudexor/acp-server@4.4.0
+  - @claudexor/artifact-store@4.4.0
+  - @claudexor/config@4.4.0
+  - @claudexor/core@4.4.0
+  - @claudexor/delivery@4.4.0
+  - @claudexor/harness-acp@4.4.0
+  - @claudexor/harness-agy@4.4.0
+  - @claudexor/harness-claude@4.4.0
+  - @claudexor/harness-codex@4.4.0
+  - @claudexor/harness-cursor@4.4.0
+  - @claudexor/harness-fake@4.4.0
+  - @claudexor/harness-opencode@4.4.0
+  - @claudexor/harness-raw-api@4.4.0
+  - @claudexor/mcp-server@4.4.0
+  - @claudexor/orchestrator@4.4.0
+  - @claudexor/review@4.4.0
+  - @claudexor/secrets@4.4.0
+  - @claudexor/workspace@4.4.0
+  - @claudexor/gateway@4.4.0
+
 ## 4.3.1
 
 ### Patch Changes

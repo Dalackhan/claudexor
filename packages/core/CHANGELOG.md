@@ -1,5 +1,17 @@
 # @claudexor/core
 
+## 4.4.0
+
+### Minor Changes
+
+- Engine retention retires unregistered and archived project histories, orphaned run trees and unreferenced native session parts in recurring bounded maintenance and never removes anything still referenced; immutable attempt, final and anchor patches share one content-addressed object per project where hard links are supported (#477).
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/util@4.4.0
+  - @claudexor/schema@4.4.0
+
 ## 4.3.1
 
 ### Patch Changes

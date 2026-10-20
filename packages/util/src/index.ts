@@ -1,3 +1,4 @@
+export * from "./process-timing.js";
 export { CLAUDEXOR_VERSION } from "./version.js";
 export type { PinnedVendorCliVersion } from "./vendor-pin.js";
 export * from "./secret-names.js";

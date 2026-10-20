@@ -1,5 +1,30 @@
 # @claudexor/orchestrator
 
+## 4.4.0
+
+### Minor Changes
+
+- Engine retention retires unregistered and archived project histories, orphaned run trees and unreferenced native session parts in recurring bounded maintenance and never removes anything still referenced; immutable attempt, final and anchor patches share one content-addressed object per project where hard links are supported (#477).
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/util@4.4.0
+  - @claudexor/schema@4.4.0
+  - @claudexor/artifact-store@4.4.0
+  - @claudexor/budget@4.4.0
+  - @claudexor/config@4.4.0
+  - @claudexor/context@4.4.0
+  - @claudexor/core@4.4.0
+  - @claudexor/delivery@4.4.0
+  - @claudexor/event-log@4.4.0
+  - @claudexor/policy@4.4.0
+  - @claudexor/review@4.4.0
+  - @claudexor/workspace@4.4.0
+  - @claudexor/arbitration@4.4.0
+  - @claudexor/gateway@4.4.0
+  - @claudexor/synthesis@4.4.0
+
 ## 4.3.1
 
 ### Patch Changes

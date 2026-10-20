@@ -1,5 +1,16 @@
 # @claudexor/artifact-store
 
+## 4.4.0
+
+### Minor Changes
+
+- Adds `writePatch`, which stores immutable run patches as one content-addressed object per project, hard-linked where the filesystem supports it and copied otherwise (#477).
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/util@4.4.0
+
 ## 4.3.1
 
 ### Patch Changes

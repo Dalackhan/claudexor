@@ -1,6 +1,10 @@
+import { requestGone } from "./request-liveness.js";
+import { measureSync } from "@claudexor/util";
+import { trackRequest } from "./request-timing.js";
+import { serveRunDetail } from "./run-detail-route.js";
 import { handleAccountResourceRoute } from "./account-resource-routes.js";
 import { projectProcessScope } from "./run-detail-scope.js";
-import { ControlAccountResetRequest } from "@claudexor/schema";
+import { CONTROL_STORE_IDENTITY_HEADER, ControlAccountResetRequest } from "@claudexor/schema";
 import { recoverInterruptedOutput } from "./retained-output.js";
 import { recordedExecutionRoot } from "./run-delivery-state.js";
 import * as exactPatch from "./run-exact-patch.js";
@@ -150,7 +154,6 @@ import {
   PlanQuestionsArtifact,
   CouncilProjection,
   derivePlanReadiness,
-  directDelegatedChildrenFromRecords,
   type ApplyEligibility,
   ControlAuthReadinessRefreshRequest,
   ControlAuthReadinessRefreshResponse,
@@ -248,6 +251,8 @@ export interface DaemonControlApiOptions {
   runStartTimeoutMs?: number;
   /** Issue #165 D5 admission snapshot; absent embedders always serve normal. */
   servingMode?: () => ControlServingMode;
+  /** Current durable store identity; unavailable before open or during replacement. */
+  storeId?: () => string | undefined;
   bus?: { subscribe(listener: (event: { run_id: string }) => void): () => void };
   /** Internal storage fact; a committed terminal may still need its file effects. */
   terminalFilesPending?: (runIdOrCommandId: string) => boolean;
@@ -661,6 +666,7 @@ export class DaemonControlApiServer {
     body: unknown,
     contentType = "application/json",
   ): void {
+    if (res.destroyed) return;
     if (status >= 400 && contentType === "application/json") {
       const error = controlProblemError(status, body);
       return this.problem(res, status, error, error.code, false, error.message);
@@ -692,8 +698,10 @@ export class DaemonControlApiServer {
   private readBody = readControlRequestBody;
 
   private onRequest(req: IncomingMessage, res: ServerResponse): void {
+    trackRequest(req, res);
     const tracked: Promise<void> = this.handle(req, res)
       .catch((err) => {
+        if (requestGone(req, res)) return;
         try {
           if (!res.headersSent) {
             this.problem(
@@ -717,6 +725,7 @@ export class DaemonControlApiServer {
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (requestGone(req, res)) return;
     const url = new URL(req.url ?? "/", "http://localhost");
     const requestPath = url.pathname;
     const method = req.method ?? "GET";
@@ -748,6 +757,8 @@ export class DaemonControlApiServer {
         requestedMajor: req.headers["x-claudexor-protocol-major"],
         readBody: () => this.readBody(req),
         servingMode: this.opts.servingMode?.() ?? "normal",
+        storeId: this.opts.storeId,
+        wantsStoreId: req.headers[CONTROL_STORE_IDENTITY_HEADER] === "1",
       });
     } catch (error) {
       return this.requestError(res, error);
@@ -808,7 +819,7 @@ export class DaemonControlApiServer {
     }
 
     if (method === "GET" && path === "/runs") {
-      return this.handleRunList(url, res);
+      return this.handleRunList(url, req, res);
     }
 
     if (
@@ -868,30 +879,24 @@ export class DaemonControlApiServer {
 
     const runDetailMatch = /^\/runs\/([^/]+)$/.exec(path);
     if (method === "GET" && runDetailMatch) {
-      const rec = await this.findRun(decodeURIComponent(runDetailMatch[1] as string));
-      if (!rec) return this.json(res, 404, { error: "no such run" });
-      // Fence order: cursor FIRST, every projection (pending interactions
-      // included) after it — see the detailFor doc comment.
-      const lastSeq = rec.runDir ? lastRunEventSeq(join(rec.runDir, "events.jsonl")) : 0;
-      const parentRunId = rec.runId ?? rec.id;
-      // Addressed child read: the daemon selects this parent's direct children
-      // before it projects, so parent detail never pays for the params of every
-      // other retained run. The same bounded rule is re-applied here, because an
-      // engine that predates the query answers with the whole list.
-      const children = directDelegatedChildrenFromRecords(
-        parentRunId,
-        await this.opts.daemon.list({ delegatedFromRunId: parentRunId }),
-      ).map((candidate) => this.summarizeRunOrDiagnostic(candidate));
-      return this.json(
+      return serveRunDetail(
+        {
+          findRun: (id) => this.findRun(id),
+          children: (id) => this.opts.daemon.list({ delegatedFromRunId: id }),
+          summarize: (rec) => this.summarizeRunOrDiagnostic(rec),
+          project: (rec, cursor, children) =>
+            detailFor(
+              rec,
+              this.pendingInteractionsFor(rec),
+              cursor,
+              this.validOperatorDecisionFor(rec),
+              children,
+            ),
+          json: (response, status, body) => this.json(response, status, body),
+        },
+        decodeURIComponent(runDetailMatch[1] as string),
+        req,
         res,
-        200,
-        detailFor(
-          rec,
-          this.pendingInteractionsFor(rec),
-          lastSeq,
-          this.validOperatorDecisionFor(rec),
-          children,
-        ),
       );
     }
 
@@ -972,7 +977,12 @@ export class DaemonControlApiServer {
       return this.json(
         res,
         200,
-        await projectThreadList(this.opts.daemon, await svc(), (r) => this.runNeedsAttention(r)),
+        await projectThreadList(
+          this.opts.daemon,
+          await svc(),
+          (r) => this.runNeedsAttention(r),
+          () => !requestGone(req, res),
+        ),
       );
     }
 
@@ -986,6 +996,7 @@ export class DaemonControlApiServer {
         const runs = await this.opts.daemon.list({
           threadId: decodeURIComponent(threadDetailMatch[1] as string),
         });
+        if (requestGone(req, res)) return;
         const byRun = new Map(runs.map((r) => [r.runId ?? r.id, r]));
         const thread = detail.thread as { head_run_id?: string | null };
         const cards = projectTurnRunCards(
@@ -1993,7 +2004,7 @@ export class DaemonControlApiServer {
    * newest `RUN_LIST_DEFAULT_LIMIT` runs with `hasMore`/`nextCursor` to page the
    * rest.
    */
-  private async handleRunList(url: URL, res: ServerResponse): Promise<void> {
+  private async handleRunList(url: URL, req: IncomingMessage, res: ServerResponse): Promise<void> {
     let query: RunListQuery;
     try {
       query = parseRunListQuery(url);
@@ -2004,11 +2015,18 @@ export class DaemonControlApiServer {
       await this.opts.daemon.list({ page: query }),
       query,
     );
+    if (requestGone(req, res)) return;
+    const runs = await summarizeRunPage(
+      page,
+      (r) => this.summarizeRunOrDiagnostic(r),
+      () => !requestGone(req, res),
+    );
+    if (requestGone(req, res)) return;
     return this.json(
       res,
       200,
       ControlRunListResponse.parse({
-        runs: await summarizeRunPage(page, (r) => this.summarizeRunOrDiagnostic(r)),
+        runs,
         nextCursor,
         hasMore,
       }),
@@ -2231,7 +2249,7 @@ export class DaemonControlApiServer {
    */
   private summarizeRunOrDiagnostic(rec: DaemonRunRecord): ControlRunSummary {
     try {
-      return this.summarizeRunLive(rec);
+      return measureSync("control.run_summary", () => this.summarizeRunLive(rec));
     } catch (err) {
       const delegatedFromRunId = Id.safeParse(paramsRecord(rec)["delegatedFromRunId"]);
       let waitingOnUser = false;

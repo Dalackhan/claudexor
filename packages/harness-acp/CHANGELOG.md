@@ -1,5 +1,19 @@
 # @claudexor/harness-acp
 
+## 4.4.0
+
+### Minor Changes
+
+- Declares its native sessions not pruned, because independent deletion safety is not proven, so engine retention leaves them in place (#477).
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/util@4.4.0
+  - @claudexor/schema@4.4.0
+  - @claudexor/core@4.4.0
+  - @claudexor/secrets@4.4.0
+
 ## 4.3.1
 
 ### Patch Changes

@@ -33,8 +33,12 @@ export async function projectThreadList(
   daemon: Pick<DaemonFacadeClient, "list">,
   collection: { threads: unknown[]; problems?: unknown[] },
   needsAttention: (record: DaemonRunRecord) => boolean,
+  active: () => boolean = () => true,
 ): Promise<ControlThreadListResponse> {
+  if (!active()) return { threads: [], problems: [] };
   const heads = await readThreadHeads(daemon, collection.threads);
+  // The caller discards this value after disconnect; do no artifact projection.
+  if (!active()) return { threads: [], problems: [] };
   const blocked = new Set(
     heads.filter((r) => r.state === "succeeded" && needsAttention(r)).map((r) => r.runId ?? r.id),
   );

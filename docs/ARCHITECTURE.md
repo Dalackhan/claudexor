@@ -2311,6 +2311,13 @@ period is not cut; none of these limits applies to responses or SSE streams.
 Once stopping, it closes each kept-alive socket as soon as its response finishes,
 so the longer keep-alive window never delays shutdown.
 
+HTTP handlers stop at entry when the client has already disconnected. Run detail
+checks again after addressed lookups and before its cursor/artifact projection;
+yielding run pages and thread projections stop before further expensive reads.
+A normally consumed request body is not a disconnect: Node may mark it destroyed
+while its response socket remains live. Already-running synchronous work cannot
+be interrupted, and disconnect does not undo a mutation already admitted.
+
 An admitted continuation whose predecessor record or run directory disappears
 before execution fails with `continuation_predecessor_unavailable` (404, not
 retryable), before orchestrator or harness startup. It never becomes a fresh run.
@@ -2328,13 +2335,34 @@ share, and the GC pauses a `PerformanceObserver` saw (count, total, longest).
 It is null until the first window completes; a stalled loop rolls its window
 late, so `windowMs` grows with the stall. `claudexor daemon status` prints the
 same window as one line. The status route reaches the daemon in process, so it
-answers while the loop is merely slow. The protocol handshake remains unchanged.
+answers while the loop is merely slow.
 The `store` facts report flusher state, interval, last barrier and lag, WAL bytes,
 open obligations, busy waits, request-thread COMMIT timing since the store opened
 ([SQLite engine store](#sqlite-engine-store)), integrity and current import
 progress. A field is null when its owner cannot observe it; pending integrity is
 not a successful check.
-No memory, loop or store measurements impose automatic admission thresholds.
+The `routes` array in `timing` adds completed response/disconnect count and p50/p99/max latency
+by HTTP method and operation-catalog template, both `lifetime` (since process
+start) and `window` (the last completed loop window). SSE latency includes the
+stream's whole lifetime. Unknown URLs/methods share `OTHER <unmatched>`; raw
+URLs, query values and identifiers are never retained. At most 256 route keys
+have two fixed-capacity microsecond histograms, with two significant digits;
+maxima are measured directly and rounded to a microsecond. Before the first
+window, window metadata and per-route windows are null; an empty completed
+window has count zero and null latencies. The status request itself is counted
+when its response finishes, so it appears in a subsequent read.
+The `worstSync` array in `timing` retains only the 32 longest instrumented synchronous sections
+since start (descending, later samples win ties), with operation, duration and
+timestamp. Labels cover `store.begin_immediate`, `store.commit`, `store.external_write`,
+`control.run_detail`, `control.run_summary`, and `scope.persist`; scope persistence
+measures synchronous serialization, not its asynchronous file writes. These
+samples may overlap and do not identify the cause of a delay. `store.commit`
+also exposes lifetime `p50_ms`/`p99_ms` using the same histogram precision.
+Older engines omit the new optional fields. The catalog still points to the
+same `ControlDaemonStatus` response schema.
+No memory, loop, timing or store measurements impose automatic admission thresholds.
+
+`POST /v2/handshake` returns top-level `storeId`, the durable engine store's UUID (stable across restarts, absent when unavailable), only to a request sending `X-Claudexor-Store-Identity: 1`, so older strict same-major clients keep the legacy shape; a run 404 is meaningful only together with the same `storeId`.
 
 <!-- BEGIN GENERATED ENDPOINTS (node scripts/gen-endpoints-doc.mjs; do not edit by hand) -->
 - `GET /healthz`
@@ -3553,9 +3581,10 @@ kept only for cold import and an independent frozen copy kept for tests.
   store opened (a new store, including an in-process replacement, starts
   again): attempts, failures, and the last and longest duration on a monotonic
   clock at microsecond resolution. Only the native COMMIT call is timed, so a
-  WAL header sync or checkpoint SQLite runs inside it is included, while BEGIN,
-  the body, error mapping, ROLLBACK, open-time schema setup and the flusher's
-  later barrier are not. It is one lifetime summary, not aligned with the
+  WAL header sync or checkpoint SQLite runs inside it is included, while BEGIN
+  (timed separately as `store.begin_immediate` among the worst synchronous
+  sections), the body, error mapping, ROLLBACK, open-time schema setup and the
+  flusher's later barrier are not. It is one lifetime summary, not aligned with the
   event-loop window; a long COMMIT is evidence of where the request thread
   waited, not proof of a disk cause. Before any COMMIT the counts are 0 and
   the durations null; a store that is not open reports null, and older

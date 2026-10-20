@@ -1,6 +1,6 @@
 {
   "name": "@claudexor/harness-acp",
-  "version": "4.3.1",
+  "version": "4.4.0",
   "license": "MIT",
   "description": "ACP client harness with GitHub Copilot CLI as its first agent.",
   "type": "module",

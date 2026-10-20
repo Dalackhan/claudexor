@@ -1,6 +1,6 @@
 {
   "name": "@claudexor/harness-agy",
-  "version": "4.3.1",
+  "version": "4.4.0",
   "license": "MIT",
   "description": "Google Antigravity CLI adapter (agy -p --output-format stream-json).",
   "type": "module",

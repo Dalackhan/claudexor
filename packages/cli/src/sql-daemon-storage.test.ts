@@ -28,8 +28,12 @@ afterEach(async () => {
 
 it("keeps physical archive bodies and uploads outside fresh and restarted GC custody", async () => {
   const f = fixture();
+  expect(f.storage.storeId()).toBeUndefined();
   await f.storage.open();
   const old = f.storage.graph();
+  const originalIdentity = f.storage.storeId();
+  expect(originalIdentity).toBe(old.store.storeId);
+  expect(typeof originalIdentity).toBe("string");
   const params = { prompt: "acknowledged old conversation ".repeat(4_000) };
   old.commands
     .current()
@@ -90,6 +94,7 @@ it("keeps physical archive bodies and uploads outside fresh and restarted GC cus
   await old.store.flushed();
   await old.resources.drainCleanup();
   await f.storage.close();
+  expect(f.storage.storeId()).toBeUndefined();
   // Exercise the default process-start cutoff with known old fixture mtimes.
   const resourceSha = model.sha256.replace(/^sha256:/, "");
   const part = join("resource-store", "uploads", `${upload.uploadId}.part`);
@@ -106,6 +111,7 @@ it("keeps physical archive bodies and uploads outside fresh and restarted GC cus
     closeSync(fd);
   }
   await f.storage.open();
+  expect(f.storage.storeId()).toBe(originalIdentity);
   expect(f.storage.graph().commands.current().get("old-only")!.params).toEqual(params);
   expect((await f.storage.graph().maintenance.integrityCheck()).ok).toBe(false);
   expect(f.onCorrupt).toHaveBeenCalledWith(expect.objectContaining({ code: "store_corrupt" }));
@@ -116,6 +122,8 @@ it("keeps physical archive bodies and uploads outside fresh and restarted GC cus
   };
   const receipt = await f.storage.engineRecovery.quarantineAndStartFresh(recoveryRequest);
   const fresh = f.storage.graph();
+  expect(f.storage.storeId()).toBe(fresh.store.storeId);
+  expect(f.storage.storeId()).not.toBe(originalIdentity);
   expect(fresh.store.prepare("SELECT count(*) AS n FROM command").get()).toEqual({ n: 0 });
   expect(
     fresh.store.prepare("SELECT value FROM meta WHERE key='legacy_idempotency_dir'").get(),

@@ -1,5 +1,20 @@
 # @claudexor/harness-codex
 
+## 4.4.0
+
+### Minor Changes
+
+- Engine retention retires unregistered and archived project histories, orphaned run trees and unreferenced native session parts in recurring bounded maintenance and never removes anything still referenced; immutable attempt, final and anchor patches share one content-addressed object per project where hard links are supported (#477).
+- A fresh managed Codex install resolves npm `latest` once to an exact version, discloses it and installs exactly that version; `--release-tested` uses the release baseline, a latest older than that baseline refuses (`latest_older_than_tested`), and `pinnedVersion` now names the selected install target. Thanks to @josephsteuerjr (#476).
+
+### Patch Changes
+
+- Updated dependencies
+  - @claudexor/util@4.4.0
+  - @claudexor/schema@4.4.0
+  - @claudexor/core@4.4.0
+  - @claudexor/secrets@4.4.0
+
 ## 4.3.1
 
 ### Patch Changes

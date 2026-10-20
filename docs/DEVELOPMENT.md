@@ -319,7 +319,7 @@ Tests and local smokes must never touch real user state:
   independent legacy/SQL comparisons. The 219-file frozen oracle is test-only:
   never refresh its hashes or goldens to fit a new implementation.
   `scripts/store-load-bench.mjs` measures the SQL request path and checkpoint
-  behavior; the writer's checkpoint threshold is not a maximum WAL size. Use
+  behavior; pinned readers can grow the WAL until the flusher can reclaim it. Use
   copied historical corpora and isolated roots. Run responsiveness/SSE and bundle
   worker checks without provider profiles; normal cleanup must close every
   fixture worker and daemon it owns. The durability and migration contracts are

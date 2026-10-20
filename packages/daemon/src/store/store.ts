@@ -182,11 +182,12 @@ export class EngineStore {
    * synchronous: returning a thenable rolls the transaction back and throws,
    * because an await inside a transaction would hold the writer lock across
    * the event loop and break "returned means committed". Only the native COMMIT
-   * call is timed for `facts().commit`, including any WAL header sync or
-   * automatic checkpoint SQLite runs inside it (see `pragmas.ts`).
+   * call is timed for `facts().commit`, including any WAL header sync
+   * SQLite runs inside it (see `pragmas.ts`).
    */
   transaction<T>(fn: () => T): T {
     this.assertOpen();
+    this.flusher.assertWritable();
     if (this.connection.isTransaction) {
       throw new StoreError(
         "store_transaction_nested",
@@ -328,21 +329,26 @@ export class EngineStore {
   }
 
   private async closeConnections(): Promise<void> {
-    let stopFailed = false;
-    try {
-      await this.flusher.stop();
-    } catch (error) {
-      stopFailed = true;
-      throw error;
-    } finally {
+    // Keep the checkpointer alive while the writer closes. The worker performs
+    // the final barrier and closes LAST, so SQLite's last-close checkpoint uses
+    // checkpoint_fullfsync=1 off the request thread too.
+    const closeWriter = (): void => {
       this.statements.clear();
-      try {
-        if (this.connection.isOpen) this.connection.close();
-      } catch (error) {
-        // Keep the first failure, while closed still reflects the native state.
-        if (!stopFailed) throw error;
-      }
+      if (this.connection.isOpen) this.connection.close();
+    };
+    let failure: unknown;
+    try {
+      await this.flusher.stop(closeWriter);
+    } catch (error) {
+      failure = error;
     }
+    // Preserve the existing cleanup contract even if worker shutdown fails.
+    try {
+      closeWriter();
+    } catch (error) {
+      failure ??= error;
+    }
+    if (failure !== undefined) throw failure;
   }
 
   /** The request thread and private worker channels share one error owner. */

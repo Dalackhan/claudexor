@@ -469,7 +469,7 @@ describe("SQL terminal transaction and real EventLog", () => {
       encoding: "utf8",
       timeout: 15000,
     });
-    expect(killed.stdout).toContain("terminal-kill-point");
+    expect(killed.stdout, killed.stderr).toContain("terminal-kill-point");
     if (process.platform === "win32") expect(killed.status, killed.stderr).toBe(1);
     else expect(killed.signal, killed.stderr).toBe("SIGKILL");
     const f = await runtime(root);

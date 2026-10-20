@@ -3456,22 +3456,31 @@ kept only for cold import and an independent frozen copy kept for tests.
   F_FULLFSYNC on macOS, also a device-wide barrier for `O_DSYNC` file data
   handed to the drive before it). The barrier is never derived from a
   checkpoint result, and a freshly started or restarted worker treats its
-  first pass as dirty. Every connection that can checkpoint — the writer and
-  the flusher; the serving maintenance connection is read-only and never
-  checkpoints — sets `checkpoint_fullfsync`, so the checkpoint that completes a backfill
-  syncs WAL → database → reuse in order and database pages become durable
-  there, not through the WAL fsync;
-  the writer's `wal_autocheckpoint` of 4000 pages (about 16 MiB) is the
-  trigger threshold of that checkpoint, not a physical bound: under a pinned
-  reader (a maintenance integrity check or export, a long statement) or a
-  large transaction the WAL keeps growing and resets once the reader
-  releases, after which `journal_size_limit` truncates the file; the first
-  such checkpoint after a long pinned read copies the accumulated backlog in
-  one longer stop on the request thread. The writer's automatic checkpoint
-  runs inside a COMMIT call once the WAL reaches the threshold, and a COMMIT
-  that restarts the WAL syncs the new WAL header, so `synchronous=NORMAL`
-  removes the per-commit WAL sync, not every native sync on the request thread.
-  The request thread itself calls no
+  first pass as dirty. The flusher is the only serving checkpointer and keeps
+  `checkpoint_fullfsync=1`, so synchronized WAL → database backfill precedes
+  reuse; database pages become durable there, not through the later WAL fsync.
+  The request-thread connection sets `wal_autocheckpoint=0` and
+  `checkpoint_fullfsync=0` (`fullfsync=0` remains unchanged). Its COMMIT can
+  still sync a restarted WAL header using plain fsync, but never runs an
+  automatic checkpoint or requests macOS F_FULLFSYNC. Moving those full-device
+  syncs off the request thread preserves NORMAL commit/crash durability and
+  the same generation-numbered power-loss barrier. A pinned reader or large
+  transaction can grow the WAL; after the reader ends the worker backfills it,
+  and the writer's next WAL reuse applies `journal_size_limit` (64 MiB).
+  Worker death rejects existing barrier waiters and the controller restarts it
+  automatically, replaying unacknowledged registrations. Failure callers may
+  still save terminal records during a short restart. One second after a death,
+  row transactions fail with retryable `store_flush_unavailable` before BEGIN
+  until a worker completes a successful pass; merely restarting does not reset
+  that deadline. Thus a persistently failed checkpointer cannot accumulate
+  unlimited new WAL through normal mutations. Reads and health remain available.
+  Normal shutdown closes the writer while the flusher is alive, then the worker
+  performs a final pass and closes last: SQLite's last-close checkpoint keeps
+  the full sync class off the request thread too. Shutdown waits up to one second
+  for a restarting worker. Cleanup after worker failure remains best effort and
+  may close the last connection on the request thread with plain syncs; an
+  unfinished final worker pass is logged, never claimed as a barrier. `close()`
+  is not a substitute for `flushed()` and preserves its existing cleanup contract. The request thread itself calls no
   Node storage-sync primitive: external files use `O_DSYNC` on POSIX and
   libuv's write-through open flag on Windows, where Node does not export the
   POSIX constant. The temp is renamed and its directory goes to the flusher via
@@ -3535,7 +3544,7 @@ kept only for cold import and an independent frozen copy kept for tests.
   store opened (a new store, including an in-process replacement, starts
   again): attempts, failures, and the last and longest duration on a monotonic
   clock at microsecond resolution. Only the native COMMIT call is timed, so a
-  WAL header sync or checkpoint SQLite runs inside it is included, while BEGIN,
+  WAL header sync SQLite runs inside it is included, while BEGIN,
   the body, error mapping, ROLLBACK, open-time schema setup and the flusher's
   later barrier are not. It is one lifetime summary, not aligned with the
   event-loop window; a long COMMIT is evidence of where the request thread

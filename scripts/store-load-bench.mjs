@@ -240,7 +240,7 @@ await new Promise((r) => setTimeout(r, 300));
 const facts = store.facts();
 const result = {
   config:
-    "A2 (main wal_autocheckpoint=4000 ff; worker PASSIVE ff + explicit WAL fsync; dir syncs per pass)",
+    "Main wal_autocheckpoint=0 checkpoint_fullfsync=0; worker PASSIVE ff + explicit WAL fsync; dir syncs per pass",
   rate: RATE,
   K,
   seconds: SECONDS,

@@ -18,6 +18,8 @@ export interface FlusherHooks {
   allowExit?: boolean;
   /** Sleep inside the pass, between checkpoint and barrier (kill-during-pass tests). */
   passDelayMs?: number;
+  /** Test gate after checkpoint: [1,0] pauses at [2,0] until index 1 is notified. */
+  checkpointGate?: SharedArrayBuffer;
 }
 
 export interface FlusherWorkerData {

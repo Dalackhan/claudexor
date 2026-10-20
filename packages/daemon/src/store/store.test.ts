@@ -44,8 +44,8 @@ describeStore("EngineStore adapter", () => {
     expect(readPragmas(store.db, MAIN_CONNECTION_PRAGMAS)).toEqual({
       journal_mode: "wal",
       synchronous: 1,
-      wal_autocheckpoint: 4000,
-      checkpoint_fullfsync: 1,
+      wal_autocheckpoint: 0,
+      checkpoint_fullfsync: 0,
       fullfsync: 0,
       journal_size_limit: 67108864,
       busy_timeout: 5000,

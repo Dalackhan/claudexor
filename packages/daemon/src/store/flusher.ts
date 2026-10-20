@@ -87,6 +87,7 @@ export class FlusherController {
   };
   private restarts = 0;
   private deaths = 0;
+  private unavailableSince: number | null = null;
   private closing = false;
   private readyInThisLife = false;
   private restartTimer: NodeJS.Timeout | NodeJS.Immediate | null = null;
@@ -193,7 +194,29 @@ export class FlusherController {
     this.worker?.postMessage({ type: "exit", code } satisfies FlusherCommand);
   }
 
-  async stop(): Promise<void> {
+  /** Allow failure records during restart, but bound writes through a prolonged outage. */
+  assertWritable(): void {
+    if (this.unavailableSince !== null && performance.now() - this.unavailableSince >= 1000)
+      throw new StoreFlushUnavailableError(
+        this.generation,
+        "the flusher has not recovered within one second; retry after a successful pass",
+      );
+  }
+
+  async stop(closeWriter?: () => void): Promise<void> {
+    let writerFailure: unknown;
+    if (closeWriter) {
+      const deadline = performance.now() + FLUSH_INTERVAL_MS * 5;
+      while (this.state !== "up" && !this.closing && performance.now() < deadline)
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      // Normally the worker owns the last connection. After a failed worker,
+      // cleanup is still best effort; close() has never promised a barrier.
+      try {
+        closeWriter();
+      } catch (error) {
+        writerFailure = error;
+      }
+    }
     this.closing = true;
     if (this.restartTimer) {
       clearTimeout(this.restartTimer as NodeJS.Timeout);
@@ -206,12 +229,28 @@ export class FlusherController {
       waiter.reject(new StoreFlushUnavailableError(g, "engine store is closing")),
     );
     this.waiters.clear();
-    if (!worker) return;
+    if (!worker) {
+      if (writerFailure !== undefined) throw writerFailure;
+      return;
+    }
+    let stopped = false;
+    worker.on("message", (event: FlusherEvent) => {
+      if (event.type === "stopped") stopped = true;
+    });
     const exited = new Promise<void>((resolve) => worker.once("exit", () => resolve()));
     worker.postMessage({ type: "stop" } satisfies FlusherCommand);
-    await Promise.race([exited, new Promise<void>((r) => setTimeout(r, FLUSH_INTERVAL_MS * 5))]);
+    let timeout: NodeJS.Timeout | undefined;
+    await Promise.race([
+      exited,
+      new Promise<void>((r) => {
+        timeout = setTimeout(r, FLUSH_INTERVAL_MS * 5);
+      }),
+    ]);
+    clearTimeout(timeout);
     await worker.terminate();
     this.state = "down";
+    if (!stopped) this.options.log?.("store flusher stopped without proving a final barrier");
+    if (writerFailure !== undefined) throw writerFailure;
   }
 
   private send(entry: Outstanding): void {
@@ -226,7 +265,12 @@ export class FlusherController {
       dbPath: this.options.dbPath,
       hooks: this.options.hooks ?? {},
     };
-    const worker = new Worker(this.entry, { workerData: data, name: "claudexor-store-flusher" });
+    const worker = new Worker(this.entry, {
+      workerData: data,
+      name: "claudexor-store-flusher",
+      // --input-type applies only to the parent's eval/stdin, never this file.
+      execArgv: process.execArgv.filter((arg) => !arg.startsWith("--input-type")),
+    });
     this.worker = worker;
     this.state = "starting";
     this.readyInThisLife = false;
@@ -263,6 +307,7 @@ export class FlusherController {
   }
 
   private onSynced(report: FlusherPassReport): void {
+    this.unavailableSince = null;
     this.lastReport = report;
     this.counters = report.counters;
     if (report.barrier) this.lastBarrierAt = report.at;
@@ -282,6 +327,7 @@ export class FlusherController {
   }
 
   private onDeath(code: number): void {
+    this.unavailableSince ??= performance.now();
     this.deaths += 1;
     this.state = "down";
     this.options.log?.(`store flusher worker exited with code ${code}; restarting`);

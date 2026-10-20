@@ -107,6 +107,10 @@ export async function runFlusherWorker(port: MessagePort, data: FlusherWorkerDat
         }
       : null;
     if (checkpoint?.busy) counters.busyPassive += 1;
+    if (hooks.checkpointGate) {
+      const gate = new Int32Array(hooks.checkpointGate);
+      if (Atomics.compareExchange(gate, 0, 1, 2) === 1) Atomics.wait(gate, 1, 0, 10_000);
+    }
     if (hooks.passDelayMs) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, hooks.passDelayMs);
     }
@@ -142,6 +146,9 @@ export async function runFlusherWorker(port: MessagePort, data: FlusherWorkerDat
   };
 
   const stop = (): void => {
+    // The writer has closed while this connection kept the WAL open. Finish
+    // directory registrations and the barrier before the last-close checkpoint.
+    pass();
     stopped = true;
     if (timer) clearTimeout(timer);
     timer = null;

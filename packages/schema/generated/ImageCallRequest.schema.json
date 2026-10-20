@@ -52,7 +52,7 @@
               "additionalProperties": false
             }
           ],
-          "description": "Auto keeps a usable prior account; pin never selects another account."
+          "description": "Auto prefers preferredProfileId among unmarked accounts of the same catalog tier (listed before unlisted); a listed alternative or a capability mark outranks it. Pin never selects another account."
         },
         "prompt": {
           "type": "string",

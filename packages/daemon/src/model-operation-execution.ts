@@ -117,6 +117,7 @@ export async function executeModelOperation(
         ...evidence,
         problem: barrierProblem,
       });
+    if ("routing" in result && result.routing) evidence.routing = result.routing;
     evidence.usage = result.usage;
     evidence.cost = result.cost;
     evidence.problem = result.problem;
@@ -254,7 +255,7 @@ async function invokeModelOperation(
     "ModelCallRequest",
   );
   signal.throwIfAborted();
-  const { adapter, profile } = await deps.resolve(request, signal);
+  const { adapter, profile } = await deps.resolve(request, signal, operationId);
   signal.throwIfAborted();
   return ModelCallResult.parse(
     await adapter.invoke(request, {

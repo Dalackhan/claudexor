@@ -32,7 +32,7 @@ export async function readRoutingEvidence(
   }
 }
 
-/** One account row's model-scoped evidence: live refusal marks and its latest
+/** One account row's model-scoped evidence: live refusal/capability marks and its latest
  * service per requested model. Service is a routing observation, never a quota
  * or authentication verdict. */
 export function routingEvidenceLines(
@@ -47,6 +47,10 @@ export function routingEvidenceLines(
   const mine = <T extends { harness_id: string; profile_id: string }>(rows: readonly T[]) =>
     rows.filter((row) => row.harness_id === harnessId && row.profile_id === profileId);
   return [
+    ...mine(evidence.capabilities ?? []).map(
+      (mark) =>
+        `model capability · ${mark.requested_model} · ${mark.state} · since ${mark.observed_at}, next probe ${mark.expires_at} · ${mark.provider_reason.length > 160 ? mark.provider_reason.slice(0, 159) + "…" : mark.provider_reason}`,
+    ),
     ...mine(evidence.refusals)
       .filter((mark) => Date.parse(mark.expires_at) > now)
       .map(

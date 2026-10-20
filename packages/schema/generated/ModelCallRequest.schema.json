@@ -52,7 +52,11 @@
               "additionalProperties": false
             }
           ],
-          "description": "Auto keeps a usable prior account; pin never selects another account."
+          "description": "Auto prefers preferredProfileId among unmarked accounts of the same catalog tier (listed before unlisted); a listed alternative or a capability mark outranks it. Pin never selects another account."
+        },
+        "retryOfOperationId": {
+          "$ref": "#/definitions/ModelCallRequest/properties/source",
+          "description": "One host-owned capability retry of a failed auto operation with otherwise identical generation input. No engine re-dispatch; unavailable after daemon restart or four hours."
         },
         "messages": {
           "type": "array",

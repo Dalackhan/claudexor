@@ -68,6 +68,28 @@ const snapshot = ControlCredentialProfilesSnapshotResponse.parse({
   quotaEventCursor: "q-1",
 });
 const evidence = {
+  capabilities: [
+    {
+      harness_id: "claude",
+      profile_id: "work",
+      requested_model: "unsupported-model",
+      account_fingerprint: "work-identity",
+      provider_reason: "Model unavailable for this account. " + "More detail. ".repeat(20),
+      observed_at: "2026-10-13T08:00:00.000Z",
+      expires_at: "2026-10-13T12:00:00.000Z",
+      state: "probe_due",
+    },
+    {
+      harness_id: "claude",
+      profile_id: "another-account",
+      requested_model: "other-account-model",
+      account_fingerprint: null,
+      provider_reason: "Not supported",
+      observed_at: "2026-10-13T08:00:00.000Z",
+      expires_at: "2099-01-01T00:00:00.000Z",
+      state: "confirmed",
+    },
+  ],
   refusals: [
     {
       harness_id: "claude",
@@ -189,6 +211,13 @@ describe("CLI and MCP consumers of the additive read", () => {
       "    recent refusal · claude-opus-5-5 · observed 2026-10-13T08:00:00.000Z",
     );
     expect(out()).toContain("    last served · default model · 2026-10-13T07:00:00.000Z");
+    expect(out()).toContain(
+      "    model capability · unsupported-model · probe_due · since 2026-10-13T08:00:00.000Z, next probe 2026-10-13T12:00:00.000Z · " +
+        evidence.capabilities[0]!.provider_reason.slice(0, 159) +
+        "…",
+    );
+    expect(out()).not.toContain(evidence.capabilities[0]!.provider_reason);
+    expect(out()).not.toContain("other-account-model");
     expect(out()).not.toContain("expired-model");
     // The none reason and the paid route disclosure are retained, qualified.
     expect(out()).toContain(
@@ -199,6 +228,7 @@ describe("CLI and MCP consumers of the additive read", () => {
     out = capture();
     expect(await accountsCommandWithDeps(parseArgs(["accounts"]), false)).toBe(0);
     expect(out()).toContain("recent refusal · claude-opus-5-5");
+    expect(out()).toContain("model capability · unsupported-model · probe_due");
     expect(out()).toContain("next up (default model) codex: API key route");
     vi.restoreAllMocks();
     out = capture();
@@ -220,6 +250,7 @@ describe("CLI and MCP consumers of the additive read", () => {
     expect(await profilesCommandWithDeps(parseArgs(["profiles"]), false)).toBe(0);
     expect(out()).toContain("work [config_dir_login] available");
     expect(out()).not.toContain("recent refusal");
+    expect(out()).not.toContain("model capability");
     expect(out()).not.toContain("routing evidence unavailable");
     vi.restoreAllMocks();
     out = capture();

@@ -42,7 +42,7 @@ export const ACCOUNT_RESOURCE_OPERATION_DRAFTS: OperationDraft[] = [
     responseSchema: "ControlAccountRoutingEvidenceResponse",
     responseKind: "json",
     summary:
-      "Read live model-scoped refusal marks and the durable last-served order; no probe or quota refresh.",
+      "Read live model-scoped refusal marks, temporary capability marks, and the durable last-served order; no probe or quota refresh.",
   },
   {
     method: "GET",

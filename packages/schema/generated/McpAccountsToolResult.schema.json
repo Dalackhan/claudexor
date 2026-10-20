@@ -381,6 +381,72 @@
             "routingEvidence": {
               "type": "object",
               "properties": {
+                "capabilities": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "harness_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Harness family of the account."
+                      },
+                      "profile_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Account row that refused this model before generation started."
+                      },
+                      "requested_model": {
+                        "type": "string",
+                        "description": "Model the refused request named."
+                      },
+                      "account_fingerprint": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "Provider account identity the mark is bound to; null when the adapter has none."
+                      },
+                      "provider_reason": {
+                        "type": "string",
+                        "description": "Latest provider refusal text, redacted and at most 1024 characters."
+                      },
+                      "observed_at": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "When the earliest current refusal for this mark was observed."
+                      },
+                      "expires_at": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Probe becomes eligible at this time; not a vendor reset."
+                      },
+                      "state": {
+                        "type": "string",
+                        "enum": [
+                          "provisional",
+                          "confirmed",
+                          "probe_due",
+                          "probing"
+                        ],
+                        "description": "provisional = refused here; confirmed = another account then served the correlated retry; probe_due = expired, the next selection may probe it; probing = one operation holds that probe."
+                      }
+                    },
+                    "required": [
+                      "harness_id",
+                      "profile_id",
+                      "requested_model",
+                      "account_fingerprint",
+                      "provider_reason",
+                      "observed_at",
+                      "expires_at",
+                      "state"
+                    ],
+                    "additionalProperties": false,
+                    "description": "A temporary capability mark for one account and one model. It only orders auto selection: the account stays enabled and usable as a last fallback."
+                  },
+                  "description": "Temporary capability marks; absent from engines that predate them. A mark clears on a success there or a catalog or credential change; after expires_at one operation may probe the account."
+                },
                 "refusals": {
                   "type": "array",
                   "items": {

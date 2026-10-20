@@ -105,6 +105,8 @@ export function createSqlDaemonExecutors(
     ...options.models,
     unusable: graph.accounts.unusable,
     substitutions: graph.accounts.substitutions,
+    refusals: graph.accounts.refusals,
+    capabilities: graph.accounts.capabilities,
     lastService: graph.accounts.services,
     commands: graph.commands,
     resourceQueries: graph.commands.queries,

@@ -1,7 +1,7 @@
 import { sqlFixture } from "../../daemon/src/store/test-support/sql-fixture.js";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -9,6 +9,8 @@ import {
   DaemonClient,
   DaemonServer,
   ModelSubstitutionLedger,
+  ModelCapabilityLedger,
+  PreProgressRefusalLedger,
   QuotaRegistry,
 } from "@claudexor/daemon";
 import { createCodexAdapter, createCodexModelAdapter } from "@claudexor/harness-codex";
@@ -20,12 +22,16 @@ import {
   ModelCallRequest,
   ModelCallResult,
   QuotaAbsence,
+  QuotaSnapshot,
+  ControlAccountRoutingEvidenceResponse,
   isModelOperation,
   type CredentialProfileStatus,
   type ModelCatalogEntry,
   type ModelInventoryAbsence,
 } from "@claudexor/schema";
-import type { ModelAdapter } from "@claudexor/core";
+import { bindCredentialMutationWindow, type ModelAdapter } from "@claudexor/core";
+import { createCredentialProfilesService } from "./accounts-services.js";
+import { updateGlobalConfig } from "@claudexor/config";
 import { accountObservations } from "./account-observations.js";
 
 beforeEach(() => accountObservations.invalidate());
@@ -66,6 +72,12 @@ async function fixture(
   const unusable = new CredentialUnusableLedger();
   const clock = { now: Date.now() };
   const substitutions = new ModelSubstitutionLedger(() => new Date(clock.now));
+  const capabilities = new ModelCapabilityLedger(unusable.credentials, () => clock.now);
+  const refusals = new PreProgressRefusalLedger(
+    () => new Date(clock.now),
+    () => false,
+    unusable.credentials,
+  );
   // The model each account's terminal response discloses; absent = the requested one.
   const served: Record<string, string | null> = {};
   // Accounts whose terminal response ran out of room rather than completing.
@@ -164,6 +176,8 @@ async function fixture(
     config: () => cfg,
     unusable,
     substitutions,
+    capabilities,
+    refusals,
     migrationGate: () => null,
     registry: new Map([["codex", { ...createCodexAdapter(), probeCredentialProfile: probe }]]),
     sources: [
@@ -195,7 +209,10 @@ async function fixture(
     await sql.close();
     rmSync(root, { recursive: true, force: true });
   });
-  const run = async (account: ModelCallRequest["account"] = { mode: "auto" }) => {
+  const run = async (
+    account: ModelCallRequest["account"] = { mode: "auto" },
+    changes: Partial<ModelCallRequest> = {},
+  ) => {
     const ref = resources().publishModel(
       Buffer.from(
         JSON.stringify(
@@ -204,6 +221,7 @@ async function fixture(
             model: "test-model",
             account,
             messages: [{ role: "system", content: "own prompt" }],
+            ...changes,
           }),
         ),
       ),
@@ -222,6 +240,13 @@ async function fixture(
   };
   return {
     root,
+    capabilities,
+    refusals,
+    routingStatus: createCredentialProfilesService(() => quota, {
+      ...sql.graph.accounts,
+      capabilities,
+      refusals,
+    }).accountRoutingEvidence,
     services,
     resources,
     profiles,
@@ -245,43 +270,54 @@ async function fixture(
 }
 
 describe("production model service composition", () => {
-  it("retains a dispatched model refusal at model scope while an unqualified catalog remains usable", async () => {
-    const f = await fixture();
-    f.failures.a = "model_unavailable";
-    f.failureContext.a = { httpStatus: 404, vendorCode: "model_not_found" };
-    const failed = await f.run({ mode: "pin", profileId: "a" });
-    expect(failed.problem?.code).toBe("model_unavailable");
-    expect(f.unusable.live()).toMatchObject([
-      { profile_id: "a", model: "test-model", code: "capability_refused" },
-    ]);
-    expect((await f.run()).dispatch.route?.credentialProfileId).toBe("b");
-    await expect(f.services.routes.modelCatalog("codex", "a")).resolves.toMatchObject({
-      credentialProfileId: "a",
-    });
-  });
+  it.each(["model_unavailable", "model_capability_refused"])(
+    "retains a dispatched %s with explicit model_not_found at model scope",
+    async (code) => {
+      const f = await fixture();
+      f.failures.a = code;
+      f.failureContext.a = { httpStatus: 404, vendorCode: "model_not_found" };
+      const failed = await f.run({ mode: "pin", profileId: "a" });
+      expect(failed.problem?.code).toBe(code);
+      expect(f.unusable.live()).toMatchObject([
+        { profile_id: "a", model: "test-model", code: "capability_refused" },
+      ]);
+      expect((await f.run()).dispatch.route?.credentialProfileId).toBe("b");
+      await expect(f.services.routes.modelCatalog("codex", "a")).resolves.toMatchObject({
+        credentialProfileId: "a",
+      });
+    },
+  );
 
-  it("does not turn a generic pre-dispatch model preparation failure into an account restriction", async () => {
-    const f = await fixture();
-    f.invoke.mockImplementationOnce(async (request, context) =>
-      ModelCallResult.parse({
-        outcome: "failed",
-        message: null,
-        route: {
-          source: "codex",
-          credentialProfileId: context.profile.profile_id,
-          accountFingerprint: context.profile.profile_id,
-          model: request.model,
-        },
-        usage: {},
-        cost: { knowledge: "unknown", billing: "unknown", source: "fixture", provenance: [] },
-        appliedOptions: {},
-        problem: { code: "model_unavailable", message: "preparation failed", retryable: false },
-      }),
-    );
-    await f.run({ mode: "pin", profileId: "a" });
-    expect(f.unusable.live()).toEqual([]);
-    expect((await f.run({ mode: "pin", profileId: "a" })).state).toBe("succeeded");
-  });
+  it.each(["model_unavailable", "model_capability_refused"])(
+    "does not turn a pre-dispatch %s into an account restriction",
+    async (code) => {
+      const f = await fixture();
+      f.invoke.mockImplementationOnce(async (request, context) =>
+        ModelCallResult.parse({
+          outcome: "failed",
+          message: null,
+          route: {
+            source: "codex",
+            credentialProfileId: context.profile.profile_id,
+            accountFingerprint: context.profile.profile_id,
+            model: request.model,
+          },
+          usage: {},
+          cost: { knowledge: "unknown", billing: "unknown", source: "fixture", provenance: [] },
+          appliedOptions: {},
+          problem: {
+            code,
+            message: "preparation failed",
+            retryable: false,
+            context: { vendorCode: "model_not_found", generationStarted: false },
+          },
+        }),
+      );
+      await f.run({ mode: "pin", profileId: "a" });
+      expect(f.unusable.live()).toEqual([]);
+      expect((await f.run({ mode: "pin", profileId: "a" })).state).toBe("succeeded");
+    },
+  );
 
   it.each(["late_failure", "late_success", "concurrent_success"] as const)(
     "retains operation results without allowing %s to overwrite newer account evidence",
@@ -1328,5 +1364,518 @@ describe("production model service composition", () => {
     f.services.close();
     expect(await catalog).toMatchObject({ message: "catalog cancelled" });
     expect(f.invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("account/model capability routing", () => {
+  const refusal = {
+    generationStarted: false,
+    capabilityKind: "model_not_supported",
+    capabilityEvidence: "provider_text",
+    providerReason:
+      "The 'test-model' model is not supported when using Codex with a ChatGPT account.",
+  };
+  async function refusing() {
+    const f = await fixture({ inventoryAbsence: "advisory" });
+    f.failures.a = "model_capability_refused";
+    f.failureContext.a = refusal;
+    return f;
+  }
+  it.each([
+    { capabilityKind: "model_not_supported", capabilityEvidence: "provider_text" },
+    { capabilityKind: "model_not_found", capabilityEvidence: "provider_text" },
+    {
+      capabilityKind: "model_not_supported",
+      capabilityEvidence: "provider_code",
+      vendorCode: "model_not_supported",
+    },
+  ])("only demotes capability evidence without explicit model_not_found: %j", async (context) => {
+    const f = await refusing();
+    f.failureContext.a = { ...refusal, ...context };
+    await f.run();
+    expect(f.capabilities.live()).toMatchObject([{ profile_id: "a", state: "provisional" }]);
+    expect(f.unusable.live()).toEqual([]);
+  });
+  it("prefers a listed account over a preferred advisory miss, retaining all-miss fallback", async () => {
+    const f = await fixture({ inventoryAbsence: "advisory" });
+    f.catalogModels.a = [];
+    const first = await f.run({ mode: "auto", preferredProfileId: "a" });
+    expect(first.dispatch.route?.credentialProfileId).toBe("b");
+    expect(first.routing?.selectionReason).toBe("listed");
+    f.catalogModels.b = [];
+    const fallback = await f.run({ mode: "auto", preferredProfileId: "a" });
+    expect(fallback.dispatch.route?.credentialProfileId).toBe("a");
+    expect(fallback.routing?.selectionReason).toBe("unlisted_fallback");
+  });
+  it("marks immediately, yields a preferred account, and confirms only a correlated successful retry", async () => {
+    const f = await refusing();
+    const first = await f.run();
+    expect(first.problem).toMatchObject({
+      code: "model_capability_refused",
+      retryable: false,
+      context: {
+        retryOnOtherAccount: true,
+        accountMode: "auto",
+        credentialProfileId: "a",
+        requestedModel: "test-model",
+        operationId: first.id,
+      },
+    });
+    expect(f.capabilities.live()[0]?.state).toBe("provisional");
+    expect(f.unusable.live()).toEqual([]);
+    const second = await f.run(
+      { mode: "auto", preferredProfileId: "a" },
+      { retryOfOperationId: first.id },
+    );
+    expect(second.state).toBe("succeeded");
+    expect(second.dispatch.route?.credentialProfileId).toBe("b");
+    expect(second.routing?.differentialOutcome).toBe("confirmed");
+    expect(f.capabilities.live()[0]?.state).toBe("confirmed");
+    expect(
+      (await f.run({ mode: "auto", preferredProfileId: "a" })).dispatch.route?.credentialProfileId,
+    ).toBe("b");
+    delete f.failures.a;
+    expect(
+      (await f.run({ mode: "auto" }, { model: "different-model" })).dispatch.route
+        ?.credentialProfileId,
+    ).toBe("a");
+    expect(f.capabilities.live()).toHaveLength(1);
+  });
+  it("an equivalent refusal on the single host retry returns the original problem and retracts the pair", async () => {
+    const f = await refusing();
+    f.failures.b = "model_capability_refused";
+    f.failureContext.b = refusal;
+    const first = await f.run();
+    const second = await f.run({ mode: "auto" }, { retryOfOperationId: first.id });
+    expect(second.problem).toMatchObject({
+      code: first.problem!.code,
+      message: first.problem!.message,
+      context: {
+        credentialProfileId: "a",
+        retryOnOtherAccount: false,
+        differentialOutcome: "equivalent_refusal",
+        accountsTried: [{ credentialProfileId: "a" }, { credentialProfileId: "b" }],
+      },
+    });
+    expect(f.capabilities.live()).toEqual([]);
+    expect(f.refusals.live()).toEqual([]);
+    const third = await f.run({ mode: "auto" }, { retryOfOperationId: second.id });
+    expect(third.problem?.code).toBe("model_retry_invalid");
+    expect(f.invoke).toHaveBeenCalledTimes(2);
+  });
+  it("a pin never rotates or creates a mark, and no alternative means retryOnOtherAccount=false", async () => {
+    const f = await refusing();
+    const pin = await f.run({ mode: "pin", profileId: "a" });
+    expect(pin.problem?.context).toMatchObject({
+      retryOnOtherAccount: false,
+      accountMode: "pin",
+      accountsTried: [{ credentialProfileId: "a" }],
+    });
+    expect(pin.routing?.selectionReason).toBe("pinned");
+    expect(f.capabilities.live()).toEqual([]);
+    f.cfg.credential_profiles[1]!.enabled = false;
+    expect((await f.run()).problem?.context.retryOnOtherAccount).toBe(false);
+    expect(f.invoke.mock.calls.map(([, ctx]) => ctx.profile.profile_id)).toEqual(["a", "a"]);
+  });
+  it("withholds the retry signal when history continuation is bound to the refusing account", async () => {
+    const withHistory = (credentialProfileId: string): Partial<ModelCallRequest> => ({
+      messages: [
+        { role: "user", content: "earlier question" },
+        {
+          role: "assistant",
+          content: "earlier answer",
+          nativeContinuation: {
+            route: {
+              source: "codex",
+              credentialProfileId,
+              accountFingerprint: null,
+              model: "earlier-model",
+            },
+            format: "codex.responses.v1",
+            payload: [],
+          },
+        },
+        { role: "user", content: "next question" },
+      ],
+    });
+    const f = await refusing();
+    const blocked = await f.run({ mode: "auto" }, withHistory("a"));
+    expect(blocked.problem?.context).toMatchObject({
+      credentialProfileId: "a",
+      retryOnOtherAccount: false,
+      retryBlockedBy: "native_continuation",
+    });
+    expect(blocked.routing?.differentialOutcome).toBe("provisional");
+    expect(f.capabilities.live()).toMatchObject([{ profile_id: "a", state: "provisional" }]);
+    const retry = await f.run(
+      { mode: "auto" },
+      { ...withHistory("a"), retryOfOperationId: blocked.id },
+    );
+    expect(retry.problem?.code).toBe("model_retry_invalid");
+    expect(f.invoke).toHaveBeenCalledTimes(1);
+
+    // Predicate-only: this mocked adapter accepts history bound to b on account a.
+    // The real Codex transport rejects such history locally with
+    // invalid_continuation, so only the blocking predicate is checked here; a
+    // top-level turn continuation resets on a new route and never blocks.
+    const open = await refusing();
+    const elsewhere = await open.run(
+      { mode: "auto" },
+      {
+        ...withHistory("b"),
+        nativeContinuation: {
+          route: {
+            source: "codex",
+            credentialProfileId: "a",
+            accountFingerprint: null,
+            model: "test-model",
+          },
+          format: "codex.turn.v1",
+          payload: { turnState: "turn-state" },
+        },
+      },
+    );
+    expect(elsewhere.problem?.context.retryOnOtherAccount).toBe(true);
+    expect(elsewhere.problem?.context).not.toHaveProperty("retryBlockedBy");
+  });
+  it("allows a marked account as the last fallback instead of disabling it", async () => {
+    const f = await refusing();
+    await f.run();
+    f.cfg.credential_profiles[1]!.enabled = false;
+    const next = await f.run();
+    expect(next.dispatch.route?.credentialProfileId).toBe("a");
+    expect(next.routing?.selectionReason).toBe("marked_fallback");
+    expect(f.profiles[0]!.enabled).toBe(true);
+  });
+  it.each(["invalid_request", "unsupported_parameter", "transport_unknown"])(
+    "does not mark or suggest a capability retry for %s",
+    async (code) => {
+      const f = await fixture();
+      f.failures.a = code;
+      f.failureContext.a = {};
+      const result = await f.run();
+      expect(result.problem?.code).toBe(code);
+      expect(result.problem?.context.retryOnOtherAccount).toBeUndefined();
+      expect(f.capabilities.live()).toEqual([]);
+    },
+  );
+  it("does not mark a refusal after output or on an unknown outcome", async () => {
+    const f = await refusing();
+    const invoke = f.invoke.getMockImplementation()!;
+    f.invoke.mockImplementation(async (req, ctx) => ({
+      ...(await invoke(req, ctx)),
+      usage: {
+        input_tokens: 1,
+        output_tokens: 1,
+        cached_input_tokens: null,
+        cache_write_tokens: null,
+        reasoning_tokens: null,
+      },
+    }));
+    await f.run();
+    expect(f.capabilities.live()).toEqual([]);
+    f.invoke.mockImplementation(async (req, ctx) => ({
+      ...(await invoke(req, ctx)),
+      outcome: "unknown",
+    }));
+    await f.run();
+    expect(f.capabilities.live()).toEqual([]);
+  });
+  it("reads existing pre-progress refusal memory and clears it on service", async () => {
+    const f = await fixture();
+    f.refusals.record({ harness_id: "codex", profile_id: "a", requested_model: "test-model" });
+    const first = await f.run();
+    expect(first.dispatch.route?.credentialProfileId).toBe("b");
+    expect(first.routing?.poolEvents.length).toBeGreaterThan(0);
+    await f.run({ mode: "pin", profileId: "a" });
+    expect(f.refusals.live()).toEqual([]);
+  });
+  it("probes after four hours and clears on observed catalog change before expiry", async () => {
+    const f = await refusing();
+    await f.run();
+    f.clock.now += 4 * 60 * 60_000;
+    delete f.failures.a;
+    const probe = await f.run();
+    expect(probe.dispatch.route?.credentialProfileId).toBe("a");
+    expect(probe.routing?.selectionReason).toBe("probe");
+    expect(f.capabilities.live()).toEqual([]);
+    f.failures.a = "model_capability_refused";
+    await f.run();
+    delete f.failures.a;
+    f.catalogModels.a = [model(), model("new-model")];
+    expect((await f.run()).dispatch.route?.credentialProfileId).toBe("a");
+    expect(f.capabilities.live()).toEqual([]);
+  });
+  it.each(["disabled", "unmarked", "marked"])(
+    "a concurrent call still dispatches while a probes and b is %s",
+    async (other) => {
+      const f = await refusing();
+      await f.run();
+      f.clock.now += 4 * 60 * 60_000;
+      if (other === "disabled") f.cfg.credential_profiles[1]!.enabled = false;
+      if (other === "marked") {
+        f.failures.b = "model_capability_refused";
+        f.failureContext.b = refusal;
+        await f.run({ mode: "auto", preferredProfileId: "b" });
+        delete f.failures.b;
+      }
+      const invoke = f.invoke.getMockImplementation()!;
+      let signalStarted!: () => void;
+      let finishProbe!: () => void;
+      const started = new Promise<void>((resolve) => {
+        signalStarted = resolve;
+      });
+      const finish = new Promise<void>((resolve) => {
+        finishProbe = resolve;
+      });
+      f.invoke.mockImplementationOnce(async (req, ctx) => {
+        const result = await invoke(req, ctx);
+        signalStarted();
+        await finish;
+        return result;
+      });
+      const probe = f.run();
+      await started;
+      try {
+        expect(f.capabilities.state("codex", "a", "test-model")).toBe("probing");
+        delete f.failures.a;
+        const concurrent = await f.run();
+        expect(concurrent.state).toBe("succeeded");
+        expect(concurrent.dispatch.route?.credentialProfileId).toBe(
+          other === "disabled" ? "a" : "b",
+        );
+        expect(concurrent.routing?.selectionReason).toBe(
+          other === "unmarked" ? "listed" : "marked_fallback",
+        );
+      } finally {
+        finishProbe();
+        await probe;
+      }
+      // The older probe's refusal cannot resurrect evidence cleared by newer service.
+      if (other === "disabled") expect(f.capabilities.live()).toEqual([]);
+    },
+  );
+  it("uses an unmarked advisory miss before a listed expired mark on a correlated retry", async () => {
+    const f = await refusing();
+    f.cfg.credential_profiles.push({
+      ...f.profiles[1]!,
+      profile_id: "c",
+      isolation_locator: join(f.root, "c"),
+    });
+    f.catalogModels.c = [];
+    f.failures.b = "model_capability_refused";
+    f.failureContext.b = refusal;
+    await f.run({ mode: "auto", preferredProfileId: "b" });
+    f.clock.now += 4 * 60 * 60_000;
+    const first = await f.run({ mode: "auto", preferredProfileId: "a" });
+    expect(first.dispatch.route?.credentialProfileId).toBe("a");
+    expect(f.capabilities.state("codex", "b", "test-model")).toBe("probe_due");
+    const retry = await f.run({ mode: "auto" }, { retryOfOperationId: first.id });
+    expect(retry.dispatch.route?.credentialProfileId).toBe("c");
+    expect(retry.routing?.selectionReason).toBe("unlisted_fallback");
+    expect(f.capabilities.state("codex", "b", "test-model")).toBe("probe_due");
+  });
+  it("keeps a received success when capability evidence maintenance fails", async () => {
+    const f = await fixture();
+    vi.spyOn(f.capabilities, "served").mockImplementation(() => {
+      throw new Error("evidence failed");
+    });
+    const result = await f.run();
+    expect(result.state).toBe("succeeded");
+    expect(result.routing?.selectionReason).toBe("listed");
+  });
+  it("serves while a login holds the credential window and keeps earlier marks", async () => {
+    const f = await refusing();
+    const first = await f.run();
+    expect(first.problem?.context.retryOnOtherAccount).toBe(true);
+    expect(f.capabilities.live()).toMatchObject([{ profile_id: "a", state: "provisional" }]);
+    delete f.failures.a;
+    bindCredentialMutationWindow(() => true);
+    try {
+      // A retry signalled before the window stays claimable; nothing settles.
+      const retry = await f.run({ mode: "auto" }, { retryOfOperationId: first.id });
+      expect(retry.state).toBe("succeeded");
+      expect(retry.dispatch.route?.credentialProfileId).toBe("b");
+      expect(retry.routing?.differentialOutcome).toBeUndefined();
+      const auto = await f.run();
+      expect(auto.state).toBe("succeeded");
+      expect(auto.dispatch.route?.credentialProfileId).toBe("b");
+      const pinned = await f.run({ mode: "pin", profileId: "a" });
+      expect(pinned.state).toBe("succeeded");
+      expect(pinned.dispatch.route?.credentialProfileId).toBe("a");
+      // Unknown generations record and forget nothing.
+      expect(f.capabilities.live()).toMatchObject([{ profile_id: "a", state: "provisional" }]);
+    } finally {
+      bindCredentialMutationWindow(null);
+    }
+    expect(f.capabilities.state("codex", "a", "test-model")).toBe("provisional");
+  });
+  it("does not dispatch a catalog observed across a credential mutation", async () => {
+    const f = await fixture();
+    const catalog = f.catalog.getMockImplementation()!;
+    f.catalog.mockImplementation(async (context) => {
+      const result = await catalog(context);
+      f.capabilities.credentials.clearSubject("codex", context.profile.profile_id);
+      return result;
+    });
+    expect((await f.run()).problem?.code).toBe("auth_changed");
+    expect(f.invoke).not.toHaveBeenCalled();
+  });
+  it("serves the real Codex HTTP refusal through daemon operations, receipts and Accounts status", async () => {
+    const posts: Array<{ account: string; body: unknown }> = [];
+    const adapter = createCodexModelAdapter({
+      clientVersion: async () => ({ version: "0.156.1", source: "verified_transport" }),
+      now: () => Date.now(),
+      readAuthFile: async (path) => {
+        const id = basename(dirname(path));
+        const jwt = (value: unknown) =>
+          `fixture.${Buffer.from(JSON.stringify(value)).toString("base64url")}.signature`;
+        return JSON.stringify({
+          auth_mode: "chatgpt",
+          tokens: {
+            account_id: id,
+            access_token: jwt({ exp: 2100000000 }),
+            id_token: jwt({
+              sub: id,
+              "https://api.openai.com/auth": { chatgpt_plan_type: id === "a" ? "free" : "pro" },
+            }),
+          },
+        });
+      },
+      fetch: async (_url, init) => {
+        if (init?.method !== "POST") return Response.json({ models: [{ slug: "gpt-6.1-sol" }] });
+        const account = new Headers(init.headers).get("chatgpt-account-id")!;
+        posts.push({ account, body: JSON.parse(await new Response(init.body).text()) });
+        if (account === "a")
+          return Response.json(
+            {
+              detail:
+                "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
+            },
+            { status: 400 },
+          );
+        return new Response(
+          `data: ${JSON.stringify({ type: "response.completed", response: { model: "gpt-6.1-sol", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "served by B" }] }], usage: { input_tokens: 2, output_tokens: 3 } } })}\n\n`,
+        );
+      },
+    });
+    const f = await fixture({ adapter });
+    process.env.CLAUDEXOR_CONFIG_DIR = f.root;
+    updateGlobalConfig(() => f.cfg);
+    for (const [id, used] of [
+      ["a", 0.01],
+      ["b", 0.4],
+    ] as const)
+      f.quota.upsert(
+        QuotaSnapshot.parse({
+          subject: {
+            harness: "codex",
+            subject_id: id,
+            credential_route: "vendor_native",
+            plan_label: null,
+          },
+          constraints: [
+            {
+              id: "five_hour",
+              label: "5h",
+              used_ratio: used,
+              window_seconds: 18000,
+              resets_at: null,
+              cooldown_until: null,
+            },
+          ],
+          source: "codex_app_server",
+          observed_at: new Date().toISOString(),
+          freshness: "fresh",
+        }),
+      );
+    const { DaemonControlApiServer } = await import("../../control-api/src/daemon-server.js");
+    const api = new DaemonControlApiServer({
+      token: "fixture-control",
+      daemon: f.client,
+      services: { ...f.services.routes, accountRoutingEvidence: f.routingStatus },
+    });
+    const address = await api.start();
+    cleanups.push(() => api.stop());
+    const endpoint = `http://${address.host}:${address.port}/v2`;
+    const headers = {
+      Authorization: "Bearer fixture-control",
+      "X-Claudexor-Protocol-Major": "3",
+      "Content-Type": "application/json",
+    };
+    const run = async (account: ModelCallRequest["account"], retryOfOperationId?: string) => {
+      const input = ModelCallRequest.parse({
+        source: "codex",
+        model: "gpt-6.1-sol",
+        account,
+        messages: [{ role: "user", content: "hello" }],
+        ...(retryOfOperationId ? { retryOfOperationId } : {}),
+      });
+      const request = f.resources().publishModel(Buffer.from(JSON.stringify(input)));
+      const response = await fetch(`${endpoint}/model-operations`, {
+        method: "POST",
+        headers: { ...headers, "Idempotency-Key": randomUUID() },
+        body: JSON.stringify({ request }),
+      });
+      expect(response.ok).toBe(true);
+      const started = (await response.json()) as { id: string };
+      await vi.waitFor(
+        async () =>
+          expect(["queued", "running"]).not.toContain(
+            (await f.services.routes.getModelOperation(started.id)).state,
+          ),
+        { timeout: 10000 },
+      );
+      const inspected = await fetch(`${endpoint}/model-operations/${started.id}`, { headers });
+      return (await inspected.json()) as Awaited<ReturnType<typeof f.run>>;
+    };
+    const first = await run({ mode: "auto" });
+    expect(first.problem).toMatchObject({
+      code: "model_capability_refused",
+      context: {
+        httpStatus: 400,
+        credentialProfileId: "a",
+        requestedModel: "gpt-6.1-sol",
+        generationStarted: false,
+        retryOnOtherAccount: true,
+        accountMode: "auto",
+        accountsTried: [
+          {
+            credentialProfileId: "a",
+            providerReason:
+              "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
+          },
+        ],
+        nextStep: expect.any(String),
+      },
+    });
+    expect(posts.map((p) => p.account)).toEqual(["a"]);
+    const second = await run({ mode: "auto" }, first.id);
+    expect(second.state).toBe("succeeded");
+    expect(second.dispatch.route?.credentialProfileId).toBe("b");
+    expect(second.routing?.differentialOutcome).toBe("confirmed");
+    expect(posts[0]!.body).toEqual(posts[1]!.body);
+    const status = ControlAccountRoutingEvidenceResponse.parse(
+      await (await fetch(`${endpoint}/accounts/routing-evidence`, { headers })).json(),
+    );
+    expect(status.capabilities).toMatchObject([
+      {
+        profile_id: "a",
+        requested_model: "gpt-6.1-sol",
+        state: "confirmed",
+        provider_reason: expect.any(String),
+        observed_at: expect.any(String),
+        expires_at: expect.any(String),
+      },
+    ]);
+    const third = await run({ mode: "auto" });
+    expect(third.dispatch.route?.credentialProfileId).toBe("b");
+    expect(third.routing?.selectionReason).toBe("listed");
+    const pin = await run({ mode: "pin", profileId: "a" });
+    expect(pin.problem?.context.retryOnOtherAccount).toBe(false);
+    expect(pin.routing?.selectionReason).toBe("pinned");
+    expect(posts.map((p) => p.account)).toEqual(["a", "b", "b", "a"]);
+    expect(f.unusable.live()).toEqual([]);
+    expect(f.profiles.every((p) => p.enabled)).toBe(true);
   });
 });

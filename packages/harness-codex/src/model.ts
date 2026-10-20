@@ -1,3 +1,4 @@
+import { codexCapabilityRefusal } from "./model-capability-refusal.js";
 import {
   codexProcessingCapability,
   prepareCodexProcessing,
@@ -231,6 +232,7 @@ async function catalogFor(
     source: "codex",
     credentialProfileId: context.profile.profile_id,
     accountFingerprint: auth.accountFingerprint,
+    capabilityFingerprint: auth.capabilityFingerprint,
     observedAt: new Date(now()).toISOString(),
     provenance: "provider_http",
     clientVersion: declared.version,
@@ -329,7 +331,9 @@ export function createCodexModelAdapter(deps: CodexModelAdapterDeps = {}): Model
           discovered &&
           (discovered.source !== route.source ||
             discovered.credentialProfileId !== route.credentialProfileId ||
-            discovered.accountFingerprint !== auth.accountFingerprint)
+            discovered.accountFingerprint !== auth.accountFingerprint ||
+            (discovered.capabilityFingerprint !== undefined &&
+              discovered.capabilityFingerprint !== auth.capabilityFingerprint))
         )
           throw new CodexModelError(
             "auth_changed",
@@ -406,7 +410,12 @@ export function createCodexModelAdapter(deps: CodexModelAdapterDeps = {}): Model
           const result = emptyModelResult({ ...route, model: null });
           const error = await capture.readRefusal(response);
           result.problem = processingAdmissionProblem(
-            authenticatedProblem(response, error, auth, now()),
+            codexCapabilityRefusal(
+              authenticatedProblem(response, error, auth, now()),
+              response.status,
+              error,
+              request.model,
+            ),
             request.options,
             processing,
           );

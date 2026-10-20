@@ -476,13 +476,22 @@ count. `next_up` in either listing is the configured default model's verdict,
 never a forecast for another model.
 
 `GET /v2/accounts/routing-evidence` is the additive, read-only Accounts
-evidence: the live pre-progress refusal marks and each registered account's last
-service per requested model (most recent first), strict and query-free, with no
+evidence: live pre-progress refusals, temporary per-model capability marks, and
+each registered account's last service per requested model (most recent first), strict and query-free, with no
 probe and no quota refresh. Clients negotiate it through the operation catalog
 (`get:accounts.routing-evidence`) and keep the legacy listings unchanged. An
 engine without it answers 404, which first-party clients treat as no new data;
 any other failure leaves the listing authoritative with one diagnostic. Last
 service is a routing observation, never a quota or authentication verdict.
+
+The optional `capabilities[]` array adds temporary account/model demotions. Each
+entry includes `harness_id`, `profile_id`, `requested_model`,
+`account_fingerprint`, redacted `provider_reason`, `observed_at`, `expires_at`,
+and `state` (`provisional`, `confirmed`, `probe_due`, `probing`). Join it by
+harness/profile to show one line per model. It does not change account availability
+or quota. Model operations expose a separate `retryOnOtherAccount` signal;
+[the host retry contract](MODEL_CAPABILITY_ROUTING.md) describes the one allowed
+correlated re-send and the receipt fields.
 
 `GET /v2/run-applicability` takes an absolute `repoRoot` query and returns the
 live Workspace Git status plus the engine-owned in-place/isolated run-shape
@@ -732,8 +741,8 @@ view, including freshness and `next_up` state — the default read is the
 retained readiness observation, with its check time, composed with current
 quota and registry facts; `fresh: true` opts into the expensive atomic snapshot,
 which honors account/route rate-limit cooldowns and retained legacy vendor floors;
-the additive `routingEvidence` carries the model-scoped recent refusals and last
-service, absent for an older engine, and a failed evidence read adds one
+the additive `routingEvidence` carries model-scoped recent refusals, temporary
+per-model capability marks, and last service, absent for an older engine, and a failed evidence read adds one
 `routingEvidenceProblem` while the listing stays authoritative),
 `claudexor_runs`, `claudexor_inspect`, `claudexor_run_status`,
 `claudexor_run_result`, `claudexor_run_cancel`, `claudexor_run_time_limit`,

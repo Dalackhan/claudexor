@@ -51,6 +51,7 @@ interface ModelOperationServices {
   resolve(
     request: ModelCallRequest,
     signal: AbortSignal,
+    operationId: string,
   ): Promise<{
     adapter: ModelAdapter;
     profile: CredentialProfile;
@@ -309,6 +310,7 @@ export class ModelOperations {
       usage: result.usage ?? ModelUsage.parse({}),
       cost: result.cost ?? null,
       problem: result.problem ?? null,
+      ...(result.routing ? { routing: result.routing } : {}),
     };
     if (isTerminalLifecycle(record.state) && evidence.dispatch.state === "started") {
       evidence.dispatch = { ...evidence.dispatch, state: "unknown" };

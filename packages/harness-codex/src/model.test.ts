@@ -962,7 +962,7 @@ describe("single-generation Codex adapter", () => {
     );
     expect(result.outcome).toBe("failed");
     expect(result.problem).toMatchObject({
-      code: "model_unavailable",
+      code: "model_capability_refused",
       context: { vendorCode: "model_not_found", httpStatus: 404 },
     });
     expect(fixture.onDispatch).toHaveBeenCalledTimes(1);

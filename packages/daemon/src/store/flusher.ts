@@ -226,12 +226,7 @@ export class FlusherController {
       dbPath: this.options.dbPath,
       hooks: this.options.hooks ?? {},
     };
-    const worker = new Worker(this.entry, {
-      workerData: data,
-      name: "claudexor-store-flusher",
-      // --input-type applies only to the parent's eval/stdin, never this file.
-      execArgv: process.execArgv.filter((arg) => !arg.startsWith("--input-type")),
-    });
+    const worker = new Worker(this.entry, { workerData: data, name: "claudexor-store-flusher" });
     this.worker = worker;
     this.state = "starting";
     this.readyInThisLife = false;

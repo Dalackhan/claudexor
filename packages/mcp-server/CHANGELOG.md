@@ -2,6 +2,10 @@
 
 ## 4.4.0
 
+### Minor Changes
+
+- MCP controllers get idempotent one-shot launches and durable run supervision: `claudexor_run_wait`, `claudexor_run_message`, `claudexor_run_continue` and bounded `claudexor_run_event_read` parts. Thanks to @IlidanNaga (#478).
+
 ### Patch Changes
 
 - Updated dependencies

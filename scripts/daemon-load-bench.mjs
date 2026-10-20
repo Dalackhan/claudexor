@@ -37,6 +37,12 @@ const output = resolve(out);
 const results = {
   base: execFileSync("git", ["rev-parse", base], { cwd: repo, encoding: "utf8" }).trim(),
   candidate: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim(),
+  // The candidate is bundled from the working tree, so HEAD alone does not name what ran.
+  candidateDirty:
+    execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).trim() !== "",
   node: process.version,
   seconds,
   rate: 200,

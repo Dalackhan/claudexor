@@ -23,7 +23,7 @@ async function open(hooks: FlusherHooks = {}, log?: (line: string) => void) {
   const store = await EngineStore.open({
     daemonDir: join(root, "daemon"),
     workerEntry: resolve(import.meta.dirname, "../../dist/store/flusher-worker.js"),
-    flusherHooks: { manualTick: true, ...hooks },
+    flusherHooks: { manualTick: true, checkpointEveryPasses: 1, ...hooks },
     ...(log ? { log } : {}),
   });
   stores.push(store);
@@ -127,6 +127,40 @@ describeStore("flusher is the only serving checkpointer", () => {
     write(store, 1, 16);
     await pass(store);
     expect(statSync(store.paths.wal).size).toBeLessThanOrEqual(1024 * 1024);
+  });
+
+  it("backfills on its cadence below the reuse trigger", async () => {
+    const store = await open({ checkpointEveryPasses: 3 });
+    write(store, 0, 16);
+    expect((await pass(store)).checkpoint).not.toBeNull(); // a worker life's first pass backfills
+    for (const expected of [false, false, true]) {
+      write(store, 1, 16);
+      const report = await pass(store);
+      expect(report.checkpoint !== null).toBe(expected);
+      expect(report.barrier).toBe(true); // the durability barrier never waits for the cadence
+    }
+  });
+
+  it("checkpoints every pass while a pinned WAL stays above its reuse trigger", async () => {
+    const pinned = await open({ checkpointEveryPasses: 1000, restartThresholdPages: 1 });
+    pinned.exec("PRAGMA journal_size_limit=1048576");
+    write(pinned, 0);
+    const reader = new sqlite!.DatabaseSync(pinned.paths.database);
+    reader.exec("BEGIN");
+    reader.prepare("SELECT id FROM checkpoint_test").all();
+    try {
+      for (let i = 0; i < 4; i++) write(pinned, 0);
+      expect((await pass(pinned)).checkpoint!.busy).toBe(1); // first pass: a reader pins the tail
+      write(pinned, 0);
+      expect((await pass(pinned)).checkpoint).not.toBeNull(); // still above the trigger: every pass retries
+    } finally {
+      reader.exec("COMMIT");
+      reader.close();
+    }
+    const reclaimed = await pass(pinned);
+    expect(reclaimed.checkpoint!.checkpointed).toBe(reclaimed.checkpoint!.log);
+    write(pinned, 1, 16);
+    expect((await pass(pinned)).checkpoint).toBeNull(); // reclaimed: back to the cadence
   });
 
   it("restarts a large WAL in the worker, reporting a pinned reader without waiting", async () => {

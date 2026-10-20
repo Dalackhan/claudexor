@@ -5,6 +5,9 @@ import { fileURLToPath } from "node:url";
 export const FLUSH_INTERVAL_MS = 200;
 /** Preserve the former main autocheckpoint trigger, now enforced by the worker. */
 export const WAL_RESTART_PAGES = 4000;
+/** Backfill at most every 25 passes (5 s) below the reuse trigger. A completed backfill lets the next
+ * COMMIT restart the WAL, and that restart's header sync is an F_FULLFSYNC on the request thread. */
+export const CHECKPOINT_EVERY_PASSES = 25;
 
 /** The `workerData` discriminator every store worker is spawned with. The
  * worker modules self-start on it, so the same module graph serves the dev
@@ -24,6 +27,8 @@ export interface FlusherHooks {
   checkpointGate?: SharedArrayBuffer;
   /** Exercise the bounded RESTART path without a 16 MiB test WAL. */
   restartThresholdPages?: number;
+  /** Checkpoint cadence below the reuse trigger (1: every pass). */
+  checkpointEveryPasses?: number;
 }
 
 export interface FlusherWorkerData {

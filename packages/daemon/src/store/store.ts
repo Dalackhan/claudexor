@@ -210,7 +210,13 @@ export class EngineStore {
         "engine store transactions do not nest",
       );
     }
-    this.exec("BEGIN IMMEDIATE");
+    // A worker RESTART holds the writer lock through its syncs: this wait is the request thread's.
+    const beginStarted = this.monotonicNow();
+    try {
+      this.exec("BEGIN IMMEDIATE");
+    } finally {
+      processTiming.recordSync("store.begin_immediate", this.monotonicNow() - beginStarted);
+    }
     let committed = false;
     try {
       const result = fn();

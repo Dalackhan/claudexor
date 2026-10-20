@@ -4,7 +4,7 @@ import { trackRequest } from "./request-timing.js";
 import { serveRunDetail } from "./run-detail-route.js";
 import { handleAccountResourceRoute } from "./account-resource-routes.js";
 import { projectProcessScope } from "./run-detail-scope.js";
-import { ControlAccountResetRequest } from "@claudexor/schema";
+import { CONTROL_STORE_IDENTITY_HEADER, ControlAccountResetRequest } from "@claudexor/schema";
 import { recoverInterruptedOutput } from "./retained-output.js";
 import { recordedExecutionRoot } from "./run-delivery-state.js";
 import * as exactPatch from "./run-exact-patch.js";
@@ -758,6 +758,7 @@ export class DaemonControlApiServer {
         readBody: () => this.readBody(req),
         servingMode: this.opts.servingMode?.() ?? "normal",
         storeId: this.opts.storeId,
+        wantsStoreId: req.headers[CONTROL_STORE_IDENTITY_HEADER] === "1",
       });
     } catch (error) {
       return this.requestError(res, error);

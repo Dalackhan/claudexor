@@ -739,6 +739,7 @@
                   "operation": {
                     "type": "string",
                     "enum": [
+                      "store.begin_immediate",
                       "store.commit",
                       "store.external_write",
                       "control.run_detail",

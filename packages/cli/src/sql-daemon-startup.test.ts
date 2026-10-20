@@ -201,6 +201,7 @@ class Fixture {
       headers: {
         authorization: `Bearer ${token}`,
         "x-claudexor-protocol-major": "3",
+        "x-claudexor-store-identity": "1",
         "content-type": "application/json",
         "idempotency-key": key,
       },

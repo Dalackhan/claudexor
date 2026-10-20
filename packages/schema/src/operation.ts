@@ -6,6 +6,8 @@ import { z } from "zod/v3";
 // the ONLY compatibility signal (renaming every route for cosmetic symmetry
 // was rejected as churn).
 export const CONTROL_PROTOCOL_MAJOR = 3 as const;
+/** Opt-in request header (value `1`) for handshake extensions an older strict client would refuse. */
+export const CONTROL_STORE_IDENTITY_HEADER = "x-claudexor-store-identity";
 
 export const ControlHandshakeRequest = z
   .object({
@@ -26,7 +28,7 @@ export const ControlHandshakeResponse = z
       .min(1)
       .optional()
       .describe(
-        "Immutable UUID of the durable engine store, stable across restarts; a run 404 is meaningful only with the same storeId. Absent when the store is unavailable or the daemon predates this field.",
+        "Immutable UUID of the durable engine store, stable across restarts; a run 404 is meaningful only with the same storeId. Returned only to a request sending `X-Claudexor-Store-Identity: 1` (older strict clients keep the legacy shape); absent when the store is unavailable or the daemon predates this field.",
       ),
     /** Build identity of the serving engine (D20/INV-116 spirit): stale-
      * daemon skew is visible at the handshake instead of guessed later. */

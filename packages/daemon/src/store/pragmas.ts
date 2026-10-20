@@ -3,13 +3,18 @@ import type { DatabaseSync } from "node:sqlite";
 /**
  * Connection pragmas of the engine store (SYNTHESIS_R5 §2, topology A2).
  *
- * Main connection: WAL + NORMAL, no automatic checkpoints and no full-device
- * syncs. A COMMIT that restarts the WAL still syncs its new header, using plain
- * fsync rather than F_FULLFSYNC on macOS. The flusher alone checkpoints, with
+ * Main connection: WAL + NORMAL, no automatic checkpoints. It keeps
+ * checkpoint_fullfsync=1 because the COMMIT that restarts the WAL after a full
+ * backfill syncs the new header with the checkpoint sync class: on macOS a plain
+ * fsync lets the drive reorder later frames before that header, and power loss
+ * could then replay the old cycle over barrier-proven commits (SQLite wal.c,
+ * ticket ff5be73dee). The flusher alone checkpoints, also with
  * checkpoint_fullfsync=1: synchronized backfill precedes reuse, and its explicit
- * WAL barrier still proves committed state durable across power loss. A pinned
- * reader or large transaction can grow the WAL until the flusher can reclaim it.
- * The busy timeout is a fuse, counted by `busy_waits`.
+ * WAL barrier proves committed state durable across power loss. It backfills at
+ * most every CHECKPOINT_EVERY_PASSES passes unless the WAL reached its reuse
+ * trigger, so restarts (and their one request-thread header sync) stay rare. A
+ * pinned reader or large transaction can grow the WAL until the flusher can
+ * reclaim it. The busy timeout is a fuse, counted by `busy_waits`.
  *
  * Flusher connection: never writes rows or waits for a lock. Normally PASSIVE;
  * at the former 4,000-frame trigger it tries RESTART with busy_timeout=0 to prevent
@@ -27,7 +32,7 @@ export const MAIN_CONNECTION_PRAGMAS: PragmaSpec = Object.freeze({
   journal_mode: "wal",
   synchronous: 1,
   wal_autocheckpoint: 0,
-  checkpoint_fullfsync: 0,
+  checkpoint_fullfsync: 1,
   fullfsync: 0,
   journal_size_limit: WAL_REUSE_BYTES,
   busy_timeout: 5000,

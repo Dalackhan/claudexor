@@ -77,6 +77,7 @@ export const DaemonTimingFacts = z.object({
     .array(
       z.object({
         operation: z.enum([
+          "store.begin_immediate",
           "store.commit",
           "store.external_write",
           "control.run_detail",

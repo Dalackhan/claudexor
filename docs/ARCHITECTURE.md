@@ -2353,7 +2353,7 @@ window has count zero and null latencies. The status request itself is counted
 when its response finishes, so it appears in a subsequent read.
 The `worstSync` array in `timing` retains only the 32 longest instrumented synchronous sections
 since start (descending, later samples win ties), with operation, duration and
-timestamp. Labels cover `store.commit`, `store.external_write`,
+timestamp. Labels cover `store.begin_immediate`, `store.commit`, `store.external_write`,
 `control.run_detail`, `control.run_summary`, and `scope.persist`; scope persistence
 measures synchronous serialization, not its asynchronous file writes. These
 samples may overlap and do not identify the cause of a delay. `store.commit`
@@ -2362,7 +2362,7 @@ Older engines omit the new optional fields. The catalog still points to the
 same `ControlDaemonStatus` response schema.
 No memory, loop, timing or store measurements impose automatic admission thresholds.
 
-`POST /v2/handshake` optionally returns top-level `storeId`, the durable engine store's UUID (stable across restarts, absent when unavailable); a run 404 is meaningful only together with the same `storeId`.
+`POST /v2/handshake` returns top-level `storeId`, the durable engine store's UUID (stable across restarts, absent when unavailable), only to a request sending `X-Claudexor-Store-Identity: 1`, so older strict same-major clients keep the legacy shape; a run 404 is meaningful only together with the same `storeId`.
 
 <!-- BEGIN GENERATED ENDPOINTS (node scripts/gen-endpoints-doc.mjs; do not edit by hand) -->
 - `GET /healthz`
@@ -3497,7 +3497,8 @@ kept only for cold import and an independent frozen copy kept for tests.
   any write.
 - The flusher worker owns the power-loss barrier. Every 200 ms it fsyncs each
   directory registered since the previous pass, reads `data_version`, runs a
-  PASSIVE checkpoint for space, and — whenever anything was committed since
+  PASSIVE checkpoint for space every 25 passes (5 s; every pass while the WAL
+  stays at its reuse trigger), and — whenever anything was committed since
   its last proven barrier — issues one explicit fsync of the WAL file (an
   F_FULLFSYNC on macOS, also a device-wide barrier for `O_DSYNC` file data
   handed to the drive before it). The barrier is never derived from a
@@ -3505,12 +3506,16 @@ kept only for cold import and an independent frozen copy kept for tests.
   first pass as dirty. The flusher is the only serving checkpointer and keeps
   `checkpoint_fullfsync=1`, so synchronized WAL → database backfill precedes
   reuse; database pages become durable there, not through the later WAL fsync.
-  The request-thread connection sets `wal_autocheckpoint=0` and
-  `checkpoint_fullfsync=0` (`fullfsync=0` remains unchanged). Its COMMIT can
-  still sync a restarted WAL header using plain fsync, but never runs an
-  automatic checkpoint or requests macOS F_FULLFSYNC. Moving those full-device
-  syncs off the request thread preserves NORMAL commit/crash durability and
-  the same generation-numbered power-loss barrier. A pinned reader or large
+  The request-thread connection sets `wal_autocheckpoint=0` and keeps
+  `checkpoint_fullfsync=1` (`fullfsync=0` remains unchanged): it never runs an
+  automatic checkpoint, but the COMMIT that restarts the WAL after a full
+  backfill syncs the new header with the checkpoint sync class, and on macOS
+  only F_FULLFSYNC keeps the drive from persisting later frames before that
+  header (with a plain fsync, power loss could replay the old cycle over
+  barrier-proven commits; SQLite ticket ff5be73dee). The slower checkpoint
+  cadence keeps such restarts, and that one header sync on the request thread,
+  rare. Moving checkpoints off the request thread preserves NORMAL
+  commit/crash durability and the same generation-numbered power-loss barrier. A pinned reader or large
   transaction can grow the WAL; after the reader ends the worker backfills it,
   and the writer's next WAL reuse applies `journal_size_limit` (64 MiB).
   Continuous writes can append past each PASSIVE checkpoint's captured prefix
@@ -3599,9 +3604,12 @@ kept only for cold import and an independent frozen copy kept for tests.
   store opened (a new store, including an in-process replacement, starts
   again): attempts, failures, and the last and longest duration on a monotonic
   clock at microsecond resolution. Only the native COMMIT call is timed, so a
-  WAL header sync SQLite runs inside it is included, while BEGIN,
-  the body, error mapping, ROLLBACK, open-time schema setup and the flusher's
-  later barrier are not. It is one lifetime summary, not aligned with the
+  WAL header sync SQLite runs inside it is included, while BEGIN (labelled
+  `store.begin_immediate` among the worst synchronous sections: a worker
+  RESTART holds the writer lock through its syncs, and a hold past the 5 s
+  busy fuse fails the mutation with retryable `store_busy`), the body, error
+  mapping, ROLLBACK, open-time schema setup and the flusher's later barrier
+  are not. It is one lifetime summary, not aligned with the
   event-loop window; a long COMMIT is evidence of where the request thread
   waited, not proof of a disk cause. Before any COMMIT the counts are 0 and
   the durations null; a store that is not open reports null, and older

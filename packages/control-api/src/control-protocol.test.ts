@@ -10,6 +10,7 @@ function boundary(input: {
   requestedMajor?: string;
   servingMode?: "normal" | "recovery_only";
   storeId?: string;
+  wantsStoreId?: boolean;
   body?: unknown;
 }) {
   return resolveControlProtocol({
@@ -19,6 +20,7 @@ function boundary(input: {
     readBody: async () => input.body ?? {},
     servingMode: input.servingMode,
     storeId: () => input.storeId,
+    wantsStoreId: input.wantsStoreId ?? true,
   });
 }
 
@@ -30,6 +32,7 @@ describe("control protocol recovery-only gate (issue #165 D5)", () => {
       requestPath: "/v2/handshake",
       requestedMajor: undefined,
       storeId: () => storeId,
+      wantsStoreId: true,
       readBody: async () => {
         storeId = "new-store";
         return { protocolMajor: CONTROL_PROTOCOL_MAJOR, client: "test" };
@@ -53,6 +56,26 @@ describe("control protocol recovery-only gate (issue #165 D5)", () => {
       expect(body.storeId).toBe(storeId);
       expect(Object.hasOwn(body, "storeId")).toBe(storeId !== undefined);
       expect(ControlHandshakeResponse.safeParse({ ...body, storeId: 123 }).success).toBe(false);
+    }
+  });
+
+  it("keeps the legacy handshake shape for a client that did not opt in to storeId", async () => {
+    // The pre-storeId response schema was strict: an unsolicited key would fail an older client.
+    const legacy = ControlHandshakeResponse.omit({ storeId: true }).strict();
+    for (const wantsStoreId of [false, true]) {
+      const result = await boundary({
+        method: "POST",
+        requestPath: "/v2/handshake",
+        servingMode: "recovery_only",
+        storeId: "11111111-1111-4111-8111-111111111111",
+        wantsStoreId,
+        body: { protocolMajor: CONTROL_PROTOCOL_MAJOR, client: "test" },
+      });
+      if (result.kind !== "response") throw new Error("handshake did not respond");
+      const body = result.body as Record<string, unknown>;
+      expect(Object.hasOwn(body, "storeId")).toBe(wantsStoreId);
+      expect(legacy.safeParse(body).success).toBe(!wantsStoreId);
+      expect(body.servingMode).toBe("recovery_only");
     }
   });
 

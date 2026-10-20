@@ -32,6 +32,7 @@ export class LatencyHistogram {
 }
 
 export type SyncOperation =
+  | "store.begin_immediate"
   | "store.commit"
   | "store.external_write"
   | "control.run_detail"

@@ -224,11 +224,16 @@ at every wire boundary.
   negotiation down to 2024-10-07, schema-validated arguments, elicitation);
   all three run modes enqueue through the daemon `/v2` control API. Until MCP
   Tasks stabilize, MCP returns a durable run handle and exposes explicit
-  status/result/cancel/interaction tools; it does not hold a tool call open or
-  advertise Tasks. MCP persistent-thread create/turn pass an optional caller key
+  status/result/cancel/interaction tools; launch calls do not wait for terminal,
+  return the accepted job (queued or bound) as the handle, and the server does
+  not advertise Tasks. One-shot launches and MCP
+  persistent-thread create/turn pass an optional caller key
   to the daemon's existing idempotent command authority; read projects its
   thread detail
-  without starting a run or a daemon. ACP uses the official TypeScript SDK at stable protocol v1;
+  without starting a run or a daemon. Existing-run wait, event-part, live-message
+  and continuation controllers project the same daemon authority; their bounded
+  observation and receipt contracts live in [MCP controls](INTEGRATIONS.md#observing-and-directing-an-existing-run).
+  ACP uses the official TypeScript SDK at stable protocol v1;
   its session IDs are daemon thread IDs and list/load/resume/close/prompt/cancel
   all project the same `/v2` thread authority. ACP images and embedded resources
   are finalized through the daemon attachment pipeline before a turn enqueues.
@@ -2416,6 +2421,7 @@ No memory, loop, timing or store measurements impose automatic admission thresho
 - `POST /v2/runs/:id/control`
 - `POST /v2/runs/:id/decision`
 - `GET /v2/runs/:id/events`
+- `GET /v2/runs/:id/events/:id`
 - `POST /v2/runs/:id/interactions/:id/answer`
 - `POST /v2/runs/:id/messages`
 - `GET /v2/runs/:id/produced`
@@ -3032,6 +3038,18 @@ to the run directory when it materializes — a client can subscribe at enqueue
 time and never race the scheduler. `claudexor follow` rides the same contract
 with bounded reconnects (`Last-Event-ID` resume) and exits 1 with "stream
 lost" when the stream ends without a terminal event.
+
+`GET /v2/runs/:id/events/:seq` (query `offset`, `limit`) reads one bounded part
+(at most 64 KiB, never splitting a character) of one event in exactly the redacted line
+the stream delivers, with its total size and SHA-256, so a reader whose page
+cannot hold that event reassembles it instead of skipping it. It locates the
+event in the run's `events.jsonl` by the id rule it shares with the stream,
+serves only complete, valid event lines (`run_event_not_found`,
+`run_event_invalid`), and answers the retention tombstone like the artifact
+routes, including a run reclaimed while it reads; it is no path or whole-log
+reader. Its scan yields to the daemon's event loop after every 64 KiB read, but
+each part rescans the history before its event, so an N-byte event costs about
+N/limit scans of that history.
 
 ### Daemon lifecycle (signals, orphans, crash GC)
 
@@ -4174,8 +4192,9 @@ refused` lifecycle state before consumption is typed `live_input_refused`
 without failing the run. A one-shot argv run (no interaction channel; never
 the daemon's shape) has no live session and answers `not_active`/`no_live_session`. Cursor declares `none` (no
 persistent live-input channel: its prompt is piped once, then EOF); agy,
-opencode, copilot and raw-api declare `none`. There is no CLI verb or MCP tool for
-messages in this release (`claudexor follow` is the later surface), and the
+opencode, copilot and raw-api declare `none`. MCP exposes the existing channel
+through `claudexor_run_message` (see [MCP controls](INTEGRATIONS.md#observing-and-directing-an-existing-run)).
+There is no CLI message verb yet (`claudexor follow` is the later surface), and the
 ACP server's `session/prompt` on an active session is refused rather than
 bridged into a steer.
 

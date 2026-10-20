@@ -6,6 +6,7 @@ import {
   validateRunFactsInvariants,
 } from "@claudexor/schema";
 import {
+  canonicalRunId,
   isRecoverableRunDetailIntegrityProblem,
   projectDegradedRecoveryRunDetail,
   projectImmediateRunDetail,
@@ -177,6 +178,30 @@ describe("MCP run detail projections", () => {
       /identity does not match/,
     );
   });
+  it("resolves a queued job handle only through the daemon's matching job identity", () => {
+    const detail = { summary: { jobId: "job-1", runId: "run-1", state: "running" } };
+    expect(projectRecoveryRunDetail("__run_status", "job-1", detail)).toMatchObject({
+      runId: "run-1",
+      status: "running",
+    });
+    expect(() => projectRecoveryRunDetail("__run_status", "job-other", detail)).toThrow(
+      /identity does not match/,
+    );
+  });
+
+  it("retains Delegate parent checks when resolving a job handle", () => {
+    const detail = {
+      summary: { jobId: "job-1", runId: "run-1", state: "running", delegatedFromRunId: "parent-1" },
+    };
+    expect(projectRecoveryRunDetail("__run_result", "job-1", detail, "parent-1")).toMatchObject({
+      runId: "run-1",
+      status: "running",
+    });
+    expect(() => projectRecoveryRunDetail("__run_result", "job-1", detail, "parent-other")).toThrow(
+      /not a child/,
+    );
+  });
+
   it("keeps compact execution evidence valid on strict MCP recovery outputs", () => {
     const attemptExecution = [
       {
@@ -314,5 +339,74 @@ describe("MCP run detail projections", () => {
         Object.assign(new Error("auth"), { code: "unauthorized", retryable: false }),
       ),
     ).toBe(false);
+  });
+
+  it("projects continuation facts verbatim and leaves unprojected facts unknown", () => {
+    const resumable = {
+      cause: "pool_exhausted",
+      resetsAt: "2026-10-20T00:00:00.000Z",
+      limitWindow: "five_hour",
+      limitEvidence: null,
+      carriers: ["native", "packet"],
+      limitCode: "usage_limit",
+      session: { harness: "codex", nativeSessionId: "native-1", holderProfileId: "codex-work" },
+      workspace: { kind: "retained_envelope", root: "/kept/tree" },
+    };
+    const retainedEnvelope = {
+      root: "/kept/tree",
+      bytes: 1024,
+      retainedAt: "2026-10-19T00:00:00.000Z",
+      cause: "pool_exhausted",
+    };
+    const terminal = {
+      summary: {
+        runId: "run-1",
+        state: "failed",
+        continueFrom: "run-0",
+        resumable,
+        continuity: [],
+        retainedEnvelope,
+      },
+    };
+    for (const mode of ["__run_status", "__run_result", "__run_inspect"]) {
+      const projected = McpRunHandleResult.parse(projectRecoveryRunDetail(mode, "run-1", terminal));
+      expect(projected).toMatchObject({
+        continueFrom: "run-0",
+        resumable,
+        continuity: [],
+        retainedEnvelope,
+      });
+    }
+    // The daemon's explicit nulls stay nulls; list-shaped details without receipts omit them.
+    const finished = projectRecoveryRunDetail("__run_status", "run-1", {
+      summary: {
+        runId: "run-1",
+        state: "succeeded",
+        continueFrom: null,
+        resumable: null,
+        retainedEnvelope: null,
+      },
+    });
+    expect(finished).toMatchObject({ continueFrom: null, resumable: null, retainedEnvelope: null });
+    expect(finished).not.toHaveProperty("continuity");
+    // Absent or malformed facts are unknown, never an invented "nothing to continue".
+    const unknown = projectRecoveryRunDetail("__run_status", "run-1", {
+      summary: { runId: "run-1", state: "failed", resumable: { cause: "invented" } },
+    });
+    for (const key of ["continueFrom", "resumable", "continuity", "retainedEnvelope"])
+      expect(unknown).not.toHaveProperty(key);
+    expect(projectDegradedRecoveryRunDetail("run-1", new Error("x"))).not.toHaveProperty(
+      "resumable",
+    );
+  });
+
+  it("converges a job id on its bound run and refuses any other identity", () => {
+    expect(canonicalRunId("run-1", { runId: "run-1", jobId: "job-1" })).toBe("run-1");
+    expect(canonicalRunId("job-1", { runId: "run-1", jobId: "job-1" })).toBe("run-1");
+    expect(canonicalRunId("job-1", { runId: "job-1", jobId: "job-1" })).toBe("job-1");
+    expect(() => canonicalRunId("job-2", { runId: "run-1", jobId: "job-1" })).toThrow(
+      /identity does not match/,
+    );
+    expect(() => canonicalRunId("run-1", undefined)).toThrow(/identity does not match/);
   });
 });

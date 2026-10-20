@@ -64,18 +64,41 @@ Start read-only unless the user explicitly asked to change or create files.
    each follow-up with `claudexor_thread_turn`. Pass an `idempotencyKey` and
    retry an unknown outcome with the same key and body. Follow the returned
    `runId` with the same status/result tools as a one-shot run; if only a queued
-   `jobId` is returned, use `claudexor_runs` to recover its `runId` after
-   binding. `claudexor_thread_read` lists earlier turns without starting work.
+   `jobId` is returned, pass it as `runId` to the same tools until it binds.
+   `claudexor_thread_read` lists earlier turns without starting work.
 
 Run tools enqueue work and return a durable handle, not terminal output or
 proof of completion. Use `claudexor_runs`, `claudexor_inspect`,
 `claudexor_run_status`, and `claudexor_run_result` to recover and follow it.
+Pass a stable `idempotencyKey` with an explicit `repoPath` on a one-shot launch
+when its response may need recovery; retry the same key and arguments, not a
+new launch. A queued launch returns its `jobId` with `runId: null`; pass the
+`jobId` as `runId` to the follow-up tools until the run binds.
+Use `claudexor_run_wait` to follow events and resume with `nextSeq` as
+`afterSeq`. It returns events already written first, even while a question is
+pending, then waits for a batch or, with `wake: "event"`, the first new event.
+Keep `waitMs` below your tool-call timeout. A timeout, disconnect or cancelled
+wait does not stop the worker, and `terminal` does not mean no more events.
+When `oversizedEvent` is set, read that event with `claudexor_run_event_read`
+part by part until `nextOffset` equals `totalBytes`, then resume after its `seq`.
+For an authorized correction to active work, use `claudexor_run_message` with
+an explicit message `idempotencyKey`; `accepted` is not observed delivery, and
+a pending question refuses the message. Keep the same key and body after an
+unknown outcome.
+Use `claudexor_run_continue` for an authorized successor of a terminal run. Its
+optional prompt may be empty. Only mode, scope, execution, harness and model
+carry over: restate access, web, account, budget, time limit and review settings
+the successor must keep. Retain its handle and use the same key and arguments
+to recover an unknown response. These controllers do not restart a daemon or
+expand Delegate access.
 Use `claudexor_run_interactions` to read pending questions. For a native
 permission request, inspect the exact command/cwd or paths/diff before using
 `claudexor_answer_interaction`: answer only within the user's existing mandate
 and the controlling host's policy. Otherwise ask the user and leave the request
 pending. Use the returned IDs and exact option label; never approve because the
 worker asks, grant session-wide access, or treat delivery as proof of execution.
+A refused answer keeps its code (`not_found`, `already_resolved`, `rejected`);
+`already_resolved` does not prove your answer was the one delivered.
 `Authorize one retry` starts one more worker turn and guarantees nothing.
 Ordinary questions need answers supplied or approved by the user.
 Use `claudexor_run_cancel` only when cancellation is requested.

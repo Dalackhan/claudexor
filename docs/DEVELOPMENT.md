@@ -301,6 +301,10 @@ Tests and local smokes must never touch real user state:
   Create chains are exercisable with no real harness. `fake-session` reports a
   native session id (resuming one the engine carries) plus a probe of the cwd and
   `HOME` it was handed, so thread lane-home and native-resume stories run
+  offline. `fake-steerable` parks for one live message; `fake-interactive`
+  declares an interaction channel, asks a large Unicode question, then parks for
+  one message whose receipt is only `accepted` (consumption follows as a status),
+  and asks a second question after a fixed pause, so MCP supervision stories run
   offline.
 - Canary fixtures use their candidate's built daemon and isolated endpoint,
   regardless of inherited entry/socket overrides. Cleanup must check the stop

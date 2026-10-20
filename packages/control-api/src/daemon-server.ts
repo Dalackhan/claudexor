@@ -89,6 +89,7 @@ export {
 } from "./run-record.js";
 import { handleRunRetryRoute } from "./run-retry-routes.js";
 import { handleRunMessageRoute } from "./run-message-routes.js";
+import { handleRunEventPartRoute } from "./run-event-part-routes.js";
 import { handleRunTimeLimitRoute } from "./run-time-limit-routes.js";
 import {
   handleRunApplyRoutes,
@@ -1683,6 +1684,9 @@ export class DaemonControlApiServer {
       )
     )
       return;
+
+    const eventPartCtx = { findRun: (id: string) => this.findRun(id), json: this.json.bind(this) };
+    if (await handleRunEventPartRoute(eventPartCtx, method, path, url, res)) return;
 
     const eventsMatch = /^\/runs\/([^/]+)\/events$/.exec(path);
     if (method === "GET" && eventsMatch) {

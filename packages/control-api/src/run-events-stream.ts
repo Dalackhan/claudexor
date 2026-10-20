@@ -2,7 +2,12 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import type { DaemonRunRecord } from "./daemon-server.js";
-import { TERMINAL_STATES, readNewLines, redactedSseLine } from "./sse-shared.js";
+import {
+  TERMINAL_STATES,
+  readNewLines,
+  redactedSseLine,
+  streamLineIdentity,
+} from "./sse-shared.js";
 
 export interface StreamEventsCtx {
   findRun(id: string): Promise<DaemonRunRecord | null | undefined>;
@@ -117,18 +122,9 @@ export async function streamRunEvents(
         carry = rest;
         for (const raw of lines) {
           lineNo += 1;
-          // Durable cursor: the event's own persisted seq. Legacy lines without
-          // one fall back to their line number (matching EventLog's counter
-          // init), so resume ids stay consistent either way.
-          let seq = lineNo;
-          let type = "run";
-          try {
-            const parsed = JSON.parse(raw) as { type?: string; seq?: number };
-            type = String(parsed.type ?? "run");
-            if (typeof parsed.seq === "number" && Number.isFinite(parsed.seq)) seq = parsed.seq;
-          } catch {
-            type = "malformed";
-          }
+          // Durable cursor: the event's own persisted seq, else its line number,
+          // so resume ids stay consistent either way (shared with event parts).
+          const { seq, type } = streamLineIdentity(raw, lineNo);
           const terminal =
             type === "run.completed" || type === "run.failed" || type === "run.blocked";
           if (terminal) terminalSeen = true;

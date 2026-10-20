@@ -22,7 +22,7 @@
   "packages/harness-claude/src/index.ts": 775,
   "packages/harness-codex/src/index.ts": 867,
   "packages/harness-cursor/src/index.ts": 502,
-  "packages/mcp-server/src/index.ts": 654,
+  "packages/mcp-server/src/index.ts": 570,
   "packages/orchestrator/src/attemptTelemetry.ts": 829,
   "packages/orchestrator/src/orchestrator.ts": 7568,
   "packages/orchestrator/src/planRun.ts": 479,

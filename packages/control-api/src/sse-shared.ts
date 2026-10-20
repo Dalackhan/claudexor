@@ -17,6 +17,24 @@ export function redactedSseLine(raw: string): string {
   }
 }
 
+/**
+ * The run event stream's identity for one non-empty events.jsonl line, shared
+ * by the stream and the event-part reader: its persisted seq, else its 1-based
+ * non-empty line number (legacy lines, matching EventLog's counter init), and
+ * its SSE event name.
+ */
+export function streamLineIdentity(raw: string, lineNo: number): { seq: number; type: string } {
+  try {
+    const parsed = JSON.parse(raw) as { type?: unknown; seq?: unknown };
+    return {
+      seq: typeof parsed.seq === "number" && Number.isFinite(parsed.seq) ? parsed.seq : lineNo,
+      type: String(parsed.type ?? "run"),
+    };
+  } catch {
+    return { seq: lineNo, type: "malformed" };
+  }
+}
+
 /** Incremental line reader for events.jsonl tails (rotation-tolerant). */
 export function readNewLines(
   path: string,

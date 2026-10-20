@@ -1049,6 +1049,37 @@
       "error_schema": "ControlProblem"
     },
     {
+      "method": "GET",
+      "path": "/v2/runs/:id/events/:id",
+      "mutating": false,
+      "applicability": "run",
+      "summary": "Read one bounded part of one validated run event by seq, in the exact redacted serialization the run event stream delivers.",
+      "auth": "loopback_bearer",
+      "request_schema": null,
+      "parameters": [
+        {
+          "name": "offset",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": null,
+          "schema_ref": null,
+          "description": "UTF-8 byte offset of the part: 0 or the previous part's nextOffset (canonical nonnegative integer at a character boundary)."
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": null,
+          "schema_ref": null,
+          "description": "Maximum part bytes, 4 to 65536 (default 32768); a part may end earlier at a character boundary."
+        }
+      ],
+      "response_schema": "ControlRunEventPart",
+      "error_schema": "ControlProblem"
+    },
+    {
       "method": "POST",
       "path": "/v2/runs/:id/interactions/:id/answer",
       "mutating": true,

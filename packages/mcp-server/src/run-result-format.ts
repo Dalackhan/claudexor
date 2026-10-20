@@ -24,6 +24,9 @@ export function formatRunResult(result: unknown): string {
     }
     const trailer: string[] = [];
     if (typeof r["runId"] === "string" && r["runId"]) trailer.push(`runId: ${r["runId"]}`);
+    // A queued launch has no run yet: its job id is the recovery handle.
+    if (typeof r["jobId"] === "string" && r["jobId"] && r["jobId"] !== r["runId"])
+      trailer.push(`jobId: ${r["jobId"]}`);
     if (typeof r["runDir"] === "string" && r["runDir"]) trailer.push(`artifacts: ${r["runDir"]}`);
     if (typeof r["status"] === "string" && r["status"]) trailer.push(`status: ${r["status"]}`);
     if (!summary && trailer.length === 0) return JSON.stringify(result);
@@ -48,6 +51,7 @@ export function structuredRunResult(result: unknown): Record<string, unknown> {
     ...(Array.isArray(r["attemptExecution"]) ? { attemptExecution: r["attemptExecution"] } : {}),
     summary,
     runId: typeof r["runId"] === "string" && r["runId"] ? r["runId"] : null,
+    jobId: typeof r["jobId"] === "string" && r["jobId"] ? r["jobId"] : null,
     runDir: typeof r["runDir"] === "string" && r["runDir"] ? r["runDir"] : null,
     // `status` carries the run LIFECYCLE (D8); the axes ride alongside as facts.
     status: typeof r["status"] === "string" && r["status"] ? r["status"] : null,

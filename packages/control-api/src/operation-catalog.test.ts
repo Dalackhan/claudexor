@@ -27,6 +27,17 @@ describe("operation catalog wording (QA-039 / QA-049)", () => {
     expect(op("PUT", "/v2/uploads/:id/bytes")?.summary.toLowerCase()).toMatch(/one request|single/);
   });
 
+  it("advertises the opt-in store identity header on the handshake", () => {
+    expect(op("POST", "/v2/handshake")?.parameters).toEqual([
+      expect.objectContaining({
+        name: "x-claudexor-store-identity",
+        location: "header",
+        required: false,
+        enum: ["1"],
+      }),
+    ]);
+  });
+
   it("advertises DELETE /v2/projects/:id as a fenced, artifact-retaining removal", () => {
     const remove = op("DELETE", "/v2/projects/:id");
     expect(remove).toBeDefined();

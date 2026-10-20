@@ -6,7 +6,7 @@ import {
   type ControlOperationDescriptor,
   ControlHarnessSetupHarness,
 } from "@claudexor/schema";
-import { queryParam, resumeHeader } from "./operation-parameters.js";
+import { STORE_IDENTITY_HEADER, queryParam, resumeHeader } from "./operation-parameters.js";
 import { REMOTE_OPERATION_DRAFTS } from "./remote-operation-descriptors.js";
 import { MODEL_OPERATION_DRAFTS } from "./model-routes.js";
 import { MAINTENANCE_OPERATION_DRAFTS } from "./maintenance-routes.js";
@@ -84,7 +84,9 @@ const operations: ControlOperationDescriptor[] = [
     "ControlResource",
     { idempotency: "key_required" },
   ),
-  j("POST", "/v2/handshake", "read_only", "ControlHandshakeRequest", "ControlHandshakeResponse"),
+  j("POST", "/v2/handshake", "read_only", "ControlHandshakeRequest", "ControlHandshakeResponse", {
+    parameters: [STORE_IDENTITY_HEADER],
+  }),
   j("GET", "/v2/daemon/status", "read_only", null, "ControlDaemonStatus"),
   j("GET", "/v2/operations", "read_only", null, "ControlOperationCatalog"),
   ...MAINTENANCE_OPERATION_DRAFTS.map(descriptor),

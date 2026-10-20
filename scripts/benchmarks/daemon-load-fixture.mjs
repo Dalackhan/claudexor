@@ -11,7 +11,8 @@ import { createPartition } from "@fixture/partitions";
 import { appendEvent } from "@fixture/events";
 import { DaemonControlApiServer } from "@fixture/http";
 import { daemonHealth } from "@fixture/health";
-import { startLoopFacts } from "@fixture/loop";
+import { LoopFactsWindow, startLoopFacts } from "@fixture/loop";
+import { measureSyncSection, syncWindows } from "../lib/daemon-load-observer.mjs";
 
 // Worker modules embedded by the store self-start in this same bundle.
 if (isMainThread) await main();
@@ -24,6 +25,7 @@ async function main() {
   const histogram = createHistogram({ figures: 2 });
   const nativeRecord = store.recordCommit.bind(store);
   store.recordCommit = (duration, failed) => {
+    syncWindows.record("store.commit", duration);
     histogram.record(Math.max(1, Math.round(duration * 1_000)));
     nativeRecord(duration, failed);
   };
@@ -36,6 +38,18 @@ async function main() {
         : null;
     }
     return facts;
+  };
+  const nativeExec = store.exec.bind(store);
+  store.exec = (sql) =>
+    sql === "BEGIN IMMEDIATE"
+      ? measureSyncSection("store.begin_immediate", () => nativeExec(sql))
+      : nativeExec(sql);
+  const nativeRoll = LoopFactsWindow.prototype.roll;
+  LoopFactsWindow.prototype.roll = function () {
+    const window = nativeRoll.call(this);
+    // Roll at the SAME boundary as the status facts, not the polling boundary.
+    process.send?.({ loopWindow: syncWindows.roll(window) });
+    return window;
   };
   // Only the benchmark's base status contract needs the additive percentile keys.
   DaemonStoreFacts.shape.commit = DaemonStoreFacts.shape.commit
@@ -131,6 +145,7 @@ async function main() {
   process.on("disconnect", () => void shutdown());
   process.on("message", (message) => {
     if (message !== "start") return;
+    syncWindows.reset();
     stopLoop = startLoopFacts();
     const began = performance.now();
     const body = Buffer.alloc(200 * 1024, 0x62);

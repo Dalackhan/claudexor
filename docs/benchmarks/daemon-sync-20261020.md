@@ -9,14 +9,26 @@ Base: `0919faac45dc34f67439bfb55443777143c9cfd0`. Final measured production tree
 With the repository’s cached dependencies and supported Node installed:
 
 ```sh
-node scripts/daemon-load-bench.mjs --base=0919faac4 --seconds=30 --rounds=2 --out=results/acceptance.json
+node scripts/daemon-load-bench.mjs --base 0919faac4 --seconds 30 --rounds 6 --out results/acceptance.json
 ```
 
-The lane ran this through its 300-second process-tree watchdog. Each build gets its own temporary root and HOME; the script stops its exact child PID and removes that root. The script archives the exact base and bundles each tree’s store, health, loop-facts and HTTP code. This is an isolated daemon composition with synthetic producers, not full provider/CLI bootstrap. Both trees use the same installed lockfile.
+Both `--rounds N` and `--rounds=N` are accepted. A round is a pair of trials: AB, then BA, repeating, where A is base and B is candidate. Six rounds run twelve trials in three ABBA blocks; the default remains two rounds (one ABBA block). Any positive integer pair count is accepted. Use a process-tree watchdog sized for the requested count, allowing at least `2 * rounds * (seconds + 30)` seconds plus build time. The historical two-round runs below used the lane's 300-second watchdog.
+
+Each build gets its own temporary root and HOME; the script stops its exact child PID and removes that root. The script archives the exact base and bundles each tree’s store, health, loop-facts and HTTP code. This is an isolated daemon composition with synthetic producers, not full provider/CLI bootstrap. Both trees use the same installed lockfile.
 
 Each 30-second trial performs 6,000 model-shaped transactions over nine partitions, including a distinct 200 KiB external body every twentieth write, concurrently with 1,800 real run-detail requests from four paced clients. Detail parses a 100-event fixture, whose cursor the client checks. Status is polled every 250 ms through `GET /v2/daemon/status`, including the final completed ten-second loop window. Order is base/candidate, then candidate/base. Every trial completed all work with 6,001 COMMIT attempts (including setup), zero COMMIT failures and no flusher deaths. No separate disk stressor was added on the shared host.
 
 The base predates COMMIT percentiles. An identical benchmark-only histogram observes the existing measured native COMMIT durations on both trees, after the timed call, and adds p50/p99 to the base status schema. It changes no SQL calls or pragmas. The candidate’s production request/synchronous timings remain enabled. Percentiles use two-significant-digit microsecond histograms; maxima are direct measurements. All numbers below come from status; loop maximum is the largest completed-window maximum, not an average of maxima.
+
+## Quiet-host rerun handoff
+
+The orchestrator owns the next full comparison. No 30-second comparison was rerun for the follow-up while eight implementation lanes shared the Mac (load1 28–43 in the final original comparison). The release blocker above remains until the quiet-host evidence establishes a lower tail. The original tables and JSON below are unchanged.
+
+The updated harness prints one JSON `run_summary` line per trial to stdout, with separate `commit` p99/max and `eventLoop` tails, plus WAL and host-load observations. Start/stop PID messages go to stderr. The result file retains every trial, raw status samples in sibling files, and two `build_summary` records (also printed at the end). Build summaries report `worstRunP99Ms` for COMMIT, `worstWindowP99Ms` for the loop, and maxima separately. These are explicitly worst observed percentiles, not pooled p99s or averages; individual trial/window values remain available for comparison.
+
+Every completed native loop window retains its worst labelled synchronous section and the maximum for each instrumented operation. An identical benchmark observer wraps the actual external-file writer and run-detail function bodies on both source trees, observes the already-timed native COMMIT, and times `BEGIN IMMEDIATE`. It records one maximum per label and resets at the same loop-roll boundary as status, then sends that window via IPC; HTTP polling cannot lose a window or its smaller later stalls. The last captured window is checked against the status response. Source instrumentation fails if either function is renamed or becomes asynchronous; it changes no SQL, pragmas, native sync calls or worker behavior.
+
+Labels distinguish `store.external_write` (including O_DSYNC writes, unchanged by H1), `store.commit` (including base autocheckpoints/WAL-header syncs), `store.begin_immediate` (including writer-lock waits), and `control.run_detail`. The summary's maximum-loop window includes its worst section's label, duration and timestamps; each trial's `loops` array retains that attribution for every window. A worker checkpoint runs on another thread, so it is not labelled as a synchronous request-thread stall; any writer-lock wait appears under BEGIN. These labels identify the longest measured section **in the same window**, not proof that it caused the exact maximum delay sample. GC, uninstrumented work and host scheduling can also contribute. This attribution is available on both builds and does not depend on the production lifetime top-32 list.
 
 ## COMMIT latency (milliseconds)
 

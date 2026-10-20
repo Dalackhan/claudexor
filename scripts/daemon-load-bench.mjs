@@ -3,14 +3,14 @@
  * Compare a git base and working tree using identical, isolated store + HTTP
  * daemon compositions. No provider calls, credentials, managed roots or CLI
  * daemon discovery. pnpm install --offline first; then:
- *   node scripts/daemon-load-bench.mjs --base=0919faac4 --seconds=30 --rounds=2 --out=results.json
+ *   node scripts/daemon-load-bench.mjs --base 0919faac4 --seconds 30 --rounds 4 --out results.json
  * Uses the installed esbuild to bundle each tree's source, with its own workspace
- * aliases. A benchmark-only observer adds p50/p99 to BOTH status contracts using
- * durations already measured by EngineStore; it changes no native calls/pragmas.
+ * aliases. Identical benchmark-only observers label synchronous work and add
+ * COMMIT percentiles to BOTH builds; they change no native calls or pragmas.
  * Each trial: 200 model-shaped transactions/s over nine partitions, a distinct
  * 200 KiB external body every twentieth write, four paced run-detail clients
- * totaling 60 reads/s, and status polling. Two rounds run base/candidate then
- * candidate/base. Waits for the last loop window; retains raw status samples.
+ * totaling 60 reads/s, and status polling. Rounds count pairs, alternating AB/BA
+ * (two rounds = ABBA). Waits for the last loop window; retains raw status samples.
  */
 import { build } from "esbuild";
 import { fork, execFileSync } from "node:child_process";
@@ -21,25 +21,19 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
+import {
+  benchmarkOptions,
+  buildSummaries,
+  instrumentSyncFunction,
+  loopTail,
+  runSummary,
+  trialOrder,
+} from "./lib/daemon-load-bench.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const args = Object.fromEntries(
-  process.argv.slice(2).map((arg) => arg.replace(/^--/, "").split("=")),
-);
-const base = args.base ?? "0919faac4";
-const seconds = Number(args.seconds ?? 30),
-  rounds = Number(args.rounds ?? 2);
-if (
-  !Number.isInteger(seconds) ||
-  seconds < 1 ||
-  seconds > 120 ||
-  !Number.isInteger(rounds) ||
-  rounds < 1 ||
-  rounds > 4
-)
-  throw new Error("seconds must be 1..120; rounds 1..4");
+const { base, seconds, rounds, out } = benchmarkOptions(process.argv.slice(2));
 const scratch = mkdtempSync(join(tmpdir(), "cx-daemon-load-"));
-const output = resolve(args.out ?? "daemon-load-results.json");
+const output = resolve(out);
 const results = {
   base: execFileSync("git", ["rev-parse", base], { cwd: repo, encoding: "utf8" }).trim(),
   candidate: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim(),
@@ -48,13 +42,16 @@ const results = {
   rate: 200,
   readsPerSecond: 60,
   rounds,
-  instrumentation: "identical post-COMMIT histogram and additive status schema on both builds",
+  instrumentation:
+    "identical post-COMMIT histogram, BEGIN wait, external-write and run-detail timers on both builds; per-window maxima captured at the native loop roll via IPC",
+  attribution:
+    "worst labelled synchronous section in each loop window; temporal association, not proof of the exact cause of its maximum delay",
   trials: [],
 };
 const owned = new Set();
 
 async function bundle(tree, label) {
-  const aliases = {};
+  const aliases = { "@bench/sync-observer": join(repo, "scripts/lib/daemon-load-observer.mjs") };
   for (const directory of readdirSync(join(tree, "packages"))) {
     const location = join(tree, "packages", directory);
     try {
@@ -90,6 +87,24 @@ async function bundle(tree, label) {
       js: 'import { createRequire as benchRequire } from "node:module"; const require = benchRequire(import.meta.url);',
     },
     nodePaths: [join(repo, "node_modules"), join(repo, "node_modules/.pnpm/node_modules")],
+    plugins: [
+      {
+        name: "benchmark-sync-labels",
+        setup(builder) {
+          builder.onLoad({ filter: /[\\/](external-files|daemon-server)\.ts$/ }, ({ path }) => {
+            const external = path.endsWith("external-files.ts");
+            return {
+              contents: instrumentSyncFunction(
+                readFileSync(path, "utf8"),
+                external ? "writeExternalFile" : "detailFor",
+                external ? "store.external_write" : "control.run_detail",
+              ),
+              loader: "ts",
+            };
+          });
+        },
+      },
+    ],
     logLevel: "warning",
   });
   return outfile;
@@ -126,6 +141,10 @@ async function trial(bundlePath, label, round) {
     stdio: ["ignore", "ignore", "pipe", "ipc"],
   });
   owned.add(child);
+  const loops = [];
+  child.on("message", (value) => {
+    if (value.loopWindow) loops.push(value.loopWindow);
+  });
   let stderr = "";
   child.stderr.on("data", (data) => {
     stderr = (stderr + data).slice(-16_384);
@@ -154,7 +173,7 @@ async function trial(bundlePath, label, round) {
     });
   try {
     const ready = await message((value) => value.ready);
-    console.log(`started ${label} round ${round}, owned PID ${child.pid}`);
+    console.error(`started ${label} round ${round}, owned PID ${child.pid}`);
     const origin = `http://${ready.host}:${ready.port}`;
     const headers = { authorization: `Bearer ${token}`, "X-Claudexor-Protocol-Major": "3" };
     const get = async (path) => {
@@ -209,10 +228,17 @@ async function trial(bundlePath, label, round) {
     }
     if (pollError) throw pollError;
     const last = samples.at(-1);
-    const loops = [
-      ...new Map(samples.filter((s) => s.loop).map((s) => [s.loop.windowEndedAt, s.loop])).values(),
-    ];
     if (!loops.length) throw new Error("no completed event-loop window");
+    // IPC captures EVERY native window, including ones HTTP polling misses.
+    // Cross-check the last observed status window against the capture.
+    const capturedIndex = loops.findIndex(
+      (window) => window.windowEndedAt === last.loop.windowEndedAt,
+    );
+    const captured = loops[capturedIndex];
+    if (!captured || JSON.stringify(captured.delay) !== JSON.stringify(last.loop.delay))
+      throw new Error("loop attribution does not match the status window");
+    const completedLoops = loops.slice(0, capturedIndex + 1);
+    const eventLoop = loopTail(completedLoops);
     const passes = samples.map((sample) => sample.store.flusher?.last_pass).filter(Boolean);
     const row = {
       label,
@@ -225,11 +251,12 @@ async function trial(bundlePath, label, round) {
       loadStart,
       loadEnd: loadavg()[0],
       commit: last.store.commit,
-      loopMaxMs: Math.max(...loops.map((w) => w.delay?.maxMs ?? 0)),
+      eventLoop,
+      loopMaxMs: eventLoop.maxMs,
       walMaxMiB: Math.max(...passes.map((pass) => pass.wal_bytes ?? 0)) / (1024 * 1024),
       flusher: last.store.flusher.counters,
       busyWaits: last.store.busy_waits,
-      loops,
+      loops: completedLoops,
       timing: last.timing ?? null,
     };
     writeFileSync(
@@ -239,7 +266,7 @@ async function trial(bundlePath, label, round) {
     return row;
   } finally {
     await stop(child);
-    console.log(`stopped owned PID ${child.pid}`);
+    console.error(`stopped owned PID ${child.pid}`);
   }
 }
 
@@ -272,23 +299,14 @@ try {
     candidate: await bundle(repo, "candidate"),
   };
   mkdirSync(dirname(output), { recursive: true });
-  for (let round = 1; round <= rounds; round++) {
-    for (const label of round % 2 ? ["base", "candidate"] : ["candidate", "base"]) {
-      const row = await trial(bundles[label], label, round);
-      results.trials.push(row);
-      writeFileSync(output, JSON.stringify(results, null, 2) + "\n");
-      console.log(
-        JSON.stringify({
-          label,
-          round,
-          writes: row.writes,
-          reads: row.reads,
-          commit: row.commit,
-          loopMaxMs: row.loopMaxMs,
-        }),
-      );
-    }
+  for (const { label, round } of trialOrder(rounds)) {
+    const row = await trial(bundles[label], label, round);
+    results.trials.push(row);
+    results.buildSummaries = buildSummaries(results.trials);
+    writeFileSync(output, JSON.stringify(results, null, 2) + "\n");
+    console.log(JSON.stringify(runSummary(row)));
   }
+  for (const summary of results.buildSummaries) console.log(JSON.stringify(summary));
 } finally {
   for (const child of owned) await stop(child);
   rmSync(scratch, { recursive: true, force: true });

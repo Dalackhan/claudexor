@@ -37,12 +37,16 @@ export async function createDirectoryEnvelope(input: {
 }): Promise<WorkspaceEnvelope> {
   const executionRoot = input.inPlace ? input.sourceRoot : join(input.envelopeRoot, "tree");
   const scopePaths = input.scopePaths ?? [];
-  await prepareDirectoryWorkspace({
-    ...input,
-    executionRoot,
-    scopePaths,
-    inPlace: input.inPlace === true,
-  });
+  // The envelope still provisions HOME for delegated selection; live readers
+  // need no write-oriented file preimages. Harness HOME selection is unchanged.
+  if (!input.inPlace || input.accessProfile !== "readonly") {
+    await prepareDirectoryWorkspace({
+      ...input,
+      executionRoot,
+      scopePaths,
+      inPlace: input.inPlace === true,
+    });
+  }
   return WorkspaceEnvelope.parse({
     id: input.envelopeId,
     task_id: input.taskId,

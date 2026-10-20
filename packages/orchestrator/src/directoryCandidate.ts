@@ -47,6 +47,11 @@ export async function captureDirectoryCandidate(input: {
   artifactRoot: string;
   observedPaths: string[];
 }): Promise<{ files?: DirectoryCandidate; refusal?: CaptureRefusal }> {
+  if (
+    input.envelope.policy_profile === "readonly" &&
+    input.envelope.worktree_path === input.envelope.repo_root
+  )
+    return {};
   try {
     const files = await input.manager.captureFiles(input.envelope, input.artifactRoot, {
       observedPaths: input.observedPaths,

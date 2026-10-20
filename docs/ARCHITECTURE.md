@@ -1748,7 +1748,16 @@ whole folder. A selected path may be absent at preparation and become a new
 output. Selection controls copied inputs and capture coverage, not the native
 harness's filesystem permissions.
 
-Directory work produces a `files` WorkProduct. Its `files.manifest` and
+Read-only live directory Agents keep the source root and existing harness HOME
+selection, but skip write-oriented input inventory, baseline hashing and output
+capture. They return an answer without a file manifest or delivery payload.
+Delegated runs retain scoped HOME; ordinary in-place runs keep native HOME selection.
+Scope metadata and native adapter access enforcement remain unchanged. Readonly
+run facts use `noChanges: true` for the absence of a write-backed result, not a
+filesystem comparison proving the absence of changes. Writable live and isolated
+directory work keep their existing preparation and capture.
+
+Writable directory work produces a `files` WorkProduct. Its `files.manifest` and
 `meta.manifest_sha256` address a complete file manifest in the existing run
 artifact tree, including source/execution roots, selection, completeness, modes,
 symlinks and full content references at `final/files/manifest.json` and

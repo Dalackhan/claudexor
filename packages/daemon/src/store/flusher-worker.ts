@@ -126,7 +126,9 @@ export async function runFlusherWorker(port: MessagePort, data: FlusherWorkerDat
       // the tail. busy_timeout=0 returns immediately when a reader/writer pins it;
       // the next pass retries, and the explicit barrier still runs below.
       if (checkpoint && checkpoint.log >= restartPages) checkpoint = checkpointFacts(restart);
-      lastLog = checkpoint && checkpoint.checkpointed < checkpoint.log ? checkpoint.log : 0;
+      // While the WAL holds at least the trigger (backfilled or not), every pass retries until a
+      // writer has restarted it; a BUSY RESTART must not wait for the cadence.
+      lastLog = checkpoint ? checkpoint.log : lastLog;
     }
     if (hooks.checkpointGate) {
       const gate = new Int32Array(hooks.checkpointGate);

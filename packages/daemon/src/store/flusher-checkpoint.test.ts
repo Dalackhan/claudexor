@@ -142,7 +142,7 @@ describeStore("flusher is the only serving checkpointer", () => {
   });
 
   it("checkpoints every pass while a pinned WAL stays above its reuse trigger", async () => {
-    const pinned = await open({ checkpointEveryPasses: 1000, restartThresholdPages: 1 });
+    const pinned = await open({ checkpointEveryPasses: 1000, restartThresholdPages: 8 });
     pinned.exec("PRAGMA journal_size_limit=1048576");
     write(pinned, 0);
     const reader = new sqlite!.DatabaseSync(pinned.paths.database);
@@ -152,15 +152,17 @@ describeStore("flusher is the only serving checkpointer", () => {
       for (let i = 0; i < 4; i++) write(pinned, 0);
       expect((await pass(pinned)).checkpoint!.busy).toBe(1); // first pass: a reader pins the tail
       write(pinned, 0);
-      expect((await pass(pinned)).checkpoint).not.toBeNull(); // still above the trigger: every pass retries
+      expect((await pass(pinned)).checkpoint!.busy).toBe(1); // still above the trigger: every pass retries
     } finally {
       reader.exec("COMMIT");
       reader.close();
     }
     const reclaimed = await pass(pinned);
     expect(reclaimed.checkpoint!.checkpointed).toBe(reclaimed.checkpoint!.log);
-    write(pinned, 1, 16);
-    expect((await pass(pinned)).checkpoint).toBeNull(); // reclaimed: back to the cadence
+    write(pinned, 1, 16); // the next writer restarts the reclaimed WAL
+    expect((await pass(pinned)).checkpoint!.log).toBeLessThan(8);
+    write(pinned, 2, 16);
+    expect((await pass(pinned)).checkpoint).toBeNull(); // below the trigger again: back to the cadence
   });
 
   it("restarts a large WAL in the worker, reporting a pinned reader without waiting", async () => {

@@ -32,6 +32,7 @@ export async function resolveControlProtocol(input: {
   requestedMajor: string | string[] | undefined;
   readBody: () => Promise<unknown>;
   servingMode?: ControlServingMode;
+  storeId?: () => string | undefined;
 }): Promise<ControlProtocolBoundary> {
   const servingMode = input.servingMode ?? "normal";
   if (input.method === "POST" && input.requestPath === "/v2/handshake") {
@@ -48,6 +49,8 @@ export async function resolveControlProtocol(input: {
         ),
       };
     }
+    // Read after the body await: storage may open or be replaced while it arrives.
+    const storeId = input.storeId?.();
     return {
       kind: "response",
       status: 200,
@@ -58,6 +61,7 @@ export async function resolveControlProtocol(input: {
         operationsPath: "/v2/operations",
         engine: engineBuildIdentity(),
         servingMode,
+        ...(storeId === undefined ? {} : { storeId }),
       }),
     };
   }

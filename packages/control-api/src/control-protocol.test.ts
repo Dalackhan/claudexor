@@ -1,4 +1,4 @@
-import { CONTROL_PROTOCOL_MAJOR } from "@claudexor/schema";
+import { CONTROL_PROTOCOL_MAJOR, ControlHandshakeResponse } from "@claudexor/schema";
 import { describe, expect, it } from "vitest";
 import { resolveControlProtocol } from "./control-protocol.js";
 
@@ -9,6 +9,7 @@ function boundary(input: {
   requestPath: string;
   requestedMajor?: string;
   servingMode?: "normal" | "recovery_only";
+  storeId?: string;
   body?: unknown;
 }) {
   return resolveControlProtocol({
@@ -17,10 +18,44 @@ function boundary(input: {
     requestedMajor: input.requestedMajor ?? MAJOR,
     readBody: async () => input.body ?? {},
     servingMode: input.servingMode,
+    storeId: () => input.storeId,
   });
 }
 
 describe("control protocol recovery-only gate (issue #165 D5)", () => {
+  it("reads the current store after receiving the handshake body", async () => {
+    let storeId = "old-store";
+    const result = await resolveControlProtocol({
+      method: "POST",
+      requestPath: "/v2/handshake",
+      requestedMajor: undefined,
+      storeId: () => storeId,
+      readBody: async () => {
+        storeId = "new-store";
+        return { protocolMajor: CONTROL_PROTOCOL_MAJOR, client: "test" };
+      },
+    });
+    expect(result).toMatchObject({ status: 200, body: { storeId: "new-store" } });
+  });
+
+  it("keeps storeId optional and carries the current identity in recovery mode", async () => {
+    for (const storeId of [undefined, "11111111-1111-4111-8111-111111111111"]) {
+      const result = await boundary({
+        method: "POST",
+        requestPath: "/v2/handshake",
+        servingMode: "recovery_only",
+        storeId,
+        body: { protocolMajor: CONTROL_PROTOCOL_MAJOR, client: "test" },
+      });
+      expect(result.kind).toBe("response");
+      if (result.kind !== "response") throw new Error("handshake did not respond");
+      const body = ControlHandshakeResponse.parse(result.body);
+      expect(body.storeId).toBe(storeId);
+      expect(Object.hasOwn(body, "storeId")).toBe(storeId !== undefined);
+      expect(ControlHandshakeResponse.safeParse({ ...body, storeId: 123 }).success).toBe(false);
+    }
+  });
+
   it("carries servingMode in the handshake from the canonical admission snapshot", async () => {
     const recovery = await boundary({
       method: "POST",

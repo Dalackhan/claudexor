@@ -98,6 +98,7 @@ export class EngineStore {
     paths: EngineStorePaths,
     connection: DatabaseSync,
     private readonly options: EngineStoreOptions,
+    readonly storeId: string | undefined,
   ) {
     this.runtime = runtime;
     this.paths = paths;
@@ -135,17 +136,21 @@ export class EngineStore {
     const connection = new runtime.sqlite.DatabaseSync(paths.database, {
       timeout: MAIN_CONNECTION_PRAGMAS["busy_timeout"] as number,
     });
+    let identity: { value: string } | undefined;
     try {
       // Identity first: a foreign or unknown file is refused before the
       // journal-mode or any other write touches it.
       ensureSchemaIdentityOrThrow(connection);
       applyPragmas(connection, MAIN_CONNECTION_PRAGMAS);
       ensureSchema(connection, options.now);
+      // The durable UUID belongs to this database, never to a process or path.
+      identity = connection.prepare("SELECT value FROM meta WHERE key='store_id'").get() as
+        { value: string } | undefined;
     } catch (error) {
       connection.close();
       throw mapStoreError(error, "opening the engine store");
     }
-    const store = new EngineStore(runtime, paths, connection, options);
+    const store = new EngineStore(runtime, paths, connection, options, identity?.value);
     await store.flusher.start();
     return store;
   }

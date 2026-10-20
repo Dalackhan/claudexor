@@ -2330,7 +2330,7 @@ share, and the GC pauses a `PerformanceObserver` saw (count, total, longest).
 It is null until the first window completes; a stalled loop rolls its window
 late, so `windowMs` grows with the stall. `claudexor daemon status` prints the
 same window as one line. The status route reaches the daemon in process, so it
-answers while the loop is merely slow. The protocol handshake remains unchanged.
+answers while the loop is merely slow.
 The `store` facts report flusher state, interval, last barrier and lag, WAL bytes,
 open obligations, busy waits, request-thread COMMIT timing since the store opened
 ([SQLite engine store](#sqlite-engine-store)), integrity and current import
@@ -2354,8 +2354,10 @@ measures synchronous serialization, not its asynchronous file writes. These
 samples may overlap and do not identify the cause of a delay. `store.commit`
 also exposes lifetime `p50_ms`/`p99_ms` using the same histogram precision.
 Older engines omit the new optional fields. The catalog still points to the
-same `ControlDaemonStatus` response schema; no route or handshake changed.
+same `ControlDaemonStatus` response schema.
 No memory, loop, timing or store measurements impose automatic admission thresholds.
+
+`POST /v2/handshake` optionally returns top-level `storeId`, the durable engine store's UUID (stable across restarts, absent when unavailable); a run 404 is meaningful only together with the same `storeId`.
 
 <!-- BEGIN GENERATED ENDPOINTS (node scripts/gen-endpoints-doc.mjs; do not edit by hand) -->
 - `GET /healthz`

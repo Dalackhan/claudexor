@@ -250,6 +250,8 @@ export interface DaemonControlApiOptions {
   runStartTimeoutMs?: number;
   /** Issue #165 D5 admission snapshot; absent embedders always serve normal. */
   servingMode?: () => ControlServingMode;
+  /** Current durable store identity; unavailable before open or during replacement. */
+  storeId?: () => string | undefined;
   bus?: { subscribe(listener: (event: { run_id: string }) => void): () => void };
   /** Internal storage fact; a committed terminal may still need its file effects. */
   terminalFilesPending?: (runIdOrCommandId: string) => boolean;
@@ -754,6 +756,7 @@ export class DaemonControlApiServer {
         requestedMajor: req.headers["x-claudexor-protocol-major"],
         readBody: () => this.readBody(req),
         servingMode: this.opts.servingMode?.() ?? "normal",
+        storeId: this.opts.storeId,
       });
     } catch (error) {
       return this.requestError(res, error);

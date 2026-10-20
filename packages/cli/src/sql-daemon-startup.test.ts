@@ -17,6 +17,7 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { DaemonClient } from "@claudexor/daemon";
 import {
   ControlDaemonStatus,
+  ControlHandshakeResponse,
   type ControlJournalInspection,
   type ControlJournalQuarantineReceipt,
 } from "@claudexor/schema";
@@ -212,10 +213,12 @@ class Fixture {
     return value as T;
   }
   async hello() {
-    return this.request<{ servingMode: string }>("/v2/handshake", "POST", {
-      protocolMajor: 3,
-      client: "sql-startup-fixture",
-    });
+    return ControlHandshakeResponse.parse(
+      await this.request("/v2/handshake", "POST", {
+        protocolMajor: 3,
+        client: "sql-startup-fixture",
+      }),
+    );
   }
   async quarantine(name: string, inspection: ControlJournalInspection, key = randomUUID()) {
     return this.request<ControlJournalQuarantineReceipt>(
@@ -351,6 +354,35 @@ function readSql<T>(
 }
 
 describe.skipIf(!sqlite)("production SQL daemon startup process qualification", () => {
+  it("handshakes the durable store identity across a restart and a different root", async () => {
+    const first = new Fixture("handshake-store");
+    first.start();
+    await first.httpReady();
+    await first.mode("normal");
+    const identity = (await first.hello()).storeId;
+    expect(identity).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    await first.stop();
+    expect(
+      readSql(first, (db) => db.prepare("SELECT value FROM meta WHERE key='store_id'").get()),
+    ).toEqual({ value: identity });
+    first.start();
+    await first.httpReady();
+    await first.mode("normal");
+    expect((await first.hello()).storeId).toBe(identity);
+    await first.stop();
+
+    const other = new Fixture("handshake-other-store");
+    other.start();
+    await other.httpReady();
+    await other.mode("normal");
+    const otherIdentity = (await other.hello()).storeId;
+    expect(typeof otherIdentity).toBe("string");
+    expect(otherIdentity).not.toBe(identity);
+    await other.stop();
+  }, 60_000);
+
   it("starts a fresh root, serves real health and global/project threads, then closes SQL", async () => {
     const f = new Fixture("fresh");
     f.start();

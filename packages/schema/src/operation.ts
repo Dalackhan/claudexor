@@ -21,6 +21,13 @@ export const ControlHandshakeResponse = z
     protocolMajor: z.literal(CONTROL_PROTOCOL_MAJOR),
     compatible: z.literal(true),
     operationsPath: z.literal("/v2/operations"),
+    storeId: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Immutable UUID of the durable engine store, stable across restarts; a run 404 is meaningful only with the same storeId. Absent when the store is unavailable or the daemon predates this field.",
+      ),
     /** Build identity of the serving engine (D20/INV-116 spirit): stale-
      * daemon skew is visible at the handshake instead of guessed later. */
     engine: z

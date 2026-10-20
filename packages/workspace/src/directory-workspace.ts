@@ -37,12 +37,15 @@ export async function createDirectoryEnvelope(input: {
 }): Promise<WorkspaceEnvelope> {
   const executionRoot = input.inPlace ? input.sourceRoot : join(input.envelopeRoot, "tree");
   const scopePaths = input.scopePaths ?? [];
-  await prepareDirectoryWorkspace({
-    ...input,
-    executionRoot,
-    scopePaths,
-    inPlace: input.inPlace === true,
-  });
+  // Live readers need scoped homes, not write-oriented file preimages.
+  if (!input.inPlace || input.accessProfile !== "readonly") {
+    await prepareDirectoryWorkspace({
+      ...input,
+      executionRoot,
+      scopePaths,
+      inPlace: input.inPlace === true,
+    });
+  }
   return WorkspaceEnvelope.parse({
     id: input.envelopeId,
     task_id: input.taskId,

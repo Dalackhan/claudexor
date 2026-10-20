@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:net";
 import { ArtifactStore } from "@claudexor/artifact-store";
 import type { HarnessAdapter } from "@claudexor/core";
 import { createFakeHarness } from "@claudexor/harness-fake";
@@ -24,6 +25,7 @@ import {
 import { type ReviewerSpec } from "@claudexor/review";
 import { verifyAndDeliverFiles } from "@claudexor/delivery";
 import { Orchestrator } from "./orchestrator.js";
+import { OrchestratorCredentials } from "./orchestrator-credentials.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -315,12 +317,87 @@ describe("ordinary directory Agent execution", () => {
       repoRoot: root,
       workspaceKind: "directory",
       prompt: "Read the directory",
+      scopePaths: ["."],
       harnesses: [author.adapter.id],
       access: "readonly",
     });
     expect(result.facts.lifecycle).toBe("succeeded");
     expect(readdirSync(root).sort()).toEqual(["input.txt", "outside.txt"]);
     expect(existsSync(join(result.runDir, "final/work_product.yaml"))).toBe(false);
+    expect(existsSync(join(result.runDir, "attempts/a01/final/files/manifest.json"))).toBe(false);
+    expect(readFileSync(join(result.runDir, "final/answer.md"), "utf8")).toContain(
+      "Prepared the output.",
+    );
+    const attempt = new ArtifactStore(root).readYaml<Record<string, unknown>>(
+      join(result.runDir, "attempts/a01/attempt.yaml"),
+    );
+    expect(attempt).not.toHaveProperty("capture_refusal");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "answers from a readonly live directory containing a Unix socket",
+    async () => {
+      const root = fixture();
+      const socket = createServer();
+      await new Promise<void>((resolve, reject) => {
+        socket.once("error", reject);
+        socket.listen(join(root, "s"), resolve);
+      });
+      try {
+        const author = writer(Buffer.from([1]));
+        const result = await new Orchestrator({
+          registry: new Map([[author.adapter.id, author.adapter]]),
+        }).run({
+          repoRoot: root,
+          workspaceKind: "directory",
+          inPlace: true,
+          scopePaths: ["."],
+          access: "readonly",
+          harnesses: [author.adapter.id],
+          prompt: "Read the directory without changing its files",
+        });
+        expect(result.facts.lifecycle).toBe("succeeded");
+        expect(author.calls).toEqual([root]);
+        expect(readFileSync(join(result.runDir, "final/answer.md"), "utf8")).toContain(
+          "Prepared the output.",
+        );
+        expect(existsSync(join(result.runDir, "final/work_product.yaml"))).toBe(false);
+        expect(existsSync(join(result.runDir, "attempts/a01/final/files/manifest.json"))).toBe(
+          false,
+        );
+      } finally {
+        await new Promise<void>((resolve, reject) =>
+          socket.close((error) => (error ? reject(error) : resolve())),
+        );
+      }
+    },
+  );
+
+  it("does not mark an empty readonly directory answer as delivered", async () => {
+    const root = fixture();
+    const author = writer(Buffer.from([1]));
+    author.adapter.run = async function* (spec) {
+      const ts = new Date().toISOString();
+      yield { type: "started", ts, session_id: spec.session_id };
+      yield { type: "completed", ts, session_id: spec.session_id };
+    };
+    const served = vi.spyOn(OrchestratorCredentials.prototype, "noteTryServed");
+    try {
+      const result = await new Orchestrator({
+        registry: new Map([[author.adapter.id, author.adapter]]),
+      }).run({
+        repoRoot: root,
+        workspaceKind: "directory",
+        scopePaths: ["."],
+        access: "readonly",
+        harnesses: [author.adapter.id],
+        prompt: "Read only",
+      });
+      expect(served.mock.calls.map(([, , delivered]) => delivered)).toEqual([false]);
+      expect(existsSync(join(result.runDir, "final/work_product.yaml"))).toBe(false);
+    } finally {
+      served.mockRestore();
+    }
   });
 
   it.each([true, false])(

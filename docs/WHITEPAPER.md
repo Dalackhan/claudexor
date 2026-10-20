@@ -402,6 +402,11 @@ folder remain an ordinary folder, whether work happens directly there or in a
 copy of the selected inputs. Isolation therefore does not itself authorize Git
 initialization or force a different execution strategy.
 
+Read-only live directory tasks need a scoped harness home, not a write baseline:
+they do not inventory/hash the selected source tree or capture a file work product.
+The native harness still owns read-only enforcement; returned prose is an answer,
+not a claim that a before/after filesystem comparison ran.
+
 Stable project identity remains separate from the folder where the harness runs.
 The caller selects the input footprint; a copy retains that complete footprint
 and its outputs for inspection and later delivery. Applying a copied result is a

@@ -2745,7 +2745,7 @@ export class Orchestrator {
           : await secretDiff.captureCandidateDiff(wsm, envelope);
         const currentDiff = secretDiff.capturedDiff(currentCapture);
         const workspaceUnchanged = directory
-          ? directoryCapture.files?.noChanges === true
+          ? !isMutatingAccess(access) || directoryCapture.files?.noChanges === true
           : currentDiff?.trim().length === 0;
         const deliverableEmpty = workspaceUnchanged && answer.text().length === 0;
         const delivered = !harnessErrored && !deliverableEmpty && !signal?.aborted;

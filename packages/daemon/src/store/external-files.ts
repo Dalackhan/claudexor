@@ -1,3 +1,4 @@
+import { measureSync } from "@claudexor/util";
 import { randomUUID } from "node:crypto";
 import {
   closeSync,
@@ -46,40 +47,42 @@ export function writeExternalFile(
   registry: ExternalRegistry,
   input: { dir: string; name: string; bytes: Uint8Array; keepExisting?: boolean },
 ): ExternalFileReceipt {
-  const target = join(input.dir, input.name);
-  if (input.keepExisting && existsSync(target)) {
-    return { path: target, generation: registry.registerExternal(input.dir), written: false };
-  }
-  ensureDirectory(registry, input.dir);
-  const temp = join(input.dir, `.${input.name}.${randomUUID()}.tmp`);
-  let fd: number | null = null;
-  try {
-    fd = openSync(
-      temp,
-      externalWriteFlags(constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL),
-      0o600,
-    );
-    let offset = 0;
-    while (offset < input.bytes.byteLength) {
-      offset += writeSync(fd, input.bytes, offset, input.bytes.byteLength - offset, offset);
-    }
-    closeSync(fd);
-    fd = null;
+  return measureSync("store.external_write", () => {
+    const target = join(input.dir, input.name);
     if (input.keepExisting && existsSync(target)) {
-      unlinkSync(temp);
       return { path: target, generation: registry.registerExternal(input.dir), written: false };
     }
-    renameSync(temp, target);
-  } catch (error) {
-    if (fd !== null) closeSync(fd);
+    ensureDirectory(registry, input.dir);
+    const temp = join(input.dir, `.${input.name}.${randomUUID()}.tmp`);
+    let fd: number | null = null;
     try {
-      unlinkSync(temp);
-    } catch {
-      /* best effort; the orphan sweep removes stale .tmp files */
+      fd = openSync(
+        temp,
+        externalWriteFlags(constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL),
+        0o600,
+      );
+      let offset = 0;
+      while (offset < input.bytes.byteLength) {
+        offset += writeSync(fd, input.bytes, offset, input.bytes.byteLength - offset, offset);
+      }
+      closeSync(fd);
+      fd = null;
+      if (input.keepExisting && existsSync(target)) {
+        unlinkSync(temp);
+        return { path: target, generation: registry.registerExternal(input.dir), written: false };
+      }
+      renameSync(temp, target);
+    } catch (error) {
+      if (fd !== null) closeSync(fd);
+      try {
+        unlinkSync(temp);
+      } catch {
+        /* best effort; the orphan sweep removes stale .tmp files */
+      }
+      throw mapStoreError(error, `writing ${target}`);
     }
-    throw mapStoreError(error, `writing ${target}`);
-  }
-  return { path: target, generation: registry.registerExternal(input.dir), written: true };
+    return { path: target, generation: registry.registerExternal(input.dir), written: true };
+  });
 }
 
 /** Publish by hard link (finalize, SYNTHESIS_R5 §6.4): an existing target wins. */

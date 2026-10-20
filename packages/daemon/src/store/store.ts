@@ -1,3 +1,4 @@
+import { LatencyHistogram, processTiming } from "@claudexor/util";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
@@ -42,7 +43,14 @@ export interface StoreFacts {
   wal_bytes: number | null;
   busy_waits: number;
   /** `transaction()` COMMIT calls since this store opened: a lifetime summary, not a window. */
-  commit: { attempts: number; failures: number; last_ms: number | null; max_ms: number | null };
+  commit: {
+    attempts: number;
+    failures: number;
+    last_ms: number | null;
+    max_ms: number | null;
+    p50_ms: number | null;
+    p99_ms: number | null;
+  };
   obligations_open: number | null;
   integrity: "pending" | "ok" | "failed";
   /** Filled by the importer (PR-D); the store core never migrates. */
@@ -74,6 +82,7 @@ export class EngineStore {
   private readonly monotonicNow: () => number;
   private busyWaits = 0;
   /** Constant-space COMMIT timing; only `facts()` reads it. */
+  private readonly commitLatency = new LatencyHistogram();
   private readonly commits = {
     attempts: 0,
     failures: 0,
@@ -297,6 +306,8 @@ export class EngineStore {
       wal_bytes: flusher.last_pass?.wal_bytes ?? null,
       busy_waits: this.busyWaits,
       commit: {
+        p50_ms: this.commitLatency.facts().p50Ms,
+        p99_ms: this.commitLatency.facts().p99Ms,
         attempts: this.commits.attempts,
         failures: this.commits.failures,
         last_ms: microsecondMs(this.commits.lastMs),
@@ -374,6 +385,8 @@ export class EngineStore {
   }
 
   private recordCommit(elapsedMs: number, failed: boolean): void {
+    this.commitLatency.record(elapsedMs);
+    processTiming.recordSync("store.commit", elapsedMs);
     this.commits.attempts += 1;
     if (failed) this.commits.failures += 1;
     this.commits.lastMs = elapsedMs;

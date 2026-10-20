@@ -1,3 +1,4 @@
+import { measureSync } from "@claudexor/util";
 /**
  * The daemon's durable run-scope index (`daemon/run-scopes.json`): the
  * discovery record a crashed daemon's next life needs to end what its runs
@@ -514,8 +515,10 @@ export class DaemonRunScopeIndex implements RunScopeCustodian {
 
   /** Serialized atomic rewrite (tmp + rename), one writer at a time. */
   private persist(): Promise<void> {
-    const body: RunScopeIndexFile = { schema_version: 1, entries: this.load() };
-    const text = JSON.stringify(body, null, 2);
+    const text = measureSync("scope.persist", () => {
+      const body: RunScopeIndexFile = { schema_version: 1, entries: this.load() };
+      return JSON.stringify(body, null, 2);
+    });
     const write = this.writes.then(async () => {
       await mkdir(dirname(this.options.path), { recursive: true });
       const tmp = `${this.options.path}.tmp`;

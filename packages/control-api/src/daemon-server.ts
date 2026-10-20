@@ -1,3 +1,6 @@
+import { measureSync } from "@claudexor/util";
+import { trackRequest } from "./request-timing.js";
+import { serveRunDetail } from "./run-detail-route.js";
 import { handleAccountResourceRoute } from "./account-resource-routes.js";
 import { projectProcessScope } from "./run-detail-scope.js";
 import { ControlAccountResetRequest } from "@claudexor/schema";
@@ -149,7 +152,6 @@ import {
   PlanQuestionsArtifact,
   CouncilProjection,
   derivePlanReadiness,
-  directDelegatedChildrenFromRecords,
   type ApplyEligibility,
   ControlAuthReadinessRefreshRequest,
   ControlAuthReadinessRefreshResponse,
@@ -691,6 +693,7 @@ export class DaemonControlApiServer {
   private readBody = readControlRequestBody;
 
   private onRequest(req: IncomingMessage, res: ServerResponse): void {
+    trackRequest(req, res);
     const tracked: Promise<void> = this.handle(req, res)
       .catch((err) => {
         try {
@@ -867,30 +870,23 @@ export class DaemonControlApiServer {
 
     const runDetailMatch = /^\/runs\/([^/]+)$/.exec(path);
     if (method === "GET" && runDetailMatch) {
-      const rec = await this.findRun(decodeURIComponent(runDetailMatch[1] as string));
-      if (!rec) return this.json(res, 404, { error: "no such run" });
-      // Fence order: cursor FIRST, every projection (pending interactions
-      // included) after it — see the detailFor doc comment.
-      const lastSeq = rec.runDir ? lastRunEventSeq(join(rec.runDir, "events.jsonl")) : 0;
-      const parentRunId = rec.runId ?? rec.id;
-      // Addressed child read: the daemon selects this parent's direct children
-      // before it projects, so parent detail never pays for the params of every
-      // other retained run. The same bounded rule is re-applied here, because an
-      // engine that predates the query answers with the whole list.
-      const children = directDelegatedChildrenFromRecords(
-        parentRunId,
-        await this.opts.daemon.list({ delegatedFromRunId: parentRunId }),
-      ).map((candidate) => this.summarizeRunOrDiagnostic(candidate));
-      return this.json(
+      return serveRunDetail(
+        {
+          findRun: (id) => this.findRun(id),
+          children: (id) => this.opts.daemon.list({ delegatedFromRunId: id }),
+          summarize: (rec) => this.summarizeRunOrDiagnostic(rec),
+          project: (rec, cursor, children) =>
+            detailFor(
+              rec,
+              this.pendingInteractionsFor(rec),
+              cursor,
+              this.validOperatorDecisionFor(rec),
+              children,
+            ),
+          json: (response, status, body) => this.json(response, status, body),
+        },
+        decodeURIComponent(runDetailMatch[1] as string),
         res,
-        200,
-        detailFor(
-          rec,
-          this.pendingInteractionsFor(rec),
-          lastSeq,
-          this.validOperatorDecisionFor(rec),
-          children,
-        ),
       );
     }
 
@@ -2227,7 +2223,7 @@ export class DaemonControlApiServer {
    */
   private summarizeRunOrDiagnostic(rec: DaemonRunRecord): ControlRunSummary {
     try {
-      return this.summarizeRunLive(rec);
+      return measureSync("control.run_summary", () => this.summarizeRunLive(rec));
     } catch (err) {
       const delegatedFromRunId = Id.safeParse(paramsRecord(rec)["delegatedFromRunId"]);
       let waitingOnUser = false;

@@ -2329,7 +2329,26 @@ open obligations, busy waits, request-thread COMMIT timing since the store opene
 ([SQLite engine store](#sqlite-engine-store)), integrity and current import
 progress. A field is null when its owner cannot observe it; pending integrity is
 not a successful check.
-No memory, loop or store measurements impose automatic admission thresholds.
+`timing.routes` adds completed response/disconnect count and p50/p99/max latency
+by HTTP method and operation-catalog template, both `lifetime` (since process
+start) and `window` (the last completed loop window). SSE latency includes the
+stream's whole lifetime. Unknown URLs/methods share `OTHER <unmatched>`; raw
+URLs, query values and identifiers are never retained. At most 256 route keys
+have two fixed-capacity microsecond histograms, with two significant digits;
+maxima are measured directly and rounded to a microsecond. Before the first
+window, window metadata and per-route windows are null; an empty completed
+window has count zero and null latencies. The status request itself is counted
+when its response finishes, so it appears in a subsequent read.
+`timing.worstSync` retains only the 32 longest instrumented synchronous sections
+since start (descending, later samples win ties), with operation, duration and
+timestamp. Labels cover `store.commit`, `store.external_write`,
+`control.run_detail`, `control.run_summary`, and `scope.persist`; scope persistence
+measures synchronous serialization, not its asynchronous file writes. These
+samples may overlap and do not identify the cause of a delay. `store.commit`
+also exposes lifetime `p50_ms`/`p99_ms` using the same histogram precision.
+Older engines omit the new optional fields. The catalog still points to the
+same `ControlDaemonStatus` response schema; no route or handshake changed.
+No memory, loop, timing or store measurements impose automatic admission thresholds.
 
 <!-- BEGIN GENERATED ENDPOINTS (node scripts/gen-endpoints-doc.mjs; do not edit by hand) -->
 - `GET /healthz`

@@ -1,0 +1,332 @@
+{
+  "gate": "blocked: final event-loop maximum is not lower and COMMIT p99 is mixed",
+  "phases": [
+    {
+      "phase": "PASSIVE only",
+      "base": "0919faac45dc34f67439bfb55443777143c9cfd0",
+      "candidate": "0c9c5d4fa0794f1047daec04b83b6b4079583a0a",
+      "node": "v24.16.0",
+      "seconds": 30,
+      "trials": [
+        {
+          "label": "base",
+          "round": 1,
+          "pid": 15430,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30442.152166,
+          "loadStart": 12.2373046875,
+          "loadEnd": 16.90380859375,
+          "pragmas": {
+            "wal_autocheckpoint": 4000,
+            "checkpoint_fullfsync": 1,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.402,
+            "max_ms": 288.261,
+            "p50_ms": 0.116,
+            "p99_ms": 10.367
+          },
+          "loopMaxMs": 1032.323,
+          "walMaxMiB": 16.91497039794922
+        },
+        {
+          "label": "candidate",
+          "round": 1,
+          "pid": 17854,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30250.643291,
+          "loadStart": 16.90380859375,
+          "loadEnd": 13.439453125,
+          "pragmas": {
+            "wal_autocheckpoint": 0,
+            "checkpoint_fullfsync": 0,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.055,
+            "max_ms": 1194.339,
+            "p50_ms": 0.126,
+            "p99_ms": 39.935
+          },
+          "loopMaxMs": 1245.708,
+          "walMaxMiB": 410.48888397216797
+        },
+        {
+          "label": "candidate",
+          "round": 2,
+          "pid": 18832,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30144.672334,
+          "loadStart": 13.439453125,
+          "loadEnd": 11.2373046875,
+          "pragmas": {
+            "wal_autocheckpoint": 0,
+            "checkpoint_fullfsync": 0,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.423,
+            "max_ms": 924.914,
+            "p50_ms": 0.144,
+            "p99_ms": 20.863
+          },
+          "loopMaxMs": 968.36,
+          "walMaxMiB": 410.50067138671875
+        },
+        {
+          "label": "base",
+          "round": 2,
+          "pid": 20419,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30175.192916,
+          "loadStart": 11.2373046875,
+          "loadEnd": 9.0654296875,
+          "pragmas": {
+            "wal_autocheckpoint": 4000,
+            "checkpoint_fullfsync": 1,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.036,
+            "max_ms": 137.756,
+            "p50_ms": 0.114,
+            "p99_ms": 8.063
+          },
+          "loopMaxMs": 225.444,
+          "walMaxMiB": 16.270591735839844
+        }
+      ]
+    },
+    {
+      "phase": "RESTART at 64 MiB",
+      "base": "0919faac45dc34f67439bfb55443777143c9cfd0",
+      "candidate": "2c5f3efe202dc6e6bc3783ed0b312c311740291a",
+      "node": "v24.16.0",
+      "seconds": 30,
+      "trials": [
+        {
+          "label": "base",
+          "round": 1,
+          "pid": 49403,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30174.227874999997,
+          "loadStart": 10.41748046875,
+          "loadEnd": 10.61279296875,
+          "pragmas": {
+            "wal_autocheckpoint": 4000,
+            "checkpoint_fullfsync": 1,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.074,
+            "max_ms": 439.71,
+            "p50_ms": 0.109,
+            "p99_ms": 5.855
+          },
+          "loopMaxMs": 513.278,
+          "walMaxMiB": 18.459121704101562
+        },
+        {
+          "label": "candidate",
+          "round": 1,
+          "pid": 52086,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30057.904125,
+          "loadStart": 10.61279296875,
+          "loadEnd": 13.72265625,
+          "pragmas": {
+            "wal_autocheckpoint": 0,
+            "checkpoint_fullfsync": 0,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.07,
+            "max_ms": 140.269,
+            "p50_ms": 0.134,
+            "p99_ms": 15.103
+          },
+          "loopMaxMs": 189.268,
+          "walMaxMiB": 103.4935302734375
+        },
+        {
+          "label": "candidate",
+          "round": 2,
+          "pid": 55165,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30818.989167000003,
+          "loadStart": 14.70556640625,
+          "loadEnd": 12.86962890625,
+          "pragmas": {
+            "wal_autocheckpoint": 0,
+            "checkpoint_fullfsync": 0,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.049,
+            "max_ms": 119.876,
+            "p50_ms": 0.125,
+            "p99_ms": 8.319
+          },
+          "loopMaxMs": 2420.113,
+          "walMaxMiB": 113.5560531616211
+        },
+        {
+          "label": "base",
+          "round": 2,
+          "pid": 58729,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30277.968792,
+          "loadStart": 12.86962890625,
+          "loadEnd": 13.44287109375,
+          "pragmas": {
+            "wal_autocheckpoint": 4000,
+            "checkpoint_fullfsync": 1,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.038,
+            "max_ms": 141.672,
+            "p50_ms": 0.122,
+            "p99_ms": 7.935
+          },
+          "loopMaxMs": 176.03,
+          "walMaxMiB": 15.869819641113281
+        }
+      ]
+    },
+    {
+      "phase": "RESTART at 4,000 frames (final)",
+      "base": "0919faac45dc34f67439bfb55443777143c9cfd0",
+      "candidate": "fc6e52aa112271a41766454242f7019118270a3c",
+      "node": "v24.16.0",
+      "seconds": 30,
+      "trials": [
+        {
+          "label": "base",
+          "round": 1,
+          "pid": 84263,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 32851.854333,
+          "loadStart": 37.8369140625,
+          "loadEnd": 37.50439453125,
+          "pragmas": {
+            "wal_autocheckpoint": 4000,
+            "checkpoint_fullfsync": 1,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.069,
+            "max_ms": 1295.484,
+            "p50_ms": 0.108,
+            "p99_ms": 20.863
+          },
+          "loopMaxMs": 1331.692,
+          "walMaxMiB": 15.814811706542969
+        },
+        {
+          "label": "candidate",
+          "round": 1,
+          "pid": 88117,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 31047.286083000003,
+          "loadStart": 36.3427734375,
+          "loadEnd": 43.16748046875,
+          "pragmas": {
+            "wal_autocheckpoint": 0,
+            "checkpoint_fullfsync": 0,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.064,
+            "max_ms": 269.633,
+            "p50_ms": 0.102,
+            "p99_ms": 21.375
+          },
+          "loopMaxMs": 3539.993,
+          "walMaxMiB": 25.441200256347656
+        },
+        {
+          "label": "candidate",
+          "round": 2,
+          "pid": 92481,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 30297.439125,
+          "loadStart": 43.16748046875,
+          "loadEnd": 36.53125,
+          "pragmas": {
+            "wal_autocheckpoint": 0,
+            "checkpoint_fullfsync": 0,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.051,
+            "max_ms": 393.881,
+            "p50_ms": 0.116,
+            "p99_ms": 18.687
+          },
+          "loopMaxMs": 1086.325,
+          "walMaxMiB": 29.649307250976562
+        },
+        {
+          "label": "base",
+          "round": 2,
+          "pid": 96273,
+          "writes": 6000,
+          "reads": 1800,
+          "elapsedMs": 39022.573000000004,
+          "loadStart": 36.53125,
+          "loadEnd": 28.37890625,
+          "pragmas": {
+            "wal_autocheckpoint": 4000,
+            "checkpoint_fullfsync": 1,
+            "fullfsync": 0
+          },
+          "commit": {
+            "attempts": 6001,
+            "failures": 0,
+            "last_ms": 0.162,
+            "max_ms": 2585.84,
+            "p50_ms": 0.13,
+            "p99_ms": 28.671
+          },
+          "loopMaxMs": 2661.286,
+          "walMaxMiB": 16.72637176513672
+        }
+      ]
+    }
+  ]
+}

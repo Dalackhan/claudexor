@@ -2336,7 +2336,7 @@ open obligations, busy waits, request-thread COMMIT timing since the store opene
 ([SQLite engine store](#sqlite-engine-store)), integrity and current import
 progress. A field is null when its owner cannot observe it; pending integrity is
 not a successful check.
-`timing.routes` adds completed response/disconnect count and p50/p99/max latency
+The `routes` array in `timing` adds completed response/disconnect count and p50/p99/max latency
 by HTTP method and operation-catalog template, both `lifetime` (since process
 start) and `window` (the last completed loop window). SSE latency includes the
 stream's whole lifetime. Unknown URLs/methods share `OTHER <unmatched>`; raw
@@ -2346,7 +2346,7 @@ maxima are measured directly and rounded to a microsecond. Before the first
 window, window metadata and per-route windows are null; an empty completed
 window has count zero and null latencies. The status request itself is counted
 when its response finishes, so it appears in a subsequent read.
-`timing.worstSync` retains only the 32 longest instrumented synchronous sections
+The `worstSync` array in `timing` retains only the 32 longest instrumented synchronous sections
 since start (descending, later samples win ties), with operation, duration and
 timestamp. Labels cover `store.commit`, `store.external_write`,
 `control.run_detail`, `control.run_summary`, and `scope.persist`; scope persistence

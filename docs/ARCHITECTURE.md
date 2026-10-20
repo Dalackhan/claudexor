@@ -3497,8 +3497,7 @@ kept only for cold import and an independent frozen copy kept for tests.
   any write.
 - The flusher worker owns the power-loss barrier. Every 200 ms it fsyncs each
   directory registered since the previous pass, reads `data_version`, runs a
-  PASSIVE checkpoint for space every 25 passes (5 s; every pass while the WAL
-  stays at its reuse trigger), and — whenever anything was committed since
+  PASSIVE checkpoint for space, and — whenever anything was committed since
   its last proven barrier — issues one explicit fsync of the WAL file (an
   F_FULLFSYNC on macOS, also a device-wide barrier for `O_DSYNC` file data
   handed to the drive before it). The barrier is never derived from a
@@ -3512,9 +3511,8 @@ kept only for cold import and an independent frozen copy kept for tests.
   backfill syncs the new header with the checkpoint sync class, and on macOS
   only F_FULLFSYNC keeps the drive from persisting later frames before that
   header (with a plain fsync, power loss could replay the old cycle over
-  barrier-proven commits; SQLite ticket ff5be73dee). The slower checkpoint
-  cadence keeps such restarts, and that one header sync on the request thread,
-  rare. Moving checkpoints off the request thread preserves NORMAL
+  barrier-proven commits; SQLite ticket ff5be73dee). That restart is the one
+  full-device sync left on the request thread. Moving checkpoints off it preserves NORMAL
   commit/crash durability and the same generation-numbered power-loss barrier. A pinned reader or large
   transaction can grow the WAL; after the reader ends the worker backfills it,
   and the writer's next WAL reuse applies `journal_size_limit` (64 MiB).

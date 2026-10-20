@@ -48,7 +48,7 @@ async function openStore(hooks: {
   const store = await EngineStore.open({
     daemonDir: join(root, "daemon"),
     workerEntry: builtWorkerEntry("flusher-worker.js"),
-    flusherHooks: { checkpointEveryPasses: 1, ...hooks },
+    flusherHooks: hooks,
   });
   stores.push(store);
   return store;

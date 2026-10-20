@@ -10,11 +10,11 @@ import type { DatabaseSync } from "node:sqlite";
  * could then replay the old cycle over barrier-proven commits (SQLite wal.c,
  * ticket ff5be73dee). The flusher alone checkpoints, also with
  * checkpoint_fullfsync=1: synchronized backfill precedes reuse, and its explicit
- * WAL barrier proves committed state durable across power loss. It backfills at
- * most every CHECKPOINT_EVERY_PASSES passes unless the WAL reached its reuse
- * trigger, so restarts (and their one request-thread header sync) stay rare. A
- * pinned reader or large transaction can grow the WAL until the flusher can
- * reclaim it. The busy timeout is a fuse, counted by `busy_waits`.
+ * WAL barrier proves committed state durable across power loss. A writer that
+ * finds the WAL fully backfilled restarts it, and that one COMMIT pays the
+ * ordered header sync; the request thread never checkpoints. A pinned reader or
+ * large transaction can grow the WAL until the flusher can reclaim it. The busy
+ * timeout is a fuse, counted by `busy_waits`.
  *
  * Flusher connection: never writes rows or waits for a lock. Normally PASSIVE;
  * at the former 4,000-frame trigger it tries RESTART with busy_timeout=0 to prevent

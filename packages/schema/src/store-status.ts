@@ -79,7 +79,7 @@ export const DaemonStoreFacts = z.object({
   commit: StoreCommitFacts.nullable()
     .optional()
     .describe(
-      "Request-thread transaction COMMIT calls since this engine store opened, timed around the native call only: a plain WAL header sync SQLite runs inside it is included; checkpoints and full-device syncs belong to the background flusher; BEGIN, the transaction body and ROLLBACK are not. A long call is a measurement, not proof of a disk cause. Null while the store is not open; older engines omit it.",
+      "Request-thread transaction COMMIT calls since this engine store opened, timed around the native call only: a WAL header sync or automatic checkpoint SQLite runs inside it is included; BEGIN, the transaction body and ROLLBACK are not. A long call is a measurement, not proof of a disk cause. Null while the store is not open; older engines omit it.",
     ),
   obligations_open: count.nullable(),
   integrity: z.enum(["pending", "ok", "failed"]).nullable(),

@@ -323,7 +323,7 @@ Tests and local smokes must never touch real user state:
   independent legacy/SQL comparisons. The 219-file frozen oracle is test-only:
   never refresh its hashes or goldens to fit a new implementation.
   `scripts/store-load-bench.mjs` measures the SQL request path and checkpoint
-  behavior; pinned readers can grow the WAL until the flusher can reclaim it. Use
+  behavior; the writer's checkpoint threshold is not a maximum WAL size. Use
   copied historical corpora and isolated roots. Run responsiveness/SSE and bundle
   worker checks without provider profiles; normal cleanup must close every
   fixture worker and daemon it owns. The durability and migration contracts are
@@ -332,7 +332,7 @@ Tests and local smokes must never touch real user state:
   compares isolated source bundles with model-shaped writes and real run-detail
   reads; it preserves raw status windows and stops only its own daemon PIDs.
   Base and candidate must share the installed lockfile. See the
-  [2026-10-20 comparison and its quiet-host release evidence](benchmarks/daemon-sync-20261020.md).
+  [2026-10-20 comparison](benchmarks/daemon-sync-20261020.md).
 - Read-only run lookups (`inspect`, `apply`) connect to an already-running daemon
   but never auto-start one (a typo'd run id reports `no such run`); only acting
   paths (`agent`/`best-of`/`create`, `decision`) auto-start it. `daemon start` blocks

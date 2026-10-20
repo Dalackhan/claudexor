@@ -3,38 +3,32 @@ import type { DatabaseSync } from "node:sqlite";
 /**
  * Connection pragmas of the engine store (SYNTHESIS_R5 §2, topology A2).
  *
- * Main connection: WAL + NORMAL, no automatic checkpoints. It keeps
- * checkpoint_fullfsync=1 because the COMMIT that restarts the WAL after a full
- * backfill syncs the new header with the checkpoint sync class: on macOS a plain
- * fsync lets the drive reorder later frames before that header, and power loss
- * could then replay the old cycle over barrier-proven commits (SQLite wal.c,
- * ticket ff5be73dee). The flusher alone checkpoints, also with
- * checkpoint_fullfsync=1: synchronized backfill precedes reuse, and its explicit
- * WAL barrier proves committed state durable across power loss. A writer that
- * finds the WAL fully backfilled restarts it, and that one COMMIT pays the
- * ordered header sync; the request thread never checkpoints. A pinned reader or
- * large transaction can grow the WAL until the flusher can reclaim it. The busy
- * timeout is a fuse, counted by `busy_waits`.
+ * Main connection: WAL + NORMAL, autocheckpoint TRIGGERED at 4000 pages
+ * (about 16 MiB of frames — a threshold, not a WAL size bound: a pinned reader
+ * or a large transaction grows the WAL beyond it until the reader releases,
+ * R5_AMENDMENTS A6) with `checkpoint_fullfsync=1`; plain `fullfsync` stays off.
+ * NORMAL skips the per-commit WAL sync, yet COMMIT on this thread is not
+ * sync-free: a commit that restarts the WAL syncs its new header, and a commit
+ * that reaches the threshold runs that checkpoint inside the same call, which
+ * may complete a backfill and sync WAL -> DB -> reuse. Both use the checkpoint
+ * sync class (F_FULLFSYNC on macOS); `EngineStore.facts().commit` times these
+ * calls. The busy timeout is a fuse, not a design: hitting it is the
+ * `busy_waits` fact.
  *
- * Flusher connection: never writes rows or waits for a lock. Normally PASSIVE;
- * at the former 4,000-frame trigger it tries RESTART with busy_timeout=0 to prevent
- * continuous writers from starving reuse. A successful RESTART briefly holds
- * the writer lock; all its full-device syncs remain on the worker.
+ * Flusher connection: never writes rows, never waits for a lock (PASSIVE
+ * checkpoints are lock-free by contract), same checkpoint sync class.
  */
 export interface PragmaSpec {
   readonly [name: string]: number | string;
 }
 
-/** Reuse target, not a hard bound while a reader or transaction pins the WAL. */
-const WAL_REUSE_BYTES = 64 * 1024 * 1024;
-
 export const MAIN_CONNECTION_PRAGMAS: PragmaSpec = Object.freeze({
   journal_mode: "wal",
   synchronous: 1,
-  wal_autocheckpoint: 0,
+  wal_autocheckpoint: 4000,
   checkpoint_fullfsync: 1,
   fullfsync: 0,
-  journal_size_limit: WAL_REUSE_BYTES,
+  journal_size_limit: 67108864,
   busy_timeout: 5000,
   temp_store: 2,
   page_size: 4096,

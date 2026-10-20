@@ -44,8 +44,7 @@ describeStore("EngineStore adapter", () => {
     expect(readPragmas(store.db, MAIN_CONNECTION_PRAGMAS)).toEqual({
       journal_mode: "wal",
       synchronous: 1,
-      wal_autocheckpoint: 0,
-      // A WAL restart's header sync must stay ordered (F_FULLFSYNC on macOS): see pragmas.ts.
+      wal_autocheckpoint: 4000,
       checkpoint_fullfsync: 1,
       fullfsync: 0,
       journal_size_limit: 67108864,

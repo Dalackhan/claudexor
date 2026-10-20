@@ -3502,43 +3502,22 @@ kept only for cold import and an independent frozen copy kept for tests.
   F_FULLFSYNC on macOS, also a device-wide barrier for `O_DSYNC` file data
   handed to the drive before it). The barrier is never derived from a
   checkpoint result, and a freshly started or restarted worker treats its
-  first pass as dirty. The flusher is the only serving checkpointer and keeps
-  `checkpoint_fullfsync=1`, so synchronized WAL → database backfill precedes
-  reuse; database pages become durable there, not through the later WAL fsync.
-  The request-thread connection sets `wal_autocheckpoint=0` and keeps
-  `checkpoint_fullfsync=1` (`fullfsync=0` remains unchanged): it never runs an
-  automatic checkpoint, but the COMMIT that restarts the WAL after a full
-  backfill syncs the new header with the checkpoint sync class, and on macOS
-  only F_FULLFSYNC keeps the drive from persisting later frames before that
-  header (with a plain fsync, power loss could replay the old cycle over
-  barrier-proven commits; SQLite ticket ff5be73dee). That restart is the one
-  full-device sync left on the request thread. Moving checkpoints off it preserves NORMAL
-  commit/crash durability and the same generation-numbered power-loss barrier. A pinned reader or large
-  transaction can grow the WAL; after the reader ends the worker backfills it,
-  and the writer's next WAL reuse applies `journal_size_limit` (64 MiB).
-  Continuous writes can append past each PASSIVE checkpoint's captured prefix
-  and starve reuse. At 4,000 frames (about 16 MiB, the former main autocheckpoint
-  trigger), the worker follows PASSIVE with RESTART to finish that tail under
-  the writer lock. Its `busy_timeout=0` never
-  waits for a pinned reader or existing writer; BUSY is a checkpoint fact and
-  the next pass retries. A successful RESTART briefly excludes writers, so a
-  request-thread BEGIN may wait for it, but checkpoint/full-device sync work
-  stays on the worker. The target is not a hard limit for a pinned reader or
-  large transaction; neither checkpoint result replaces the explicit barrier.
-  Worker death rejects existing barrier waiters and the controller restarts it
-  automatically, replaying unacknowledged registrations. Failure callers may
-  still save terminal records during a short restart. One second after a death,
-  row transactions fail with retryable `store_flush_unavailable` before BEGIN
-  until a worker completes a successful pass; merely restarting does not reset
-  that deadline. Thus a persistently failed checkpointer cannot accumulate
-  unlimited new WAL through normal mutations. Reads and health remain available.
-  Normal shutdown closes the writer while the flusher is alive, then the worker
-  performs a final pass and closes last: SQLite's last-close checkpoint keeps
-  the full sync class off the request thread too. Shutdown waits up to one second
-  for a restarting worker. Cleanup after worker failure remains best effort and
-  may close the last connection on the request thread with plain syncs; an
-  unfinished final worker pass is logged, never claimed as a barrier. `close()`
-  is not a substitute for `flushed()` and preserves its existing cleanup contract. The request thread itself calls no
+  first pass as dirty. Every connection that can checkpoint — the writer and
+  the flusher; the serving maintenance connection is read-only and never
+  checkpoints — sets `checkpoint_fullfsync`, so the checkpoint that completes a backfill
+  syncs WAL → database → reuse in order and database pages become durable
+  there, not through the WAL fsync;
+  the writer's `wal_autocheckpoint` of 4000 pages (about 16 MiB) is the
+  trigger threshold of that checkpoint, not a physical bound: under a pinned
+  reader (a maintenance integrity check or export, a long statement) or a
+  large transaction the WAL keeps growing and resets once the reader
+  releases, after which `journal_size_limit` truncates the file; the first
+  such checkpoint after a long pinned read copies the accumulated backlog in
+  one longer stop on the request thread. The writer's automatic checkpoint
+  runs inside a COMMIT call once the WAL reaches the threshold, and a COMMIT
+  that restarts the WAL syncs the new WAL header, so `synchronous=NORMAL`
+  removes the per-commit WAL sync, not every native sync on the request thread.
+  The request thread itself calls no
   Node storage-sync primitive: external files use `O_DSYNC` on POSIX and
   libuv's write-through open flag on Windows, where Node does not export the
   POSIX constant. The temp is renamed and its directory goes to the flusher via
@@ -3602,12 +3581,10 @@ kept only for cold import and an independent frozen copy kept for tests.
   store opened (a new store, including an in-process replacement, starts
   again): attempts, failures, and the last and longest duration on a monotonic
   clock at microsecond resolution. Only the native COMMIT call is timed, so a
-  WAL header sync SQLite runs inside it is included, while BEGIN (labelled
-  `store.begin_immediate` among the worst synchronous sections: a worker
-  RESTART holds the writer lock through its syncs, and a hold past the 5 s
-  busy fuse fails the mutation with retryable `store_busy`), the body, error
-  mapping, ROLLBACK, open-time schema setup and the flusher's later barrier
-  are not. It is one lifetime summary, not aligned with the
+  WAL header sync or checkpoint SQLite runs inside it is included, while BEGIN
+  (timed separately as `store.begin_immediate` among the worst synchronous
+  sections), the body, error mapping, ROLLBACK, open-time schema setup and the
+  flusher's later barrier are not. It is one lifetime summary, not aligned with the
   event-loop window; a long COMMIT is evidence of where the request thread
   waited, not proof of a disk cause. Before any COMMIT the counts are 0 and
   the durations null; a store that is not open reports null, and older

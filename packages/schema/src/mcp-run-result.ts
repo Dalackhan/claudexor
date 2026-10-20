@@ -8,6 +8,9 @@ import { RunDelegationInfo } from "./delegation.js";
 import { CouncilProjection, PlanReadiness } from "./plan.js";
 import { RunFacts } from "./run-facts.js";
 import { AttemptExecutionEvidence } from "./attempt-execution.js";
+import { Id } from "./primitives.js";
+import { RunContinuityReceipt, RunResumable } from "./run-continuity.js";
+import { ControlRetainedEnvelope } from "./run-continuation.js";
 
 export const RunDetailProblem = z
   .object({
@@ -77,7 +80,14 @@ export const McpRunToolResult = z
       .string()
       .nullable()
       .describe(
-        "Daemon run id (recovery handle for inspect/follow/apply/decision); null for in-process read-only runs.",
+        "Daemon run id once the accepted job started a run (recovery handle for inspect/follow/apply/decision); null while the job is still queued or after it failed before a run started.",
+      ),
+    jobId: z
+      .string()
+      .nullable()
+      .default(null)
+      .describe(
+        "Daemon job id of the accepted launch. While runId is null, pass it as runId to the status, wait and result tools; they report the canonical runId once the run binds.",
       ),
     runDir: z
       .string()
@@ -86,7 +96,9 @@ export const McpRunToolResult = z
     status: z
       .string()
       .nullable()
-      .describe("Terminal run LIFECYCLE (succeeded | failed | cancelled | interrupted)."),
+      .describe(
+        "Run lifecycle state (queued | running | succeeded | failed | cancelled | interrupted); null when an accepted job's state could not be read.",
+      ),
     runFacts: RunFacts.nullable()
       .default(null)
       .describe(
@@ -217,6 +229,30 @@ export const McpRunHandleResult = z
     delegation: RunDelegationInfo.nullable()
       .default(null)
       .describe("Typed Delegate receipt; null when unavailable or legacy."),
+    // Continuation facts come verbatim from the daemon's run summary. An
+    // omitted key means the read could not project the fact (unknown), which
+    // is distinct from the daemon's explicit null.
+    continueFrom: Id.nullable()
+      .optional()
+      .describe(
+        "Predecessor run this run continues; null for an ordinary run, omitted when the detail did not project it.",
+      ),
+    resumable: RunResumable.nullable()
+      .optional()
+      .describe(
+        "Terminal facts of stopped unfinished work that claudexor_run_continue can continue (cause, resetsAt, carriers, session, workspace); null when the work finished or the run is not terminal, omitted when not projected.",
+      ),
+    continuity: z
+      .array(RunContinuityReceipt)
+      .optional()
+      .describe(
+        "Per-try continuation receipts (carrier, cause, accounts, model) from the run's event log; omitted when not projected.",
+      ),
+    retainedEnvelope: ControlRetainedEnvelope.nullable()
+      .optional()
+      .describe(
+        "Isolated envelope kept for a successor (disk use visible); null when none, omitted when not projected.",
+      ),
     detailProblem: RunDetailProblem.nullable()
       .default(null)
       .describe(

@@ -10,6 +10,7 @@ import { queryParam, resumeHeader } from "./operation-parameters.js";
 import { REMOTE_OPERATION_DRAFTS } from "./remote-operation-descriptors.js";
 import { MODEL_OPERATION_DRAFTS } from "./model-routes.js";
 import { MAINTENANCE_OPERATION_DRAFTS } from "./maintenance-routes.js";
+import { RUN_EVENT_PART_OPERATION_DRAFTS } from "./run-event-part-routes.js";
 import type { OperationDraft } from "./operation-draft.js";
 import { OPERATION_SUMMARIES } from "./operation-summaries.js";
 
@@ -316,6 +317,7 @@ const operations: ControlOperationDescriptor[] = [
       }),
     ],
   }),
+  ...RUN_EVENT_PART_OPERATION_DRAFTS.map(descriptor),
   j(
     "POST",
     "/v2/runs/:id/interactions/:id/answer",

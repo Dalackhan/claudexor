@@ -74,6 +74,11 @@ const acpFields = [...acpAllowMatch[1].matchAll(/"([A-Za-z]+)"/g)].map((m) => m[
 // MCP argument -> CLI flag mapping. Every MCP arg must appear here.
 const MCP_TO_CLI = {
   prompt: { cli: null, reason: "the CLI positional argument, not a flag" },
+  idempotencyKey: {
+    cli: null,
+    reason:
+      "caller-owned MCP launch identity, carried as the existing HTTP Idempotency-Key rather than an engine run-control flag",
+  },
   harness: { cli: "harness" },
   primaryHarness: { cli: "primary-harness" },
   model: { cli: "model" },
@@ -371,7 +376,10 @@ for (const declared of Object.keys(BOOLEAN_FLAG_MAP)) {
 
 // ACP <-> MCP: every MCP run-control argument must be expressible over ACP
 // (same engine contract; repoPath is the ACP session cwd by design).
-const ACP_EQUIVALENT = { repoPath: "session/new cwd anchors the project" };
+const ACP_EQUIVALENT = {
+  repoPath: "session/new cwd anchors the project",
+  idempotencyKey: "caller-owned MCP transport identity; ACP does not expose launch replay keys",
+};
 for (const arg of mcpArgs) {
   if (arg in ACP_EQUIVALENT) continue;
   if (!acpFields.includes(arg)) {
@@ -394,6 +402,8 @@ const MUTATING_TOOLS = new Set([
   "claudexor_thread_create",
   "claudexor_thread_turn",
   "claudexor_run_cancel",
+  "claudexor_run_message",
+  "claudexor_run_continue",
   "claudexor_run_time_limit",
   "claudexor_answer_interaction",
   "claudexor_quarantine_journal",
@@ -420,8 +430,17 @@ for (const tool of tools) {
 // The durable-run READ tools (inspect/status/result) project the same D8 axes
 // as GET /runs/:id and MUST declare a typed outputSchema (McpRunHandleResult),
 // so a new read tool without one fails here rather than silently shipping a
-// free-text-only result.
-for (const readTool of ["claudexor_inspect", "claudexor_run_status", "claudexor_run_result"]) {
+// free-text-only result. Supervision tools that take no prompt (wait, event
+// parts, live messages, successors) carry the same structured contract.
+for (const readTool of [
+  "claudexor_inspect",
+  "claudexor_run_status",
+  "claudexor_run_result",
+  "claudexor_run_wait",
+  "claudexor_run_event_read",
+  "claudexor_run_message",
+  "claudexor_run_continue",
+]) {
   const tool = tools.find((t) => t.name === readTool);
   if (!tool) {
     failures.push(`typed read tool '${readTool}' is missing from defaultClaudexorTools`);

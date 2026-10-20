@@ -98,7 +98,83 @@ async function wireToolCall(tools: McpTool[], name: string, args: Record<string,
 }
 
 describe("Claudexor MCP server (SDK v2)", () => {
-  it("negotiates the client's 2025-06-18 era, lists 24 tools, and answers PING during a slow call", async () => {
+  it("keeps caller idempotency keys outside the Delegate belt before ledger admission", async () => {
+    let calls = 0;
+    const ledger = { started: 0, committedUsd: 0 };
+    const tools = beltClaudexorTools(
+      async () => {
+        calls += 1;
+      },
+      {
+        parentRunId: "parent",
+        repoRoot: "/fixture",
+        depth: 0,
+        maxSubRuns: 8,
+        parentBudget: { kind: "finite", maxUsd: 1 },
+      },
+      ledger,
+    );
+    for (const tool of tools)
+      expect(tool.inputSchema.properties).not.toHaveProperty("idempotencyKey");
+    const result = await wireToolCall(tools, "claudexor_run", {
+      prompt: "inspect",
+      idempotencyKey: "caller-key",
+    });
+    expect(result?.isError).toBe(true);
+    expect(calls).toBe(0);
+    expect(ledger).toEqual({ started: 0, committedUsd: 0 });
+  });
+
+  it.each(["ask", "run", "plan", "best_of", "create"])(
+    "accepts and forwards an optional caller key on claudexor_%s",
+    async (suffix) => {
+      const calls: unknown[] = [];
+      const tools = defaultClaudexorTools(async (params) => {
+        calls.push(params);
+        return { runId: "run-key", jobId: "job-key", status: "running" };
+      });
+      const name = `claudexor_${suffix}`;
+      const tool = tools.find((candidate) => candidate.name === name)!;
+      expect((tool.inputSchema.properties as Record<string, unknown>).idempotencyKey).toMatchObject(
+        {
+          type: "string",
+          minLength: 1,
+          maxLength: 256,
+          pattern: "\\S",
+        },
+      );
+      expect(tool.inputSchema.required).not.toContain("idempotencyKey");
+      const result = await wireToolCall(tools, name, {
+        prompt: "inspect",
+        idempotencyKey: "k".repeat(256),
+      });
+      expect(result?.isError).not.toBe(true);
+      expect(calls).toEqual([
+        expect.objectContaining({
+          idempotencyKey: "k".repeat(256),
+          deferred: true,
+        }),
+      ]);
+    },
+  );
+
+  it.each(["", " \t ", "k".repeat(257), 123, null])(
+    "refuses an invalid one-shot caller key %j before invoking the runner",
+    async (idempotencyKey) => {
+      let calls = 0;
+      const result = await wireToolCall(
+        defaultClaudexorTools(async () => {
+          calls += 1;
+        }),
+        "claudexor_run",
+        { prompt: "inspect", idempotencyKey },
+      );
+      expect(result?.isError).toBe(true);
+      expect(calls).toBe(0);
+    },
+  );
+
+  it("negotiates the client's 2025-06-18 era, lists 28 tools, and answers PING during a slow call", async () => {
     const tools = defaultClaudexorTools(async (p) => {
       if (p.mode === "agent") {
         await sleep(500);
@@ -136,12 +212,16 @@ describe("Claudexor MCP server (SDK v2)", () => {
     expect(init?.result?.protocolVersion).toBe("2025-06-18");
     expect(init?.result?.serverInfo?.name).toBe("claudexor");
     const listedTools = w.responses.find((r) => r.id === 2)?.result?.tools;
-    expect(listedTools).toHaveLength(24);
+    expect(listedTools).toHaveLength(28);
     expect(listedTools.map((tool: { name: string }) => tool.name)).toEqual(
       expect.arrayContaining([
         "claudexor_account_resources",
         "claudexor_account_reset",
         "claudexor_run_time_limit",
+        "claudexor_run_message",
+        "claudexor_run_wait",
+        "claudexor_run_event_read",
+        "claudexor_run_continue",
       ]),
     );
     const call = w.responses.find((r) => r.id === 3);

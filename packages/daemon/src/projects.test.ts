@@ -322,3 +322,23 @@ describe("whole-registry nesting (one pass)", () => {
     await sql.close();
   });
 });
+
+describe("missing project roots", () => {
+  it("refuses registration of a vanished root with a named, non-retryable code and no row", async () => {
+    const f = await fixture();
+    const before = f.store.list().length;
+    let failure: unknown;
+    try {
+      f.store.register({ root: join(f.base, "vanished"), idempotencyKey: "k", clientId: "test" });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      code: "project_root_missing",
+      status: 400,
+      retryable: false,
+      requiredActions: [expect.stringContaining("never starts or replays work")],
+    });
+    expect(f.store.list()).toHaveLength(before);
+  });
+});

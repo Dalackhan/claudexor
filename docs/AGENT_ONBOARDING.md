@@ -166,12 +166,16 @@ entries; do not invent an `@profile` mini-grammar.
   envelope. `claudexor <cmd> --help` (or `--help --json`) prints that command's
   scoped usage; `claudexor help --json` is the full machine catalog.
 - **MCP** (`claudexor mcp serve`, stdio) uses durable handles while MCP Tasks
-  remain experimental. A run tool enqueues work and returns `{runId, runDir,
-  status}` after the daemon binds the run, not terminal output; use
-  `claudexor_run_status`, `claudexor_run_result`,
-  `claudexor_run_cancel`, `claudexor_run_interactions`, and
-  `claudexor_answer_interaction` to continue. A cancel or answer is successful
-  only after the `/v2` control API acknowledges it.
+  remain experimental. A run tool enqueues work and returns `{jobId, runId,
+  runDir, status}` (with `runId: null` while the job is still queued), not
+  terminal output; follow it with `claudexor_run_wait`, `claudexor_run_status`
+  and `claudexor_run_result`, answer questions with
+  `claudexor_run_interactions`/`claudexor_answer_interaction`, steer with
+  `claudexor_run_message`, read oversized events with
+  `claudexor_run_event_read`, and start an explicit successor with
+  `claudexor_run_continue` (contract: [Observing and directing an existing
+  run](INTEGRATIONS.md#observing-and-directing-an-existing-run)). A cancel or
+  answer is successful only after the `/v2` control API acknowledges it.
   Use the read-only `claudexor_accounts` tool to inspect account/profile state
   before selecting a pinned reviewer; it never starts authentication.
 - **ACP** (`claudexor acp serve`, stdio) uses stable protocol version 1 through
@@ -216,9 +220,11 @@ Every mutating result carries a `runId`. The decision tree:
 4. The run stopped before its work finished (`resumable` present on
    `GET /v2/runs/:id` — a usage limit, a crash, a cancel, a daemon restart, a
    question for you) → continue it, never restart it: `POST /v2/runs`
-   `{continueFrom: <runId>, prompt: "<what next, may be empty>"}`. The engine
-   resumes the same vendor session when it can and briefs a new one with the
-   evidence otherwise; the receipt says which.
+   `{continueFrom: <runId>, prompt: "<what next, may be empty>"}` (MCP:
+   `claudexor_run_continue`; restate access, web, account, budget, time and
+   review controls the successor must keep). The engine resumes the same vendor
+   session when it can and briefs a new one with the evidence otherwise; the
+   receipt says which.
 5. Lost the handle? `claudexor inspect <runId>`, `claudexor follow <runId>`,
    or the MCP durable tools `claudexor_runs` / `claudexor_run_status` /
    `claudexor_run_result` / `claudexor_apply_check`.

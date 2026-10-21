@@ -583,8 +583,10 @@ describe("harness install --target local", () => {
         2,
         image,
         ["--version"],
-        expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"] }),
+        expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"], windowsHide: true }),
       );
+      // The captured proof hides its direct child; the npm install keeps its terminal.
+      expect(spawn.mock.calls[0]![2]).not.toHaveProperty("windowsHide");
       // Windows process keys reach npm and the image; provider secrets never do.
       const npmEnv = (spawn.mock.calls[0]![2] as { env: NodeJS.ProcessEnv }).env;
       expect(npmEnv).toMatchObject({

@@ -21,6 +21,7 @@ import {
   resolveHarnessCommandOnPath,
 } from "./runtime-env.js";
 import { composeSpawnEnv } from "./env-scope.js";
+import { interpretedCommand, windowsQuietChildrenPreload } from "./npm-launch.js";
 import { killOwnedProcessTree } from "./process-tree.js";
 
 let root: string;
@@ -67,6 +68,41 @@ function installed(kind = "node", prefix = join(root, "user prefix")) {
 }
 
 describe("standard Windows npm launch preparation", () => {
+  it("adds quiet child defaults only for background Windows Node, retaining identity and env", () => {
+    const fixture = installed();
+    const env = { PATH: fixture.prefix, HOME: "scoped", MARKER: "profile" };
+    const preload = windowsQuietChildrenPreload();
+    const interactive = prepareHarnessCommand(fixture.shim, ["argument"], env, "win32");
+    const background = prepareHarnessCommand(fixture.shim, ["argument"], env, "win32", true);
+    expect(background.args).toEqual(["--require", preload, fixture.script, "argument"]);
+    expect(background.binary).toBe(interactive.binary);
+    expect(background.resolution).toEqual(interactive.resolution);
+    expect(background.env).toEqual(interactive.env);
+    expect(interactive.args).toEqual([fixture.script, "argument"]);
+    // The vendor's own shebang flags keep their place before the preload.
+    const interpreter = { binary: fixture.node, args: ["--no-warnings"] };
+    expect(interpretedCommand(fixture.script, ["a"], {}, interpreter, true).args).toEqual([
+      "--no-warnings",
+      "--require",
+      preload,
+      fixture.script,
+      "a",
+    ]);
+    // Native images and non-Windows launches have no Node to preload.
+    expect(prepareHarnessCommand(fixture.node, [], env, "win32", true).args).toEqual([]);
+    expect(prepareHarnessCommand(process.execPath, [], env, "linux", true).args).toEqual([]);
+    const result = spawnSync(background.binary, background.args, {
+      env: background.env,
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      args: ["argument"],
+      home: "scoped",
+      marker: "profile",
+    });
+  });
+
   it.each(["node", "node-current", "node-options", "node-env"])(
     "recognizes actual %s npm output and preserves its selected runtime",
     (kind) => {
@@ -158,6 +194,9 @@ describe("standard Windows npm launch preparation", () => {
     expect(command.binary).toBe(fixture.script);
     expect(command.args).toEqual(["--version"]);
     expect(command.resolution.command?.interpreter).toBeUndefined();
+    expect(
+      prepareHarnessCommand("tool", ["--version"], { PATH: fixture.prefix }, "win32", true),
+    ).toEqual(command);
   });
 
   it("does not bypass a customized wrapper even when its last line targets a package bin", () => {

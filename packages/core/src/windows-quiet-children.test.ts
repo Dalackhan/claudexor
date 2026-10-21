@@ -110,6 +110,32 @@ describe("Windows quiet-children preload", () => {
     expect(node(["--require", preload, entry])).toEqual(native);
   });
 
+  it("preserves option descriptors, frozen defaults and function names", () => {
+    const entry = file(
+      "descriptors.cjs",
+      `const cp = require("child_process");
+      const results = { names: [cp.spawn.name, cp.spawnSync.name] };
+      for (const kind of ["nonenumerable", "frozen-prototype", "own-frozen"]) {
+        const options = kind === "frozen-prototype"
+          ? Object.create(Object.freeze({windowsHide: undefined})) : {};
+        Object.defineProperty(options, "env", {
+          value: {...process.env, MARKER: "descriptor-retained"}, enumerable: false,
+        });
+        options.encoding = "utf8";
+        if (kind === "own-frozen") Object.defineProperty(options, "windowsHide", {
+          value: undefined, writable: false, configurable: false,
+        });
+        const child = cp.spawnSync(process.execPath,
+          ["-e", "process.stdout.write(process.env.MARKER || 'absent')"], options);
+        results[kind] = {status: child.status, stdout: child.stdout};
+      }
+      process.stdout.write(JSON.stringify(results));`,
+    );
+    const native = node([entry]);
+    expect(native.status, native.stderr).toBe(0);
+    expect(node(["--require", preload, entry])).toEqual(native);
+  });
+
   it("leaves Node's own argument validation unchanged", () => {
     const entry = file(
       "validation.cjs",

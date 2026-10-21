@@ -988,7 +988,10 @@ these helpers also `--require` core's packaged CommonJS
 `windows-quiet-children.cjs`; the single-file bundles find it in the core
 runtime deployed beside them, and a missing file is a launch error. It
 defaults `windowsHide` for the vendor's own exported `spawn`/`spawnSync`
-calls, keeping explicit values and Node's argument validation. The selected
+calls, keeping explicit values and Node's argument validation. Options are
+copied with their descriptors and prototype; exotic accessors that require
+the original object's private-field identity remain unsupported on older Node.
+The selected
 interpreter (an older Node beside the npm shim included), vendor script,
 argv, environment and binary identity are unchanged. `NODE_OPTIONS` is not
 touched, but Node children that inherit the wrapper's `execArgv` (`fork`,

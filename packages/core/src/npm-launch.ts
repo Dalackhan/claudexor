@@ -215,12 +215,40 @@ export function interpretedCommand(
   args: readonly string[],
   env: NodeJS.ProcessEnv,
   interpreter?: HarnessInterpreter,
+  quietWindowsChildren = false,
 ): { binary: string; args: string[]; env: NodeJS.ProcessEnv } {
   return interpreter
     ? {
         binary: interpreter.binary,
-        args: [...interpreter.args, entrypoint, ...args],
+        args: [
+          ...interpreter.args,
+          ...(quietWindowsChildren ? [WINDOWS_BACKGROUND_IMPORT] : []),
+          entrypoint,
+          ...args,
+        ],
         env: { ...env, ...interpreter.env },
       }
     : { binary: entrypoint, args: [...args], env };
 }
+
+// windowsHide on the outer Node does not reach a vendor JS wrapper's native
+// child (e.g. Codex's spawn(..., {stdio: "inherit"})). Keep the wrapper and its
+// environment/argv semantics; only background captures opt into quiet defaults.
+// A fixed data import needs no mutable preload file beside an installed CLI.
+export const WINDOWS_BACKGROUND_IMPORT = `--import=data:text/javascript,${encodeURIComponent(`
+import cp from 'node:child_process';
+import {syncBuiltinESMExports} from 'node:module';
+for (const name of ['spawn', 'spawnSync']) {
+  const original = cp[name];
+  cp[name] = function(file, args, options) {
+    const argv = Array.from(arguments);
+    const index = Array.isArray(args) || (args == null && options !== undefined) ? 2 : 1;
+    const opts = argv[index];
+    if (opts == null || typeof opts === 'object') {
+      argv[index] = {...opts, windowsHide: opts?.windowsHide ?? true};
+    }
+    return Reflect.apply(original, this, argv);
+  };
+}
+syncBuiltinESMExports();
+`)}`;

@@ -30,7 +30,13 @@ export async function runCaptureRaw(
   args: string[],
   opts: RawCaptureOptions = {},
 ): Promise<CaptureResult> {
-  const invocation = prepareHarnessCommand(cmd, args, composeSpawnEnv(opts.inheritEnv, opts.env));
+  const invocation = prepareHarnessCommand(
+    cmd,
+    args,
+    composeSpawnEnv(opts.inheritEnv, opts.env),
+    process.platform,
+    true,
+  );
   const env = invocation.env;
   const child = spawn(invocation.binary, invocation.args, {
     cwd: opts.cwd,

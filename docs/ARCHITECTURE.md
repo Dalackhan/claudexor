@@ -979,10 +979,13 @@ credential homes and provider-variable scrubbing remain specific to each probe.
 The same runtime environment producer supplies an absent OS login name from
 `os.userInfo()`, preserving supplied identity and later environment
 patches. It never derives the name from a profile or scratch HOME.
-The shared `spawnProcess`/`runCaptureRaw` helpers also request `windowsHide`:
-every child they start is a fully piped background process. On Windows this
-requests a hidden console for the direct child at spawn; it does not control
-grandchildren or windows the child opens later. Interactive sign-in
+The shared `spawnProcess`/`runCaptureRaw` helpers request `windowsHide` for
+their piped background children. Windows Node-interpreted vendor entries also
+preload quiet defaults for Node's `spawn`/`spawnSync`: hiding only the outer
+Node does not hide a native grandchild started by an npm wrapper. The fixed
+data import preserves the selected vendor script, argv, environment and binary
+identity; explicit visibility options remain explicit. It does not control
+native grandchildren or windows opened later. Interactive sign-in
 (`profiles login`, the Terminal/ConPTY setup runner) and `setup attach` do not
 use those helpers and keep their own visible-terminal policy.
 

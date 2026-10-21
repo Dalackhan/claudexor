@@ -21,6 +21,9 @@ import {
   resolveHarnessCommandOnPath,
 } from "./runtime-env.js";
 import { composeSpawnEnv } from "./env-scope.js";
+import { WINDOWS_BACKGROUND_IMPORT } from "./npm-launch.js";
+import { runCaptureRaw } from "./capture-raw.js";
+import { spawnProcess } from "./proc.js";
 import { killOwnedProcessTree } from "./process-tree.js";
 
 let root: string;
@@ -67,6 +70,99 @@ function installed(kind = "node", prefix = join(root, "user prefix")) {
 }
 
 describe("standard Windows npm launch preparation", () => {
+  it.skipIf(process.platform !== "win32").each(["raw", "stream"])(
+    "runs a native grandchild through the real %s background consumer",
+    async (mode) => {
+      const fixture = installed();
+      writeFileSync(
+        fixture.script,
+        `#!/usr/bin/env node
+        const {spawnSync} = require('node:child_process');
+        const result = spawnSync(process.execPath, ['-e', 'console.log(process.env.MARKER)'],
+          {stdio: 'inherit', env: process.env});
+        process.exit(result.status ?? 1);`,
+      );
+      const opts = { env: { PATH: fixture.prefix, MARKER: "grandchild-reached" }, timeoutMs: 5000 };
+      if (mode === "raw") {
+        const result = await runCaptureRaw(fixture.shim, [], opts);
+        expect(result.code).toBe(0);
+        expect(result.stdout.trim()).toBe("grandchild-reached");
+      } else {
+        const events = [];
+        for await (const event of spawnProcess(fixture.shim, [], opts)) events.push(event);
+        expect(events).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ type: "stdout", line: "grandchild-reached" }),
+          ]),
+        );
+        expect(events.at(-1)).toMatchObject({ type: "exit", code: 0 });
+      }
+    },
+  );
+
+  it("adds quiet child defaults only for background Windows Node, retaining identity and env", () => {
+    const fixture = installed();
+    const env = { PATH: fixture.prefix, HOME: "scoped", MARKER: "profile" };
+    const interactive = prepareHarnessCommand(fixture.shim, ["argument"], env, "win32");
+    const background = prepareHarnessCommand(fixture.shim, ["argument"], env, "win32", true);
+    expect(background.args).toEqual([WINDOWS_BACKGROUND_IMPORT, fixture.script, "argument"]);
+    expect(background.binary).toBe(interactive.binary);
+    expect(background.resolution).toEqual(interactive.resolution);
+    expect(background.env).toEqual(interactive.env);
+    expect(interactive.args).toEqual([fixture.script, "argument"]);
+    expect(prepareHarnessCommand(fixture.node, [], env, "win32", true).args).toEqual([]);
+    expect(prepareHarnessCommand(process.execPath, [], env, "linux", true).args).toEqual([]);
+    const result = spawnSync(background.binary, background.args, {
+      env: background.env,
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      args: ["argument"],
+      home: "scoped",
+      marker: "profile",
+    });
+  });
+
+  it("preloads both CommonJS and ESM child-process exports without overriding explicit visibility", () => {
+    const spy = `import cp from 'node:child_process';
+      import {syncBuiltinESMExports} from 'node:module';
+      globalThis.calls = [];
+      for (const name of ['spawn', 'spawnSync']) cp[name] = (...args) => calls.push({name,args});
+      syncBuiltinESMExports();`;
+    const script = `import cp, {spawn, spawnSync} from 'node:child_process';
+      spawn('tool', ['one'], {env: {MARKER: 'profile'}, stdio: 'inherit'});
+      cp.spawnSync('tool', {cwd: 'with spaces'});
+      spawn('tool', undefined, {windowsHide: false});
+      spawnSync('tool', ['two'], {windowsHide: false});
+      cp.spawn('tool');
+      spawn('tool', 17);
+      console.log(JSON.stringify(calls));`;
+    const result = spawnSync(
+      process.execPath,
+      [
+        `--import=data:text/javascript,${encodeURIComponent(spy)}`,
+        WINDOWS_BACKGROUND_IMPORT,
+        "--input-type=module",
+        "-e",
+        script,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const calls = JSON.parse(result.stdout);
+    expect(calls[0].args).toEqual([
+      "tool",
+      ["one"],
+      { env: { MARKER: "profile" }, stdio: "inherit", windowsHide: true },
+    ]);
+    expect(calls[1].args).toEqual(["tool", { cwd: "with spaces", windowsHide: true }]);
+    expect(calls[2].args).toEqual(["tool", null, { windowsHide: false }]);
+    expect(calls[3].args).toEqual(["tool", ["two"], { windowsHide: false }]);
+    expect(calls[4].args).toEqual(["tool", { windowsHide: true }]);
+    expect(calls[5].args).toEqual(["tool", 17]);
+  });
+
   it.each(["node", "node-current", "node-options", "node-env"])(
     "recognizes actual %s npm output and preserves its selected runtime",
     (kind) => {

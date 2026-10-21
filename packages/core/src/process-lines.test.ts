@@ -216,3 +216,56 @@ describe("bounded process frames", () => {
     expect(lines).toEqual(Array.from({ length: 200 }, (_, i) => String(i)));
   });
 });
+
+describe("LF-only stdout framing", () => {
+  it("keeps Unicode separators and fragmented UTF-8 inside JSON payloads", async () => {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const lines: string[] = [];
+    const reader = readProcessLines(
+      { stdout, stderr } as unknown as ChildProcessWithoutNullStreams,
+      (event) => {
+        if (event.type === "stdout") lines.push(event.line);
+      },
+      async () => {},
+      (error) => {
+        throw error;
+      },
+      undefined,
+      "lf",
+    );
+    const payload = { text: "до\u2028середина\u2029после 😀".repeat(2000) };
+    const wire = Buffer.from(
+      JSON.stringify(payload) + "\r\n" + JSON.stringify({ end: true }) + "\n",
+    );
+    for (let i = 0; i < wire.length; i += 7) stdout.write(wire.subarray(i, i + 7));
+    stdout.end();
+    stderr.end();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    reader.close();
+    expect(lines.map((line) => JSON.parse(line))).toEqual([payload, { end: true }]);
+  });
+
+  it("drops an incomplete frame when capture is stopped", () => {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const lines: string[] = [];
+    const reader = readProcessLines(
+      { stdout, stderr } as unknown as ChildProcessWithoutNullStreams,
+      (event) => {
+        if (event.type === "stdout") lines.push(event.line);
+      },
+      async () => {},
+      (error) => {
+        throw error;
+      },
+      undefined,
+      "lf",
+    );
+    stdout.write('{"complete":true}\n{"partial":');
+    reader.stop();
+    stdout.end("true}\n");
+    stderr.end();
+    expect(lines).toEqual(['{"complete":true}']);
+  });
+});

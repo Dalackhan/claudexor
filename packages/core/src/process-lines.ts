@@ -15,14 +15,45 @@ export function readProcessLines(
   waitForSpace: () => Promise<void>,
   fail: (error: Error) => void,
   limits?: ProcessStreamLimits,
+  stdoutFraming?: "lf",
 ): { drained: Promise<void>; close(): void; stop(): void } {
   if (!limits) {
-    const out = createInterface({ input: child.stdout });
+    let closeOut: () => void;
+    if (stdoutFraming === "lf") {
+      // readline also splits U+2028/U+2029 on Node 24, corrupting valid JSON strings.
+      let tail = "";
+      child.stdout.setEncoding("utf8");
+      const data = (chunk: string): void => {
+        tail += chunk;
+        let start = 0;
+        let lf: number;
+        while ((lf = tail.indexOf("\n", start)) !== -1) {
+          publish({ type: "stdout", line: tail.slice(start, lf).replace(/\r$/, "") });
+          start = lf + 1;
+        }
+        tail = tail.slice(start);
+      };
+      const end = (): void => {
+        if (tail) publish({ type: "stdout", line: tail });
+        tail = "";
+      };
+      child.stdout.on("data", data);
+      child.stdout.once("end", end);
+      closeOut = () => {
+        child.stdout.off("data", data);
+        child.stdout.off("end", end);
+        child.stdout.pause();
+        tail = "";
+      };
+    } else {
+      const out = createInterface({ input: child.stdout });
+      out.on("line", (line) => publish({ type: "stdout", line }));
+      closeOut = () => out.close();
+    }
     const err = createInterface({ input: child.stderr });
-    out.on("line", (line) => publish({ type: "stdout", line }));
     err.on("line", (line) => publish({ type: "stderr", line }));
     const close = (): void => {
-      out.close();
+      closeOut();
       err.close();
     };
     // readline publishes every complete line as it arrives, so stopping the

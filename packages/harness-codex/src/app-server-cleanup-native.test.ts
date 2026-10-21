@@ -123,6 +123,17 @@ async function nativeCodexEvents(
 }
 
 describe("native process Codex cleanup (no vendor credentials)", () => {
+  it.each(["\u2028", "\u2029"])(
+    "preserves Unicode JSON content %j over the real pipe",
+    async (separator) => {
+      const text = "before" + separator + "after";
+      const events = await nativeCodexEvents(text);
+      expect(events.filter((event) => event.final).map((event) => event.text)).toEqual([text]);
+      expect(events.some((event) => event.type === "error")).toBe(false);
+    },
+    30000,
+  );
+
   it("rejects a native root error drained during normal shutdown", async () => {
     // Real peer, I/O and reaper; only the known Windows observer outcome is injected.
     const events = await nativeCodexEvents('{"verdict":"PASS"}', false, false, undefined, true);

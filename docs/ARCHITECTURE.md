@@ -755,7 +755,17 @@ text stdin; interactive/image runs retain their sole stream-json stdin owner.
 Claude instructions append through an adapter-owned UTF-8 file, removed when
 the child ends, never through argv or user-role text (`instructions-file.ts`).
 Codex owns one native
-`app-server --stdio` JSON-RPC child per Claudexor run. The adapter keeps the run
+`app-server --stdio` JSON-RPC child per Claudexor run. Its stdout uses the shared
+process reader's opt-in LF framing: U+2028/U+2029 inside JSON strings remain
+payload, not frame boundaries. The reader searches each chunk once and joins a
+fragmented frame once, at its LF. Natural EOF delivers an unterminated final
+frame (a malformed one fails the run); the post-exit drain's forced closure
+drops it. Every Codex
+adapter run, in any mode or reviewer role, opts in. Raw `/responses` model
+operations are HTTP and read no child stdout. The auth-refresh app-server
+child, the shared CLI run loop and other protocol line readers keep their own
+framing (`docs/BACKLOG.md`, #484 siblings).
+The adapter keeps the run
 active while a native turn, active goal continuation, or run-owned background
 terminal exists. Native thread/turn ids are control handles, not durable engine
 truth; the engine store remains authoritative. Stop pauses an active goal,

@@ -66,10 +66,23 @@
       "path": "/v2/accounts/routing-evidence",
       "mutating": false,
       "applicability": "global",
-      "summary": "Read live model-scoped refusal marks and the durable last-served order; no probe or quota refresh.",
+      "summary": "Read live model-scoped refusal marks, temporary capability marks, and the durable last-served order; no probe or quota refresh.",
       "auth": "loopback_bearer",
       "request_schema": null,
-      "parameters": [],
+      "parameters": [
+        {
+          "name": "includeCapabilities",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": [
+            "true",
+            "false"
+          ],
+          "schema_ref": null,
+          "description": "Add the temporary account x model capability marks (capabilities[]). Omitted or false preserves the legacy response shape for strict clients."
+        }
+      ],
       "response_schema": "ControlAccountRoutingEvidenceResponse",
       "error_schema": "ControlProblem"
     },
@@ -477,6 +490,18 @@
           ],
           "schema_ref": null,
           "description": "Retain exact failed-response bytes and exception details in the private result. Omitted or false preserves the legacy result shape."
+        },
+        {
+          "name": "captureRoutingEvidence",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": [
+            "true",
+            "false"
+          ],
+          "schema_ref": null,
+          "description": "Attach account-routing evidence (selection reason, differential outcome, pool events) to the result, receipt and detail. Omitted or false preserves the legacy shapes for strict clients; the choice is bound to idempotency. Capability refusal facts in problem.context are not gated."
         }
       ],
       "response_schema": "ControlModelOperationDetail",

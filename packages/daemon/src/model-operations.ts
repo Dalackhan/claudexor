@@ -51,6 +51,7 @@ interface ModelOperationServices {
   resolve(
     request: ModelCallRequest,
     signal: AbortSignal,
+    operationId: string,
   ): Promise<{
     adapter: ModelAdapter;
     profile: CredentialProfile;
@@ -92,13 +93,17 @@ export class ModelOperations {
     captureFailureEvidence?: boolean,
     captureEffortEvidence?: boolean,
     requestKind?: ModelOperationRequestKind,
+    captureRoutingEvidence?: boolean,
   ): Promise<ControlModelOperationDetail> {
     if (this.closed) throw operationError("daemon_stopping", "Model operations are stopping", 503);
-    if (requestKind !== undefined && (captureFailureEvidence || captureEffortEvidence)) {
-      // Image results carry no SSE/effort evidence; refusing is honest, ignoring is not.
+    if (
+      requestKind !== undefined &&
+      (captureFailureEvidence || captureEffortEvidence || captureRoutingEvidence)
+    ) {
+      // Image results carry no SSE/effort/routing evidence; refusing is honest, ignoring is not.
       throw operationError(
         "unsupported_parameter",
-        "requestKind=image cannot be combined with captureFailureEvidence or captureEffortEvidence",
+        "requestKind=image cannot be combined with captureFailureEvidence, captureEffortEvidence or captureRoutingEvidence",
         400,
       );
     }
@@ -106,6 +111,7 @@ export class ModelOperations {
     const capture = {
       ...(captureFailureEvidence === true ? { captureFailureEvidence: true as const } : {}),
       ...(captureEffortEvidence === true ? { captureEffortEvidence: true as const } : {}),
+      ...(captureRoutingEvidence === true ? { captureRoutingEvidence: true as const } : {}),
       ...(requestKind !== undefined ? { requestKind } : {}),
     };
     const envelope = {
@@ -309,6 +315,7 @@ export class ModelOperations {
       usage: result.usage ?? ModelUsage.parse({}),
       cost: result.cost ?? null,
       problem: result.problem ?? null,
+      ...(result.routing ? { routing: result.routing } : {}),
     };
     if (isTerminalLifecycle(record.state) && evidence.dispatch.state === "started") {
       evidence.dispatch = { ...evidence.dispatch, state: "unknown" };

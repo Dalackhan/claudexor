@@ -30,7 +30,8 @@ contract throughout these steps, including repair and connection recovery.
    profile and fans out to the vendors). It is one daemon-authored view of
    registered profiles, readiness,
    quota freshness, and `next_up` (the configured default model's verdict only;
-   `routingEvidence` carries model-scoped recent refusals and last service);
+   `routingEvidence` carries model-scoped recent refusals, temporary per-model
+   capability marks, and last service);
    do not reconstruct a pool by joining
    `doctor`, `quota`, and profile-list responses yourself. `available/passed`
    on the exact named row describes its last observation; check its age before

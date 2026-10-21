@@ -18,6 +18,7 @@ export interface CodexModelAuth {
   accessToken: string;
   accountId: string;
   accountFingerprint: string | null;
+  capabilityFingerprint?: string;
   expiresAt: number | null;
 }
 
@@ -122,6 +123,16 @@ async function readAuth(
           .update(JSON.stringify(["codex", accountId, principal]))
           .digest("hex")
       : null,
+    capabilityFingerprint: createHash("sha256")
+      .update(
+        JSON.stringify([
+          "codex",
+          accountId,
+          principal,
+          identityAuth?.chatgpt_plan_type ?? accessAuth?.chatgpt_plan_type ?? null,
+        ]),
+      )
+      .digest("hex"),
     expiresAt: typeof exp === "number" && Number.isFinite(exp) ? exp * 1000 : null,
   };
 }

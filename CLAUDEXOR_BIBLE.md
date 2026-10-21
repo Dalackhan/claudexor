@@ -1078,6 +1078,19 @@ invariant or operator decision before proceeding.
   credential changes that void the row's evidence. It never outranks known
   headroom, a mark, a cooldown, a pin or a usable bound row, and it is
   ordering evidence only.
+  **CONCEPT-CHANGE(INV-135):** an unpinned raw-model operation records the
+  same pre-progress refusal observation when its provider refuses the request
+  with a definite HTTP 4xx before generation, recognized as a capability refusal
+  or not; recording it reads the status and typed codes, never the wording.
+  Sign-in, timeouts, conflicts, rate and quota limits, the processing fallback,
+  server failures and typed request faults keep their own channels and record
+  nothing, and service of that model on the row clears it; an older in-flight
+  refusal never undoes a newer model operation's service. In raw-model catalog
+  selection this observation, like a live model substitution of a non-preferred
+  row, ranks after rows with neither an observation nor a capability mark and
+  before capability-marked rows; neither excludes a row. Rationale: a refusal whose wording no rule recognized left the account
+  first for every later request of that model, so one account that could not
+  serve it absorbed all of them.
   **CONCEPT-CHANGE(INV-135), #363:** an unpinned choice is admitted on FRESH
   readiness, with one bounded exception for Cursor rows: when a row's
   `cursor-agent status` probe did not answer within its own budget, that row

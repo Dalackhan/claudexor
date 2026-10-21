@@ -1154,16 +1154,20 @@ a marked row ranks after every other selectable row for that requested model,
 a row's newest mark counts, oldest mark first, and a mark never excludes a row
 or makes the pool exhausted. Model operations pass a model-substitution
 observation (see [Caller-owned model operations](#caller-owned-model-operations));
-Agent Runs, reviewer seats and the `next_up` projection pass a pre-progress
-refusal observation, recorded when an unpinned try on a subscription row reported
-a typed `started` session and then ended in the structural rotation branch's own
+Agent Runs, reviewer seats, model operations and the `next_up` projection pass a
+pre-progress refusal observation, recorded when an unpinned Agent try on a
+subscription row reported a typed `started` session and then ended in the structural rotation branch's own
 evidence (a terminal non-transient death with no agent progress, deliverable or
-mutation) without a typed vendor limit, which is already a cooldown. An adapter's
+mutation) without a typed vendor limit, which is already a cooldown, or when an
+auto model operation's provider refused it with a definite HTTP 4xx before
+generation (sign-in, timeouts, conflicts, rate and quota limits, server failures
+and typed request faults record nothing). An adapter's
 own pre-spawn refusal and an explicit pin never record one, and the vendor's
 wording is never read. It is keyed by harness, row and requested model (the
 harness default model is its own key), lives in daemon memory for one hour, and
 clears when a later try on that row and model makes agent progress or ends
-cleanly, or on a credential-generation change. A try binds its row's credential
+cleanly, when a model operation is served there, or on a credential-generation
+change. A try binds its row's credential
 generation before it spawns, so an outcome after such a change neither records
 nor clears a mark; while a login of that harness holds its credential-mutation
 window the generation is no number at all, so a try bound before or inside the
@@ -1276,8 +1280,8 @@ control) plus the additive `accountPools` key — the per-harness pool
 authority whose `next_up` verdict says who an unpinned run of the configured
 default model would route to next, computed by the same routing owner; it is
 never a forecast for another model. The separate read-only
-`GET /v2/accounts/routing-evidence` carries the live refusal marks and the
-last-served facts of the registered rows, each scoped to its requested model,
+`GET /v2/accounts/routing-evidence` carries live pre-progress refusal marks,
+temporary model capability marks, and the last-served facts of the registered rows, each scoped to its requested model,
 and leaves the legacy listings unchanged. Its `kind` is
 `profile | api_key_route | none`. The pool authority is also served alone by
 `GET /v2/account-pools`, whose catalog presence is the unified-accounts
@@ -2099,6 +2103,84 @@ refresh, and each caller rereads current authorization. Selection hands its
 exact-profile catalog to the invocation, which rechecks the account fingerprint; no catalog or credentials are cached across operations, and an
 unknown fingerprint keeps fresh discovery and cannot authorize native
 continuation reuse.
+Auto model operations now examine fresh per-account catalogs in selection order:
+listed accounts precede advisory misses; a soft observation (a live pre-progress
+refusal, or a served-model substitution of a non-preferred account) moves that
+account/model behind both groups, and a temporary capability mark behind the soft
+ones, because a soft observation may belong to one request.
+`preferredProfileId` orders accounts within a group; it cannot override a mark,
+a refusal or a listed alternative. History is the one exception: an unmarked,
+unrefused preferred account to which a message's native continuation is bound
+stays first even when its catalog omits the model, because that history replays
+only there. A marked or refusing one yields, and the selected account rejects
+the history locally with `invalid_continuation`. The resolver retains only
+catalog hashes for invalidation, never catalogs for admission across operations.
+
+A Codex inference HTTP 400/404 with an explicit model-not-found code or a narrowly
+recognized model refusal becomes `model_capability_refused`. Explicit vendor
+`model_not_found` after dispatch retains the existing model-scoped unusable
+verdict (`capability_refused`); both Agent and model selection still read it.
+Text evidence and `model_not_supported` demote through capability marks and the
+shared observation; they never make an account unusable or disabled. Quota, authentication and
+billing retain their existing channels. A pinned operation returns the typed
+refusal without a retry signal or new mark. The host may submit one separate,
+identical auto request with `retryOfOperationId`; the engine keeps one dispatch
+and one route per operation. Success on the other account confirms the original
+mark. An equivalent refusal retains both accounts' provisional evidence and
+returns the first problem with both accounts' reasons; the next request can then
+reach an unmarked third account. The host retry signal requires an unmarked
+eligible alternative, so known deficiencies cannot authorize another retry. Correlation requires the same
+source, model, messages, tools, options and continuation, and can be claimed once.
+History continuation bound to the refusing account withholds the signal
+(`retryBlockedBy=native_continuation`): another account rejects it before inference.
+
+Any other definite refusal before generation on an auto operation (HTTP 4xx
+other than 401, 408, 409 and 429; not a code that sign-in, quota, rate limits or
+the processing fallback own; not a typed request fault such as a named non-model
+parameter, `unsupported_parameter` or an exceeded context length) keeps its own
+code and gains the same retry context with `capabilityKind=unclassified`. Both
+kinds record the shared pre-progress refusal observation at once (Agent runs read
+it too); an older in-flight refusal never undoes a newer model operation's
+service. Its correlated
+retry settles an unrecognized refusal: service elsewhere creates an ordinary
+confirmed mark with the refusal's structural diagnostic as reason; another
+refusal marks nothing for the first account, because the request itself may be
+at fault. Every capability-attributed refusal also carries `modelMarks[]`, the
+live marks of that harness and model with each mark's episode start (`since`),
+and, for auto, `alternativeRemains`, whether another eligible account without a
+capability mark is left (one sweep answers this and the retry grant), so a host
+can tell an ongoing case from a new one without a timer.
+
+The process-local capability ledger has a four-hour TTL
+(`MODEL_CAPABILITY_TTL_MS`). Expiry admits one concurrent probe; success clears
+it, a refusal renews it, and an uncertain/cancelled probe delays the next probe
+by four hours. An in-flight probe sorts last, but never makes the last account
+unreachable: a concurrent operation may dispatch there without owning the probe.
+Correlated retries prefer any unmarked comparator over all capability rows,
+including expired marks. Changed catalog content, account identity or managed credential
+generation clears marks early. Codex computes a separate opaque capability
+fingerprint including the token's plan claim: a plan change does not change
+`accountFingerprint`. It is an engine-internal invalidation token that public
+catalog responses omit. Changes are recognized on the next live catalog acquisition; the Accounts
+display cache stays separate from execution admission.
+Overlapping requests bind the credential/catalog generation; late outcomes cannot
+recreate an invalidated mark or erase newer evidence. A login holding the
+credential-mutation window makes the generation unknown, not changed: operations
+are served, nothing is recorded, cleared or confirmed, and marks keep ordering. The ledger is bounded to
+512 subjects/attempts and forgets evidence on restart.
+
+Operations created with `captureRoutingEvidence=true` retain selection and
+differential evidence in their receipt, detail and result; routing evidence read
+with `includeCapabilities=true` exposes the temporary marks beside existing
+routing observations. Both are opt-in, so strict clients of the earlier shapes
+keep validating. The
+[host contract](MODEL_CAPABILITY_ROUTING.md) specifies the request, refusal,
+receipt and Accounts fields, compatibility signal and invalid-retry handling. The real daemon/control-API fixture in `model-services.test.ts` verifies
+A's exact HTTP refusal, B's service, the status mark and strict pin behavior;
+the same SQL daemon with a mocked adapter covers unrecognized refusals (service
+elsewhere confirms a mark, a second refusal marks nothing, every excluded failure
+class leaves ordering unchanged) and the soft-before-mark fallback order.
+
 Its single inference POST follows a committed dispatch receipt and a completed
 `flushed()` barrier. A barrier failure or cancellation while the adapter still
 waits inside that callback sends nothing and keeps `not_started` with the attempt
@@ -2260,8 +2342,8 @@ kept 30 minutes (observation retention, not a vendor reset time), never cleared
 by a later success, voided with the credential generation at the unusable
 ledger's call sites, and never recorded while a login of that harness holds its
 credential-mutation window (#363). While one is live, Auto selection for that
-model ranks the account after every other selectable account, oldest observation
-first, so a fully marked pool takes turns; it never excludes an account or
+model ranks the account after every other selectable account without a capability
+mark, oldest observation first, so a fully marked pool takes turns; it never excludes an account or
 exhausts a pool, and a pin or usable preferred account resolves first. Agent Runs
 do not pass it.
 

@@ -357,6 +357,14 @@ describe("model operations over the existing daemon command substrate", () => {
       expect((await post(`?captureEffortEvidence=${captureEffortEvidence !== true}`)).status).toBe(
         409,
       );
+      // The routing opt-in is bound to the same key just as strictly.
+      expect(
+        (
+          await post(
+            `?captureRoutingEvidence=true${captureEffortEvidence === true ? "&captureEffortEvidence=true" : ""}`,
+          )
+        ).status,
+      ).toBe(409);
       const params = f.store.get(created.id)!.params;
       if (captureEffortEvidence === true)
         expect(params).toHaveProperty("captureEffortEvidence", true);

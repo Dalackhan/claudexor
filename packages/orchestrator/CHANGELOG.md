@@ -1,5 +1,34 @@
 # @claudexor/orchestrator
 
+## 4.5.0
+
+### Patch Changes
+
+- 85e312d: Skip write-oriented baseline inventory and output capture for readonly live
+  directory Agents, so broad source scopes containing sockets do not block startup
+  and source files are not copied into attempt artifacts. Readonly answers no longer
+  fail file capture because a selected path resembles a credential file. Align empty
+  answer delivery and readonly `noChanges` with the Git readonly convention: no
+  write-backed result, not a filesystem comparison. Writable and isolated directory
+  preparation and capture remain unchanged.
+- Updated dependencies [032b44b]
+- Updated dependencies [85e312d]
+  - @claudexor/schema@4.5.0
+  - @claudexor/workspace@4.5.0
+  - @claudexor/arbitration@4.5.0
+  - @claudexor/budget@4.5.0
+  - @claudexor/config@4.5.0
+  - @claudexor/context@4.5.0
+  - @claudexor/core@4.5.0
+  - @claudexor/delivery@4.5.0
+  - @claudexor/event-log@4.5.0
+  - @claudexor/gateway@4.5.0
+  - @claudexor/policy@4.5.0
+  - @claudexor/review@4.5.0
+  - @claudexor/synthesis@4.5.0
+  - @claudexor/artifact-store@4.5.0
+  - @claudexor/util@4.5.0
+
 ## 4.4.0
 
 ### Minor Changes

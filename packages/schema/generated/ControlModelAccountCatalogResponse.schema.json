@@ -102,6 +102,10 @@
                           "null"
                         ]
                       },
+                      "capabilityFingerprint": {
+                        "type": "string",
+                        "description": "Opaque capability identity including plan when available; an invalidation token, never cached admission."
+                      },
                       "observedAt": {
                         "type": "string",
                         "minLength": 1,

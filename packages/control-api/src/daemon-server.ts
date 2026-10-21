@@ -310,7 +310,7 @@ export interface DaemonControlApiOptions {
         input?: ControlQuotaRefreshRequest & { view?: "resources" },
       ) => Promise<unknown>;
       accountPools?: () => Promise<unknown>;
-      accountRoutingEvidence?: () => Promise<unknown>;
+      accountRoutingEvidence?: (includeCapabilities?: boolean) => Promise<unknown>;
       rollbackAccountsMigration?: (input: unknown) => Promise<unknown>;
       credentialProfiles?: (input?: { snapshot?: boolean; view?: "resources" }) => Promise<unknown>;
       runApplicability?: (input: { repoRoot: string }) => Promise<unknown>;

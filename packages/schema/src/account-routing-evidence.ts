@@ -27,10 +27,47 @@ export const AccountLastService = z
   );
 export type AccountLastService = z.infer<typeof AccountLastService>;
 
+/** Temporary model capability ordering evidence; never account availability. */
+export const ModelCapabilityMark = z
+  .object({
+    harness_id: Id.describe("Harness family of the account."),
+    profile_id: Id.describe("Account row that refused this model before generation started."),
+    requested_model: z.string().describe("Model the refused request named."),
+    account_fingerprint: z
+      .string()
+      .nullable()
+      .describe("Provider account identity the mark is bound to; null when the adapter has none."),
+    provider_reason: z
+      .string()
+      .describe(
+        "Latest refusal diagnostic, redacted and at most 1024 characters: the provider's reason for a recognized refusal, the engine's message and vendor code otherwise.",
+      ),
+    observed_at: IsoTimestamp.describe(
+      "Start of this mark's episode, when its row was created (a recognized refusal, or the service elsewhere that confirmed an unrecognized one); renewals and probes keep it.",
+    ),
+    expires_at: IsoTimestamp.describe("Probe becomes eligible at this time; not a vendor reset."),
+    state: z
+      .enum(["provisional", "confirmed", "probe_due", "probing"])
+      .describe(
+        "provisional = refused here; confirmed = another account then served the correlated retry; probe_due = expired, the next selection may probe it; probing = one operation holds that probe.",
+      ),
+  })
+  .strict()
+  .describe(
+    "A temporary capability mark for one account and one model. It only orders auto selection: the account stays enabled and usable as a last fallback.",
+  );
+export type ModelCapabilityMark = z.infer<typeof ModelCapabilityMark>;
+
 /** `GET /v2/accounts/routing-evidence`: a separate additive read, so the legacy
  * strict Accounts responses stay unchanged for older clients. */
 export const ControlAccountRoutingEvidenceResponse = z
   .object({
+    capabilities: z
+      .array(ModelCapabilityMark)
+      .optional()
+      .describe(
+        "Temporary capability marks; absent from engines that predate them. A mark clears on a success there or a catalog or credential change; after expires_at one operation may probe the account.",
+      ),
     refusals: z
       .array(PreProgressRefusalObservation)
       .describe("Live pre-progress refusal observations, each scoped to one requested model."),
@@ -42,7 +79,7 @@ export const ControlAccountRoutingEvidenceResponse = z
   })
   .strict()
   .describe(
-    "Model-scoped account routing evidence: live refusal marks and the durable last-served order.",
+    "Model-scoped account routing evidence: live refusal marks, temporary capability marks and the durable last-served order.",
   );
 export type ControlAccountRoutingEvidenceResponse = z.infer<
   typeof ControlAccountRoutingEvidenceResponse

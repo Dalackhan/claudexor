@@ -297,6 +297,7 @@ private final class StubDaemon: RuntimeDaemonControl, @unchecked Sendable {
             handshakePollTimeout: 0.1)
         let old = RuntimeClosureIdentity(
             version: "3.2.0", buildSha: previousBuildSha)
+        daemon.handshakeIdentitySequence = [old, old]
         let reconciliation = Task { await reconciler.reconcile(serving: old) }
         await gate.waitUntilEntered()
 

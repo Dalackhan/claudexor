@@ -47,6 +47,23 @@ extension SettingsScreen {
                 .productControlAccessibility("Refresh metadata")
                 .help("Reload settings, quota, secrets, harness readiness, and trust metadata.")
             }
+            if let request = model.localDaemonBuildSwitch {
+                Text("Running v\(request.serving.version) (\(AboutInfo.shortSha(request.serving.buildSha))); this app selected \(AboutInfo.shortSha(request.target.buildSha)).")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Switch Engine Build") {
+                    Task {
+                        if let generation = await model.switchLocalDaemonBuild(request) {
+                            await model.connect(ifCurrentGeneration: generation, allowInitialLaunch: false)
+                        }
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(model.runtimeInstalling)
+                .productControlAccessibility("Switch Engine Build")
+                .help(model.runtimeInstalling
+                    ? "Wait for the current runtime installation to finish."
+                    : "Switch once from \(request.serving.buildSha) to \(request.target.buildSha), only if the engine is idle. Reconnect alone keeps the running build.")
+            }
         }
     }
 

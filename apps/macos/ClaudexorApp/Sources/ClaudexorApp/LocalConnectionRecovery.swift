@@ -21,7 +21,7 @@ struct LocalConnectionRecoveryLoop {
     private let prepareProbe: @MainActor () -> Void
     private let probe: @MainActor () async -> LocalConnectionProbeResult
     private let pollConnected: @MainActor () async -> LocalConnectionProbeResult
-    private let startDaemon: @MainActor () -> Bool
+    private let startDaemon: @MainActor (LocalRuntimeLaunchPermit) -> Bool
     private let enterOffline: @MainActor () -> Void
     private let pause: @MainActor () async -> Void
 
@@ -32,7 +32,7 @@ struct LocalConnectionRecoveryLoop {
         prepareProbe: @escaping @MainActor () -> Void,
         probe: @escaping @MainActor () async -> LocalConnectionProbeResult,
         pollConnected: @escaping @MainActor () async -> LocalConnectionProbeResult,
-        startDaemon: @escaping @MainActor () -> Bool,
+        startDaemon: @escaping @MainActor (LocalRuntimeLaunchPermit) -> Bool,
         enterOffline: @escaping @MainActor () -> Void,
         pause: @escaping @MainActor () async -> Void
     ) {
@@ -47,8 +47,13 @@ struct LocalConnectionRecoveryLoop {
         self.pause = pause
     }
 
-    func run() async {
-        var launchAvailable = true
+    func run(launchAvailable initialLaunchAvailable: Bool = true) async {
+        var launchAvailable = initialLaunchAvailable
+        var startupLease: LocalRuntimeLifecycleLease?
+        var startupDeadline: ContinuousClock.Instant?
+        // Exact release also invalidates the queued launch permit. A retired
+        // connection therefore cannot leave a probe that spawns after unlock.
+        defer { if let startupLease { lifecycleOwner.release(startupLease) } }
         while isCurrent {
             prepareProbe()
             // A lifecycle can replace or install the successor while this
@@ -59,6 +64,12 @@ struct LocalConnectionRecoveryLoop {
             // Manual Reconnect advances the generation while discovery or a
             // handshake is suspended. Its predecessor may publish nothing.
             guard isCurrent else { return }
+            if let lease = startupLease,
+               result == .connected || startupDeadline.map({ ContinuousClock.now >= $0 }) == true {
+                lifecycleOwner.release(lease)
+                startupLease = nil
+                startupDeadline = nil
+            }
 
             switch result {
             case .connected:
@@ -115,15 +126,22 @@ struct LocalConnectionRecoveryLoop {
                     }
                     // Consume before start, including a synchronous false.
                     launchAvailable = false
-                    let started = startDaemon()
-                    lifecycleOwner.release(lease)
+                    let deadline = ContinuousClock.now.advanced(by: .seconds(LocalDaemonBootPolicy.handshakeTimeout))
+                    let started = startDaemon(lifecycleOwner.launchPermit(for: lease, until: deadline))
                     if started {
+                        // The launcher schedules its probe/spawn off-thread.
+                        // Hold app transaction ownership through the boot window,
+                        // until a handshake or the bounded deadline. Retirement
+                        // cancels a still-pending spawn through its exact permit.
+                        startupLease = lease
+                        startupDeadline = deadline
                         // Preserve the existing Connecting boot window; a spawn
                         // that fails off-thread surfaces at the next probe. Missing
                         // assets fail synchronously and publish Offline at once.
                         await pause()
                         continue
                     }
+                    lifecycleOwner.release(lease)
                 }
                 enterOffline()
                 await pause()

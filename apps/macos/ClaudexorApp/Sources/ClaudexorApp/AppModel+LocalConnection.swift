@@ -4,7 +4,8 @@ import ClaudexorKit
 // MARK: - Local engine connection and exact runtime coherence
 
 extension AppModel {
-    func connect() async {
+    func connect(ifCurrentGeneration expected: Int? = nil, allowInitialLaunch: Bool = true) async {
+        if let expected, connectionGeneration != expected { return }
         connectionGeneration += 1
         let generation = connectionGeneration
         // Retire the previous exact client synchronously, before the new
@@ -14,6 +15,7 @@ extension AppModel {
         client = nil
         endpoint = ""
         engineIdentity = nil
+        localDaemonBuildSwitch = nil
         health = .connecting
         cancelAllStreams()
         let recovery = LocalConnectionRecoveryLoop(
@@ -29,16 +31,17 @@ extension AppModel {
                 guard self.client != nil else { return .unavailable }
                 return await self.pollLocalConnection(generation: generation)
             },
-            startDaemon: { DaemonLauncher.startIfNeeded() },
+            startDaemon: { DaemonLauncher.startIfNeeded(launchPermit: $0) },
             enterOffline: { self.enterHardOffline() },
             pause: { try? await Task.sleep(for: .seconds(3)) })
-        await recovery.run()
+        await recovery.run(launchAvailable: allowInitialLaunch)
     }
 
     /// Drop every daemon-owned projection when the engine is unreachable. The
     /// reconnect path repopulates these from `/v2`; user preferences and the
     /// current composer draft remain local and are intentionally preserved.
     func enterHardOffline() {
+        localDaemonBuildSwitch = nil
         let keepRemoteSelection = activeExecutionLocation != .local
         health = .offline
         endpoint = ""
@@ -134,42 +137,9 @@ extension AppModel {
         deferredOverflow.removeAll()
     }
 
-    private func daemonReconciliationOwner() -> LocalDaemonReconciler {
-        if let localDaemonReconciler { return localDaemonReconciler }
-        let reconciler = LocalDaemonReconciler(
-            daemon: makeDaemonControl(),
-            lifecycleOwner: localRuntimeLifecycleOwner)
-        localDaemonReconciler = reconciler
-        return reconciler
-    }
-
     /// Publish exact-closure coherence independently from update/install state.
     private func setLocalDaemonReconciliationNotice(_ notice: String?) {
         localDaemonReconciliationNotice = notice
-    }
-
-    /// Reconcile one compatible handshake against the exact selected local
-    /// closure. Protocol compatibility remains the connection authority; an
-    /// unstampable identity is deliberately passed as nil and reduced to a safe,
-    /// visible keep-compatible policy before any lifecycle work.
-    func localDaemonPolicy(
-        for engine: EngineBuildIdentity?,
-        generation: Int? = nil
-    ) async -> LocalDaemonReconciliationPolicy {
-        let serving = engine.flatMap {
-            AppRuntimeDaemonControl.runtimeIdentity(version: $0.version, buildSha: $0.sha)
-        }
-        let result = await daemonReconciliationOwner().reconcile(
-            serving: serving,
-            isCurrent: { @MainActor [weak self] in
-                guard let generation else { return true }
-                guard let self else { return false }
-                return !Task.isCancelled && self.connectionGeneration == generation
-            })
-        if let generation, !localConnectionGenerationIsCurrent(generation) {
-            return .superseded
-        }
-        return LocalDaemonReconciliationPolicy(result)
     }
 
     private func tryConnect(generation: Int) async -> LocalConnectionProbeResult {

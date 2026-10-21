@@ -173,7 +173,7 @@ private final class LostCompletionRecoveryHarness {
                     generation: 1)
             },
             pollConnected: { .unavailable },
-            startDaemon: {
+            startDaemon: { _ in
                 self.fallbackStartsAtProbe.append(self.probeCount)
                 return true
             },
@@ -242,7 +242,8 @@ private func seedSuccessorProjections(_ model: AppModel) throws {
         version: "3.2.0", buildSha: String(repeating: "b", count: 40))
 
     private func reconciler(_ daemon: ReconciliationDaemonStub) -> LocalDaemonReconciler {
-        LocalDaemonReconciler(
+        daemon.servingIdentity = old
+        return LocalDaemonReconciler(
             daemon: daemon,
             lifecycleOwner: LocalRuntimeLifecycleOwner(),
             targetClosure: {
@@ -358,6 +359,7 @@ private func seedSuccessorProjections(_ model: AppModel) throws {
         let recovery = LostCompletionRecoveryHarness()
         let daemon = ReconciliationDaemonStub()
         daemon.targetIdentity = target
+        daemon.servingIdentity = old
         daemon.runningIdentity = target
         let stopGate = SuspendedReconciliationEffect()
         daemon.stopGate = stopGate

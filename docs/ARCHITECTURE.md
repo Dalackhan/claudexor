@@ -5863,18 +5863,42 @@ the closure.
   equal-version pointer also falls back so a newly installed DMG cannot retain
   different bytes under the same version. On connection, the app side-effect-
   free probes the selected script and compares its exact `{version, buildSha}`
-  with the live handshake before hydrating daemon state. A mismatch is replaced
-  only after the daemon atomically proves idle and fences admission; busy or
-  unknown activity keeps the compatible daemon alive and visibly defers
-  reconciliation. A successful replacement retires the old client and re-reads
+  with the live handshake before hydrating daemon state. Exact version and SHA
+  are coherent regardless of entry path. Automatic replacement requires a
+  strictly newer stable x.y.z target; a newer serving version or unorderable
+  versions keep the compatible daemon. Equal-version alternate builds require
+  the one-shot Settings action described in DESIGN_SYSTEM. The action binds both
+  displayed identities and expires if either changes; ordinary Reconnect and
+  passive polls never request that switch. Replacement still requires the daemon
+  to atomically prove idle and fence admission; busy or unknown activity keeps
+  the compatible daemon alive and visibly defers reconciliation. A successful
+  replacement retires the old client and re-reads
   discovery before hydrating;
   any failure after lifecycle work begins goes offline rather than reusing an
   ambiguous process. An installed selection's probe must also equal the pointer's
   exact `{version,engineSha}` authority; the signed bundled selection uses its
   stamped probe as authority. The three-second identity poll retries deferred
   work when the daemon becomes idle. Reconciliation and in-app installation
-  claim the same exact session lifecycle lease before their first suspension,
-  so their stop/start transactions cannot overlap. Node is ALWAYS the
+  claim the same exact lifecycle lease before target observation. Its nonblocking
+  descriptor lock lives in the canonical discovery directory, independent of app
+  or socket spelling, and serializes participating app copies across the full
+  stop/start/proof transaction. On first launch the app creates a missing private
+  service directory before scheduling daemon startup. An existing owned canonical
+  directory is validated by uid and pathname/descriptor inode identity, then
+  repaired to private permissions through that descriptor, matching engine
+  admission. Directory and lock opens do not follow leaf links; the app does not
+  acquire the engine's writer slot. Discovery and serving identity are re-read under
+  that lease, with another identity check before stop. Outage recovery shares
+  the lease through handshake readiness or the bounded boot window. A queued
+  outage launch must present its exact lease and unexpired deadline at the actual
+  spawn boundary, under the owner lock; retiring the connection invalidates its
+  pending launch before releasing ownership. Exact release explicitly unlocks
+  before closing so inherited descriptor references cannot prolong that lease.
+  Exact token and connection-generation guards prevent stale completion from
+  clearing a successor's ownership or publishing its predecessor's identity.
+  The app lock never replaces engine root/writer authority or the installer's
+  pointer lock; older apps and external clients still rely on those engine
+  controls. Node is ALWAYS the
   app-bundled binary; because the
   whole closure unpacks together, the Browser MCP resolves adjacent to the
   daemon inside the same version dir.

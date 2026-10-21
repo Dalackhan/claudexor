@@ -73,10 +73,12 @@ final class ReconciliationDaemonStub: RuntimeDaemonControl, @unchecked Sendable 
     private let lock = NSLock()
     var busy: Bool? = false
     var targetIdentity: RuntimeClosureIdentity?
+    var servingIdentity: RuntimeClosureIdentity?
     var runningIdentity: RuntimeClosureIdentity?
     var handshakeNilCount = 0
     var busyDelayNanoseconds: UInt64 = 0
     var busyGate: SuspendedReconciliationEffect?
+    var probeGate: SuspendedReconciliationEffect?
     var stopGate: SuspendedReconciliationEffect?
     var stopThrows = false
     var replacementStopRefusal: RuntimeReplacementStopError?
@@ -121,11 +123,14 @@ final class ReconciliationDaemonStub: RuntimeDaemonControl, @unchecked Sendable 
     }
 
     func probeIdentity(scriptURL: URL) async -> RuntimeClosureIdentity? {
-        lock.withLock { targetIdentity }
+        let gate = lock.withLock { probeGate }
+        await gate?.wait()
+        return lock.withLock { targetIdentity }
     }
 
     func handshakeIdentity() async -> RuntimeClosureIdentity? {
         lock.withLock {
+            if starts == 0 { return servingIdentity }
             if handshakeNilCount > 0 {
                 handshakeNilCount -= 1
                 return nil
@@ -135,6 +140,9 @@ final class ReconciliationDaemonStub: RuntimeDaemonControl, @unchecked Sendable 
     }
 
     func setBusy(_ value: Bool?) { lock.withLock { busy = value } }
+    func setServingIdentity(_ value: RuntimeClosureIdentity?) {
+        lock.withLock { servingIdentity = value }
+    }
 }
 
 @Suite(.serialized) struct LocalDaemonReconcilerTests {
@@ -153,7 +161,9 @@ final class ReconciliationDaemonStub: RuntimeDaemonControl, @unchecked Sendable 
         pollInterval: TimeInterval = 0.001,
         pollTimeout: TimeInterval = 0.1
     ) -> LocalDaemonReconciler {
-        LocalDaemonReconciler(
+        // Pre-stop identity is independent of the simulated post-launch result.
+        if daemon.servingIdentity == nil { daemon.servingIdentity = old }
+        return LocalDaemonReconciler(
             daemon: daemon,
             lifecycleOwner: lifecycleOwner,
             targetClosure: {
@@ -181,6 +191,7 @@ final class ReconciliationDaemonStub: RuntimeDaemonControl, @unchecked Sendable 
     @Test func exactIdentityIsANoop() async {
         let daemon = ReconciliationDaemonStub()
         daemon.targetIdentity = target
+        daemon.servingIdentity = target
 
         let result = await reconciler(daemon).reconcile(serving: target)
 

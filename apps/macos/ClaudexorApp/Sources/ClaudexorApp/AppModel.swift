@@ -214,10 +214,8 @@ final class AppModel {
                 return await AppRuntimeDaemonControl.servingHandshake(using: client)
             })
     }
-    /// The one session-wide exact owner shared by updater installation and
-    /// steady local-daemon reconciliation. Filesystem locking protects the
-    /// pointer; this lease protects the stop/start lifecycle itself.
-    @ObservationIgnored let localRuntimeLifecycleOwner = LocalRuntimeLifecycleOwner()
+    @ObservationIgnored let localRuntimeLifecycleOwner: LocalRuntimeLifecycleOwner
+    var localDaemonBuildSwitch: LocalDaemonBuildSwitch?
     /// One lifecycle owner for the entire AppModel session. It is created lazily
     /// so tests can replace `makeDaemonControl` before the first reconciliation;
     /// the actor itself coalesces overlapping connect/poll attempts.
@@ -407,7 +405,9 @@ final class AppModel {
         client = newClient
     }
 
-    init(client: GatewayClient? = nil, requestNotificationAuthorization: Bool = true) {
+    init(client: GatewayClient? = nil, requestNotificationAuthorization: Bool = true,
+         lifecycleOwner: LocalRuntimeLifecycleOwner = LocalRuntimeLifecycleOwner()) {
+        self.localRuntimeLifecycleOwner = lifecycleOwner
         let sshManager = SSHConnectionManager()
         self.sshConnectionManager = sshManager
         self.remoteRuntimeInstaller = RemoteRuntimeInstaller(ssh: sshManager)

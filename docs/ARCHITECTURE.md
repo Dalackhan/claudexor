@@ -985,7 +985,7 @@ preload quiet defaults for Node's `spawn`/`spawnSync`: hiding only the outer
 Node does not hide a native grandchild started by an npm wrapper. The fixed
 data import preserves the selected vendor script, argv, environment and binary
 identity; explicit visibility options remain explicit. It does not control
-native grandchildren or windows opened later. Interactive sign-in
+windows created independently by native descendants. Interactive sign-in
 (`profiles login`, the Terminal/ConPTY setup runner) and `setup attach` do not
 use those helpers and keep their own visible-terminal policy.
 

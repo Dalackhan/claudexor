@@ -1468,6 +1468,37 @@ DesignSystemComponents.swift, DesignTokens.swift.)
   SCOPE choice, never a deletion (the MRU list is untouched). The chip stays
   visible as the choose-project CTA in that state — the ONLY place project
   selection lives; Settings owns no Current Project field.
+  Duplicate folder names in recents and the selected chip append the shortest
+  distinguishing contiguous parent suffix (`app — red` / `app — blue` for
+  `/work/red/app` / `/work/blue/app`). Unique names stay short. Local recents
+  and each remote connection's saved folders are compared separately; menu
+  rows keep full-path help. `ProjectCheckoutPresentation` owns the chip's name,
+  help and accessibility value. The existing icon slot stays fixed at 14 × 14 points:
+
+  | State | Icon / tone | Hover and accessibility value |
+  |---|---|---|
+  | Initial / no project | Choose-project folder / existing accent treatment | Existing picker action; no previous checkout path |
+  | Selected thread metadata unavailable | Choose-project folder / existing accent treatment | Project unavailable; project metadata unavailable, with no draft or previous path |
+  | Loading local checkout | Folder / secondary | Checking checkout and the selected full path |
+  | Main Git checkout | Branch / secondary | Main checkout and the selected full path |
+  | Linked Git worktree | Branch / accent | Worktree name and the selected full path |
+  | Ordinary folder | Folder / secondary | Folder and the selected full path |
+  | Unavailable | Folder / secondary | Checkout status unavailable and only the current path, when known |
+  | Remote | Folder / secondary | Remote checkout status unavailable and the remote path; the chip retains its connection prefix |
+
+  The branch symbol replaces the folder glyph; it adds no permanent status text
+  or popup. The menu's accessible name is `Project`, with dynamic selection
+  and checkout details in its value. Read-only local metadata observation runs
+  off-main, validates Git common-directory membership and its reciprocal
+  checkout backlink plus symbolic-reference or 40/64-hex HEAD syntax, and
+  refreshes when the chip appears or is hovered. A selection identity change
+  resets observation; cancelled completions cannot
+  publish into the new selection. Remote selections never trigger local
+  filesystem observation. Checkout identity does not imply a thread's execution
+  address or change its workspace selection.
+  A selected thread's matching detail or location-scoped summary establishes
+  whether its project metadata is known. Missing metadata never becomes
+  `No project`; a confirmed scopeless thread retains that label.
 - **`OptionSection` / `OptionRow`** — the "⋯" popover building blocks: a caption-titled
   section, and a `labelWidth`-aligned label+control row (replaces ad-hoc `.fixedSize()` /
   magic-width pickers so every option lines up). Solid surface, token spacing.

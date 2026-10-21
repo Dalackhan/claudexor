@@ -395,7 +395,8 @@ struct ThreadsScreen: View {
         // wrapping layout bounded to the column width can never overflow.
         FlowLayout(spacing: Theme.Spacing.sm) {
             IntentMenu(selection: $composerMode, projectScoped: threadHasProject)
-            ProjectChip(name: projectChipName,
+            ProjectChip(context: composerSelectionContext,
+                        metadataKnown: projectChipMetadataKnown,
                         bound: model.selectedThreadId != nil,
                         hasProject: threadHasProject,
                         recent: model.recentProjects,
@@ -409,6 +410,7 @@ struct ThreadsScreen: View {
                             model.showRemoteDirectoryBrowser(connectionID: $0)
                         },
                         onNoProject: { model.clearProject() })
+                .id([composerSelectionContext.locationID, composerSelectionContext.threadID ?? "", composerSelectionContext.repoRoot])
             if threadHasProject {
                 HarnessAccountChip(
                     current: primaryFamily,

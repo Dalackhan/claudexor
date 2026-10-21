@@ -87,8 +87,8 @@ struct AccentButtonStyle: ButtonStyle {
 /// is informational on an open thread and choosing another project starts a NEW
 /// draft thread there (the model owns that semantics).
 struct ProjectChip: View {
-    /// Display name (project folder, or a "Choose project" call-to-action).
-    let name: String
+    let context: ComposerSelectionContext
+    let metadataKnown: Bool
     /// True when showing an open thread's fixed repo (vs the draft Current Project).
     let bound: Bool
     let hasProject: Bool
@@ -102,17 +102,26 @@ struct ProjectChip: View {
     /// owner-locked project surface (INV-101); the destination Ask-only state
     /// already works — this is the missing way INTO it after a project was used.
     var onNoProject: () -> Void = {}
+    @State private var checkout: (context: ComposerSelectionContext, status: ProjectCheckoutStatus)?
+    @State private var checkoutRefresh = 0
 
     var body: some View {
-        ChipMenu(
+        let remote = remoteConnections.first { ExecutionLocationID.remote($0.id).rawValue == context.locationID }
+        let labelRecents = context.locationID == ExecutionLocationID.local.rawValue ? recent : remote?.savedProjects ?? []
+        let presentation = ProjectCheckoutPresentation(
+            context: context, observedContext: checkout?.context, status: checkout?.status,
+            metadataKnown: metadataKnown, recent: labelRecents, connectionName: remote?.displayName)
+        return ChipMenu(
             tint: hasProject ? Color.secondary : Theme.accent,
             fill: .outlined(stroke: hasProject ? Theme.separator : Theme.accent.opacity(0.5)),
-            help: bound
-                ? "Project for this thread (bound). Pick another to start a new thread there."
-                : "Working directory for the new thread — pick a recent project or Browse…"
+            help: presentation.chipHelp
         ) {
-            Image(systemName: hasProject ? "folder.fill" : "folder.badge.questionmark").imageScale(.small)
-            Text(name).lineLimit(1)
+            Image(systemName: presentation.symbolName ?? (hasProject ? "folder.fill" : "folder.badge.questionmark"))
+                .imageScale(.small)
+                .frame(width: 14, height: 14)
+                .foregroundStyle(presentation.isWorktree || !hasProject ? Theme.accent : Color.secondary)
+                .accessibilityHidden(true)
+            Text(presentation.name).lineLimit(1)
         } menu: {
             // A stable row (above the MRU) so no-project stays reachable even with
             // no recents; disabled when already scopeless so it never no-ops.
@@ -126,8 +135,9 @@ struct ProjectChip: View {
                 Section(bound ? "Switch project — starts a new thread" : "Recent projects") {
                     ForEach(recent, id: \.self) { path in
                         Button { onPick(path) } label: {
-                            Label(URL(fileURLWithPath: path).lastPathComponent, systemImage: "folder")
+                            Label(ProjectPathSelection.recentProjectLabel(path, among: recent), systemImage: "folder")
                         }
+                        .help(path)
                     }
                 }
                 Divider()
@@ -141,9 +151,10 @@ struct ProjectChip: View {
                                     onPickRemote(connection.id, path)
                                 } label: {
                                     Label(
-                                        URL(fileURLWithPath: path).lastPathComponent,
+                                        ProjectPathSelection.recentProjectLabel(path, among: connection.savedProjects),
                                         systemImage: "folder")
                                 }
+                                .help(path)
                             }
                             if !connection.savedProjects.isEmpty { Divider() }
                             Button {
@@ -161,6 +172,32 @@ struct ProjectChip: View {
             Button { onBrowse() } label: {
                 Label("Browse This Mac…", systemImage: "folder.badge.plus")
             }
+        }
+        .accessibilityLabel("Project")
+        .accessibilityValue(presentation.accessibilityValue)
+        .onHover { inside in
+            guard inside, context.locationID == ExecutionLocationID.local.rawValue,
+                  !context.repoRoot.isEmpty else { return }
+            // Refresh on inspection, including a folder removed since selection. No lasting cache.
+            checkout = nil
+            checkoutRefresh &+= 1
+        }
+        .task(id: checkoutRefresh) {
+            let selected = context
+            guard selected.locationID == ExecutionLocationID.local.rawValue,
+                  !selected.repoRoot.isEmpty else { return }
+            checkout = nil
+            let path = selected.repoRoot
+            let worker = Task.detached(priority: .utility) {
+                ProjectPathSelection.checkoutStatus(for: path, isLocal: true)
+            }
+            let status = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            guard !Task.isCancelled else { return }
+            checkout = (selected, status)
         }
     }
 }

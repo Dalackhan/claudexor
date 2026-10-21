@@ -2,7 +2,10 @@ import Foundation
 import Testing
 @testable import ClaudexorApp
 
-@Suite struct ProjectPathSelectionTests {
+// Git fixture setup blocks on child pipe reads and exit waits. Bound this suite's
+// fan-out (including argument cases) so it cannot monopolize the shared executor
+// while other suites measure async process responsiveness.
+@Suite(.serialized) struct ProjectPathSelectionTests {
     @Test func fixturesUseCheckoutScratchWithoutLauncherConfiguration() throws {
         let fixture = try CheckoutFixture()
         defer { fixture.cleanUp() }

@@ -81,9 +81,9 @@ the effort receipt (`parameter: --model`); an id that cannot be placed stays
 unchanged with an `omitted` receipt. The
 [effort contract](ARCHITECTURE.md#4-routing) specifies existing result/artifact
 locations, omission versus explicit `none`, and independent provider observation.
-Raw model clients discover `captureEffortEvidence` on the model-operation POST
-descriptor and freeze that query choice for each operation; omission retains the
-legacy strict result shape. GET and ACK always use the exact stored bytes.
+Raw model clients discover `captureEffortEvidence` (and, the same way,
+`captureRoutingEvidence`) on the model-operation POST descriptor and freeze that
+query choice for each operation; omission retains the legacy strict result shape. GET and ACK always use the exact stored bytes.
 The shared fixture is `packages/schema/fixtures/effort-resolution.json`.
 
 Codex raw-model catalogs list inference efforts rather than native agent modes.
@@ -476,22 +476,27 @@ count. `next_up` in either listing is the configured default model's verdict,
 never a forecast for another model.
 
 `GET /v2/accounts/routing-evidence` is the additive, read-only Accounts
-evidence: live pre-progress refusals, temporary per-model capability marks, and
-each registered account's last service per requested model (most recent first), strict and query-free, with no
-probe and no quota refresh. Clients negotiate it through the operation catalog
+evidence: live pre-progress refusals and each registered account's last service
+per requested model (most recent first), strict, with no probe and no quota
+refresh. Its one query, `includeCapabilities=true`, adds the temporary per-model
+capability marks; without it the response keeps its earlier shape. Clients
+negotiate the route and the query through the operation catalog
 (`get:accounts.routing-evidence`) and keep the legacy listings unchanged. An
-engine without it answers 404, which first-party clients treat as no new data;
-any other failure leaves the listing authoritative with one diagnostic. Last
-service is a routing observation, never a quota or authentication verdict.
+engine without the route answers 404, which first-party clients treat as no new
+data; one without the query rejects it with 400, and first-party clients read
+again without it. Any other failure leaves the listing authoritative with one
+diagnostic. Last service is a routing observation, never a quota or
+authentication verdict.
 
-The optional `capabilities[]` array adds temporary account/model demotions. Each
-entry includes `harness_id`, `profile_id`, `requested_model`,
+The requested `capabilities[]` array lists temporary account/model demotions.
+Each entry includes `harness_id`, `profile_id`, `requested_model`,
 `account_fingerprint`, redacted `provider_reason`, `observed_at`, `expires_at`,
 and `state` (`provisional`, `confirmed`, `probe_due`, `probing`). Join it by
-harness/profile to show one line per model. It does not change account availability
-or quota. Model operations expose a separate `retryOnOtherAccount` signal;
-[the host retry contract](MODEL_CAPABILITY_ROUTING.md) describes the one allowed
-correlated re-send and the receipt fields.
+harness/profile to show one line per model. It does not change account
+availability or quota. Model operations expose a separate `retryOnOtherAccount`
+signal and, when created with `captureRoutingEvidence=true`, their routing
+receipt; [the host retry contract](MODEL_CAPABILITY_ROUTING.md) describes the one
+allowed correlated re-send and the receipt fields.
 
 `GET /v2/run-applicability` takes an absolute `repoRoot` query and returns the
 live Workspace Git status plus the engine-owned in-place/isolated run-shape

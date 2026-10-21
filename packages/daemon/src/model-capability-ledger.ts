@@ -35,6 +35,8 @@ interface Contribution {
 interface Row {
   binding: CapabilityBinding;
   contributions: Map<string, Contribution>;
+  /** First refusal of this episode; renewals and probes keep it, clearing ends the episode. */
+  startedAt: string;
   expiresAt: number;
   probe: { operationId: string; order: number } | null;
 }
@@ -196,6 +198,7 @@ export class ModelCapabilityLedger {
     const row = this.rows.get(key(binding)) ?? {
       binding,
       contributions: new Map(),
+      startedAt: new Date(this.now()).toISOString(),
       expiresAt: 0,
       probe: null,
     };
@@ -222,6 +225,26 @@ export class ModelCapabilityLedger {
     this.bound(this.attempts);
   }
 
+  /** An unrecognized pre-generation refusal grants the host's one correlated
+   * retry without claiming a capability gap: no row exists until the differential
+   * proves the account at fault (settleRetry "confirmed"). */
+  offer(
+    binding: CapabilityBinding,
+    operationId: string,
+    problem: ControlProblem,
+    request: ModelCallRequest,
+  ): void {
+    if (!this.current(binding)) return;
+    this.prune();
+    this.attempts.set(operationId, {
+      binding,
+      problem,
+      digest: modelRetryDigest(request),
+      expiresAt: this.now() + MODEL_CAPABILITY_TTL_MS,
+    });
+    this.bound(this.attempts);
+  }
+
   served(binding: CapabilityBinding): void {
     if (!this.current(binding)) return;
     this.successes.set(
@@ -231,6 +254,11 @@ export class ModelCapabilityLedger {
     this.bound(this.successes);
     const row = this.rows.get(key(binding));
     if (row && row.binding.order <= binding.order) this.rows.delete(key(binding));
+  }
+
+  /** A newer selection of this account served this model: older evidence is stale. */
+  servedAfter(binding: CapabilityBinding): boolean {
+    return (this.successes.get(key(binding)) ?? -1) > binding.order;
   }
 
   claimRetry(request: ModelCallRequest, operationId: string): CapabilityAttempt | null {
@@ -264,8 +292,38 @@ export class ModelCapabilityLedger {
     if (!attempt || !this.current(attempt.binding)) return;
     const row = this.rows.get(key(attempt.binding));
     const contribution = row?.contributions.get(parentId);
-    if (!row || !contribution) return;
-    contribution.confirmed = true;
+    if (row && contribution) {
+      contribution.confirmed = true;
+      return;
+    }
+    // An unrecognized refusal that another account then served is now proven
+    // to be this account's: it becomes an ordinary, confirmed temporary mark.
+    if (
+      row ||
+      attempt.problem.context.capabilityKind !== "unclassified" ||
+      (this.successes.get(key(attempt.binding)) ?? -1) > attempt.binding.order
+    )
+      return;
+    const since = new Date(this.now()).toISOString();
+    this.rows.set(key(attempt.binding), {
+      binding: attempt.binding,
+      contributions: new Map([
+        [
+          parentId,
+          {
+            reason: redactSecrets(
+              String(attempt.problem.context.providerReason ?? attempt.problem.message),
+            ).slice(0, 1024),
+            since,
+            confirmed: true,
+          },
+        ],
+      ]),
+      startedAt: since,
+      expiresAt: this.now() + MODEL_CAPABILITY_TTL_MS,
+      probe: null,
+    });
+    this.bound(this.rows);
   }
 
   live(): ModelCapabilityMark[] {
@@ -278,7 +336,7 @@ export class ModelCapabilityLedger {
         requested_model: row.binding.model,
         account_fingerprint: row.binding.fingerprint,
         provider_reason: entries.at(-1)!.reason,
-        observed_at: entries[0]!.since,
+        observed_at: row.startedAt,
         expires_at: new Date(row.expiresAt).toISOString(),
         state: this.rowState(row),
       };

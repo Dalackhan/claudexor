@@ -7,18 +7,24 @@ export type RoutingEvidenceRead = {
 };
 
 /**
- * `GET /v2/accounts/routing-evidence` beside the primary listing. An engine
- * that predates the read answers 404: nothing new is shown. Any other failure
- * keeps the listing authoritative and adds one diagnostic; it never fails the
- * listing. `get` throws an error carrying the HTTP `status`.
+ * `GET /v2/accounts/routing-evidence` beside the primary listing, asking for the
+ * capability marks. An engine that predates the read answers 404: nothing new
+ * is shown; one that predates the capability query answers 400 and is read
+ * again without it. Any other failure keeps the listing authoritative and adds
+ * one diagnostic; it never fails the listing. `get` throws an error carrying
+ * the HTTP `status`.
  */
 export async function readRoutingEvidence(
   get: (path: string) => Promise<unknown>,
 ): Promise<RoutingEvidenceRead> {
   try {
-    const parsed = ControlAccountRoutingEvidenceResponse.safeParse(
-      await get("/accounts/routing-evidence"),
+    const body = await get("/accounts/routing-evidence?includeCapabilities=true").catch(
+      (error: unknown) => {
+        if ((error as { status?: unknown } | null)?.status !== 400) throw error;
+        return get("/accounts/routing-evidence");
+      },
     );
+    const parsed = ControlAccountRoutingEvidenceResponse.safeParse(body);
     return parsed.success
       ? { routingEvidence: parsed.data }
       : {

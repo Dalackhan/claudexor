@@ -10,11 +10,17 @@ import {
   type CredentialProfile,
   type ModelAccountChoice,
   type ModelRoutingEvidence,
+  type PreProgressRefusalObservation,
 } from "@claudexor/schema";
 import { describeCodexClientVersion } from "@claudexor/harness-codex";
 import { redactSecrets } from "@claudexor/util";
 import { bindModelAccountEvidence } from "./model-account-evidence.js";
 import { modelError } from "./model-service-refusals.js";
+
+type SoftObservation = Pick<
+  PreProgressRefusalObservation,
+  "harness_id" | "profile_id" | "requested_model"
+>;
 
 export interface ModelCatalogSelection {
   profile: CredentialProfile;
@@ -40,6 +46,15 @@ export async function selectModelCatalog(args: {
   correlatedRetry?: boolean;
   /** Only a clean alternative can authorize the host's one differential retry. */
   unmarkedOnly?: boolean;
+  /** Whether the request's historical native continuation belongs to this account. */
+  boundHistory?: (profileId: string, fingerprint: string | null) => boolean;
+  /** Live pre-generation refusals: a recently refusing account ranks like a marked one. */
+  refusals?: readonly PreProgressRefusalObservation[];
+  /** Live served-model substitutions: that account answered this model with another one. */
+  substitutions?: readonly SoftObservation[];
+  /** Set when the clean-alternative scan passes an account with no capability row:
+   * a soft observation may belong to one request, so that account may still serve. */
+  seen?: { capable: boolean };
   pick: (
     excluded: Set<string>,
     refusals: Map<string, ControlProblem>,
@@ -88,8 +103,36 @@ export async function selectModelCatalog(args: {
     }
     if (args.account.mode === "pin") return { profile, catalog, reason: "pinned" };
     const state = args.capabilities.state(args.harnessId, profile.profile_id, args.model);
-    if (args.unmarkedOnly && state !== null) continue;
+    const observed = (rows?: readonly SoftObservation[]) =>
+      rows?.some(
+        (row) =>
+          row.harness_id === args.harnessId &&
+          row.profile_id === profile.profile_id &&
+          row.requested_model === args.model,
+      ) ?? false;
+    const refused = observed(args.refusals);
+    // A usable preferred account is resolved before the substitution ordering (INV-135).
+    const substituted =
+      observed(args.substitutions) && args.account.preferredProfileId !== profile.profile_id;
+    // A conversation whose native history was produced on its preferred account
+    // replays only there: while that account carries no capability row and has
+    // not just refused it stays first even when its catalog omits the model
+    // (catalogs can lag). A marked or refusing preferred account still yields.
+    if (
+      state === null &&
+      !refused &&
+      args.account.mode === "auto" &&
+      args.account.preferredProfileId === profile.profile_id &&
+      args.boundHistory?.(profile.profile_id, catalog.accountFingerprint)
+    )
+      return { profile, catalog, reason: "preferred" };
+    if (args.unmarkedOnly && (state !== null || refused || substituted)) {
+      if (state === null && args.seen) args.seen.capable = true;
+      continue;
+    }
     const marked =
+      refused ||
+      substituted ||
       state === "provisional" ||
       state === "confirmed" ||
       state === "probing" ||
@@ -105,8 +148,13 @@ export async function selectModelCatalog(args: {
             : "listed";
     const selected = { profile, catalog, reason } as ModelCatalogSelection;
     if (listed && !marked) return selected;
-    // A probe already in flight is still usable when nothing else remains.
-    fallback.push({ selection: selected, priority: state === "probing" ? 2 : marked ? 1 : 0 });
+    // A soft observation may belong to one request; a capability row is the
+    // account's own. A probe already in flight is still usable when nothing
+    // else remains.
+    fallback.push({
+      selection: selected,
+      priority: state === "probing" ? 3 : marked && state !== null ? 2 : marked ? 1 : 0,
+    });
   }
 }
 

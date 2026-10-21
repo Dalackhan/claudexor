@@ -156,6 +156,32 @@ async function olderDaemon() {
   target.addr = { baseUrl: `http://127.0.0.1:${port}`, token: "fixture" };
 }
 
+/** A 4.4.0 engine: the read exists, strict and query-free, without capability rows. */
+async function queryFreeDaemon() {
+  const { capabilities: _rows, ...legacy } = evidence;
+  const requested: string[] = [];
+  const server: Server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://fixture");
+    requested.push(`${url.pathname}${url.search}`);
+    const send = (code: number, body: unknown) => {
+      res.writeHead(code, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
+    if (url.pathname === "/v2/credential-profiles")
+      return send(200, url.searchParams.get("snapshot") === "true" ? snapshot : listing);
+    if (url.pathname === "/v2/accounts/routing-evidence")
+      return url.search
+        ? send(400, { code: "invalid_request", message: "unsupported query", retryable: false })
+        : send(200, legacy);
+    send(404, { code: "not_found", message: `no route for ${url.pathname}`, retryable: false });
+  });
+  await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
+  closers.push(() => new Promise<void>((done) => server.close(() => done())));
+  const { port } = server.address() as AddressInfo;
+  target.addr = { baseUrl: `http://127.0.0.1:${port}`, token: "fixture" };
+  return { legacy, requested };
+}
+
 function capture() {
   let stdout = "";
   vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
@@ -260,6 +286,20 @@ describe("CLI and MCP consumers of the additive read", () => {
     expect(legacy).toEqual(listing);
     const validate = new Ajv({ strict: false }).compile(accountsOutput());
     expect(validate(legacy)).toBe(true);
+  });
+
+  it("a 4.4.0 daemon (400 to the capability query): reads again without it, no diagnostic", async () => {
+    const { legacy, requested } = await queryFreeDaemon();
+    const out = capture();
+    expect(await profilesCommandWithDeps(parseArgs(["profiles"]), false)).toBe(0);
+    expect(out()).toContain("recent refusal · claude-opus-5-5");
+    expect(out()).not.toContain("model capability");
+    expect(out()).not.toContain("routing evidence unavailable");
+    expect(requested.filter((path) => path.startsWith("/v2/accounts/"))).toEqual([
+      "/v2/accounts/routing-evidence?includeCapabilities=true",
+      "/v2/accounts/routing-evidence",
+    ]);
+    expect(await catalogQuery("__accounts")).toEqual({ ...listing, routingEvidence: legacy });
   });
 
   it("an auxiliary failure (500) keeps the listing authoritative and adds one diagnostic", async () => {

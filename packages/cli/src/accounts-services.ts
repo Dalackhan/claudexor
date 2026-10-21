@@ -162,13 +162,18 @@ export function createCredentialProfilesService(
    * Reads only: no probe, no quota refresh, no store write. Service facts are
    * routing evidence, never a
    * quota or authentication verdict. */
-  const accountRoutingEvidence = async () => {
+  const accountRoutingEvidence = async (includeCapabilities = false) => {
     const profiles = loadConfig(NO_PROJECT_ROOT).global.credential_profiles;
     const registered = new Set(profiles.map((p) => `${p.harness_id}\0${p.profile_id}`));
     return {
-      capabilities: accounts.capabilities
-        .live()
-        .filter((mark) => registered.has(`${mark.harness_id}\0${mark.profile_id}`)),
+      // Only clients that ask receive the field; strict legacy clients keep the old shape.
+      ...(includeCapabilities
+        ? {
+            capabilities: accounts.capabilities
+              .live()
+              .filter((mark) => registered.has(`${mark.harness_id}\0${mark.profile_id}`)),
+          }
+        : {}),
       refusals: accounts.refusals
         .live()
         .filter((mark) => registered.has(`${mark.harness_id}\0${mark.profile_id}`)),

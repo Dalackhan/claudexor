@@ -39,9 +39,11 @@ export const ModelCapabilityMark = z
       .describe("Provider account identity the mark is bound to; null when the adapter has none."),
     provider_reason: z
       .string()
-      .describe("Latest provider refusal text, redacted and at most 1024 characters."),
+      .describe(
+        "Latest refusal diagnostic, redacted and at most 1024 characters: the provider's reason for a recognized refusal, the engine's message and vendor code otherwise.",
+      ),
     observed_at: IsoTimestamp.describe(
-      "When the earliest current refusal for this mark was observed.",
+      "Start of this mark's episode, when its row was created (a recognized refusal, or the service elsewhere that confirmed an unrecognized one); renewals and probes keep it.",
     ),
     expires_at: IsoTimestamp.describe("Probe becomes eligible at this time; not a vendor reset."),
     state: z

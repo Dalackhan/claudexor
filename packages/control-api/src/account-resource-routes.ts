@@ -13,7 +13,7 @@ import {
 import type { DaemonControlApiOptions } from "./daemon-server.js";
 import type { OperationDraft } from "./operation-draft.js";
 import { quotaReadViewQuery, resourceViewQuery } from "./catalog-query.js";
-import { assertOnlyQueryParams, singleQuery } from "./query.js";
+import { assertOnlyQueryParams, optionalBooleanQuery, singleQuery } from "./query.js";
 import { requiredIdempotencyKey } from "./run-start.js";
 import { queryParam, QUOTA_READ_PARAMETERS } from "./operation-parameters.js";
 
@@ -43,6 +43,14 @@ export const ACCOUNT_RESOURCE_OPERATION_DRAFTS: OperationDraft[] = [
     responseKind: "json",
     summary:
       "Read live model-scoped refusal marks, temporary capability marks, and the durable last-served order; no probe or quota refresh.",
+    parameters: [
+      queryParam({
+        name: "includeCapabilities",
+        enum: ["true", "false"],
+        description:
+          "Add the temporary account x model capability marks (capabilities[]). Omitted or false preserves the legacy response shape for strict clients.",
+      }),
+    ],
   },
   {
     method: "GET",
@@ -129,8 +137,10 @@ export async function handleAccountResourceRoute(
 ): Promise<boolean> {
   try {
     if (method === "GET" && path === "/accounts/routing-evidence") {
-      assertOnlyQueryParams(url, []);
-      const payload = await required(ctx.services?.accountRoutingEvidence)();
+      assertOnlyQueryParams(url, ["includeCapabilities"]);
+      const payload = await required(ctx.services?.accountRoutingEvidence)(
+        optionalBooleanQuery(url, "includeCapabilities") === true,
+      );
       ctx.json(res, 200, ControlAccountRoutingEvidenceResponse.parse(payload));
       return true;
     }

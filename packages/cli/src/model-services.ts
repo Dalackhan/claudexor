@@ -44,7 +44,7 @@ import { catalogProfiles, enumerateAccountCatalogs } from "./account-catalog.js"
 import { bindModelAccountEvidence, withImageAccountEvidence } from "./model-account-evidence.js";
 import { modelOperationControlServices } from "./model-operation-control.js";
 import { selectModelCatalog } from "./model-catalog-selection.js";
-import { modelCapabilityOutcome } from "./model-capability-outcome.js";
+import { historyBoundTo, modelCapabilityOutcome } from "./model-capability-outcome.js";
 import { modelError, poolExhausted } from "./model-service-refusals.js";
 
 interface ModelSource {
@@ -103,7 +103,9 @@ export function createModelServices(deps: Dependencies) {
       excludedFingerprint?: string | null;
       correlatedRetry?: boolean;
       unmarkedOnly?: boolean;
+      seen?: { capable: boolean };
       poolEvents?: ModelRoutingEvidence["poolEvents"];
+      boundHistory?: (profileId: string, fingerprint: string | null) => boolean;
     } = {},
   ) => {
     const admitted = await admitAccount(source, account, model, signal);
@@ -218,7 +220,15 @@ export function createModelServices(deps: Dependencies) {
         pinnedProfile,
         boundProfileId:
           account.mode === "auto" &&
-          !capabilities.state(harnessId, account.preferredProfileId ?? "", model)
+          !capabilities.state(harnessId, account.preferredProfileId ?? "", model) &&
+          !deps.refusals
+            ?.live()
+            .some(
+              (row) =>
+                row.harness_id === harnessId &&
+                row.profile_id === account.preferredProfileId &&
+                row.requested_model === model,
+            )
             ? (account.preferredProfileId ?? null)
             : null,
         threadId: null,
@@ -254,7 +264,9 @@ export function createModelServices(deps: Dependencies) {
       excludedFingerprint?: string | null;
       correlatedRetry?: boolean;
       unmarkedOnly?: boolean;
+      seen?: { capable: boolean };
       poolEvents?: ModelRoutingEvidence["poolEvents"];
+      boundHistory?: (profileId: string, fingerprint: string | null) => boolean;
     } = {},
   ) =>
     selectModelCatalog({
@@ -267,6 +279,8 @@ export function createModelServices(deps: Dependencies) {
       unusable,
       quota: deps.quota,
       warn: deps.warn,
+      refusals: deps.refusals?.live(),
+      substitutions: substitutions.live(),
       ...options,
       pick: (excluded, refusals) =>
         pickAccount(
@@ -340,6 +354,8 @@ export function createModelServices(deps: Dependencies) {
           excludedFingerprint: retry?.binding.fingerprint,
           correlatedRetry: retry !== null,
           poolEvents,
+          boundHistory: (profileId, fingerprint) =>
+            historyBoundTo(request, { profileId, fingerprint }),
         });
       let selected = await select();
       let binding = capabilities.bind(source.credentialHarness, selected.catalog, request.model);
@@ -442,15 +458,17 @@ export function createModelServices(deps: Dependencies) {
                   routing,
                   dispatched,
                   hasAlternative: async () => {
+                    const seen = { capable: false };
                     try {
                       await resolve(source, { mode: "auto" }, input.model, signal, {
                         excluded: new Set([profile.profile_id]),
                         excludedFingerprint: binding.fingerprint,
                         unmarkedOnly: true,
+                        seen,
                       });
-                      return true;
+                      return { clean: true, capable: true };
                     } catch {
-                      return false;
+                      return { clean: false, capable: seen.capable };
                     }
                   },
                 });

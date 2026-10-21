@@ -32,12 +32,12 @@
               },
               "provider_reason": {
                 "type": "string",
-                "description": "Latest provider refusal text, redacted and at most 1024 characters."
+                "description": "Latest refusal diagnostic, redacted and at most 1024 characters: the provider's reason for a recognized refusal, the engine's message and vendor code otherwise."
               },
               "observed_at": {
                 "type": "string",
                 "minLength": 1,
-                "description": "When the earliest current refusal for this mark was observed."
+                "description": "Start of this mark's episode, when its row was created (a recognized refusal, or the service elsewhere that confirmed an unrecognized one); renewals and probes keep it."
               },
               "expires_at": {
                 "type": "string",

@@ -61,7 +61,7 @@ export const ModelAccountChoice = z
     z.object({ mode: z.literal("pin"), profileId: Id }).strict(),
   ])
   .describe(
-    "Auto prefers preferredProfileId among unmarked accounts of the same catalog tier (listed before unlisted); a listed alternative or a capability mark outranks it. Pin never selects another account.",
+    "Auto text operations prefer preferredProfileId among unmarked accounts of the same catalog tier (listed before unlisted); a listed alternative, a mark or a recent refusal outranks it. History bound to that account keeps it first over a catalog miss only while it has neither a mark nor a recent refusal. Image operations order accounts by the pool alone. Pin never selects another account.",
   );
 export type ModelAccountChoice = z.infer<typeof ModelAccountChoice>;
 
@@ -476,6 +476,7 @@ export const ModelOperationParams = z
     ),
     captureFailureEvidence: z.literal(true).optional(),
     captureEffortEvidence: z.literal(true).optional(),
+    captureRoutingEvidence: z.literal(true).optional(),
   })
   .strict();
 export type ModelOperationParams = z.infer<typeof ModelOperationParams>;

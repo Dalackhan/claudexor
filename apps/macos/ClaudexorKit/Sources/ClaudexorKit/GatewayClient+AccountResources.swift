@@ -9,7 +9,7 @@ public struct AccountResourceCapabilities: Sendable, Equatable {
     public let accountsSnapshot: Bool
     public let reset: Bool
     public let resetStatus: Bool
-    /// `GET /v2/accounts/routing-evidence` (model-scoped refusals, capability marks + last service).
+    /// `GET /v2/accounts/routing-evidence` (model-scoped refusals + last service).
     public let routingEvidence: Bool
 }
 

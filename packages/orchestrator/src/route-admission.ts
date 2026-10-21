@@ -1,18 +1,8 @@
-/** Candidate membership and exact-row readiness shared by requirements admission and execution. */
-import type {
-  GlobalConfig,
-  Intent,
-  CredentialProfile,
-  CredentialProfileStatus,
-  CredentialUnusableObservation,
-} from "@claudexor/schema";
+/** Candidate-harness membership shared by requirements admission and execution. */
+import type { GlobalConfig, Intent } from "@claudexor/schema";
 import { HarnessUnavailableError, type AdapterRegistry } from "@claudexor/core";
 import type { HarnessStatus } from "@claudexor/gateway";
 import { accountPoolRows } from "./account-pool.js";
-import {
-  selectedProfileAvailability,
-  type VendorQuotaObservations,
-} from "./credential-profiles.js";
 
 export function resolveCandidateHarnessIds(args: {
   harnesses?: string[];
@@ -68,7 +58,7 @@ export function resolveCandidateHarnessIds(args: {
       // doctor only sees the default store, and a signed-in registry row is
       // invisible to it (cursor after the host-Keychain retirement, or a
       // named-rows-only claude/codex install). Row-bearing lanes still pass
-      // the per-lane row probe below before they are admitted.
+      // execution's per-lane row probe before they are admitted.
       const registry = config.credential_profiles ?? [];
       ids = statuses
         .filter(
@@ -86,60 +76,4 @@ export function resolveCandidateHarnessIds(args: {
     }
   }
   return ids;
-}
-
-/** Readiness admits only the pin, or the bound/pool rows when the default is unavailable. */
-export async function admitCredentialRouteRows(args: {
-  registry: readonly CredentialProfile[];
-  profileId: string | null;
-  boundProfileId: string | null;
-  harnessId: string;
-  defaultReady: boolean;
-  model: string | null;
-  quota: VendorQuotaObservations;
-  unusable: readonly CredentialUnusableObservation[];
-  probe: ((profile: CredentialProfile) => Promise<CredentialProfileStatus>) | undefined;
-}): Promise<{ admitted: boolean; pinVerdict: string | null; unreadyRows: string | null }> {
-  const { registry, harnessId, profileId: explicitPin, boundProfileId: bound } = args;
-  const candidateIds: string[] = [];
-  if (explicitPin) {
-    candidateIds.push(explicitPin);
-  } else if (!args.defaultReady) {
-    const pool = accountPoolRows(registry, harnessId);
-    candidateIds.push(
-      ...(bound && pool.some((row) => row.profile_id === bound) ? [bound] : []),
-      ...pool.map((row) => row.profile_id).filter((rowId) => rowId !== bound),
-    );
-  }
-  const verdicts: string[] = [];
-  let lastVerdict: string | null = null;
-  for (const candidateId of candidateIds) {
-    const verdict = await selectedProfileAvailability({
-      registry,
-      profileId: candidateId,
-      harnessId,
-      probe: args.probe,
-      // `verification: passed` from the local store only means a login file
-      // is present. The poller's authenticated vendor call is the only
-      // liveness evidence; admission must act on it or dispatch may use a revoked token.
-      quota: args.quota,
-      unusable: args.unusable,
-      model: args.model,
-      // Only an explicit/bound route may consume bounded stale LKG evidence;
-      // only an unpinned one may consume a last positive after a timeout.
-      allowStale: explicitPin !== null || bound === candidateId,
-      unpinned: explicitPin === null,
-    });
-    if (verdict === "available") return { admitted: true, pinVerdict: null, unreadyRows: null };
-    lastVerdict = verdict;
-    verdicts.push(`${candidateId}: ${verdict ?? "not ready"}`);
-  }
-  return {
-    admitted: false,
-    pinVerdict: explicitPin ? lastVerdict : null,
-    unreadyRows:
-      !explicitPin && verdicts.length > 0
-        ? `${harnessId} has no ready account (${verdicts.join("; ")})`
-        : null,
-  };
 }

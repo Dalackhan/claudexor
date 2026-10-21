@@ -30,7 +30,7 @@ import {
   credentialExecutionSubject,
 } from "@claudexor/core";
 import type { EventLog } from "@claudexor/event-log";
-import { admitCredentialRouteRows } from "./route-admission.js";
+import { accountPoolRows } from "./account-pool.js";
 import { PoolRouteFlags, resolveAccountForRun } from "./account-resolution.js";
 import type { AttemptOutputMarkers } from "./attemptOutputMarkers.js";
 import { profileBillingVerification } from "./auth-route-classification.js";
@@ -43,6 +43,7 @@ import {
   resolveCredentialProfile,
   probeCredentialProfileStatus,
   profileStatusAdmits,
+  selectedProfileAvailability,
   type ProfilePolicy,
   type VendorQuotaObservations,
 } from "./credential-profiles.js";
@@ -341,12 +342,51 @@ export class OrchestratorCredentials {
     unusable: readonly CredentialUnusableObservation[];
     probe: ((profile: CredentialProfile) => Promise<CredentialProfileStatus>) | undefined;
   }): Promise<{ admitted: boolean; pinVerdict: string | null; unreadyRows: string | null }> {
-    return admitCredentialRouteRows({
-      ...args,
-      registry: this.host.config(args.input.repoRoot)?.global.credential_profiles ?? [],
-      profileId: this.effectiveProfileId(args.input, args.harnessId),
-      boundProfileId: args.input.threadAccountBindings?.[args.harnessId] ?? null,
-    });
+    const { input, harnessId } = args;
+    const registry = this.host.config(input.repoRoot)?.global.credential_profiles ?? [];
+    const explicitPin = this.effectiveProfileId(input, harnessId);
+    const bound = input.threadAccountBindings?.[harnessId] ?? null;
+    const candidateIds: string[] = [];
+    if (explicitPin) {
+      candidateIds.push(explicitPin);
+    } else if (!args.defaultReady) {
+      const pool = accountPoolRows(registry, harnessId);
+      candidateIds.push(
+        ...(bound && pool.some((row) => row.profile_id === bound) ? [bound] : []),
+        ...pool.map((row) => row.profile_id).filter((rowId) => rowId !== bound),
+      );
+    }
+    const verdicts: string[] = [];
+    let lastVerdict: string | null = null;
+    for (const candidateId of candidateIds) {
+      const verdict = await selectedProfileAvailability({
+        registry,
+        profileId: candidateId,
+        harnessId,
+        probe: args.probe,
+        // `verification: passed` from the local store only means a login file
+        // is present. The poller's authenticated vendor call is the only
+        // liveness evidence; admission must act on it or dispatch may use a revoked token.
+        quota: args.quota,
+        unusable: args.unusable,
+        model: args.model,
+        // Only an explicit/bound route may consume bounded stale LKG evidence;
+        // only an unpinned one may consume a last positive after a timeout.
+        allowStale: explicitPin !== null || bound === candidateId,
+        unpinned: explicitPin === null,
+      });
+      if (verdict === "available") return { admitted: true, pinVerdict: null, unreadyRows: null };
+      lastVerdict = verdict;
+      verdicts.push(`${candidateId}: ${verdict ?? "not ready"}`);
+    }
+    return {
+      admitted: false,
+      pinVerdict: explicitPin ? lastVerdict : null,
+      unreadyRows:
+        !explicitPin && verdicts.length > 0
+          ? `${harnessId} has no ready account (${verdicts.join("; ")})`
+          : null,
+    };
   }
 
   /** Resolve one reviewer slot through the ordinary account-pool owner. */

@@ -1,15 +1,17 @@
 import { loadConfig } from "@claudexor/config";
 import {
+  HarnessUnavailableError,
   credentialProfilePolicyProblem,
   credentialProfilePolicyState,
   type AdapterRegistry,
 } from "@claudexor/core";
 import type { ProjectControlPort, ResourceStorePort } from "@claudexor/daemon";
-import { capabilityIntents, type HarnessStatus } from "@claudexor/gateway";
+import type { HarnessStatus } from "@claudexor/gateway";
 import {
   RequestRequirementsResolver,
+  effectiveHarnessPool,
   resolveCandidateHarnessIds,
-  admitCredentialRouteRows,
+  resolveCredentialProfile,
 } from "@claudexor/orchestrator";
 import {
   runStartRequiresGit,
@@ -50,11 +52,6 @@ interface RunRequirementsPreflightDependencies {
   gitCapability?: () => Promise<GitCapability>;
   requiresGit?: (request: ControlRunStartRequest) => boolean;
   threadProfileId?: (threadId: string) => string | null;
-  threadAccountBindings?: (threadId: string) => Record<string, string>;
-  credentialReadiness?: () => Pick<
-    Parameters<typeof admitCredentialRouteRows>[0],
-    "quota" | "unusable"
-  >;
 }
 
 export interface RunRequirementsPreflightPolicy {
@@ -62,17 +59,14 @@ export interface RunRequirementsPreflightPolicy {
   git?: "eager" | "durable_job";
 }
 
-/** Direct runs and thread turns read the same thread and account evidence. */
+/** Direct runs, Exact Retry and thread turns read an omitted pin from the same thread. */
 export function createThreadAwareRunRequirementsPreflights(
   resources: Pick<ResourceStorePort, "resolve">,
   noProjectRoot: string,
-  threads: Pick<ProjectControlPort, "getThread" | "accountBindings">,
-  credentialReadiness: NonNullable<RunRequirementsPreflightDependencies["credentialReadiness"]>,
+  threads: Pick<ProjectControlPort, "getThread">,
 ) {
   const dependencies: RunRequirementsPreflightDependencies = {
     threadProfileId: (id) => threads.getThread(id)?.credential_profile_id ?? null,
-    threadAccountBindings: (id) => threads.accountBindings(id),
-    credentialReadiness,
     requiresGit: (request) => {
       const root = request.scope.kind === "project" ? request.scope.root : noProjectRoot;
       const config = loadConfig(root);
@@ -173,47 +167,42 @@ export function createRunRequirementsPreflight(
       });
     }
     if ((request.attachments?.length ?? 0) === 0 && request.browser !== true) return;
-    const explicitPool = (request.harnesses?.length ?? 0) > 0;
-    const intent = modeIntent[request.mode ?? "agent"];
     const config = loadConfig(cwd).global;
+    // Execution's pool: the request's (a thread turn carries its sticky pool),
+    // else Settings; either is strict. Only Auto membership reads host status.
+    const pool = effectiveHarnessPool(request.harnesses, config.routing.eligible_harnesses);
+    const explicitPool = (pool?.length ?? 0) > 0;
+    const intent = modeIntent[request.mode ?? "agent"];
     const profileId = runCredentialProfileId(request, dependencies.threadProfileId ?? (() => null));
     const registry = dependencies.registry ?? buildRegistry({ includeFakes: true });
-    const probeIds = (explicitPool ? request.harnesses! : [...registry.keys()]).filter(
-      (id) => config.harnesses[id]?.enabled !== false,
-    );
-    const needsReadiness =
-      !explicitPool || profileId !== null || config.credential_profiles.length > 0;
-    const statuses = needsReadiness
-      ? probeIds.length === 0
+    const probeIds = explicitPool
+      ? []
+      : [...registry.keys()].filter((id) => config.harnesses[id]?.enabled !== false);
+    const statuses =
+      probeIds.length === 0
         ? []
         : dependencies.statusAll
           ? await dependencies.statusAll(cwd, probeIds)
-          : await buildGateway({ includeFakes: false }).statusAll({ cwd }, probeIds)
-      : [];
-    const harnessIds = resolveCandidateHarnessIds({
-      harnesses: request.harnesses,
-      credentialProfileId: profileId,
-      config,
-      registry,
-      statuses,
-      intent,
-    });
-    if (harnessIds.length === 0) {
-      throw requestError(
-        "no eligible harness lane can satisfy this request",
-        400,
-        "request_requirements_unavailable",
-      );
+          : await buildGateway({ includeFakes: false }).statusAll({ cwd }, probeIds);
+    let harnessIds: string[];
+    try {
+      harnessIds = resolveCandidateHarnessIds({
+        harnesses: pool,
+        credentialProfileId: profileId,
+        config,
+        registry,
+        statuses,
+        intent,
+      });
+    } catch (error) {
+      if (error instanceof HarnessUnavailableError)
+        throw requestError(error.message, 400, "harness_unavailable");
+      throw error;
     }
 
+    // Static lane facts only: account readiness, quota and model admission
+    // stay with execution, which checks them before any provider starts.
     const attachments = resources.resolve(request.attachments ?? []);
-    const readiness = dependencies.credentialReadiness?.() ?? {
-      quota: { snapshots: [], absences: [] },
-      unusable: [],
-    };
-    const bindings = request.threadId
-      ? dependencies.threadAccountBindings?.(request.threadId)
-      : undefined;
     const refusals: Error[] = [];
     const manifests = await Promise.all(
       harnessIds.map(async (harnessId) => {
@@ -222,23 +211,29 @@ export function createRunRequirementsPreflight(
           throw requestError(`unknown harness lane: ${harnessId}`, 400, "harness_unavailable");
         if (config.harnesses[harnessId]?.enabled === false)
           throw requestError(`${harnessId} is disabled in settings`, 400, "harness_unavailable");
-        const cardinality = credentialProfilePolicyState({
-          adapter,
-          registry: config.credential_profiles,
-        });
-        if (cardinality.ambiguous)
-          throw credentialProfilePolicyProblem(cardinality, "credential_profile_ambiguous");
-        const status = statuses.find((entry) => entry.id === harnessId);
-        if (needsReadiness && (!status || status.manifest === null)) {
-          const refusal = requestError(`${harnessId} is unavailable`, 400, "harness_unavailable");
-          if (explicitPool) throw refusal;
-          refusals.push(refusal);
-          return null;
+        if (profileId) {
+          // A pin binds every lane; it is refused, never substituted.
+          try {
+            resolveCredentialProfile(config.credential_profiles, profileId, harnessId);
+          } catch (error) {
+            throw requestError(
+              `${harnessId}: ${error instanceof Error ? error.message : String(error)}`,
+              400,
+              "harness_unavailable",
+            );
+          }
         }
-        let manifest: NonNullable<HarnessStatus["manifest"]>;
-        try {
-          manifest = status?.manifest ?? (await adapter.discover());
-        } catch {
+        // A null Auto manifest is the gateway's own failed discovery.
+        const status = statuses.find((entry) => entry.id === harnessId);
+        let manifest: HarnessStatus["manifest"] = null;
+        if (status?.manifest !== null) {
+          try {
+            manifest = status?.manifest ?? (await adapter.discover());
+          } catch {
+            manifest = null;
+          }
+        }
+        if (!manifest) {
           const refusal = requestError(
             `${harnessId} is unavailable (discovery failed)`,
             400,
@@ -247,48 +242,6 @@ export function createRunRequirementsPreflight(
           if (explicitPool) throw refusal;
           refusals.push(refusal);
           return null;
-        }
-        if (needsReadiness) {
-          const rows = await admitCredentialRouteRows({
-            registry: config.credential_profiles,
-            profileId,
-            boundProfileId: bindings?.[harnessId] ?? null,
-            harnessId,
-            defaultReady: status?.status === "ok",
-            model:
-              request.models?.[harnessId] ?? config.harnesses[harnessId]?.default_model ?? null,
-            ...readiness,
-            probe: adapter.probeCredentialProfile?.bind(adapter),
-          });
-          if (profileId && !rows.admitted) {
-            const refusal = requestError(
-              `${harnessId} credential profile "${profileId}" is not ready: ${rows.pinVerdict}`,
-              400,
-              "harness_unavailable",
-            );
-            if (explicitPool) throw refusal;
-            refusals.push(refusal);
-            return null;
-          }
-          const enabledIntents =
-            rows.admitted && status?.status !== "ok"
-              ? capabilityIntents(manifest.capabilities)
-              : (status?.enabledIntents ?? []);
-          const defaultAdmitted =
-            status?.status === "ok" || (explicitPool && status?.status === "degraded");
-          if (
-            (!rows.admitted && (!defaultAdmitted || (rows.unreadyRows && !explicitPool))) ||
-            !enabledIntents.includes(intent)
-          ) {
-            const refusal = requestError(
-              rows.unreadyRows ?? `${harnessId} cannot ${intent}`,
-              400,
-              "harness_unavailable",
-            );
-            if (explicitPool) throw refusal;
-            refusals.push(refusal);
-            return null;
-          }
         }
         return { harnessId, manifest };
       }),
@@ -325,6 +278,17 @@ export function createRunRequirementsPreflight(
     const compatibleManifests = attachmentAdmission.admittedHarnessIds
       .map((harnessId) => eligibleManifests.find((entry) => entry.harnessId === harnessId))
       .filter((entry): entry is (typeof eligibleManifests)[number] => entry !== undefined);
+    // Like execution, validate profile cardinality only after Auto has dropped
+    // lanes that cannot receive the mandatory attachments. Explicit pools remain
+    // strict: resolveAttachmentPool above refuses any incompatible selected lane.
+    for (const { harnessId } of compatibleManifests) {
+      const cardinality = credentialProfilePolicyState({
+        adapter: registry.get(harnessId),
+        registry: config.credential_profiles,
+      });
+      if (cardinality.ambiguous)
+        throw credentialProfilePolicyProblem(cardinality, "credential_profile_ambiguous");
+    }
     if (request.browser !== true) return;
 
     const resolutions = compatibleManifests.map(({ harnessId, manifest }) =>

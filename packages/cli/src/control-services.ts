@@ -146,10 +146,7 @@ export function controlServices(
     resolve: (refs) => resources().resolve(refs),
   };
   const { preflightRunRequirements, preflightThreadRunRequirements } =
-    createThreadAwareRunRequirementsPreflights(lazyResources, NO_PROJECT_ROOT, threads, () => ({
-      quota: { ...quotaRegistry().read(), honored: accounts.unusable.honored() },
-      unusable: accounts.unusable.live(),
-    }));
+    createThreadAwareRunRequirementsPreflights(lazyResources, NO_PROJECT_ROOT, threads);
   // Routes and retention share one thread purge and durability owner.
   const { purgeThread, hasPurgeLeftovers } = threadPurgeOwner(
     threads,

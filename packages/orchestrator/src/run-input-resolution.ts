@@ -9,6 +9,15 @@ export interface RunInputResolutionDeps {
   routingGoal?: RoutingGoal;
 }
 
+/** The run's pool: the requested one (a thread turn arrives with its sticky
+ * pool projected), else Settings `routing.eligible_harnesses`, else Auto. */
+export function effectiveHarnessPool(
+  requested: string[] | undefined,
+  configuredPool: string[],
+): string[] | undefined {
+  return requested ?? (configuredPool.length > 0 ? configuredPool : undefined);
+}
+
 /** Resolve stable pool, primary, model, web, and routing defaults once per run. */
 export function resolveRunInputDefaults(input: RunInput, deps: RunInputResolutionDeps): RunInput {
   if (
@@ -18,8 +27,7 @@ export function resolveRunInputDefaults(input: RunInput, deps: RunInputResolutio
     throw new Error("contextMode 'off' is only supported for Ask without a repoRoot");
   }
   const cfg = deps.config;
-  const configuredPool = cfg.global.routing.eligible_harnesses;
-  const harnesses = input.harnesses ?? (configuredPool.length > 0 ? configuredPool : undefined);
+  const harnesses = effectiveHarnessPool(input.harnesses, cfg.global.routing.eligible_harnesses);
   const explicitPrimary = input.primaryHarness;
   const configPrimary = cfg.global.routing.primary_harness;
   const primaryHarness =

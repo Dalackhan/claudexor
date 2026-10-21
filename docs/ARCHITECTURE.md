@@ -990,7 +990,7 @@ runtime deployed beside them, and a missing file is a launch error. It
 defaults `windowsHide` for the vendor's own exported `spawn`/`spawnSync`
 calls, keeping explicit values and Node's argument validation. Options are
 copied with their descriptors and prototype; exotic accessors that require
-the original object's private-field identity remain unsupported on older Node.
+the original object's private-field identity remain unsupported.
 The selected
 interpreter (an older Node beside the npm shim included), vendor script,
 argv, environment and binary identity are unchanged. `NODE_OPTIONS` is not

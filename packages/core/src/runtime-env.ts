@@ -322,6 +322,7 @@ export function prepareHarnessCommand(
   args: readonly string[],
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
+  background = false,
 ): ReturnType<typeof interpretedCommand> & { resolution: HarnessCommandResolution } {
   const pathValue =
     env.PATH ??
@@ -337,7 +338,13 @@ export function prepareHarnessCommand(
     });
   }
   return {
-    ...interpretedCommand(command?.entrypoint ?? bin, args, env, command?.interpreter),
+    ...interpretedCommand(
+      command?.entrypoint ?? bin,
+      args,
+      env,
+      command?.interpreter,
+      background && platform === "win32",
+    ),
     resolution,
   };
 }

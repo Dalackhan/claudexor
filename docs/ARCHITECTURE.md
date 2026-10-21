@@ -434,6 +434,17 @@ mode's intent (`explain` for Ask, `audit` for Ask's `--deep-scan` sweep,
 mode requires it. Surfaces keep aggregate/default doctor evidence distinct from
 exact-profile evidence and routing gates on the identity actually selected.
 
+Attachment and Browser request preflight share candidate-harness membership and
+exact-row readiness with execution (`orchestrator/route-admission.ts`). The CLI
+resolves the requested profile through one precedence owner for both phases:
+an explicit per-turn id wins, explicit `null` clears the thread pin for that
+turn, and omission inherits it. A named profile can admit its harness when the
+default store is logged out, but never bypasses profile readiness, platform
+cardinality, enabled intents, or attachment/Browser capability and access gates.
+Explicit harness pools remain strict; Auto considers only the selected profile’s
+harnesses when pinned. Final account, quota, model and native-policy admission
+remain at execution.
+
 Read-only routing additionally re-derives the env-sensitive readiness
 evidence in the run's own resolved context: a read-only run spawns inside a
 scoped throwaway HOME, so the router resolves that context ONCE (a typed

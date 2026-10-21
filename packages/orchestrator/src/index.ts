@@ -21,3 +21,5 @@ export * from "./credential-execution.js";
 export * from "./account-evidence.js";
 export { profileQuotaBlock } from "./credential-cooldown.js";
 export { type RunScopeCustodian } from "./runScope.js";
+
+export { resolveCandidateHarnessIds, admitCredentialRouteRows } from "./route-admission.js";

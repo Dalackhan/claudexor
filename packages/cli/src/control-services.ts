@@ -20,7 +20,6 @@ import {
   type ResourceAttachmentRef,
   ControlAccountsMigrationRollbackRequest,
   ControlCredentialProfileCreateRequest,
-  type ControlRunStartRequest,
   type LiveMessageInput,
   type RuntimeConcurrencyCaps,
   RunScope,
@@ -53,8 +52,7 @@ import type { SetupJobStorePort } from "./setup-job-projection.js";
 import { activeProfileLoginJob } from "./setup-job-support.js";
 import { setupJobControlServices } from "./setup-job-control-services.js";
 import { SetupLifecycleBinding } from "./setup-lifecycle-binding.js";
-import { createRunRequirementsPreflight } from "./request-preflight.js";
-import { threadRunStartRequiresGit } from "./thread-execution-workspace.js";
+import { createThreadAwareRunRequirementsPreflights } from "./request-preflight.js";
 import { applyThreadDiff, type ThreadApplyOptions } from "./thread-delivery.js";
 import { assertCredentialProfileCompatibility } from "./profile-compatibility.js";
 import { recoveryControlServices } from "./recovery-control-services.js";
@@ -147,26 +145,11 @@ export function controlServices(
   const lazyResources: Pick<ResourceStorePort, "resolve"> = {
     resolve: (refs) => resources().resolve(refs),
   };
-  const runStartRequiresGit = (request: ControlRunStartRequest): boolean => {
-    const root = request.scope.kind === "project" ? request.scope.root : NO_PROJECT_ROOT;
-    const thread = request.threadId ? threads.getThread(request.threadId) : undefined;
-    const config = loadConfig(root);
-    return threadRunStartRequiresGit(
-      request,
-      thread,
-      config.project.constraints.protected_paths,
-      config.trust.access_default,
-    );
-  };
-  const preflightRunRequirements = createRunRequirementsPreflight(lazyResources, NO_PROJECT_ROOT, {
-    requiresGit: runStartRequiresGit,
-  });
-  const preflightThreadRunRequirements = createRunRequirementsPreflight(
-    lazyResources,
-    NO_PROJECT_ROOT,
-    { requiresGit: runStartRequiresGit },
-    { git: "durable_job" },
-  );
+  const { preflightRunRequirements, preflightThreadRunRequirements } =
+    createThreadAwareRunRequirementsPreflights(lazyResources, NO_PROJECT_ROOT, threads, () => ({
+      quota: { ...quotaRegistry().read(), honored: accounts.unusable.honored() },
+      unusable: accounts.unusable.live(),
+    }));
   // Routes and retention share one thread purge and durability owner.
   const { purgeThread, hasPurgeLeftovers } = threadPurgeOwner(
     threads,

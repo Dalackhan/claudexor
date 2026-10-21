@@ -5,15 +5,15 @@
 #
 # Dev builds run the executable directly (`swift run ClaudexorApp`); this script is only for
 # producing a shippable, notarized bundle. Signing/notarization are OPT-IN via env vars so
-# the script also works for an unsigned local .app:
+# the script also works for a locally ad-hoc-signed .app:
 #
-#   # unsigned local bundle + ZIP:
+#   # locally ad-hoc-signed bundle + ZIP (no Developer ID):
 #   apps/macos/scripts/build-app.sh
 #
-#   # unsigned local bundle with four signed development SSH runtimes:
+#   # locally ad-hoc-signed bundle with four signed development SSH runtimes:
 #   CLAUDEXOR_DEV_REMOTE_RUNTIME=1 apps/macos/scripts/build-app.sh
 #
-#   # unsigned local bundle + ZIP + DMG:
+#   # locally ad-hoc-signed bundle + ZIP + DMG (no Developer ID):
 #   MAKE_DMG=1 apps/macos/scripts/build-app.sh
 #
 #   # signed + notarized + DMG (requires your Apple Developer ID):
@@ -475,7 +475,9 @@ if [ -n "${SIGN_IDENTITY:-}" ]; then
     echo "    (set NOTARY_PROFILE to notarize + staple)"
   fi
 else
-  echo "==> Skipping codesign (set SIGN_IDENTITY to sign). This bundle is for LOCAL use;"
+  echo "==> Ad-hoc signing local app bundle (set SIGN_IDENTITY for Developer ID signing)."
+  bash "$HERE/sign-local-app.sh" "$APP"
+  echo "    This bundle is for LOCAL use;"
   echo "    Gatekeeper will block it on other machines until signed + notarized."
 fi
 

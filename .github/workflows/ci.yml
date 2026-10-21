@@ -465,6 +465,9 @@ jobs:
           node "$resources/claudexor.bundle.cjs" help --json
           pnpm vitest run packages/core/src/process-identity.test.ts packages/schema/src/platform-auth-policy.test.ts
 
+      - name: Verify local macOS app signing and cleanup
+        run: pnpm vitest run scripts/lib/build-app-local-signing.test.mjs scripts/lib/build-app-cleanup.test.mjs
+
       - name: Swift tests (ClaudexorKit)
         working-directory: apps/macos/ClaudexorKit
         run: swift test

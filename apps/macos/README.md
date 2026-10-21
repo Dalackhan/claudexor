@@ -51,10 +51,10 @@ Dev/QA env switches:
 ## Packaging
 
 ```bash
-# Unsigned local bundle + ZIP:
+# Local ad-hoc-signed bundle + ZIP (no Developer ID):
 apps/macos/scripts/build-app.sh
 
-# Unsigned local bundle + ZIP + DMG:
+# Local ad-hoc-signed bundle + ZIP + DMG (no Developer ID):
 MAKE_DMG=1 apps/macos/scripts/build-app.sh
 
 # Signed + notarized + DMG, when Developer ID credentials are configured locally:
@@ -69,13 +69,15 @@ The assembled `Claudexor.app` bundle lands in `apps/macos/dist/bundle.noindex/`
 (the `.noindex` suffix keeps Spotlight from indexing dev builds as launchable
 apps), while the DMG/ZIP artifacts and their checksums stay directly in
 `apps/macos/dist/`.
-Local builds without signing env produce `Claudexor-<version>-unsigned.zip`
-and `Claudexor-<version>-unsigned.dmg`, with sibling `.sha256` checksum
-files — Gatekeeper blocks those on other Macs (local smoke only). The
-public GitHub Release assets are SIGNED + NOTARIZED + STAPLED (the CI build imports
-the Developer ID certificate from repository secrets) and are built by
-`.github/workflows/release.yml` on a macOS runner from the pushed tag/sha, then
-attached to the draft release with `GITHUB_TOKEN`. Do not upload local
+Local builds without a Developer ID ad-hoc sign and strictly verify the root
+`.app` bundle after assembly, preserving nested runtime signatures. They produce
+`Claudexor-<version>-unsigned.zip` and `Claudexor-<version>-unsigned.dmg`,
+with sibling `.sha256` checksum files. These are local smoke artifacts;
+ad-hoc signing does not make them trusted or notarized, and Gatekeeper blocks
+them on other Macs. The public GitHub Release assets are SIGNED + NOTARIZED +
+STAPLED. `.github/workflows/release.yml` builds them on a macOS runner from the
+pushed tag/sha, imports the Developer ID certificate from repository secrets,
+and attaches them to the draft release with `GITHUB_TOKEN`. Do not upload local
 `apps/macos/dist` artifacts as final release assets. Release notes must also
 call out the macOS 26 minimum.
 

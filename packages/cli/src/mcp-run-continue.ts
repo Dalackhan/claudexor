@@ -13,8 +13,9 @@ import { acceptedPreRunFailure } from "./run-start-acceptance.js";
 
 /**
  * The successor controls a caller may state explicitly, by their canonical
- * request names. Mode, scope, execution, harness and model are inherited by
- * the daemon; every other omitted control keeps its ordinary new-run default.
+ * request names. Mode, scope, execution, harness, model and the prompt-cache
+ * lifetime are inherited by the daemon; every other omitted control keeps its
+ * ordinary new-run default.
  * Only supported fields are projected: parsing the whole request here would
  * materialize defaults before the daemon can inherit the predecessor.
  */
@@ -52,7 +53,8 @@ export async function runContinueQuery(
       status: 403,
     });
   }
-  // Inherited groups (mode, scope, execution, harness, model) are not caller controls here.
+  // Inherited groups (mode, scope, execution, harness, model, prompt-cache
+  // lifetime) are not caller controls here.
   const unknown = Object.keys(input).filter(
     (key) => !TRANSPORT_FIELDS.has(key) && !CALLER_FIELDS.includes(key),
   );

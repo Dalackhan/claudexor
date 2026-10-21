@@ -158,6 +158,7 @@ describe("command registry — the one owner of the CLI surface", () => {
       "model",
       "effort",
       "processing",
+      "prompt-cache-ttl",
       "workspace-kind",
       "scope-path",
       "portfolio",

@@ -4,6 +4,7 @@ import {
   ModeKind,
   RunExecution,
   type ProcessingPreference,
+  type PromptCacheTtl,
   normalizeCancelReasonCode,
 } from "@claudexor/schema";
 import { connectDaemonIfRunning, ensureDaemon, enqueueAndAwait } from "./daemon-run.js";
@@ -42,6 +43,8 @@ export interface McpSurfaceRunnerOptions {
   /** Original project root from the engine descriptor, never from child arguments. */
   delegationRepoRoot?: string | null;
   delegationProcessingPreference?: ProcessingPreference;
+  /** Belt-only: the parent run's captured lifetime; the generic MCP run has no such argument. */
+  delegationPromptCacheTtl?: PromptCacheTtl;
   delegationExecution?: Pick<RunExecution, "workspaceKind" | "scopePaths">;
   /** ACP-aware bridges inject this; the packaged belt does not initialize ACP. */
   acpSessionQuery?: (
@@ -176,6 +179,9 @@ export function mcpSurfaceRunner(options: McpSurfaceRunnerOptions = {}) {
       ...(p?.model ? { model: String(p.model) } : {}),
       ...(p?.effort ? { effort: String(p.effort) } : {}),
       ...(processingPreference !== undefined ? { processingPreference } : {}),
+      ...(options.delegationParentRunId && options.delegationPromptCacheTtl !== undefined
+        ? { promptCacheTtl: options.delegationPromptCacheTtl }
+        : {}),
       ...(typeof p?.review === "boolean" ? { review: p.review } : {}),
       ...(Array.isArray(p?.reviewerPanel) ? { reviewerPanel: p.reviewerPanel } : {}),
       ...(p?.reviewerModels && typeof p.reviewerModels === "object"

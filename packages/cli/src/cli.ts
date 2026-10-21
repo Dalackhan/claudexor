@@ -15,6 +15,7 @@ import {
   EFFORT_HINT_HELP,
   EffortHint,
   ProcessingPreference,
+  PromptCacheTtl,
   RunExecution,
   TimeLimitMode,
   ExternalContextPolicy,
@@ -296,6 +297,7 @@ async function orchestrate(
   let resolvedAccess: ReturnType<typeof accessProfile> = undefined;
   let resolvedEffort: EffortHint | undefined;
   let processingPreference: ProcessingPreference | undefined;
+  let promptCacheTtl: PromptCacheTtl | undefined;
   let execution: RunExecution;
   let paidBudget: PaidBudget | undefined;
   let nFlag: number | undefined;
@@ -329,6 +331,8 @@ async function orchestrate(
     const processing = flagStr(args, "processing");
     processingPreference =
       processing === undefined ? undefined : ProcessingPreference.parse(processing);
+    const cacheTtl = flagStr(args, "prompt-cache-ttl");
+    promptCacheTtl = cacheTtl === undefined ? undefined : PromptCacheTtl.parse(cacheTtl);
     const scopePaths = stringFlagValues(flagValues(args, "scope-path"), "scope-path");
     execution = RunExecution.parse({
       isolation: flagBool(args, "in-place") ? "live" : "envelope",
@@ -456,6 +460,7 @@ async function orchestrate(
     resolvedAccess,
     resolvedEffort,
     processingPreference,
+    promptCacheTtl,
     execution,
     resolvedSynthesis,
     resolvedHarnesses,
@@ -492,6 +497,7 @@ interface DaemonRunParams {
   resolvedAccess: ReturnType<typeof accessProfile>;
   resolvedEffort: EffortHint | undefined;
   processingPreference: ProcessingPreference | undefined;
+  promptCacheTtl: PromptCacheTtl | undefined;
   execution: RunExecution;
   resolvedSynthesis: ReturnType<typeof synthesisMode>;
   resolvedHarnesses: string[] | undefined;
@@ -617,6 +623,7 @@ async function daemonRun(
     ...(p.resolvedModel ? { model: p.resolvedModel } : {}),
     ...(p.resolvedEffort ? { effort: p.resolvedEffort } : {}),
     ...(p.processingPreference ? { processingPreference: p.processingPreference } : {}),
+    ...(p.promptCacheTtl ? { promptCacheTtl: p.promptCacheTtl } : {}),
     ...(p.review !== undefined ? { review: p.review } : {}),
     ...(p.reviewerPanel ? { reviewerPanel: p.reviewerPanel } : {}),
     ...(p.reviewerModels ? { reviewerModels: p.reviewerModels } : {}),
@@ -735,6 +742,7 @@ async function daemonRun(
           threadId,
           runId: started.runId,
           interactive: !json && !jsonStream, // TTY plan turns answer inline
+          promptCacheTtl: p.promptCacheTtl,
         });
         terminalRunId = effectiveRunId;
       }

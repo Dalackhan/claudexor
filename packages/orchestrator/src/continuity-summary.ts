@@ -52,10 +52,14 @@ export interface SummaryRunParams {
   /** Upper bound on the pass; the caller's run signal aborts it too. */
   timeoutMs?: number;
   signal?: AbortSignal;
-  /** Captured route processing facts for this logical summary pass. */
+  /** Captured route processing facts and prompt-cache lifetime for this summary pass. */
   processing?: Pick<
     HarnessRunSpec,
-    "processing_preference" | "processing" | "processing_cost_basis" | "processing_allow_paid"
+    | "processing_preference"
+    | "processing"
+    | "processing_cost_basis"
+    | "processing_allow_paid"
+    | "prompt_cache_ttl"
   >;
   /** The same lease-bound admission callback as the enclosing candidate. */
   processingAdmission?: ProcessingAdmission;
@@ -140,6 +144,9 @@ export async function summarizeThreadPrefix(params: SummaryRunParams): Promise<s
         : {}),
       ...(params.processing?.processing_allow_paid !== undefined
         ? { processing_allow_paid: params.processing.processing_allow_paid }
+        : {}),
+      ...(params.processing?.prompt_cache_ttl !== undefined
+        ? { prompt_cache_ttl: params.processing.prompt_cache_ttl }
         : {}),
       extra: {
         abortSignal: abort.signal,

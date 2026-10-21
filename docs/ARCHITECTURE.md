@@ -979,15 +979,26 @@ credential homes and provider-variable scrubbing remain specific to each probe.
 The same runtime environment producer supplies an absent OS login name from
 `os.userInfo()`, preserving supplied identity and later environment
 patches. It never derives the name from a profile or scratch HOME.
-The shared `spawnProcess`/`runCaptureRaw` helpers request `windowsHide` for
-their piped background children. Windows Node-interpreted vendor entries also
-preload quiet defaults for Node's `spawn`/`spawnSync`: hiding only the outer
-Node does not hide a native grandchild started by an npm wrapper. The fixed
-data import preserves the selected vendor script, argv, environment and binary
-identity; explicit visibility options remain explicit. It does not control
-windows created independently by native descendants. Interactive sign-in
-(`profiles login`, the Terminal/ConPTY setup runner) and `setup attach` do not
-use those helpers and keep their own visible-terminal policy.
+The shared `spawnProcess`/`runCaptureRaw` helpers start each child detached
+(its own process group), with piped stdio and `windowsHide`. Those options
+shape only the direct child's creation: when that child is a Node-interpreted
+npm wrapper, the native program it starts with inherited stdio is created with
+the wrapper's own spawn options. So for a Windows Node-interpreted vendor entry
+these helpers also `--require` core's packaged CommonJS
+`windows-quiet-children.cjs`; the single-file bundles find it in the core
+runtime deployed beside them, and a missing file is a launch error. It
+defaults `windowsHide` for the vendor's own exported `spawn`/`spawnSync`
+calls, keeping explicit values and Node's argument validation. The selected
+interpreter (an older Node beside the npm shim included), vendor script,
+argv, environment and binary identity are unchanged. `NODE_OPTIONS` is not
+touched, but Node children that inherit the wrapper's `execArgv` (`fork`,
+default workers) load it too. `exec*`, `fork` itself and windows that native
+descendants create independently are outside it. Codex's quota and
+`model/list` app-server probes, the install `--version` proof and the
+`login --help` probe start their direct child with `windowsHide` only: not
+detached and without the preload. Interactive sign-in (`profiles login`, the
+Terminal/ConPTY setup runner), `setup attach` and vendor update keep their own
+terminal policy.
 
 ### Account resources and explicit resets
 

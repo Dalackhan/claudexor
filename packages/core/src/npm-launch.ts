@@ -1,5 +1,6 @@
-import { closeSync, openSync, readFileSync, readSync, realpathSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isLaunchableExecutable } from "./executable-inspection.js";
 
 /** A vendor entry remains the identity. Its interpreter is only launch transport. */
@@ -222,7 +223,7 @@ export function interpretedCommand(
         binary: interpreter.binary,
         args: [
           ...interpreter.args,
-          ...(quietWindowsChildren ? [WINDOWS_BACKGROUND_IMPORT] : []),
+          ...(quietWindowsChildren ? ["--require", windowsQuietChildrenPreload()] : []),
           entrypoint,
           ...args,
         ],
@@ -231,24 +232,27 @@ export function interpretedCommand(
     : { binary: entrypoint, args: [...args], env };
 }
 
-// windowsHide on the outer Node does not reach a vendor JS wrapper's native
-// child (e.g. Codex's spawn(..., {stdio: "inherit"})). Keep the wrapper and its
-// environment/argv semantics; only background captures opt into quiet defaults.
-// A fixed data import needs no mutable preload file beside an installed CLI.
-export const WINDOWS_BACKGROUND_IMPORT = `--import=data:text/javascript,${encodeURIComponent(`
-import cp from 'node:child_process';
-import {syncBuiltinESMExports} from 'node:module';
-for (const name of ['spawn', 'spawnSync']) {
-  const original = cp[name];
-  cp[name] = function(file, args, options) {
-    const argv = Array.from(arguments);
-    const index = Array.isArray(args) || (args == null && options !== undefined) ? 2 : 1;
-    const opts = argv[index];
-    if (opts == null || typeof opts === 'object') {
-      argv[index] = {...opts, windowsHide: opts?.windowsHide ?? true};
-    }
-    return Reflect.apply(original, this, argv);
-  };
+const QUIET_CHILDREN_PRELOAD = "windows-quiet-children.cjs";
+
+/**
+ * The outer Node's spawn options shape only its own creation; a vendor JS
+ * wrapper creates its native child (e.g. Codex's spawn(..., {stdio: "inherit"}))
+ * with the wrapper's options. Background captures `--require` this packaged
+ * CommonJS file, which Node 16 and later load before an ESM or CommonJS entry;
+ * the vendor script, its argv and environment stay unchanged. It ships in core's
+ * `dist` (`src` under test); a single-file engine bundle finds it in the core
+ * runtime deployed beside itself. A missing file is a launch error, never a
+ * silently visible child.
+ */
+export function windowsQuietChildrenPreload(moduleUrl: string = import.meta.url): string {
+  const here = dirname(fileURLToPath(moduleUrl));
+  const candidates = [
+    join(here, QUIET_CHILDREN_PRELOAD),
+    join(here, "browser-mcp-runtime", "dist", QUIET_CHILDREN_PRELOAD),
+  ];
+  const preload = candidates.find((candidate) => existsSync(candidate));
+  if (!preload) {
+    throw new Error(`Windows background preload is missing: ${candidates.join(" or ")}`);
+  }
+  return preload;
 }
-syncBuiltinESMExports();
-`)}`;

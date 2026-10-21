@@ -117,6 +117,9 @@ export async function executeModelOperation(
         ...evidence,
         problem: barrierProblem,
       });
+    // Strict same-major clients keep the legacy receipt, detail and result shape.
+    if ("routing" in result && result.routing && params.captureRoutingEvidence === true)
+      evidence.routing = result.routing;
     evidence.usage = result.usage;
     evidence.cost = result.cost;
     evidence.problem = result.problem;
@@ -154,6 +157,7 @@ export async function executeModelOperation(
     // Freeze the negotiated shape BEFORE publication; GET must keep its digest-bound bytes.
     if ("effortResolution" in result && params.captureEffortEvidence !== true)
       delete result.effortResolution;
+    if ("routing" in result && params.captureRoutingEvidence !== true) delete result.routing;
     const ref = deps.resources().publishModel(Buffer.from(JSON.stringify(result), "utf8"));
     const ready = now();
     evidence.response = {
@@ -254,7 +258,7 @@ async function invokeModelOperation(
     "ModelCallRequest",
   );
   signal.throwIfAborted();
-  const { adapter, profile } = await deps.resolve(request, signal);
+  const { adapter, profile } = await deps.resolve(request, signal, operationId);
   signal.throwIfAborted();
   return ModelCallResult.parse(
     await adapter.invoke(request, {

@@ -31,7 +31,7 @@ with a vendor quota source (Antigravity, Claude, and Codex). Cursor's internal
 dashboard supplies dated monetary resources, not an execution-quota verdict.
 Everything runs on your machine, files are the source of truth, and there is no telemetry.
 
-Current status: **v4.4.0**. See "Stability at 2.0" below for what is a stable
+Current status: **v4.5.0**. See "Stability at 2.0" below for what is a stable
 contract and what remains experimental; retired verbs and mode ids hard-error
 with the new spelling instead of silently aliasing.
 
@@ -544,8 +544,8 @@ reset time when its quota window is spent), never a silent rotation.
 `claudexor profiles` shows the informational **next-up** verdict — who an
 unpinned run of the configured default model would route to next — computed
 server-side by the same routing owner (`accountPools`; also
-`GET /v2/account-pools`), plus each account's recent refusals and last service
-per requested model. Among accounts with unknown quota, the one that last
+`GET /v2/account-pools`), plus each account's recent refusals, temporary capability marks and last
+service per requested model. Among accounts with unknown quota, the one that last
 served the requested model is tried first, also after a daemon restart. When the pool is empty
 or exhausted, the typed API-key fallback may serve the run as an explicit,
 disclosed **route** — never a synthetic account row; key management stays in

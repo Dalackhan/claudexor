@@ -1,5 +1,15 @@
 # @claudexor/harness-cursor
 
+## 4.5.0
+
+### Patch Changes
+
+- Updated dependencies [032b44b]
+  - @claudexor/schema@4.5.0
+  - @claudexor/core@4.5.0
+  - @claudexor/secrets@4.5.0
+  - @claudexor/util@4.5.0
+
 ## 4.4.0
 
 ### Minor Changes

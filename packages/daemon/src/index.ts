@@ -63,3 +63,9 @@ export { AccountResets, type AccountResetBinding } from "./account-resets.js";
 import "./store/flusher-worker.js";
 import "./store/maintenance-worker.js";
 export { JournalRecoveryRequiredError, type JournalRecoveryState } from "./store/errors.js";
+
+export {
+  ModelCapabilityLedger,
+  type CapabilityAttempt,
+  type CapabilityBinding,
+} from "./model-capability-ledger.js";

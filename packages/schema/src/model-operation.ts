@@ -60,7 +60,9 @@ export const ModelAccountChoice = z
     z.object({ mode: z.literal("auto"), preferredProfileId: Id.optional() }).strict(),
     z.object({ mode: z.literal("pin"), profileId: Id }).strict(),
   ])
-  .describe("Auto keeps a usable prior account; pin never selects another account.");
+  .describe(
+    "Auto text operations prefer preferredProfileId among unmarked accounts of the same catalog tier (listed before unlisted); a listed alternative, a mark or a recent refusal outranks it. History bound to that account keeps it first over a catalog miss only while it has neither a mark nor a recent refusal. Image operations order accounts by the pool alone. Pin never selects another account.",
+  );
 export type ModelAccountChoice = z.infer<typeof ModelAccountChoice>;
 
 export const ModelRoute = z
@@ -157,6 +159,9 @@ export const ModelCallRequest = z
     source: Id,
     model: NonBlankString,
     account: ModelAccountChoice,
+    retryOfOperationId: Id.optional().describe(
+      "One host-owned capability retry of a failed auto operation with otherwise identical generation input. No engine re-dispatch; unavailable after daemon restart or four hours.",
+    ),
     messages: z.array(ModelMessage).min(1),
     tools: z.array(ModelTool).default([]),
     toolChoice: ModelToolChoice.default("auto"),
@@ -216,8 +221,30 @@ export const ModelFailureEvidence = z
   );
 export type ModelFailureEvidence = z.infer<typeof ModelFailureEvidence>;
 
+export const ModelRoutingEvidence = z
+  .object({
+    selectionReason: z.enum([
+      "listed",
+      "unlisted_fallback",
+      "marked_fallback",
+      "preferred",
+      "pinned",
+      "probe",
+    ]),
+    retryOfOperationId: Id.optional(),
+    differentialOutcome: z
+      .enum(["provisional", "confirmed", "equivalent_refusal", "inconclusive"])
+      .optional(),
+    poolEvents: z.array(
+      z.object({ type: z.string(), payload: z.record(z.string(), z.unknown()) }).strict(),
+    ),
+  })
+  .strict();
+export type ModelRoutingEvidence = z.infer<typeof ModelRoutingEvidence>;
+
 export const ModelCallResult = z
   .object({
+    routing: ModelRoutingEvidence.optional(),
     outcome: z.enum(["completed", "incomplete", "failed", "unknown"]),
     message: ModelMessage.nullable(),
     route: ModelRoute,
@@ -329,6 +356,12 @@ export const ControlModelCatalogResponse = z
     source: Id,
     credentialProfileId: Id,
     accountFingerprint: z.string().nullable(),
+    capabilityFingerprint: z
+      .string()
+      .optional()
+      .describe(
+        "Opaque capability identity including plan when available; an invalidation token, never cached admission.",
+      ),
     observedAt: IsoTimestamp.describe(
       "Original catalog observation time; cached reuse never advances it.",
     ),
@@ -443,6 +476,7 @@ export const ModelOperationParams = z
     ),
     captureFailureEvidence: z.literal(true).optional(),
     captureEffortEvidence: z.literal(true).optional(),
+    captureRoutingEvidence: z.literal(true).optional(),
   })
   .strict();
 export type ModelOperationParams = z.infer<typeof ModelOperationParams>;
@@ -459,6 +493,7 @@ export const ModelOperationReceipt = z
   .object({
     lifecycle: RunLifecycle.exclude(["queued", "running"]),
     dispatch: ModelDispatch,
+    routing: ModelRoutingEvidence.optional(),
     response: ModelResponseCustody,
     usage: ModelUsage,
     cost: ModelCostEvidence.nullable(),
@@ -498,6 +533,7 @@ export const ControlModelOperationDetail = z
     startedAt: IsoTimestamp.nullable(),
     finishedAt: IsoTimestamp.nullable(),
     dispatch: ModelDispatch,
+    routing: ModelRoutingEvidence.optional(),
     response: ModelResponseCustody,
     usage: ModelUsage,
     cost: ModelCostEvidence.nullable(),

@@ -2119,6 +2119,7 @@ describe("account/model capability routing", () => {
       profile_id: "c",
       isolation_locator: join(f.root, "c"),
     });
+    f.catalogModels.c = [model()];
     // C is marked while it is the only account.
     f.cfg.credential_profiles[0]!.enabled = false;
     f.cfg.credential_profiles[1]!.enabled = false;

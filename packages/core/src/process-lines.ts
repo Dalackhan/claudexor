@@ -21,21 +21,28 @@ export function readProcessLines(
     let closeOut: () => void;
     if (stdoutFraming === "lf") {
       // readline also splits U+2028/U+2029 on Node 24, corrupting valid JSON strings.
-      let tail = "";
+      // Only each new chunk is searched, and a frame spread over chunks is joined
+      // once at its LF: re-searching (and re-flattening) a growing `tail += chunk`
+      // string on every chunk is quadratic in the frame size.
+      let parts: string[] = [];
       child.stdout.setEncoding("utf8");
       const data = (chunk: string): void => {
-        tail += chunk;
         let start = 0;
-        let lf: number;
-        while ((lf = tail.indexOf("\n", start)) !== -1) {
-          publish({ type: "stdout", line: tail.slice(start, lf).replace(/\r$/, "") });
+        for (let lf = chunk.indexOf("\n"); lf !== -1; lf = chunk.indexOf("\n", start)) {
+          let line = chunk.slice(start, lf);
+          if (parts.length) {
+            parts.push(line);
+            line = parts.join("");
+            parts = [];
+          }
+          publish({ type: "stdout", line: line.endsWith("\r") ? line.slice(0, -1) : line });
           start = lf + 1;
         }
-        tail = tail.slice(start);
+        if (start < chunk.length) parts.push(chunk.slice(start));
       };
       const end = (): void => {
-        if (tail) publish({ type: "stdout", line: tail });
-        tail = "";
+        if (parts.length) publish({ type: "stdout", line: parts.join("") });
+        parts = [];
       };
       child.stdout.on("data", data);
       child.stdout.once("end", end);
@@ -43,7 +50,7 @@ export function readProcessLines(
         child.stdout.off("data", data);
         child.stdout.off("end", end);
         child.stdout.pause();
-        tail = "";
+        parts = [];
       };
     } else {
       const out = createInterface({ input: child.stdout });
@@ -56,7 +63,7 @@ export function readProcessLines(
       closeOut();
       err.close();
     };
-    // readline publishes every complete line as it arrives, so stopping the
+    // Unbounded readers publish every complete line as it arrives, so stopping the
     // OS reads keeps everything already read; only a partial line is dropped.
     return { drained: Promise.resolve(), close, stop: close };
   }

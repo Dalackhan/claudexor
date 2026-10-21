@@ -84,7 +84,13 @@ if (process.argv.includes("--wrapper")) {
       const holder = spawn(
         process.execPath,
         [fileURLToPath(new URL("./drain-holder.mjs", import.meta.url)), drainPlan],
-        { stdio: ["ignore", "inherit", "inherit", "ipc"] },
+        {
+          // On Windows, escape libuv's kill-on-close Job Object so the holder
+          // survives this root's exit and keeps the inherited pipes open.
+          detached: process.platform === "win32",
+          windowsHide: true,
+          stdio: ["ignore", "inherit", "inherit", "ipc"],
+        },
       );
       holder.once("message", () => process.exit(0));
     } else if (lateError) process.stdout.write(lateWire, () => process.exit(0));

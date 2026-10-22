@@ -17,6 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as core from "@claudexor/core";
 import { CODEX_VENDOR_CLI_VERSION } from "@claudexor/harness-codex";
 import type { ParsedArgs } from "./args.js";
 import { harnessInstallCommand, localPlatformRefusal } from "./harness-installer.js";
@@ -39,7 +40,7 @@ const exe = (path: string, body = "#!/bin/sh\nexit 0\n"): string => {
 
 /** A scratch world: HOME, runner Node with embedded npm, nothing installed. */
 function world() {
-  const root = mkdtempSync(join(tmpdir(), "cx-maint-"));
+  const root = mkdtempSync(join(tmpdir(), "cx maint-"));
   roots.push(root);
   const home = join(root, "home");
   mkdirSync(home, { recursive: true });
@@ -56,7 +57,7 @@ function world() {
     const binary = exe(join(pkg, "bin", `${name}.js`), `#!/bin/sh\necho ${name}-cli ${version}\n`);
     mkdirSync(join(managed, "bin"), { recursive: true });
     rmSync(join(managed, "bin", name), { force: true });
-    exe(join(managed, "bin", name), `#!/bin/sh\nexec ${binary} "$@"\n`);
+    exe(join(managed, "bin", name), `#!/bin/sh\nexec "${binary}" "$@"\n`);
     return version;
   };
   const installCodex = (version: string): string => installNpm("@openai/codex", version);
@@ -73,7 +74,7 @@ function fakeSpawn(w: ReturnType<typeof world>, latest = "99.1.0", installOk = t
     if (argv.includes("--version")) {
       const target = binary.endsWith("node") ? argv[0]! : binary;
       const body = readFileSync(target, "utf8");
-      const nested = /exec (\S+)/.exec(body)?.[1];
+      const nested = /^#!\/bin\/sh\nexec "([^"\n]+)" "\$@"\n$/.exec(body)?.[1];
       const text = nested ? readFileSync(nested, "utf8") : body;
       const answer = /echo (.*)/.exec(text)?.[1] ?? "";
       return { status: 0, stdout: `${answer}\n`, stderr: "" } as never;
@@ -760,6 +761,8 @@ describe("harness maintenance primitive", () => {
   it("a missing bundled npm is a local refusal, never a registry outage with a retry remedy", () => {
     const io = captured();
     const w = world();
+    // An empty fixture must not discover a vendor CLI in a host PATH fallback.
+    vi.spyOn(core, "resolveHarnessBinary").mockReturnValue(null);
     const npmCli = join(w.root, "runner", "lib", "node_modules", "npm", "bin", "npm-cli.js");
     rmSync(npmCli);
     const { spawn } = fakeSpawn(w);

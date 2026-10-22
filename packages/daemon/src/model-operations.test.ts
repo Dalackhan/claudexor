@@ -797,62 +797,6 @@ describe("model operations over the existing daemon command substrate", () => {
       });
       expect(f.records()).toHaveLength(1);
       expect(f.sends).toHaveBeenCalledTimes(1);
-
-      // Temporary Windows teardown diagnostics, installed after dispatch and assertions.
-      const caseName = "stop_reason" in extra ? "stop_reason" : "refusal";
-      const traceCleanup = <T extends void | Promise<void>>(stage: string, run: () => T): T => {
-        const started = performance.now();
-        const mark = (state: "begin" | "done" | "failed") => {
-          console.error(
-            `[model-cleanup:${caseName}] ${stage} ${state} ${Math.round(performance.now() - started)}ms`,
-          );
-        };
-        const failed = (error: unknown): never => {
-          mark("failed");
-          throw error;
-        };
-        mark("begin");
-        try {
-          const result = run();
-          if (result instanceof Promise) return result.then(() => mark("done"), failed) as T;
-          mark("done");
-          return result;
-        } catch (error) {
-          return failed(error);
-        }
-      };
-      const originals = {
-        apiStop: api.stop.bind(api),
-        serverStop: f.server.stop.bind(f.server),
-        operationsClose: f.operations.close.bind(f.operations),
-        sqlClose: f.sql.close.bind(f.sql),
-        maintenanceStop: f.sql.graph.maintenance.stop.bind(f.sql.graph.maintenance),
-        flushed: f.sql.store.flushed.bind(f.sql.store),
-        drainCleanup: f.resources.drainCleanup.bind(f.resources),
-        storeClose: f.sql.store.close.bind(f.sql.store),
-      };
-      vi.spyOn(api, "stop").mockImplementation(() => traceCleanup("api.stop", originals.apiStop));
-      vi.spyOn(f.server, "stop").mockImplementation(() =>
-        traceCleanup("server.stop", originals.serverStop),
-      );
-      vi.spyOn(f.operations, "close").mockImplementation(() =>
-        traceCleanup("operations.close", originals.operationsClose),
-      );
-      vi.spyOn(f.sql, "close").mockImplementation(() =>
-        traceCleanup("sql.close", originals.sqlClose),
-      );
-      vi.spyOn(f.sql.graph.maintenance, "stop").mockImplementation(() =>
-        traceCleanup("maintenance.stop", originals.maintenanceStop),
-      );
-      vi.spyOn(f.sql.store, "flushed").mockImplementation(() =>
-        traceCleanup("store.flushed", originals.flushed),
-      );
-      vi.spyOn(f.resources, "drainCleanup").mockImplementation(() =>
-        traceCleanup("resources.drainCleanup", originals.drainCleanup),
-      );
-      vi.spyOn(f.sql.store, "close").mockImplementation(() =>
-        traceCleanup("store.close", originals.storeClose),
-      );
     },
   );
   it("keeps >10 MiB bodies out of the journal and preserves a result until explicit ACK", async () => {

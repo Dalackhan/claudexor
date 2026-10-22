@@ -69,15 +69,23 @@ The assembled `Claudexor.app` bundle lands in `apps/macos/dist/bundle.noindex/`
 (the `.noindex` suffix keeps Spotlight from indexing dev builds as launchable
 apps), while the DMG/ZIP artifacts and their checksums stay directly in
 `apps/macos/dist/`.
-Local builds without a Developer ID ad-hoc sign and strictly verify the root
-`.app` bundle after assembly, preserving nested runtime signatures. They produce
-`Claudexor-<version>-unsigned.zip` and `Claudexor-<version>-unsigned.dmg`,
-with sibling `.sha256` checksum files. These are local smoke artifacts;
-ad-hoc signing does not make them trusted or notarized, and Gatekeeper blocks
-them on other Macs. The public GitHub Release assets are SIGNED + NOTARIZED +
-STAPLED. `.github/workflows/release.yml` builds them on a macOS runner from the
-pushed tag/sha, imports the Developer ID certificate from repository secrets,
-and attaches them to the draft release with `GITHUB_TOKEN`. Do not upload local
+Local builds without `SIGN_IDENTITY` ad-hoc sign and strictly verify the root
+`.app` bundle after assembly. This seals bundle resources while leaving nested
+executable bytes, existing signatures, and entitlements unchanged. Root verification
+does not independently verify the signatures of executables stored in `Resources`;
+the build's execution probes remain separate checks of the bundled runtime.
+System or custom Node binaries do not need a signature for this local sealing step.
+
+Local artifacts keep the names `Claudexor-<version>-unsigned.zip` and
+`Claudexor-<version>-unsigned.dmg`, with sibling `.sha256` checksum files:
+`-unsigned` here means no Developer ID signing, despite the ad-hoc root seal.
+These are local smoke artifacts. Successful signature verification proves bundle
+integrity; app/engine startup and distribution trust require separate checks.
+Ad-hoc signing provides neither Developer ID trust nor notarization, and Gatekeeper
+may block quarantined copies even on the build Mac. The public GitHub Release assets
+are SIGNED + NOTARIZED + STAPLED. `.github/workflows/release.yml` builds them on a
+macOS runner from the pushed tag/sha, imports the Developer ID certificate from
+repository secrets, and attaches them to the draft release with `GITHUB_TOKEN`. Do not upload local
 `apps/macos/dist` artifacts as final release assets. Release notes must also
 call out the macOS 26 minimum.
 

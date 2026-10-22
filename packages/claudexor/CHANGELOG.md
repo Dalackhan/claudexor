@@ -1,5 +1,12 @@
 # claudexor
 
+## 4.6.2
+
+### Patch Changes
+
+- c6e84d6: Ad-hoc sign and strictly verify local macOS app bundles before creating ZIP or DMG artifacts.
+  - @claudexor/cli@4.6.2
+
 ## 4.6.1
 
 ### Patch Changes

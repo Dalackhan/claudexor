@@ -1001,11 +1001,15 @@ console instead of opening a window. A descendant that detaches again or asks
 for a new console is outside it. The Windows tree kill is
 `taskkill /PID <root> /T /F` (`process-tree.ts`), which follows parent links and
 needs no process group; the child also joins libuv's kill-on-close Job, so it
-normally ends with the daemon process, while its descendants may break away.
+normally ends with the daemon process. Its descendants never join that Job: they
+end through the harness itself or the tree kill.
 A consumer passes `windowsConsole: "none"` to keep `DETACHED_PROCESS` and no
 console at all: agy does so for its runs and `--version` probe, because its
 print mode treats an openable `CONIN$` as interactive, and console programs an
-agy run starts may still open windows. Codex's quota and `model/list`
+agy run starts may still open windows. Claudexor's own `git` calls do the same:
+a console-less git starts its own children without consoles, and a credential
+or host-key prompt fails at once instead of waiting on an invisible console
+until the call's timeout. Codex's quota and `model/list`
 app-server probes, the install `--version` proof and the `login --help` probe
 start their direct child with `windowsHide` only. So do the daemon-hosted
 no-Terminal sign-in children (URL disclosure and the device-code app-server):

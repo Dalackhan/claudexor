@@ -358,7 +358,7 @@ export type WindowsConsolePolicy = "hidden" | "none";
  * process group, so a cancel signals the whole tree. Windows has no groups:
  * the tree is stopped by `taskkill /T` (process-tree.ts), which follows parent
  * links, and a child that is not detached joins libuv's kill-on-close Job, so
- * it also ends when the daemon process does (descendants may break away).
+ * it also ends when the daemon process does (its descendants never join it).
  */
 export function backgroundSpawnShape(
   platform: NodeJS.Platform = process.platform,

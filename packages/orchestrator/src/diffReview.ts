@@ -242,7 +242,7 @@ async function verifyFrozenReviewPacket(
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {
-  const result = await runCapture("git", args, { cwd });
+  const result = await runCapture("git", args, { cwd, windowsConsole: "none" });
   if (result.code !== 0) {
     throw new Error(
       `reviewDiff: git ${args.join(" ")} failed: ${(result.stderr || result.stdout).trim()}`,
@@ -252,7 +252,7 @@ async function git(cwd: string, args: string[]): Promise<string> {
 }
 
 async function gitRaw(cwd: string, args: string[]): Promise<string> {
-  const result = await runCaptureRaw("git", args, { cwd });
+  const result = await runCaptureRaw("git", args, { cwd, windowsConsole: "none" });
   if (result.code !== 0) {
     throw new Error(
       `reviewDiff: git ${args.join(" ")} failed: ${(result.stderr || result.stdout).trim()}`,

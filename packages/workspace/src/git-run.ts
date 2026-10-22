@@ -14,7 +14,11 @@ export async function git(
   args: string[],
   input?: string,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  const r = await runCaptureRaw("git", ["-C", repo, ...args], { timeoutMs: 60_000, input });
+  const r = await runCaptureRaw("git", ["-C", repo, ...args], {
+    timeoutMs: 60_000,
+    input,
+    windowsConsole: "none",
+  });
   assertCaptureComplete(r);
   return r;
 }
@@ -30,6 +34,7 @@ export async function gitEnv(
     timeoutMs: 60_000,
     env,
     input,
+    windowsConsole: "none",
   });
   assertCaptureComplete(r);
   return r;

@@ -118,8 +118,16 @@ describe.skipIf(process.platform !== "win32")("Windows console of background chi
       windowVisible: false,
     });
     expect(inherited.consoleCodePage).toBeGreaterThan(0);
+  });
 
-    const control = consoleState((await runCapture(bin, args, { windowsConsole: "none" })).stdout);
+  it("gives that grandchild a console window of its own in the console-less shape", async () => {
+    requireFixture();
+    // The control runs through the Node wrapper, which hands its pipes to the grandchild
+    // explicitly, so the report still reaches the capture from inside a new console.
+    const wrapper = ["-e", INHERITING_WRAPPER, fixture];
+    const control = consoleState(
+      (await runCapture(process.execPath, wrapper, { windowsConsole: "none" })).stdout,
+    );
     expect(control.windowPresent, JSON.stringify(control)).toBe(true);
     expect(control.consoleCodePage).toBeGreaterThan(0);
   });
@@ -158,8 +166,8 @@ describe.skipIf(process.platform !== "win32")("Windows console of background chi
       try {
         pids = parsePids(await firstLine(daemon, "PIDS|"));
         daemon.kill("SIGKILL");
-        // libuv's kill-on-close Job holds the direct child only: the grandchild
-        // may break away, so only the direct child's fate is the claim here.
+        // libuv's kill-on-close Job holds the direct child only (its descendants
+        // never join it), so only the direct child's fate is the claim here.
         expect(await goneWithin(pids[0], 5_000)).toBe(ends);
       } finally {
         if (pids) for (const pid of pids) stopTree(pid);

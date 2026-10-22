@@ -485,6 +485,7 @@ async function runGitOrThrow(label: string, cwd: string, args: string[]): Promis
     cwd,
     env: reviewerGitEnv(),
     timeoutMs: 60_000,
+    windowsConsole: "none",
   });
   if (result.code === 0) return;
   const detail = redactSecrets((result.stderr || result.stdout || `exit ${result.code}`).trim());

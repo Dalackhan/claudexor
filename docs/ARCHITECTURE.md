@@ -755,7 +755,17 @@ text stdin; interactive/image runs retain their sole stream-json stdin owner.
 Claude instructions append through an adapter-owned UTF-8 file, removed when
 the child ends, never through argv or user-role text (`instructions-file.ts`).
 Codex owns one native
-`app-server --stdio` JSON-RPC child per Claudexor run. The adapter keeps the run
+`app-server --stdio` JSON-RPC child per Claudexor run. Its stdout uses the shared
+process reader's opt-in LF framing: U+2028/U+2029 inside JSON strings remain
+payload, not frame boundaries. The reader searches each chunk once and joins a
+fragmented frame once, at its LF. Natural EOF delivers an unterminated final
+frame (a malformed one fails the run); the post-exit drain's forced closure
+drops it. Every Codex
+adapter run, in any mode or reviewer role, opts in. Raw `/responses` model
+operations are HTTP and read no child stdout. The auth-refresh app-server
+child, the shared CLI run loop and other protocol line readers keep their own
+framing (`docs/BACKLOG.md`, #484 siblings).
+The adapter keeps the run
 active while a native turn, active goal continuation, or run-owned background
 terminal exists. Native thread/turn ids are control handles, not durable engine
 truth; the engine store remains authoritative. Stop pauses an active goal,
@@ -979,12 +989,29 @@ credential homes and provider-variable scrubbing remain specific to each probe.
 The same runtime environment producer supplies an absent OS login name from
 `os.userInfo()`, preserving supplied identity and later environment
 patches. It never derives the name from a profile or scratch HOME.
-The shared `spawnProcess`/`runCaptureRaw` helpers also request `windowsHide`:
-every child they start is a fully piped background process. On Windows this
-requests a hidden console for the direct child at spawn; it does not control
-grandchildren or windows the child opens later. Interactive sign-in
-(`profiles login`, the Terminal/ConPTY setup runner) and `setup attach` do not
-use those helpers and keep their own visible-terminal policy.
+The shared `spawnProcess`/`runCaptureRaw` helpers start each child detached
+(its own process group), with piped stdio and `windowsHide`. Those options
+shape only the direct child's creation: when that child is a Node-interpreted
+npm wrapper, the native program it starts with inherited stdio is created with
+the wrapper's own spawn options. So for a Windows Node-interpreted vendor entry
+these helpers also `--require` core's packaged CommonJS
+`windows-quiet-children.cjs`; the single-file bundles find it in the core
+runtime deployed beside them, and a missing file is a launch error. It
+defaults `windowsHide` for the vendor's own exported `spawn`/`spawnSync`
+calls, keeping explicit values and Node's argument validation. Options are
+copied with their descriptors and prototype; exotic accessors that require
+the original object's private-field identity remain unsupported.
+The selected
+interpreter (an older Node beside the npm shim included), vendor script,
+argv, environment and binary identity are unchanged. `NODE_OPTIONS` is not
+touched, but Node children that inherit the wrapper's `execArgv` (`fork`,
+default workers) load it too. `exec*`, `fork` itself and windows that native
+descendants create independently are outside it. Codex's quota and
+`model/list` app-server probes, the install `--version` proof and the
+`login --help` probe start their direct child with `windowsHide` only: not
+detached and without the preload. Interactive sign-in (`profiles login`, the
+Terminal/ConPTY setup runner), `setup attach` and vendor update keep their own
+terminal policy.
 
 ### Account resources and explicit resets
 

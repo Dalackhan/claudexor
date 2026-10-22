@@ -244,6 +244,8 @@ export async function requestCodexAccount(
   const child = start(command.binary, command.args, {
     stdio: ["pipe", "pipe", "pipe"],
     env: command.env,
+    // A captured background probe: no console window for the direct child on Windows.
+    windowsHide: true,
   });
   const lines = createInterface({ input: child.stdout });
   const timeout = setTimeout(() => killOwnedProcessTree(child, "SIGKILL"), 10_000);

@@ -1,5 +1,63 @@
 # @claudexor/cli
 
+## 4.6.2
+
+### Patch Changes
+
+- @claudexor/acp-server@4.6.2
+- @claudexor/artifact-store@4.6.2
+- @claudexor/config@4.6.2
+- @claudexor/control-api@4.6.2
+- @claudexor/core@4.6.2
+- @claudexor/daemon@4.6.2
+- @claudexor/delivery@4.6.2
+- @claudexor/gateway@4.6.2
+- @claudexor/harness-acp@4.6.2
+- @claudexor/harness-agy@4.6.2
+- @claudexor/harness-claude@4.6.2
+- @claudexor/harness-codex@4.6.2
+- @claudexor/harness-cursor@4.6.2
+- @claudexor/harness-fake@4.6.2
+- @claudexor/harness-opencode@4.6.2
+- @claudexor/harness-raw-api@4.6.2
+- @claudexor/mcp-server@4.6.2
+- @claudexor/orchestrator@4.6.2
+- @claudexor/review@4.6.2
+- @claudexor/schema@4.6.2
+- @claudexor/secrets@4.6.2
+- @claudexor/util@4.6.2
+- @claudexor/workspace@4.6.2
+
+## 4.6.1
+
+### Patch Changes
+
+- ed646a5: Attachment and Browser request admission now uses execution's pool projection, candidate membership and profile precedence. An explicit or inherited profile selects its harness even when the default harness home is logged out, a Settings default pool stays strict, and a missing, disabled or wrong-harness pin is refused with a typed `harness_unavailable` 400 instead of being substituted. Admission adds no selected-profile readiness gate; Auto retains host-status discovery for candidate membership. The run checks account readiness, quota and model before any provider starts. An empty Auto candidate pool now returns 400 `harness_unavailable`; static profile ambiguity returns 409 `credential_profile_ambiguous` after incompatible attachment lanes are removed. Browser-only Auto may still reject ambiguous AGY profiles on Windows that execution would have discarded as unready. A direct run that carries `threadId` is refused before admission reads that thread.
+- Updated dependencies [ed646a5]
+  - @claudexor/orchestrator@4.6.1
+  - @claudexor/control-api@4.6.1
+  - @claudexor/acp-server@4.6.1
+  - @claudexor/artifact-store@4.6.1
+  - @claudexor/config@4.6.1
+  - @claudexor/core@4.6.1
+  - @claudexor/daemon@4.6.1
+  - @claudexor/delivery@4.6.1
+  - @claudexor/gateway@4.6.1
+  - @claudexor/harness-acp@4.6.1
+  - @claudexor/harness-agy@4.6.1
+  - @claudexor/harness-claude@4.6.1
+  - @claudexor/harness-codex@4.6.1
+  - @claudexor/harness-cursor@4.6.1
+  - @claudexor/harness-fake@4.6.1
+  - @claudexor/harness-opencode@4.6.1
+  - @claudexor/harness-raw-api@4.6.1
+  - @claudexor/mcp-server@4.6.1
+  - @claudexor/review@4.6.1
+  - @claudexor/schema@4.6.1
+  - @claudexor/secrets@4.6.1
+  - @claudexor/util@4.6.1
+  - @claudexor/workspace@4.6.1
+
 ## 4.6.0
 
 ### Minor Changes

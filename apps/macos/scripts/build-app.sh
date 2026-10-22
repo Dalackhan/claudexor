@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 #
-# Assemble a distributable Claudexor.app from the SwiftPM release build, and optionally
-# codesign (Developer ID + hardened runtime), notarize, staple, and package a DMG.
+# Assemble Claudexor.app from the SwiftPM release build and seal it for local use,
+# or sign with Developer ID + hardened runtime, notarize, staple, and package a DMG.
 #
-# Dev builds run the executable directly (`swift run ClaudexorApp`); this script is only for
-# producing a shippable, notarized bundle. Signing/notarization are OPT-IN via env vars so
-# the script also works for an unsigned local .app:
+# Dev builds can run the executable directly (`swift run ClaudexorApp`). This script
+# packages local or distribution bundles. Developer ID signing and notarization are
+# OPT-IN via env vars; local bundles receive an ad-hoc resource seal:
 #
-#   # unsigned local bundle + ZIP:
+#   # locally ad-hoc-signed bundle + ZIP (no Developer ID):
 #   apps/macos/scripts/build-app.sh
 #
-#   # unsigned local bundle with four signed development SSH runtimes:
+#   # locally ad-hoc-signed bundle with four signed development SSH runtimes:
 #   CLAUDEXOR_DEV_REMOTE_RUNTIME=1 apps/macos/scripts/build-app.sh
 #
-#   # unsigned local bundle + ZIP + DMG:
+#   # locally ad-hoc-signed bundle + ZIP + DMG (no Developer ID):
 #   MAKE_DMG=1 apps/macos/scripts/build-app.sh
 #
 #   # signed + notarized + DMG (requires your Apple Developer ID):
@@ -61,7 +61,7 @@ DEV_REMOTE_RUNTIME="${CLAUDEXOR_DEV_REMOTE_RUNTIME:-0}"
 WIN32_CONPTY_EXPECTED_SHA256="${CLAUDEXOR_WIN32_CONPTY_SHA256:-}"
 REQUIRE_WIN32_CONPTY="${CLAUDEXOR_REQUIRE_WIN32_CONPTY_HELPER:-0}"
 if [ "$DEV_REMOTE_RUNTIME" = "1" ] && [ -n "${SIGN_IDENTITY:-}" ]; then
-  echo "ERROR: CLAUDEXOR_DEV_REMOTE_RUNTIME is for unsigned local bundles only" >&2
+  echo "ERROR: CLAUDEXOR_DEV_REMOTE_RUNTIME is for local ad-hoc-signed (non-Developer-ID) bundles only" >&2
   exit 1
 fi
 
@@ -475,8 +475,11 @@ if [ -n "${SIGN_IDENTITY:-}" ]; then
     echo "    (set NOTARY_PROFILE to notarize + staple)"
   fi
 else
-  echo "==> Skipping codesign (set SIGN_IDENTITY to sign). This bundle is for LOCAL use;"
-  echo "    Gatekeeper will block it on other machines until signed + notarized."
+  echo "==> Ad-hoc signing local app bundle (set SIGN_IDENTITY for Developer ID signing)."
+  bash "$HERE/sign-local-app.sh" "$APP"
+  echo "    Local bundle integrity verified; app launch is a separate check."
+  echo "    Ad-hoc signing provides no Developer ID or notarization trust."
+  echo "    Gatekeeper may block quarantined copies, including on this Mac."
 fi
 
 if [ "${MAKE_ZIP:-1}" = "1" ]; then

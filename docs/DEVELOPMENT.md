@@ -112,7 +112,7 @@ pnpm release:verify
 ```
 
 This is the portable Node/schema/documentation gate. Native platform checks run
-in GitHub CI; `pnpm release:verify:macos` adds optional local Swift and unsigned
+in GitHub CI; `pnpm release:verify:macos` adds optional local Swift and ad-hoc-signed
 app checks. Installed-vendor fixture/model freshness is diagnostic by default;
 `pnpm release:verify:vendors` opts into strict comparison when the relevant
 vendor CLIs are available. A missing local vendor CLI is not a contribution

@@ -14,6 +14,7 @@ not build it as part of normal package tasks.
 - `ClaudexorApp/` - SwiftUI app.
 - `packaging/` - app bundle metadata, entitlements, and LaunchAgent template.
 - `scripts/build-app.sh` - local/release app packaging script.
+- `scripts/sign-local-app.sh` - ad-hoc root seal and strict verification for local bundles.
 
 ## Toolchain
 
@@ -51,10 +52,10 @@ Dev/QA env switches:
 ## Packaging
 
 ```bash
-# Unsigned local bundle + ZIP:
+# Local ad-hoc-signed bundle + ZIP (no Developer ID):
 apps/macos/scripts/build-app.sh
 
-# Unsigned local bundle + ZIP + DMG:
+# Local ad-hoc-signed bundle + ZIP + DMG (no Developer ID):
 MAKE_DMG=1 apps/macos/scripts/build-app.sh
 
 # Signed + notarized + DMG, when Developer ID credentials are configured locally:
@@ -69,13 +70,23 @@ The assembled `Claudexor.app` bundle lands in `apps/macos/dist/bundle.noindex/`
 (the `.noindex` suffix keeps Spotlight from indexing dev builds as launchable
 apps), while the DMG/ZIP artifacts and their checksums stay directly in
 `apps/macos/dist/`.
-Local builds without signing env produce `Claudexor-<version>-unsigned.zip`
-and `Claudexor-<version>-unsigned.dmg`, with sibling `.sha256` checksum
-files — Gatekeeper blocks those on other Macs (local smoke only). The
-public GitHub Release assets are SIGNED + NOTARIZED + STAPLED (the CI build imports
-the Developer ID certificate from repository secrets) and are built by
-`.github/workflows/release.yml` on a macOS runner from the pushed tag/sha, then
-attached to the draft release with `GITHUB_TOKEN`. Do not upload local
+Local builds without `SIGN_IDENTITY` ad-hoc sign and strictly verify the root
+`.app` bundle after assembly. This seals bundle resources while leaving nested
+executable bytes, existing signatures, and entitlements unchanged. Root verification
+does not independently verify the signatures of executables stored in `Resources`;
+the build's execution probes remain separate checks of the bundled runtime.
+System or custom Node binaries do not need a signature for this local sealing step.
+
+Local artifacts keep the names `Claudexor-<version>-unsigned.zip` and
+`Claudexor-<version>-unsigned.dmg`, with sibling `.sha256` checksum files:
+`-unsigned` here means no Developer ID signing, despite the ad-hoc root seal.
+These are local smoke artifacts. Successful signature verification proves bundle
+integrity; app/engine startup and distribution trust require separate checks.
+Ad-hoc signing provides neither Developer ID trust nor notarization, and Gatekeeper
+may block quarantined copies even on the build Mac. The public GitHub Release assets
+are SIGNED + NOTARIZED + STAPLED. `.github/workflows/release.yml` builds them on a
+macOS runner from the pushed tag/sha, imports the Developer ID certificate from
+repository secrets, and attaches them to the draft release with `GITHUB_TOKEN`. Do not upload local
 `apps/macos/dist` artifacts as final release assets. Release notes must also
 call out the macOS 26 minimum.
 

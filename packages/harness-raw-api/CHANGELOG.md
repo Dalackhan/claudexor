@@ -1,5 +1,23 @@
 # @claudexor/harness-raw-api
 
+## 4.6.2
+
+### Patch Changes
+
+- @claudexor/core@4.6.2
+- @claudexor/schema@4.6.2
+- @claudexor/secrets@4.6.2
+- @claudexor/util@4.6.2
+
+## 4.6.1
+
+### Patch Changes
+
+- @claudexor/core@4.6.1
+- @claudexor/schema@4.6.1
+- @claudexor/secrets@4.6.1
+- @claudexor/util@4.6.1
+
 ## 4.6.0
 
 ### Patch Changes

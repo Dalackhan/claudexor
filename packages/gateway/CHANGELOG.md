@@ -1,5 +1,19 @@
 # @claudexor/gateway
 
+## 4.6.2
+
+### Patch Changes
+
+- @claudexor/core@4.6.2
+- @claudexor/schema@4.6.2
+
+## 4.6.1
+
+### Patch Changes
+
+- @claudexor/core@4.6.1
+- @claudexor/schema@4.6.1
+
 ## 4.6.0
 
 ### Patch Changes

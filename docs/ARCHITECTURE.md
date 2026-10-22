@@ -5906,9 +5906,13 @@ signed manifest → FULL unpack to `versions/<version>/` → re-verify → strip
 `com.apple.quarantine` (after hash verification) → probe-start the unpacked
 daemon with the app-bundled Node via `claudexord --probe` (prints
 `{version,buildSha}` and exits without binding a socket or opening the store) →
-require that exact pair to equal the signed manifest → claim one process-session
-lifecycle lease shared with steady daemon reconciliation before the first async
-install step → advisory idle probe (cheap early deferral) → daemon-atomic
+require that exact pair to equal the signed manifest → claim the shared app
+lifecycle lease described under Layout below before the first async install
+step → advisory idle probe (cheap early deferral) → read the exact serving
+identity and require the signed version to be strictly newer than it under the
+same monotonic rule (a cached offer can predate another app copy's replacement,
+so a newer engine or another build of the same version is refused before any
+stop) → daemon-atomic
 runtime-replacement admission (`claudexord --stop`: synchronously prove no
 queued/running run, active setup job, or unreconciled setup termination and fence
 every ingress; busy/unknown
@@ -5969,18 +5973,69 @@ the closure.
   equal-version pointer also falls back so a newly installed DMG cannot retain
   different bytes under the same version. On connection, the app side-effect-
   free probes the selected script and compares its exact `{version, buildSha}`
-  with the live handshake before hydrating daemon state. A mismatch is replaced
-  only after the daemon atomically proves idle and fences admission; busy or
-  unknown activity keeps the compatible daemon alive and visibly defers
-  reconciliation. A successful replacement retires the old client and re-reads
+  with the live handshake before hydrating daemon state. Exact version and SHA
+  are coherent regardless of entry path. Automatic replacement requires a
+  strictly newer stable x.y.z target; a newer serving version or unorderable
+  versions keep the compatible daemon. Equal-version alternate builds require
+  the one-shot Settings action described in DESIGN_SYSTEM. The action binds both
+  displayed identities and expires if either changes; ordinary Reconnect and
+  passive polls never request that switch. Replacement still requires the daemon
+  to atomically prove idle and fence admission; busy or unknown activity keeps
+  the compatible daemon alive and visibly defers reconciliation. A successful
+  replacement retires the old client and re-reads
   discovery before hydrating;
   any failure after lifecycle work begins goes offline rather than reusing an
   ambiguous process. An installed selection's probe must also equal the pointer's
   exact `{version,engineSha}` authority; the signed bundled selection uses its
   stamped probe as authority. The three-second identity poll retries deferred
   work when the daemon becomes idle. Reconciliation and in-app installation
-  claim the same exact session lifecycle lease before their first suspension,
-  so their stop/start transactions cannot overlap. Node is ALWAYS the
+  claim the same exact lifecycle lease before target observation. Its nonblocking
+  descriptor lock lives in the canonical discovery directory, independent of app
+  or socket spelling, and serializes participating app copies across the full
+  stop/start/proof transaction. On first launch the app creates a missing private
+  service directory before scheduling daemon startup. An existing owned canonical
+  directory is validated by uid, POSIX canonical path and pathname/descriptor inode identity, then
+  repaired to private permissions through that descriptor, matching engine
+  admission. Directory and lock opens do not follow leaf links; the app does not
+  acquire the engine's writer slot. Admission separates contention from refusal.
+  A lease held in this or another participating app, or one completed in this
+  app after the caller's observation, is contention. Contention is no new
+  observation: a passive poll keeps the notice and Settings offer published for
+  the same serving identity, and an explicit Switch Engine Build checks and
+  changes nothing, offers the same exact pair again with the reason and keeps
+  polling its connection without reconnecting or retrying. Outage recovery keeps
+  its start allowance and installation reports another lifecycle action. A
+  completion in another app is invisible to that process-local check, so outage
+  recovery re-reads discovery and handshakes once while it holds the lease,
+  before it consumes the allowance; an engine that answers is adopted by the
+  next ordinary probe instead of being started again. An unusable service
+  directory or lock file
+  (a link, foreign owner, non-private or multiply linked lock, or any other open
+  or lock error) is a refusal naming that path, never another owner.
+  Reconciliation keeps the compatible engine and shows the refusal as its notice;
+  outage recovery stays Offline with that notice, reported again by each later
+  outage, and re-checks after its ordinary pause without consuming the start;
+  installation fails before any download or stop. The sidebar update chip shows
+  the notice above any update offer or install outcome, and the Connecting and
+  Offline placeholder shows it when the sidebar is not shown. The offer and
+  notice belong to the connection that observed them: a lost handshake retires
+  both, and a recovery-only answer retires the offer and its guidance. Superseded
+  switch progress is retired without clearing a later notice or the terminal
+  failure carried into reconnect. Discovery and serving
+  identity are re-read under
+  that lease, with another identity check before stop. Outage recovery shares
+  the lease through handshake readiness or the bounded boot window. A queued
+  outage launch must present its exact lease and unexpired deadline at the actual
+  spawn boundary, under the owner lock. A retired connection's loop releases its
+  lease when it next checks the generation, after its current pause or probe;
+  that exact release invalidates a launch that has not spawned yet. Exact release
+  explicitly unlocks
+  before closing so inherited descriptor references cannot prolong that lease.
+  Exact token and connection-generation guards prevent stale completion from
+  clearing a successor's ownership or publishing its predecessor's identity.
+  The app lock never replaces engine root/writer authority or the installer's
+  pointer lock; older apps and external clients still rely on those engine
+  controls. Node is ALWAYS the
   app-bundled binary; because the
   whole closure unpacks together, the Browser MCP resolves adjacent to the
   daemon inside the same version dir.
@@ -5989,10 +6044,16 @@ the closure.
   signature fail-closed → compare `version` to the running engine and gate on
   `minAppVersion` → surface "Update available → vX.Y.Z" with an Install action.
   The last install attempt's historical outcome stays visible above any later
-  Install and "View release" offer. A selected engine, including one observed
+  Install and "View release" offer, and a local engine notice sits above both,
+  never instead of them; only an active install replaces it. A selected engine,
+  including one observed
   only in recovery mode, retires its offer; a recovery-only install clears the
   stale serving identity so a re-check uses the selected runtime pointer until
-  normal connection adopts an identity. There is no background update timer.
+  normal connection adopts an identity. A refused install whose offer is no longer
+  newer than the observed serving version recomputes the cached decision against
+  that version and clears its ETag, so a subsequent 304 cannot rearm the stale
+  offer. That observation does not report an installation. There is no background
+  update timer.
 - **Build-sha stamping (QA-002).** `build-engine-resources.sh` stamps `CLAUDEXOR_BUILD_SHA`
   into the esbuild daemon and CLI bundles via `--define`, and
   `build-runtime-closure.mjs` embeds the SAME sha in the manifest and refuses to

@@ -1,10 +1,12 @@
 import SwiftUI
 import AppKit
+import ClaudexorKit
 
 @main
 struct ClaudexorApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @State private var model = AppModel()
+    @State private var model = AppModel(lifecycleOwner: LocalRuntimeLifecycleOwner(
+        serviceRoot: ControlApiDiscovery.defaultPath().deletingLastPathComponent()))
 
     var body: some Scene {
         WindowGroup {

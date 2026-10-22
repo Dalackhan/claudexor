@@ -753,6 +753,27 @@ frequency and volume are. The contracts:
     in this thread." The Canvas mode is retired (artifacts fold into this panel).
     The workspace is the sanctioned extension of the one-screen doctrine — never
     a third top-level screen.
+- **Local engine build selection (Settings → General).** Reconnect reloads the
+  connection without requesting an alternate build of the same version. When
+  reconciliation observes a different build of the selected version, General
+  shows the running and selected version/SHA and a separate **Switch Engine
+  Build** button. The existing reconciliation notice points here. The button
+  requests one idle-only switch bound to those identities; busy or unknown work
+  refuses it, and a changed identity requires a new observation and action.
+  While that request runs, the notice says the build is switching if work is
+  idle. A refusal keeps the same connection without a reconnect. If another
+  lifecycle action holds the shared lock, nothing is checked or changed: the
+  same pair is offered again with that reason, and the app never retries on its
+  own. The notice sits above the sidebar update chip's offer or install
+  outcome, never instead of them, and the Connecting/Offline placeholder shows
+  it when the sidebar is hidden.
+  A queued button action retains its displayed pair and cannot adopt a later
+  poll's offer. If replacement proof fails, canonical offline cleanup retires
+  stale projections and discovery keeps waiting for a late engine without a
+  second fallback launch.
+  Installation disables it with an explanatory tooltip. It never grants a
+  downgrade or makes passive polling switch builds. Newer or unorderable serving
+  versions retain the compatible connection with an explanatory notice.
 - Budget, Harness Doctor, and preferences live in the Settings scene (⌘,), not in
   the main window. Detachable pop-out windows remain out of scope.
 

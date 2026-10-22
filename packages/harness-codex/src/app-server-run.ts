@@ -188,10 +188,10 @@ export async function* runCodexAppServer(
       notificationWaiter.wake = undefined;
     }
   };
-
   const process = (async (): Promise<void> => {
     try {
       const options: SpawnOptions = {
+        stdoutFraming: "lf",
         cwd: input.spec.cwd,
         env: input.env,
         inheritEnv: input.spec.env_inheritance,

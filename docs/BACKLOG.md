@@ -1,5 +1,39 @@
 # Backlog
 
+## #484 siblings: line readers outside Codex app-server LF framing (2026-10-21)
+
+Owner decision 2026-10-21: #484 stays narrow, and these readers keep their
+current framing until a separate decision. Node 24 readline also ends a line at
+U+2028, U+2029 and a bare CR, while `JSON.stringify` (like the Codex peer)
+leaves U+2028/U+2029 unescaped inside strings. Every row comes from source
+reading and none was reproduced end to end. Whether the other vendor CLIs emit
+the separators unescaped is not verified.
+
+- Shared CLI run loop (`runCliHarness`, `packages/core/src/runloop.ts`, used
+  by claude, cursor, opencode and agy) spawns without `stdoutFraming`: a split
+  NDJSON line is counted in `dropped_unparsed_lines` and its event is lost.
+- Daemon RPC socket (`packages/daemon/src/rpc-followers.ts`,
+  `packages/daemon/src/client.ts`) frames with readline on both ends. A
+  `claudexor.enqueue` request carries the prompt; the server silently skips an
+  unparseable fragment, so the CLI would wait for its 10 s RPC timeout, and the
+  client reports a split reply (for example a `claudexor.status` echoing such a
+  prompt) as a transport failure.
+- ACP time-limit feed (`packages/cli/src/acp-time-limit-feed.ts`) reads the
+  run SSE stream with readline, unlike the CLI followers (`live.ts`,
+  `run-wait-events.ts`) that split on LF.
+- CLI Codex quota and device-login app-server readers
+  (`packages/cli/src/codex-quota-source.ts`, `appServerConnection` in
+  `packages/cli/src/setup-login-runner.ts`) use readline; a split response is
+  lost.
+- Codex auth refresh (`refreshCodexModelAuth`,
+  `packages/harness-codex/src/model-auth.ts`) spawns its app-server child
+  without `stdoutFraming`; a split `account/read` reply leaves the refresh
+  unconfirmed.
+- Codex effort probe (`probeCodexEfforts`,
+  `packages/harness-codex/src/effort-probe.ts`) frames on LF but decodes each
+  chunk with `toString()`, so a multi-byte character split between two reads
+  becomes U+FFFD in the model catalog text.
+
 ## 3.8.0 agy private-keychain review advisories (2026-08-22)
 
 These items were independently reproduced during the exact-candidate review.

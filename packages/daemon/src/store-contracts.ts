@@ -20,7 +20,10 @@ import type {
   Session,
   Thread,
   ThreadTurn,
+  TaskGroupPageQuery,
+  TaskGroupPage,
 } from "@claudexor/schema";
+export type { TaskGroupPageQuery } from "@claudexor/schema";
 import type { AcceptCommand, FindCommand } from "./command-store.js";
 import type { JobRecord } from "./job-record.js";
 import type { ProjectRegistration, RegisterProject } from "./projects.js";
@@ -242,6 +245,7 @@ export interface CommandQueries {
   /** Required by compact observation; absent on legacy, non-observing fixtures.
    * Persisted scalar facts must be validated per target before public use. */
   observationRecords?(ids: readonly string[]): RunObservationRecord[];
+  taskGroupPage?(input: TaskGroupPageQuery): TaskGroupPage;
   getByRunId(runId: string): JobRecord | undefined;
   select(query: CommandListQuery): JobRecord[];
   publicList(query: CommandListQuery): JobRecord[];

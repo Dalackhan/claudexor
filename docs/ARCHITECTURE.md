@@ -2558,6 +2558,25 @@ No memory, loop, timing or store measurements impose automatic admission thresho
 
 `POST /v2/handshake` returns top-level `storeId`, the durable engine store's UUID (stable across restarts, absent when unavailable), only to a request sending `X-Claudexor-Store-Identity: 1`, so older strict same-major clients keep the legacy shape; a run 404 is meaningful only together with the same `storeId`.
 
+Retained task-group reads are composed by `sqlControlReadSources` and
+`readTaskGroupRuns`. The `taskGroupPage` method of `SqlCommandQueries` selects group membership
+before projection, using the summary expression indexes and descending
+`(created_at, id)` keysets. It selects at most `limit + 1` scalar rows from the
+existing served-generation authority, without prompt, result, question-body or
+artifact hydration, a full-history traversal, or a count. Selected jobs reuse
+the body-free `readRunObservations` snapshots used by wait-many. A member's run
+ID is null until actual binding; its accepted job ID remains addressable.
+
+The served view hashes the set of partition name/epoch identities. A cursor
+binds that view, group, lifecycle filter, durable store and last returned key.
+An actual visibility change invalidates it; relinking the same project identity
+does not. Byte pagination advances only past returned members and refuses an
+unreturnable first member. CLI/MCP/HTTP are thin one-page projections of this
+owner. The bounded wire contract and reconnect example live in
+[Integrations](INTEGRATIONS.md#observing-and-directing-an-existing-run).
+The `current_served_generations`/`retained_only` qualifiers describe current
+visibility, not a permanent roster. Reads add no execution or approval authority.
+
 <!-- BEGIN GENERATED ENDPOINTS (node scripts/gen-endpoints-doc.mjs; do not edit by hand) -->
 - `GET /healthz`
 - `GET /v2/account-pools`
@@ -2639,6 +2658,7 @@ No memory, loop, timing or store measurements impose automatic admission thresho
 - `POST /v2/setup/jobs/:id/input`
 - `POST /v2/setup/jobs/:id/reconcile`
 - `GET /v2/setup/jobs/:id/snapshot`
+- `GET /v2/task-groups/:id/runs`
 - `GET /v2/threads`
 - `POST /v2/threads`
 - `GET /v2/threads/:id`
@@ -3693,6 +3713,17 @@ kept only for cold import and an independent frozen copy kept for tests.
   an older build of the same release version, which the semantic floor cannot
   tell apart — refuses the upgraded file with `store_schema_unsupported` before
   any write.
+- Schema version 3 adds two expression indexes over accepted command-summary
+  `params.taskGroupId`, ordered for group pages and group/state pages with the
+  live product and valid-JSON predicates. Non-JSON BLOB summaries remain writable
+  and are excluded from these indexes. Membership is committed in the original
+  acceptance transaction, before ACK/dispatch; there is no group table, backfill
+  or retention pin. Fresh DDL and the atomic 2→3 migration have the same indexes;
+  version 1 follows 1→2→3, and reopening the current version is write-free.
+  A version-2 reader refuses the upgraded file before writing. Downgrading an
+  upgraded store requires restoring a compatible complete backup made with all
+  writers stopped; swapping only the executable is insufficient. Source and
+  isolated-fixture qualification do not migrate an installed store.
 - The flusher worker owns the power-loss barrier. Every 200 ms it fsyncs each
   directory registered since the previous pass, reads `data_version`, runs a
   PASSIVE checkpoint for space, and — whenever anything was committed since

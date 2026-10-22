@@ -39,6 +39,7 @@ import {
   accessAndLimitProperties,
   externalContextProperties,
   reviewProperties,
+  taskGroupProperties,
 } from "./run-control-properties.js";
 const mcpRunToolResultSchema = inlineJsonSchemaRefs(
   mcpRunToolResultSchemaRaw as Record<string, unknown>,
@@ -245,6 +246,7 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
     additionalProperties: false,
     properties: {
       idempotencyKey: idempotencyKeySchema,
+      ...taskGroupProperties(),
       prompt: {
         type: "string",
         minLength: 1,

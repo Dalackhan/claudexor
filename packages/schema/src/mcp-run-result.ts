@@ -11,6 +11,7 @@ import { AttemptExecutionEvidence } from "./attempt-execution.js";
 import { Id } from "./primitives.js";
 import { RunContinuityReceipt, RunResumable } from "./run-continuity.js";
 import { ControlRetainedEnvelope } from "./run-continuation.js";
+import { TaskGroupReceipt } from "./task-group.js";
 
 export const RunDetailProblem = z
   .object({
@@ -72,6 +73,7 @@ export type SecretLikeDisclosure = z.infer<typeof SecretLikeDisclosure>;
  */
 export const McpRunToolResult = z
   .object({
+    ...TaskGroupReceipt.partial().shape,
     attemptExecution: z.array(AttemptExecutionEvidence).optional(),
     summary: z
       .string()

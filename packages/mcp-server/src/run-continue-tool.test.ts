@@ -12,7 +12,9 @@ describe("MCP run continuation", () => {
     expect(tool).toBeDefined();
     expect(tool.inputSchema.required).toEqual(["runId"]);
     // Explicit canonical successor controls; inherited groups are not restatable here.
-    expect(Object.keys(tool.inputSchema.properties as object)).toEqual([
+    expect(
+      Object.keys(tool.inputSchema.properties as object).filter((key) => key !== "taskGroupId"),
+    ).toEqual([
       "runId",
       "prompt",
       "idempotencyKey",
@@ -30,6 +32,10 @@ describe("MCP run continuation", () => {
       "continueCarrier",
     ]);
     expect(tool.inputSchema.additionalProperties).toBe(false);
+    expect((tool.inputSchema.properties as Record<string, unknown>)["taskGroupId"]).toMatchObject({
+      type: "string",
+      format: "uuid",
+    });
     expect(tool.annotations?.readOnlyHint).toBe(false);
     expect(tool.outputSchema).toBeDefined();
     expect(
@@ -41,6 +47,64 @@ describe("MCP run continuation", () => {
         parentBudget: { kind: "unlimited" },
       }).some((t) => t.name === tool.name),
     ).toBe(false);
+  });
+
+  it("exposes optional group metadata only on public one-shot launch and continuation tools", () => {
+    const runner = vi.fn(async () => ({}));
+    const tools = defaultClaudexorTools(runner);
+    for (const name of [
+      "claudexor_ask",
+      "claudexor_plan",
+      "claudexor_run",
+      "claudexor_best_of",
+      "claudexor_run_continue",
+    ]) {
+      const tool = tools.find((candidate) => candidate.name === name)!;
+      expect(tool, name).toBeDefined();
+      const properties = tool.inputSchema.properties as Record<string, Record<string, unknown>>;
+      expect(properties["taskGroupId"], name).toMatchObject({ type: "string", format: "uuid" });
+      expect(properties["taskGroupId"]).not.toHaveProperty("default");
+      expect(tool.inputSchema.required ?? []).not.toContain("taskGroupId");
+    }
+    for (const tool of tools.filter((candidate) => candidate.name.startsWith("claudexor_thread_")))
+      expect(tool.inputSchema.properties, tool.name).not.toHaveProperty("taskGroupId");
+    const belt = beltClaudexorTools(runner, {
+      parentRunId: "parent",
+      repoRoot: "/fixture",
+      depth: 0,
+      maxSubRuns: 8,
+      parentBudget: { kind: "unlimited" },
+    });
+    for (const tool of belt)
+      expect(tool.inputSchema.properties, tool.name).not.toHaveProperty("taskGroupId");
+  });
+
+  it("mirrors the accepted grouped continuation receipt in both MCP channels", async () => {
+    const taskGroupId = "11111111-1111-4111-8111-111111111111";
+    const storeId = "22222222-2222-4222-8222-222222222222";
+    const runner = vi.fn(async () => ({
+      jobId: "job-s",
+      runId: "",
+      status: "queued",
+      summary: "accepted",
+      taskGroupId,
+      storeId,
+    }));
+    const result = await runContinueTool(runner).handler(
+      { runId: "run-p", taskGroupId, idempotencyKey: "group-key" },
+      {},
+    );
+    expect(runner).toHaveBeenCalledExactlyOnceWith({
+      mode: "__run_continue",
+      runId: "run-p",
+      taskGroupId,
+      idempotencyKey: "group-key",
+    });
+    expect(result).toMatchObject({
+      structured: { taskGroupId, storeId, jobId: "job-s", runId: null },
+    });
+    expect((result as { text: string }).text).toContain(`taskGroupId: ${taskGroupId}`);
+    expect((result as { text: string }).text).toContain(`storeId: ${storeId}`);
   });
 
   it.each([undefined, "", "follow up"])(
@@ -146,6 +210,7 @@ describe("MCP run continuation", () => {
       }
       expect(runner).toHaveBeenCalledTimes(2);
       const controls = {
+        taskGroupId: "11111111-1111-4111-8111-111111111111",
         access: "readonly",
         web: "off",
         credentialProfileId: "codex-work",
@@ -167,6 +232,8 @@ describe("MCP run continuation", () => {
       });
       expect(runner).toHaveBeenCalledTimes(3);
       for (const extra of [
+        { taskGroupId: "not-a-uuid" },
+        { taskGroupId: null },
         { execution: { isolation: "live" } },
         { access: "full_access" },
         { harness: "claude" },

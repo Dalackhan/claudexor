@@ -3,6 +3,7 @@
  * trailer an MCP host renders and its structured machine mirror. Kept out of
  * index.ts so the tool wiring stays within the readability ratchet.
  */
+import { taskGroupReceiptMetadata } from "@claudexor/schema";
 
 /**
  * Render a run result for an MCP host: the human-readable summary FIRST, then
@@ -23,6 +24,8 @@ export function formatRunResult(result: unknown): string {
       }
     }
     const trailer: string[] = [];
+    for (const [key, value] of Object.entries(taskGroupReceiptMetadata(r)))
+      trailer.push(`${key}: ${value}`);
     if (typeof r["runId"] === "string" && r["runId"]) trailer.push(`runId: ${r["runId"]}`);
     // A queued launch has no run yet: its job id is the recovery handle.
     if (typeof r["jobId"] === "string" && r["jobId"] && r["jobId"] !== r["runId"])
@@ -48,6 +51,7 @@ export function structuredRunResult(result: unknown): Record<string, unknown> {
     if (!summary && typeof v === "string" && v.trim()) summary = v.trim();
   }
   return {
+    ...taskGroupReceiptMetadata(r),
     ...(Array.isArray(r["attemptExecution"]) ? { attemptExecution: r["attemptExecution"] } : {}),
     summary,
     runId: typeof r["runId"] === "string" && r["runId"] ? r["runId"] : null,

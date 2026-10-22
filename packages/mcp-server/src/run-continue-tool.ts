@@ -7,6 +7,7 @@ import {
   accessAndLimitProperties,
   externalContextProperties,
   reviewProperties,
+  taskGroupProperties,
 } from "./run-control-properties.js";
 import type { McpTool, RunnerFn } from "./index.js";
 
@@ -33,6 +34,7 @@ export function runContinueTool(runner: RunnerFn): McpTool {
           description: "Reuse the same key and arguments after an unknown response.",
         },
         ...externalContextProperties(),
+        ...taskGroupProperties(),
         ...accessAndLimitProperties(),
         ...reviewProperties(),
         continueCarrier: {

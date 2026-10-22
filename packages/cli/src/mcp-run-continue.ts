@@ -3,6 +3,7 @@ import {
   ControlRunStartResponse,
   ControlRunState,
   validateOptionalNonEmptyString,
+  taskGroupReceiptMetadata,
 } from "@claudexor/schema";
 import { connectDaemonIfRunning, type DaemonRunOutcome } from "./daemon-run.js";
 import { controlProblemError } from "./cli-error.js";
@@ -21,6 +22,7 @@ import { acceptedPreRunFailure } from "./run-start-acceptance.js";
  */
 const continuationRequest = ControlRunStartRequest.pick({
   continueFrom: true,
+  taskGroupId: true,
   prompt: true,
   access: true,
   web: true,
@@ -117,6 +119,7 @@ export async function runContinueQuery(
       const record = jobId ? await connection.client?.status(jobId).catch(() => null) : null;
       const state = ControlRunState.safeParse(record?.state);
       out = {
+        ...taskGroupReceiptMetadata(handle),
         jobId,
         runId: handle.runId,
         runDir: handle.runDir,
@@ -124,6 +127,7 @@ export async function runContinueQuery(
       };
     } else {
       out = {
+        ...taskGroupReceiptMetadata(handle),
         jobId: handle.jobId,
         runId: "",
         runDir: "",

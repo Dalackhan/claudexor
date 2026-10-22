@@ -6,6 +6,7 @@ import {
   type ProcessingPreference,
   type PromptCacheTtl,
   normalizeCancelReasonCode,
+  taskGroupLaunchMetadata,
 } from "@claudexor/schema";
 import { connectDaemonIfRunning, ensureDaemon, enqueueAndAwait } from "./daemon-run.js";
 import { controlProblemError } from "./cli-error.js";
@@ -26,6 +27,7 @@ import { runMessageQuery } from "./mcp-run-message.js";
 import { runContinueQuery } from "./mcp-run-continue.js";
 import { runWaitQuery } from "./mcp-run-wait.js";
 import { runsWaitQuery } from "./mcp-runs-wait.js";
+import { taskGroupRunsQuery } from "./task-group-runs.js";
 import { runEventReadQuery } from "./mcp-run-event-read.js";
 import { journalRecoveryQuery } from "./mcp-journal-recovery.js";
 
@@ -65,6 +67,10 @@ export interface McpSurfaceRunnerOptions {
 export function mcpSurfaceRunner(options: McpSurfaceRunnerOptions = {}) {
   return async (p: any, hooks?: SurfaceRunnerHooks) => {
     const beltContext = Boolean(options.delegationParentRunId);
+    if (p?.mode === "__task_group_runs") {
+      const { mode: _mode, ...input } = p;
+      return taskGroupRunsQuery(input, beltContext, hooks?.signal);
+    }
     if (p?.mode === "__runs_wait") {
       const { mode: _mode, ...input } = p;
       return runsWaitQuery(input, beltContext, hooks?.signal);
@@ -134,6 +140,7 @@ export function mcpSurfaceRunner(options: McpSurfaceRunnerOptions = {}) {
       });
     }
     const mode = ModeKind.parse(p?.mode ?? "agent");
+    const metadata = taskGroupLaunchMetadata(p, beltContext);
     // A replayable launch key names one stable project; it never follows
     // whatever directory this server process happens to run in.
     const explicitRoot = typeof p?.repoPath === "string" && p.repoPath.trim().length > 0;
@@ -151,6 +158,7 @@ export function mcpSurfaceRunner(options: McpSurfaceRunnerOptions = {}) {
       ? options.delegationProcessingPreference
       : p?.processingPreference;
     const body: Record<string, unknown> = {
+      ...metadata,
       prompt: String(p?.prompt ?? ""),
       mode,
       scope: { kind: "project", root: repoRoot },

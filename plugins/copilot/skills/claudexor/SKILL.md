@@ -74,6 +74,29 @@ Pass a stable `idempotencyKey` with an explicit `repoPath` on a one-shot launch
 when its response may need recovery; retry the same key and arguments, not a
 new launch. A queued launch returns its `jobId` with `runId: null`; pass the
 `jobId` as `runId` to the follow-up tools until the run binds.
+
+Optional retained task groups are an API for caller-owned correlation on a
+supporting daemon. A public one-shot launch can explicitly pass a UUID
+`taskGroupId` (CLI `--task-group-id`). Save that UUID, each member's distinct
+request key and exact body before launch; keep accepted receipts and their
+`storeId` outside the ephemeral controller. `claudexor_task_group_runs` accepts
+`{taskGroupId, expectedStoreId?, limit?, state?, cursor?}` and returns exactly one
+page of original job handles with actual nullable run IDs. Supply the saved
+`expectedStoreId` when recovering. Limit is 1..200,
+default 50; cursor is at most 2048 characters; logical result JSON is at most
+131072 UTF-8 bytes. Resume explicitly with `nextCursor`; `hasMore` never causes
+automatic traversal. A store mismatch or stale cursor is a typed refusal.
+Pages declare `current_served_generations` and `retained_only`: an empty page
+after pruning or archive is not proof of never-accepted work or a complete
+roster. Missing membership grants no resubmission authority. Group reads never
+launch, retry, resume, answer or cancel; interrupted jobs remain interrupted.
+Same-key replay needs the exact saved group/body; Exact Retry keeps the group.
+A new continuation can explicitly supply a group, with no inheritance on
+omission. Thread turns, Delegate tools and ACP session settings do not take
+group input. This API adds no rights, budget inheritance or app UI handoff;
+use it only when advertised by the selected supporting engine. The source
+distribution's `docs/INTEGRATIONS.md` contains the recovery example.
+
 Use `claudexor_runs_wait` to observe 1..1000 `targets` entries shaped
 `{runId, seen?}` with compact positional summaries and attention indexes.
 For example, call it with `{"targets":[{"runId":"job-a"},{"runId":"job-b"}],"waitMs":0}`.

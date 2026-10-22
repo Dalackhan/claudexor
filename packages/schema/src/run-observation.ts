@@ -1,5 +1,6 @@
 import { z } from "zod/v3";
 import { ControlRunState } from "./control.js";
+import { TaskGroupId } from "./task-group.js";
 
 export const RUN_WAIT_MANY_MAX_TARGETS = 1000;
 export const RUN_WAIT_MANY_REQUEST_BYTES = 1_048_576;
@@ -21,6 +22,7 @@ export const RunObservationRecord = z
     epoch: z.string().min(1),
     state: ControlRunState,
     createdAt: z.string().min(1),
+    taskGroupId: TaskGroupId.optional(),
   })
   .strict();
 export type RunObservationRecord = z.infer<typeof RunObservationRecord>;

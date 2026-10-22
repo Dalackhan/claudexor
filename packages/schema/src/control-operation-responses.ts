@@ -111,6 +111,7 @@ export const ControlDeliveryResponse = DeliveryReceipt.describe(
 export type ControlDeliveryResponse = z.infer<typeof ControlDeliveryResponse>;
 
 export const ControlThreadTurnRequest = ControlRunStartRequest.omit({
+  taskGroupId: true,
   scope: true,
   execution: true,
   threadId: true,
@@ -150,7 +151,10 @@ export type ControlThreadTurnRequest = z.infer<typeof ControlThreadTurnRequest>;
 
 export const ControlThreadTurnResponse = z
   .union([
-    ControlRunStartInfo.extend({ threadId: Id, turnId: Id }),
+    ControlRunStartInfo.omit({ taskGroupId: true, storeId: true }).extend({
+      threadId: Id,
+      turnId: Id,
+    }),
     z.object({ jobId: Id, threadId: Id, turnId: Id, state: z.string().min(1) }).strict(),
   ])
   .describe("Durable handle returned by thread turn create or Exact Retry.");

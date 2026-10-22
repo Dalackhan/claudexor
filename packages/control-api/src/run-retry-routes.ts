@@ -34,6 +34,7 @@ type RetryServices = Pick<
 
 export interface RunRetryRouteContext {
   daemon: DaemonFacadeClient;
+  storeId?: () => string | undefined;
   services?: RetryServices;
   findRun(id: string): Promise<DaemonRunRecord | null>;
   waitForRunStart(jobId: string): Promise<DaemonRunRecord>;
@@ -271,21 +272,28 @@ async function respondToExactRetryJob(
       ...(retryTurnId ? { turnId: retryTurnId } : {}),
     });
   }
+  const metadata = runStart.acceptedTaskGroupReceipt(accepted, ctx.storeId);
   if (!accepted.runId && TERMINAL_STATES.has(accepted.state)) {
     // The replayed job died BEFORE it bound a run (e.g. the trust gate's typed
     // 403). A 202 here would hand the caller a durable handle for a run that
     // will never exist, and `claudexor retry` would exit 0 on it.
-    const { status, body } = runStart.unboundRunStartResponse(accepted, true, {
-      retryOf: sourceRunId,
-      ...(threadId ? { threadId } : {}),
-      ...(retryTurnId ? { turnId: retryTurnId } : {}),
-    });
+    const { status, body } = runStart.unboundRunStartResponse(
+      accepted,
+      true,
+      {
+        retryOf: sourceRunId,
+        ...(threadId ? { threadId } : {}),
+        ...(retryTurnId ? { turnId: retryTurnId } : {}),
+      },
+      metadata,
+    );
     return ctx.json(res, status, body);
   }
   ctx.json(
     res,
     accepted.runId ? 200 : 202,
     ControlRunRetryResponse.parse({
+      ...metadata,
       retryOf: sourceRunId,
       jobId: accepted.id,
       runId: accepted.runId ?? null,

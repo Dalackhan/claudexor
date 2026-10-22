@@ -48,6 +48,7 @@ import { RunContinuityReceipt, RunResumable } from "./run-continuity.js";
 import { ContinueCarrierPreference, ControlRetainedEnvelope } from "./run-continuation.js";
 import { ProcessingPreference } from "./processing.js";
 import { PromptCacheTtl } from "./prompt-cache.js";
+import { TaskGroupId } from "./task-group.js";
 export { RunExecution } from "./control-run-execution.js";
 export { ControlTimelineEvent } from "./control-timeline.js";
 export const ControlReviewerPanelEntry = z
@@ -96,6 +97,7 @@ export const ControlRunStartRequest = z
         "Immutable daemon resource ids returned by upload finalize; paths and inline bytes are not accepted.",
       ),
     mode: ModeKind.default("agent"),
+    taskGroupId: TaskGroupId.optional(),
     scope: RunScope.default({ kind: "none" }),
     execution: RunExecution.default({ isolation: "envelope" }),
     harnesses: z
@@ -376,13 +378,7 @@ export const ControlRunState = z
   );
 export type ControlRunState = z.infer<typeof ControlRunState>;
 
-export const ControlQueuedRunInfo = z
-  .object({
-    jobId: z.string().describe("Daemon job id."),
-    state: ControlRunState,
-    error: z.string().optional().describe("Error message, when the job failed."),
-  })
-  .describe("Compact state of a queued/running daemon job.");
+export const ControlQueuedRunInfo = RunRetrySchemas.queuedInfo(ControlRunState);
 export type ControlQueuedRunInfo = z.infer<typeof ControlQueuedRunInfo>;
 
 export const ControlProjectMetadata = z

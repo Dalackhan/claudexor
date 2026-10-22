@@ -13,6 +13,7 @@ import { MAINTENANCE_OPERATION_DRAFTS } from "./maintenance-routes.js";
 import { RUN_EVENT_PART_OPERATION_DRAFTS } from "./run-event-part-routes.js";
 import type { OperationDraft } from "./operation-draft.js";
 import { OPERATION_SUMMARIES } from "./operation-summaries.js";
+import { TASK_GROUP_RUNS_OPERATION_DRAFTS } from "./task-group-routes.js";
 
 function descriptor(input: OperationDraft): ControlOperationDescriptor {
   // Resource-family classification (QA-054) follows the resource plane.
@@ -69,6 +70,7 @@ const j = (
   });
 
 const operations: ControlOperationDescriptor[] = [
+  ...TASK_GROUP_RUNS_OPERATION_DRAFTS.map(descriptor),
   ...MODEL_OPERATION_DRAFTS.map(descriptor),
   j("POST", "/v2/uploads", "mutating", "ControlUploadCreateRequest", "ControlUploadStatus", {
     idempotency: "key_required",

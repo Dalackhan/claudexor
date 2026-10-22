@@ -4,6 +4,8 @@ import {
   type EngineStore,
   type createSqlDaemonServices,
 } from "@claudexor/daemon";
+import { readTaskGroupRuns } from "@claudexor/control-api";
+import type { TaskGroupRunsInput } from "@claudexor/schema";
 
 type ControlReadGraph = Pick<
   ReturnType<typeof createSqlDaemonServices>,
@@ -17,6 +19,43 @@ export function sqlControlReadSources(
   storeId: () => string | undefined,
 ) {
   return {
+    taskGroupRuns: (input: TaskGroupRunsInput, signal?: AbortSignal) => {
+      let selected: { graph: ControlReadGraph; storeId: string } | undefined;
+      return readTaskGroupRuns(
+        input,
+        {
+          storeId,
+          page: (query) => {
+            const graph = current();
+            const queries = graph.commands.queries;
+            if (!queries.taskGroupPage)
+              throw Object.assign(new Error("indexed task group observation is unavailable"), {
+                code: "task_group_runs_unavailable",
+                status: 503,
+                retryable: false,
+              });
+            selected = { graph, storeId: query.storeId };
+            return queries.taskGroupPage(query);
+          },
+          snapshot: (ids, readSignal) => {
+            if (!selected)
+              throw Object.assign(new Error("task group page has not selected a store"), {
+                code: "task_group_runs_unavailable",
+                status: 503,
+                retryable: false,
+              });
+            return readRunObservations(
+              selected.graph.commands.queries,
+              selected.graph.interactions,
+              selected.storeId,
+              ids,
+              readSignal,
+            );
+          },
+        },
+        signal,
+      );
+    },
     runObservations: async (ids: readonly string[], signal?: AbortSignal) => {
       const identity = storeId();
       if (!identity)
@@ -45,6 +84,16 @@ export function deferredCommands(current: () => CommandBackend): CommandBackend 
     pruneHistory: (...args) => current().pruneHistory(...args),
     queries: {
       observationRecords: (ids) => current().queries.observationRecords!(ids),
+      taskGroupPage: (input) => {
+        const queries = current().queries;
+        if (!queries.taskGroupPage)
+          throw Object.assign(new Error("indexed task group observation is unavailable"), {
+            code: "task_group_runs_unavailable",
+            status: 503,
+            retryable: false,
+          });
+        return queries.taskGroupPage(input);
+      },
       getByRunId: (id) => current().queries.getByRunId(id),
       select: (query) => current().queries.select(query),
       publicList: (query) => current().queries.publicList(query),

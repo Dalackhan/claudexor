@@ -92,6 +92,8 @@ import { handleRunMessageRoute } from "./run-message-routes.js";
 import { handleRunEventPartRoute } from "./run-event-part-routes.js";
 import { handleRunTimeLimitRoute } from "./run-time-limit-routes.js";
 import { handleRunWaitManyRoute } from "./run-wait-many-routes.js";
+import { handleTaskGroupRunsRoute } from "./task-group-routes.js";
+import type { TaskGroupRunsInput, TaskGroupRunsResult } from "@claudexor/schema";
 import type { RunWaitManyHost } from "./run-wait-many.js";
 import {
   handleRunApplyRoutes,
@@ -249,6 +251,7 @@ export interface DaemonControlApiOptions {
   storeId?: () => string | undefined;
   /** Body-free, positional run observations from the current durable store. */
   runObservations?: RunWaitManyHost["snapshot"];
+  taskGroupRuns?: (input: TaskGroupRunsInput, signal?: AbortSignal) => Promise<TaskGroupRunsResult>;
   bus?: { subscribe(listener: (event: { run_id: string }) => void): () => void };
   /** Internal storage fact; a committed terminal may still need its file effects. */
   terminalFilesPending?: (runIdOrCommandId: string) => boolean;
@@ -773,6 +776,7 @@ export class DaemonControlApiServer {
       daemon: this.opts.daemon,
       services: this.opts.services,
       runObservations: this.opts.runObservations,
+      taskGroupRuns: this.opts.taskGroupRuns,
       bus: this.opts.bus,
       pollMs: this.opts.pollMs,
       readBody: (request: IncomingMessage, maxBytes?: number) => this.readBody(request, maxBytes),
@@ -783,6 +787,7 @@ export class DaemonControlApiServer {
     };
     for (const route of [
       handleRunWaitManyRoute,
+      handleTaskGroupRunsRoute,
       handleResourceRoute,
       handleModelRoute,
       handleMaintenanceRoute,
@@ -845,6 +850,7 @@ export class DaemonControlApiServer {
           services: this.opts.services,
           findRun: (id) => this.findRun(id),
           waitForRunStart: (id) => this.waitForRunStart(id),
+          storeId: this.opts.storeId,
           serializeThreadMutation: (threadId, work) =>
             chainThreadMutation(this.threadTurnChains, threadId, work),
           json: (response, status, body) => this.json(response, status, body),
@@ -1974,11 +1980,13 @@ export class DaemonControlApiServer {
 
   private async respondToAcceptedJob(res: ServerResponse, jobId: string): Promise<void> {
     const rec = await this.waitForRunStart(jobId);
+    const metadata = runStart.acceptedTaskGroupReceipt(rec, this.opts.storeId);
     if (rec.runId && rec.runDir) {
       return this.json(
         res,
         200,
         ControlRunStartInfo.parse({
+          ...metadata,
           jobId: rec.id,
           runId: rec.runId,
           taskId: rec.taskId,
@@ -1986,7 +1994,12 @@ export class DaemonControlApiServer {
         }),
       );
     }
-    const { status, body } = runStart.unboundRunStartResponse(rec, TERMINAL_STATES.has(rec.state));
+    const { status, body } = runStart.unboundRunStartResponse(
+      rec,
+      TERMINAL_STATES.has(rec.state),
+      {},
+      metadata,
+    );
     return this.json(res, status, body);
   }
 

@@ -79,6 +79,7 @@ const MCP_TO_CLI = {
     reason:
       "caller-owned MCP launch identity, carried as the existing HTTP Idempotency-Key rather than an engine run-control flag",
   },
+  taskGroupId: { cli: "task-group-id" },
   harness: { cli: "harness" },
   primaryHarness: { cli: "primary-harness" },
   model: { cli: "model" },
@@ -358,6 +359,35 @@ for (const [field, flag] of Object.entries(RUN_OBSERVATION_TOOL_FLAGS)) {
   }
 }
 
+const TASK_GROUP_TOOL_FLAGS = {
+  limit: { flag: "limit", type: "integer" },
+  state: { flag: "state", type: "string" },
+  cursor: { flag: "cursor", type: "string" },
+  expectedStoreId: { flag: "expected-store-id", type: "string" },
+};
+const groupTool = tools.find((tool) => tool.name === "claudexor_task_group_runs");
+const groupCommand = cliRegistry.CLI_COMMANDS.find((command) => command.id === "task-group-runs");
+if (
+  groupCommand?.mutability !== "read" ||
+  groupTool?.inputSchema.properties?.taskGroupId?.type !== "string"
+)
+  failures.push(
+    "task-group-runs must be a registered read with a taskGroupId UUID positional equivalent",
+  );
+if (!groupCommand?.positionalPatterns.some((pattern) => pattern.min === 1 && pattern.max === 1))
+  failures.push("task-group-runs must consume exactly one positional UUID");
+for (const [field, { flag, type }] of Object.entries(TASK_GROUP_TOOL_FLAGS)) {
+  if (groupTool?.inputSchema.properties?.[field]?.type !== type)
+    failures.push(`Task group read is missing ${type} field '${field}'`);
+  if (!cliValueFlags.includes(flag) || !groupCommand?.flags.includes(flag))
+    failures.push(
+      `Task group read '${field}' maps to missing task-group-runs value flag '--${flag}'`,
+    );
+  for (const command of cliRegistry.CLI_COMMANDS)
+    if (command.id !== "task-group-runs" && command.flags.includes(flag))
+      failures.push(`Task group read flag '--${flag}' leaked into '${command.id}'`);
+}
+
 const mappedCliFlags = new Set(
   Object.values(MCP_TO_CLI)
     .flatMap((mapping) => [
@@ -370,7 +400,8 @@ for (const flag of cliValueFlags) {
   if (
     mappedCliFlags.has(flag) ||
     Object.values(ACCOUNT_TOOL_FLAGS).includes(flag) ||
-    Object.values(RUN_OBSERVATION_TOOL_FLAGS).includes(flag)
+    Object.values(RUN_OBSERVATION_TOOL_FLAGS).includes(flag) ||
+    Object.values(TASK_GROUP_TOOL_FLAGS).some((mapping) => mapping.flag === flag)
   )
     continue;
   if (flag in CLI_ONLY_EXEMPT) continue;
@@ -406,6 +437,8 @@ for (const declared of Object.keys(BOOLEAN_FLAG_MAP)) {
 const ACP_EQUIVALENT = {
   repoPath: "session/new cwd anchors the project",
   idempotencyKey: "caller-owned MCP transport identity; ACP does not expose launch replay keys",
+  taskGroupId:
+    "external one-shot correlation metadata; ACP session/prompt fields deliberately reject it",
 };
 for (const arg of mcpArgs) {
   if (arg in ACP_EQUIVALENT) continue;
@@ -465,6 +498,7 @@ for (const readTool of [
   "claudexor_run_result",
   "claudexor_run_wait",
   "claudexor_runs_wait",
+  "claudexor_task_group_runs",
   "claudexor_run_event_read",
   "claudexor_run_message",
   "claudexor_run_continue",

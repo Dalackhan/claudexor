@@ -10,7 +10,7 @@ changing Claudexor.
 
 | Surface | Current role | Stability |
 |---|---|---|
-| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, runs-wait, retry, run-again, apply, decision, review), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). `runs-wait` observes existing handles read-only through `--targets-json` and optional `--wait-ms`, with `--json` or `--json-stream` output. | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
+| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, runs-wait, task-group-runs, retry, run-again, apply, decision, review), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). `runs-wait` observes existing handles read-only through `--targets-json` and optional `--wait-ms`, with `--json` or `--json-stream` output. `task-group-runs` reads one bounded retained group page. | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
 | Daemon and control API | Local durable queue, Agent runs, caller-owned model and image operations, artifacts, SSE events, settings, harness status, secrets metadata, apply, and run control. | Stable contract: endpoints and DTOs per `docs/reference/endpoints.json` + generated schemas (add-only fields). Loopback + bearer token only. |
 | MCP server | Exposes Claudexor tools to MCP clients. `claudexor_runs_wait` projects the same read-only observation with `targets: [{runId, seen?}]` and optional `waitMs`. | Stable contract: the tool set with input/output schemas. Tool list follows the implementation, not old docs. |
 | ACP server | Lets compatible editors or agents talk to Claudexor as a local agent surface. | Experimental (may change in minors, disclosed in the CHANGELOG). |
@@ -765,7 +765,7 @@ per-model capability marks, and last service, absent for an older engine, and a 
 `routingEvidenceProblem` while the listing stays authoritative),
 `claudexor_runs`, `claudexor_inspect`, `claudexor_run_status`,
 `claudexor_run_result`, `claudexor_run_cancel`, `claudexor_run_time_limit`,
-`claudexor_run_wait`, `claudexor_runs_wait`, `claudexor_run_event_read`, `claudexor_run_message`,
+`claudexor_run_wait`, `claudexor_runs_wait`, `claudexor_task_group_runs`, `claudexor_run_event_read`, `claudexor_run_message`,
 `claudexor_run_continue`,
 `claudexor_run_interactions`, `claudexor_answer_interaction`,
 `claudexor_apply_check`, and
@@ -824,6 +824,78 @@ Recovery assumes the same registered project root is still available at that
 path. A missing, moved or unmounted root is refused (`project_root_missing`)
 before the replay lookup, so nothing is replayed or started; `claudexor_runs`
 still lists the earlier run.
+
+**Recovering a retained task group.** On supporting daemons, public one-shot
+launches accept an optional caller-generated UUID `taskGroupId` (CLI
+`--task-group-id`). It is immutable accepted metadata. Tagged receipts carry
+both `taskGroupId` and the accepting `storeId`, including queued job-only
+receipts. Each member still has its own request key. The group is optional
+correlation, with no scheduler, permissions or budget authority.
+
+For example, a controller can keep the following record in its own durable
+storage outside the ephemeral MCP process. Save G, KA, KB and the exact request
+bodies **before** the first launch; then save each accepted receipt and its
+`storeId` before continuing. These are illustrative UUIDs, not defaults:
+
+```js
+const G = "11111111-1111-4111-8111-111111111111";
+const KA = "22222222-2222-4222-8222-222222222222";
+const KB = "33333333-3333-4333-8333-333333333333";
+const A = { prompt: "Review the parser", repoPath: "/absolute/project", taskGroupId: G, idempotencyKey: KA };
+const B = { prompt: "Review the tests", repoPath: "/absolute/project", taskGroupId: G, idempotencyKey: KB };
+// Persist { G, KA, KB, A, B } in caller-owned storage before calling either tool.
+// Call claudexor_ask(A), then persist its complete accepted receipt + storeId.
+// Call claudexor_ask(B), then persist its complete accepted receipt + storeId.
+```
+
+After losing only the controller transport, reconnect to the same backend and
+call `claudexor_task_group_runs` with
+`{taskGroupId: G, expectedStoreId: saved.storeId, limit: 1}`. This read needs
+neither a launch nor the previous working directory. Keep the returned original
+`jobId` handles and the actual nullable `runId` values: a queued job has
+`runId: null` until binding. If `hasMore` is true, explicitly request the next
+page with the returned `nextCursor`; the tool does not follow it automatically.
+The CLI and HTTP expose the same single-page read:
+
+```bash
+claudexor task-group-runs 11111111-1111-4111-8111-111111111111 --expected-store-id "$SAVED_STORE_ID" --limit 1 --json
+```
+
+HTTP clients use `GET /v2/task-groups/:id/runs` with optional query parameters
+`expectedStoreId`, `limit`, lifecycle `state`, and `cursor`. Supply the saved
+`expectedStoreId` for recovery. Limit is
+1..200 (default 50); a cursor is at most 2048 characters. Logical result JSON
+is capped at 131072 UTF-8 bytes, so a page can contain fewer than the requested
+number of members. The cursor binds group, filter, store and served view;
+`store_mismatch` and `stale_cursor` refuse incompatible recovery. A changed
+served view requires a fresh traversal, not a silent cursor reset. Commands and
+tools are usable only when advertised by the selected supporting engine. An
+older or unavailable backend fails typed; it is not an empty successful group.
+Observation requires an existing daemon and never starts one.
+
+Now pass the recovered job handles to `claudexor_runs_wait`. Save its per-target
+tokens and echo them as `seen` to suppress unchanged attention. Fetch a pending
+question with `claudexor_run_interactions` and answer it separately under the
+existing approval rules. Fetch output separately with `claudexor_run_result`;
+terminal attention does not prove readable output. Event replay has its own
+`nextSeq`/`afterSeq` cursor, independent of group cursors and `seen` tokens.
+
+Every page declares `visibility: "current_served_generations"` and
+`retention: "retained_only"`. Pruning, project archive or generation retirement
+can hide accepted members. An empty page is not proof of never-accepted work or
+a complete historical roster; `hasMore: false` ends only this retained traversal.
+Missing membership does not authorize resubmission. Group reads and waits never
+launch, retry, resume, answer or cancel work. A daemon crash can leave a recovered
+running job `interrupted`; discovery does not resume it.
+
+For an uncertain launch response, replay KA or KB with its **identical** saved
+body; changing or removing its group conflicts. Exact Retry retains the accepted
+group. A deliberately new continuation may explicitly supply `taskGroupId`, but
+omission does not inherit it. Thread turns, Delegate tools and ACP session
+settings do not take group input. Groups confer no rights or budget inheritance,
+and there is no app UI handoff contract. See the
+[storage compatibility caveat](ARCHITECTURE.md#sqlite-engine-store) before opening
+an existing store with a new engine.
 
 **Waiting for several jobs.** `claudexor_runs_wait` observes attention from
 1..1000 existing job/run handles with one `POST /v2/runs/wait-many`. Pass

@@ -1,4 +1,9 @@
-import { isTerminalLifecycle, type ModeKind, type RunOutcomeFacts } from "@claudexor/schema";
+import {
+  isTerminalLifecycle,
+  taskGroupReceiptMetadata,
+  type ModeKind,
+  type RunOutcomeFacts,
+} from "@claudexor/schema";
 import { daemonOutcomeSummary, fetchRunDetail, type DaemonRunOutcome } from "./daemon-run.js";
 import {
   describeRunDetailProblem,
@@ -76,6 +81,8 @@ export async function projectLaunchHandle(
       status: out.status,
       summary,
       ...detailProjection,
+      ...(out.runId ? {} : taskGroupReceiptMetadata(out.errorContext)),
+      ...taskGroupReceiptMetadata(out),
       ...(detailProblem ? { detailProblem } : {}),
     };
   } catch (error) {

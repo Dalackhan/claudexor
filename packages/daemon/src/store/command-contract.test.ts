@@ -2,7 +2,8 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DurableJournal } from "./test-support/fixtures/legacy/journal/index.js";
-import { RunEvent, type CommandListQuery } from "@claudexor/schema";
+import { ControlRunStartRequest as PreGroupRunStartRequest } from "./test-support/fixtures/legacy/schema/control.js";
+import { ControlRunStartRequest, RunEvent, type CommandListQuery } from "@claudexor/schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BlobFiles, deleteUnownedInlineInTx } from "./blob-files.js";
 import { SqlCommandStore } from "./commands.js";
@@ -29,6 +30,8 @@ import { insertEventInTx, restoreEventSequenceInTx } from "./retention.js";
 import { applyTerminalInTx, storedTerminal } from "./run-events.js";
 import { parseDecisionMutation } from "../operator-decisions.js";
 import type { JobRecord } from "../job-record.js";
+import { DaemonServer } from "../server.js";
+import type { CommandBackend } from "../command-authority.js";
 
 const TIME = "2026-10-10T00:00:00.000Z";
 const cleanup: Array<() => void | Promise<void>> = [];
@@ -87,6 +90,160 @@ const request = (id: string, params: unknown = { mode: "ask", prompt: "hello" })
 });
 
 describe("SQL command authority", () => {
+  it("refuses raw socket thread/Delegate group admission before SQL acceptance, keeping ordinary grouped launches usable", async () => {
+    const f = await fixture();
+    const backend: CommandBackend = {
+      current: () => f.commands,
+      forRequest: () => f.commands,
+      findById: (id) => (f.commands.get(id) ? f.commands : undefined),
+      queries: f.queries,
+      pruneHistory: f.pruner.pruneHistory.bind(f.pruner),
+    };
+    const runner = vi.fn(async () => ({ lifecycle: "succeeded" }));
+    const server = new DaemonServer({
+      socketPath: join(f.root, "unused.sock"),
+      token: "fixture",
+      commands: backend,
+      runner,
+    });
+    cleanup.push(() => server.stop());
+    const ordinary = {
+      mode: "ask",
+      prompt: "work",
+      taskGroupId: "11111111-1111-4111-8111-111111111111",
+    };
+    for (const [extra, operation] of [
+      [{ threadId: "thread" }, "run.create"],
+      [{ delegatedFromRunId: "parent" }, "delegated-run"],
+      [{}, "delegated-run"],
+    ] as const) {
+      await expect(
+        server.dispatch("claudexor.enqueue", {
+          request: { ...ordinary, ...extra },
+          operation,
+          idempotencyKey: "rejected",
+          clientId: "fixture",
+        }),
+      ).rejects.toMatchObject({ code: "task_group_not_supported", status: 400 });
+      for (const table of ["command", "idempotency", "event"])
+        expect(f.store.prepare(`SELECT count(*) AS n FROM ${table}`).get()).toEqual({ n: 0 });
+    }
+    expect(runner).not.toHaveBeenCalled();
+    const accepted = (await server.dispatch("claudexor.enqueue", {
+      request: ordinary,
+      idempotencyKey: "ordinary",
+      clientId: "fixture",
+    })) as { id: string };
+    expect(f.commands.get(accepted.id)?.params).toHaveProperty("taskGroupId", ordinary.taskGroupId);
+    expect(runner).toHaveBeenCalledOnce();
+    expect(
+      await server.dispatch("claudexor.enqueue", {
+        request: ordinary,
+        idempotencyKey: "ordinary",
+        clientId: "fixture",
+      }),
+    ).toMatchObject({ id: accepted.id, reused: true });
+    expect(runner).toHaveBeenCalledOnce();
+  });
+
+  it("commits queued group membership before ACK and keeps it through reopen, keyed replay and binding", async () => {
+    const f = await fixture();
+    const taskGroupId = "11111111-1111-4111-8111-111111111111";
+    const otherGroup = "22222222-2222-4222-8222-222222222222";
+    const parsedParams = ControlRunStartRequest.parse({ prompt: "work", taskGroupId });
+    const input = request("group-job", parsedParams);
+    const accepted = f.commands.accept(input);
+    expect(accepted).toMatchObject({ reused: false, record: { id: "group-job", state: "queued" } });
+    expect(accepted.record).not.toHaveProperty("runId");
+    const membership = (store: EngineStore) =>
+      store
+        .prepare(
+          "SELECT id,run_id,state,json_extract(CAST(summary AS TEXT),'$.params.taskGroupId') AS group_id FROM command WHERE id='group-job'",
+        )
+        .get();
+    expect(membership(f.store)).toEqual({
+      id: "group-job",
+      run_id: null,
+      state: "queued",
+      group_id: taskGroupId,
+    });
+    const identity = f.store.storeId;
+    expect(identity).toMatch(/^[0-9a-f-]{36}$/);
+    await f.store.close(); // Discard the ACK and reopen the actual private database.
+    const store = await EngineStore.open({
+      daemonDir: join(f.root, "daemon"),
+      workerEntry: resolve(import.meta.dirname, "../../dist/store/flusher-worker.js"),
+      flusherHooks: { manualTick: true },
+    });
+    cleanup.push(() => store.close());
+    const blobs = new BlobFiles(store),
+      obligations = new Obligations(store);
+    const commands = new SqlCommandStore(store, blobs, currentGeneration(store, "global")!, {
+      isLive: () => true,
+      obligations,
+      terminalFiles: new SqlTerminalFiles(store, obligations),
+      pruner: new SqlCommandPruner(store, blobs),
+    });
+    expect(store.storeId).toBe(identity);
+    expect(membership(store)).toEqual({
+      id: "group-job",
+      run_id: null,
+      state: "queued",
+      group_id: taskGroupId,
+    });
+    const replay = () => commands.accept({ ...input, id: "must-never-start" });
+    expect(replay()).toEqual({ record: accepted.record, reused: true });
+    for (const params of [{ ...parsedParams, taskGroupId: otherGroup }, { prompt: "work" }]) {
+      expect(() =>
+        commands.accept({ ...input, params: ControlRunStartRequest.parse(params) }),
+      ).toThrow(expect.objectContaining({ code: "idempotency_conflict", status: 409 }));
+    }
+    commands.update("group-job", {
+      state: "running",
+      runId: "actual-run",
+      params: { taskGroupId: otherGroup },
+    });
+    expect(membership(store)).toEqual({
+      id: "group-job",
+      run_id: "actual-run",
+      state: "running",
+      group_id: taskGroupId,
+    });
+    expect(replay()).toMatchObject({
+      reused: true,
+      record: { id: "group-job", runId: "actual-run", params: { taskGroupId } },
+    });
+    expect(store.prepare("SELECT count(*) AS n FROM command").get()).toEqual({ n: 1 });
+    expect(store.prepare("SELECT count(*) AS n FROM idempotency").get()).toEqual({ n: 1 });
+    expect(
+      store.prepare("SELECT count(*) AS n FROM event WHERE type='command.accepted'").get(),
+    ).toEqual({ n: 1 });
+  });
+
+  it("keeps the absent-field wire digest compatible with the frozen pre-group writer", async () => {
+    const f = await fixture();
+    const params = ControlRunStartRequest.parse({ prompt: "legacy request", mode: "ask" });
+    expect(params).not.toHaveProperty("taskGroupId");
+    const oldRequest = request(
+      "untagged",
+      PreGroupRunStartRequest.parse({ prompt: "legacy request", mode: "ask" }),
+    );
+    f.legacy.accept(oldRequest); // independent frozen parser and digest producer
+    const oldDigest = f.journal.records()[0]!.payload as { requestDigest: string };
+    f.commands.accept({ ...oldRequest, params });
+    expect(f.store.prepare("SELECT request_digest FROM idempotency").get()).toEqual({
+      request_digest: oldDigest.requestDigest,
+    });
+    expect(f.commands.find({ ...oldRequest, params })?.id).toBe("untagged");
+    expect(
+      f.store
+        .prepare(
+          "SELECT json_extract(CAST(summary AS TEXT),'$.params.taskGroupId') AS group_id FROM command",
+        )
+        .get(),
+    ).toEqual({ group_id: null });
+  });
+
   it.each(["blob", "command", "idempotency"])(
     "accept rolls back a fault in %s before exposing any authority",
     async (table) => {
@@ -97,14 +254,26 @@ describe("SQL command authority", () => {
           `CREATE TRIGGER accept_fault BEFORE INSERT ON ${table} BEGIN SELECT RAISE(ABORT,'accept fault'); END`,
         ),
       );
-      expect(() => f.commands.accept(request("failed"))).toThrow(/accept fault/);
+      const tagged = request("failed", {
+        mode: "ask",
+        prompt: "hello",
+        taskGroupId: "11111111-1111-4111-8111-111111111111",
+      });
+      expect(() => f.commands.accept(tagged)).toThrow(/accept fault/);
       for (const name of ["blob", "command", "idempotency", "event"])
         expect(f.store.prepare(`SELECT count(*) AS n FROM ${name}`).get()).toEqual({ n: 0 });
       expect(f.store.prepare("SELECT next_seq FROM partition").get()).toEqual({ next_seq: 1 });
       expect(f.store.facts().flusher.generation).toBe(generation);
       f.store.transaction(() => f.store.exec("DROP TRIGGER accept_fault"));
-      expect(f.commands.accept(request("failed")).reused).toBe(false);
-      expect(f.commands.find(request("failed"))?.id).toBe("failed");
+      expect(f.commands.accept(tagged).reused).toBe(false);
+      expect(f.commands.find(tagged)?.id).toBe("failed");
+      expect(
+        f.store
+          .prepare(
+            "SELECT json_extract(CAST(summary AS TEXT),'$.params.taskGroupId') AS group_id FROM command",
+          )
+          .get(),
+      ).toEqual({ group_id: "11111111-1111-4111-8111-111111111111" });
     },
   );
   it("pure import reducers reproduce the frozen logical fixture without runtime mutations", async () => {
@@ -343,12 +512,17 @@ describe("SQL command authority", () => {
       ),
     );
     const before = f.store.prepare("SELECT next_seq FROM partition").get();
-    expect(() => f.commands.accept(request("failed"))).toThrow(/injected event failure/);
+    const tagged = request("failed", {
+      mode: "ask",
+      prompt: "work",
+      taskGroupId: "11111111-1111-4111-8111-111111111111",
+    });
+    expect(() => f.commands.accept(tagged)).toThrow(/injected event failure/);
     for (const table of ["command", "idempotency", "blob", "event"])
       expect(f.store.prepare(`SELECT count(*) AS n FROM ${table}`).get()).toEqual({ n: 0 });
     expect(f.store.prepare("SELECT next_seq FROM partition").get()).toEqual(before);
     f.store.transaction(() => f.store.exec("DROP TRIGGER fail_event"));
-    f.commands.accept(request("failed"));
+    f.commands.accept(tagged);
     const accepted = f.commands.get("failed");
     const state = f.store.prepare("SELECT params_sha,result_sha FROM command").get();
     f.store.transaction(() =>

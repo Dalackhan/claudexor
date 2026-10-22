@@ -211,7 +211,7 @@ describeStore("durable last-served facts (engine store schema v2)", () => {
     `);
     const before = dump(v1, V1_TABLES);
     v1.close();
-    // Version 2 only ADDS one table to the shipped v1 DDL.
+    // Version 2 adds this table; version 3 adds only task-group indexes.
     expect([...ENGINE_TABLES].sort()).toEqual([...V1_TABLES, "account_last_service"].sort());
 
     const upgraded = await openGraph(root);
@@ -219,13 +219,13 @@ describeStore("durable last-served facts (engine store schema v2)", () => {
       applicationId: ENGINE_APPLICATION_ID,
       userVersion: ENGINE_SCHEMA_VERSION,
     });
-    expect(ENGINE_SCHEMA_VERSION).toBe(2);
+    expect(ENGINE_SCHEMA_VERSION).toBe(3);
     const after = dump(upgraded.store.db, V1_TABLES);
     const metaAfter = Object.fromEntries(
       (after["meta"] as Array<{ key: string; value: string }>).map((row) => [row.key, row.value]),
     );
     expect(metaAfter).toEqual({
-      schema_version: "2",
+      schema_version: "3",
       store_id: "11111111-1111-4111-8111-111111111111",
       created_at: "2026-10-01T00:00:00.000Z",
       global_pid: "1",
@@ -238,7 +238,7 @@ describeStore("durable last-served facts (engine store schema v2)", () => {
 
     // A newer file is still refused before any write.
     const newer = new DatabaseSync(join(root, "daemon", "engine.sqlite"));
-    newer.exec("PRAGMA user_version=3");
+    newer.exec("PRAGMA user_version=4");
     const rows = () =>
       (newer.prepare("SELECT count(*) AS n FROM account_last_service").get() as { n: number }).n;
     expect(rows()).toBe(1);

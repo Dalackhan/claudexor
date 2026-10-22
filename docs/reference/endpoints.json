@@ -1451,6 +1451,62 @@
     },
     {
       "method": "GET",
+      "path": "/v2/task-groups/:id/runs",
+      "mutating": false,
+      "applicability": "run",
+      "summary": "Read one compact page of retained group members in current served generations; absence is not a permanent roster or replay authority.",
+      "auth": "loopback_bearer",
+      "request_schema": null,
+      "parameters": [
+        {
+          "name": "limit",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": null,
+          "schema_ref": "TaskGroupRunsInput#/properties/limit",
+          "description": "Page size 1..200, default 50; byte limits may return fewer members."
+        },
+        {
+          "name": "state",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": [
+            "queued",
+            "running",
+            "succeeded",
+            "failed",
+            "cancelled",
+            "interrupted"
+          ],
+          "schema_ref": "TaskGroupRunsInput#/properties/state",
+          "description": "Optional lifecycle filter bound to the cursor."
+        },
+        {
+          "name": "cursor",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": null,
+          "schema_ref": "TaskGroupRunsInput#/properties/cursor",
+          "description": "Opaque cursor (at most 2048 characters) from this group, filter, store and served view."
+        },
+        {
+          "name": "expectedStoreId",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": null,
+          "schema_ref": "TaskGroupRunsInput#/properties/expectedStoreId",
+          "description": "Refuse a different durable store identity instead of recovering another store's handles."
+        }
+      ],
+      "response_schema": "TaskGroupRunsResult",
+      "error_schema": "ControlProblem"
+    },
+    {
+      "method": "GET",
       "path": "/v2/threads",
       "mutating": false,
       "applicability": "thread",

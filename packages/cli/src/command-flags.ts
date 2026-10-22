@@ -24,6 +24,7 @@ export const COMMON_RUN_FLAGS: readonly string[] = [
   "time-limit-mode",
   "max-turns",
   "prompt-file",
+  "task-group-id",
   "thread",
   "resume",
   "json-stream",
@@ -116,6 +117,10 @@ const FROZEN_REVIEW_FLAGS: readonly CliFlagSpec[] = [
 export const FROZEN_REVIEW_FLAG_NAMES = FROZEN_REVIEW_FLAGS.map((flag) => flag.name);
 
 export const CLI_FLAGS: readonly CliFlagSpec[] = [
+  valueFlag("limit", "<N>", "task-group-runs: page limit 1..200 (default 50)"),
+  valueFlag("state", "<state>", "task-group-runs: filter retained members by lifecycle"),
+  valueFlag("cursor", "<cursor>", "task-group-runs: opaque cursor from the prior returned page"),
+  valueFlag("expected-store-id", "<id>", "task-group-runs: refuse a different durable store"),
   valueFlag("targets-json", "<array>", "runs-wait: JSON array of {runId, seen?} targets (1..1000)"),
   valueFlag(
     "wait-ms",
@@ -200,6 +205,11 @@ export const CLI_FLAGS: readonly CliFlagSpec[] = [
   valueFlag("max-turns", "<n>", "Per-run turn cap (beats per-harness settings)"),
   valueFlag("prompt-file", "<file>", "Read the prompt from a file (or pass `-` to read stdin)"),
   valueFlag("thread", "<id>", "Continue an existing thread (runs land as its next turn)"),
+  valueFlag(
+    "task-group-id",
+    "<uuid>",
+    "Caller-owned group for retained one-shot jobs; each job keeps its own acceptance key",
+  ),
   valueFlag("diff", "<file>", "Diff file for the review verb (per-commit gate)"),
   valueFlag("intent", '"<text>"', "Review intent context for the review verb"),
   valueFlag("tests", '"<evidence>"', "Test evidence text for the review verb"),

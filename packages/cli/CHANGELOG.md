@@ -1,5 +1,52 @@
 # @claudexor/cli
 
+## 4.6.0
+
+### Minor Changes
+
+- a81897c: Choose the native prompt-cache lifetime of Claude Code sessions per run: `POST /v2/runs` and `POST /v2/threads/:id/turns` accept `promptCacheTtl: "5m" | "1h"` (CLI `--prompt-cache-ttl`, including plan answers the same command submits inline), and omission keeps native defaults, profile settings and the inherited environment. Adapters declare the values they translate in `capability_profile.prompt_cache_ttls`; `GET /v2/agent-capabilities` projects them as `harnesses[].promptCacheTtls` and lists the key in `runControlKeys`. The value is frozen into the task contract, inherited by a bare `continueFrom` (a successor cannot go back to Default; that takes a new run), re-injected by Exact Retry, and forwarded to task lanes, the continuity summary, reviewers and delegation-belt children on declaring harnesses. Elsewhere it is an `ignored_settings` disclosure, except in best-of synthesis, which emits no `harness.started`: an undeclared synthesis harness runs without the lifetime and without a disclosure. The deep-scan reducer's `harness.started` now discloses every route knob its harness ignores, including `max_turns` and tool lists. The Claude adapter sets `CLAUDE_CODE_PROMPT_CACHE_TTL` and `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL`, keeps forcing and disabling controls, and discloses the ones known to govern instead (and a known older CLI). Each Claude attempt records `prompt_cache_ttl` in `final/telemetry.yaml` with the lifetime routed to its sessions (`requested`), the configured value and the observed split of the reported five-minute and one-hour cache-write tokens; an unreported split stays unknown.
+
+### Patch Changes
+
+- 2593b90: On Windows, background harness runs and captures start the vendor with an invisible
+  console instead of none, so the shells, `git`, MCP servers and other console programs
+  a run starts inherit it instead of opening windows of their own. Agy keeps the
+  console-less start because its print mode treats an openable console input as
+  interactive, and Claudexor's own `git` calls keep the console-less start they always
+  had.
+  Cancellation still stops the whole tree with `taskkill /T`, and a background child
+  now also ends when the daemon process dies. The no-Terminal sign-in
+  children (URL disclosure and the device-code app-server) open no console window, and
+  Codex quota and model discovery, the install version proof and the `login --help`
+  probe start their direct child hidden. The Node preload that defaulted `windowsHide`
+  inside npm wrappers is removed: the inherited console covers those children.
+- Updated dependencies [b344c39]
+- Updated dependencies [a81897c]
+- Updated dependencies [2593b90]
+  - @claudexor/core@4.6.0
+  - @claudexor/harness-codex@4.6.0
+  - @claudexor/schema@4.6.0
+  - @claudexor/util@4.6.0
+  - @claudexor/control-api@4.6.0
+  - @claudexor/orchestrator@4.6.0
+  - @claudexor/review@4.6.0
+  - @claudexor/mcp-server@4.6.0
+  - @claudexor/harness-claude@4.6.0
+  - @claudexor/harness-agy@4.6.0
+  - @claudexor/delivery@4.6.0
+  - @claudexor/workspace@4.6.0
+  - @claudexor/daemon@4.6.0
+  - @claudexor/gateway@4.6.0
+  - @claudexor/harness-acp@4.6.0
+  - @claudexor/harness-cursor@4.6.0
+  - @claudexor/harness-fake@4.6.0
+  - @claudexor/harness-opencode@4.6.0
+  - @claudexor/harness-raw-api@4.6.0
+  - @claudexor/acp-server@4.6.0
+  - @claudexor/config@4.6.0
+  - @claudexor/artifact-store@4.6.0
+  - @claudexor/secrets@4.6.0
+
 ## 4.5.0
 
 ### Minor Changes

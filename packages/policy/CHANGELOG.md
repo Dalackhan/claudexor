@@ -1,5 +1,15 @@
 # @claudexor/policy
 
+## 4.6.0
+
+### Patch Changes
+
+- Updated dependencies [a81897c]
+- Updated dependencies [2593b90]
+  - @claudexor/schema@4.6.0
+  - @claudexor/util@4.6.0
+  - @claudexor/context@4.6.0
+
 ## 4.5.0
 
 ### Patch Changes

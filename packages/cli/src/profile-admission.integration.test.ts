@@ -51,7 +51,7 @@ afterEach(async () => {
   await closeDaemons();
   resetRecorder();
 }, 60_000);
-afterAll(() => finishFixture(), 60_000);
+afterAll(() => finishFixture(process.env.CLAUDEXOR_TEST_ADMISSION_OBSERVATIONS), 60_000);
 
 const codexRows: Row[] = [
   { id: "work", harness: "codex" },

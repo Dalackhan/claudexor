@@ -46,13 +46,9 @@ export async function closeDaemons(): Promise<void> {
   for (const close of closers.splice(0).reverse()) await close();
 }
 
-export function finishFixture(): void {
+export function finishFixture(observationsPath?: string): void {
   for (const dir of reap.splice(0)) rmSync(dir, { recursive: true, force: true });
-  if (process.env.CLAUDEXOR_TEST_ADMISSION_OBSERVATIONS)
-    writeFileSync(
-      process.env.CLAUDEXOR_TEST_ADMISSION_OBSERVATIONS,
-      JSON.stringify(observations, null, 2),
-    );
+  if (observationsPath) writeFileSync(observationsPath, JSON.stringify(observations, null, 2));
 }
 
 function temp(prefix: string): string {

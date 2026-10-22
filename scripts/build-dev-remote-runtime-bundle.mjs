@@ -172,7 +172,7 @@ function main() {
     buildSha,
     protocolMajor: REMOTE_RUNTIME_PROTOCOL_MAJOR,
     minAppVersion: version,
-    notes: `Unsigned local Claudexor.app development SSH runtime ${version}.`,
+    notes: `Local ad-hoc-signed (non-Developer-ID) Claudexor.app development SSH runtime ${version}.`,
     assets: metadata,
     keyId: "unsigned",
     algorithm: "Ed25519",

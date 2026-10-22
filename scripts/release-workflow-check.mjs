@@ -89,13 +89,24 @@ if (
 const localSealCall = 'bash "$HERE/sign-local-app.sh" "$APP"';
 const localSealIndex = appBuilder.indexOf(localSealCall);
 const signedBranchIndex = appBuilder.indexOf('if [ -n "${SIGN_IDENTITY:-}" ]; then');
+const localBranchIndex = appBuilder.indexOf("\nelse\n", signedBranchIndex);
+const localBranchEnd = appBuilder.indexOf("\nfi\n", localBranchIndex);
+const lastBundleWrites = [
+  'ditto "$ENGINE_RESOURCES" "$APP/Contents/Resources"',
+  'node "$REPO_ROOT/scripts/build-dev-remote-runtime-bundle.mjs"',
+  '"$DEV_REMOTE_DIR/remote-runtime-manifest.json"',
+];
 if (
   localSealIndex < 0 ||
   appBuilder.indexOf(localSealCall, localSealIndex + 1) >= 0 ||
   signedBranchIndex < 0 ||
-  localSealIndex < appBuilder.indexOf("\nelse\n", signedBranchIndex) ||
-  localSealIndex <
-    appBuilder.lastIndexOf('DEV_REMOTE_DIR="$APP/Contents/Resources/remote-runtime-dev"') ||
+  localBranchIndex < 0 ||
+  localSealIndex < localBranchIndex ||
+  localSealIndex > localBranchEnd ||
+  lastBundleWrites.some((needle) => {
+    const index = appBuilder.lastIndexOf(needle);
+    return index < 0 || index > localSealIndex;
+  }) ||
   localSealIndex > appBuilder.indexOf('if [ "${MAKE_ZIP:-1}" = "1" ]; then') ||
   !macosPr.includes("build-app-local-signing.test.mjs")
 ) {

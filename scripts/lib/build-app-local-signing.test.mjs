@@ -120,6 +120,9 @@ function fixture() {
   return { ...f, app, node, resource };
 }
 
+// Bracket each argument so the log keeps argv boundaries; the app path contains a space.
+const recordArgv = `for arg in "$@"; do printf '[%s]' "$arg" >> "$HOME/calls"; done\nprintf '\\n' >> "$HOME/calls"\n`;
+
 function digest(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
@@ -171,17 +174,15 @@ shellTest("injected signing failure propagates without reaching verification", (
   const bin = join(f.root, "bin");
   mkdirSync(bin);
   const fakeCodesign = join(bin, "codesign");
-  writeFileSync(
-    fakeCodesign,
-    '#!/bin/sh\nprintf "%s\\n" "$*" >> "$HOME/calls"\necho signing-failed >&2\nexit 71\n',
-    { mode: 0o755 },
-  );
+  writeFileSync(fakeCodesign, `#!/bin/sh\n${recordArgv}echo signing-failed >&2\nexit 71\n`, {
+    mode: 0o755,
+  });
   f.env.PATH = `${bin}:/usr/bin:/bin`;
-  const app = join(f.root, "Claudexor.app");
+  const app = join(f.root, "Local Build", "Claudexor.app");
   const result = run(f, "/bin/bash", [helper, app]);
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(71);
   expect(result.stderr).toContain("signing-failed");
-  expect(readFileSync(join(f.env.HOME, "calls"), "utf8")).toBe(`--force --sign - ${app}\n`);
+  expect(readFileSync(join(f.env.HOME, "calls"), "utf8")).toBe(`[--force][--sign][-][${app}]\n`);
 });
 
 shellTest("injected verification failure propagates after signing succeeds", () => {
@@ -191,16 +192,16 @@ shellTest("injected verification failure propagates after signing succeeds", () 
   const fakeCodesign = join(bin, "codesign");
   writeFileSync(
     fakeCodesign,
-    '#!/bin/sh\nprintf "%s\\n" "$*" >> "$HOME/calls"\nif [ "$1" = "--verify" ]; then echo verification-failed >&2; exit 72; fi\nexit 0\n',
+    `#!/bin/sh\n${recordArgv}if [ "$1" = "--verify" ]; then echo verification-failed >&2; exit 72; fi\nexit 0\n`,
     { mode: 0o755 },
   );
   f.env.PATH = `${bin}:/usr/bin:/bin`;
-  const app = join(f.root, "Claudexor.app");
+  const app = join(f.root, "Local Build", "Claudexor.app");
   const result = run(f, "/bin/bash", [helper, app]);
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(72);
   expect(result.stderr).toContain("verification-failed");
   // Exact argv pins the promised strict deep verification, not only its first flag.
   expect(readFileSync(join(f.env.HOME, "calls"), "utf8")).toBe(
-    `--force --sign - ${app}\n--verify --deep --strict --verbose=2 ${app}\n`,
+    `[--force][--sign][-][${app}]\n[--verify][--deep][--strict][--verbose=2][${app}]\n`,
   );
 });

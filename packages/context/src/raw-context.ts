@@ -29,7 +29,10 @@ export async function rawContextForEnvelope(
 }
 
 async function gitOutput(repo: string, args: string[]): Promise<string> {
-  const result = await runCapture("git", ["-C", repo, ...args], { timeoutMs: 30_000 });
+  const result = await runCapture("git", ["-C", repo, ...args], {
+    timeoutMs: 30_000,
+    windowsConsole: "none",
+  });
   if (result.code !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.trim()}`);
   return result.stdout;
 }

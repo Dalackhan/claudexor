@@ -56,8 +56,13 @@ export async function revertInPlaceFromAnchor(repo: string, anchorId: string) {
 }
 
 async function git(repo: string, args: string[], input?: string) {
-  // Raw capture: the patch rides stdin already; stdout may carry diffs too.
-  return runCaptureRaw("git", ["-C", repo, ...args], { timeoutMs: 60_000, input });
+  // Raw capture: the patch rides stdin already; stdout may carry diffs too. Console-less
+  // on Windows, as git calls always started (ARCHITECTURE runtime map).
+  return runCaptureRaw("git", ["-C", repo, ...args], {
+    timeoutMs: 60_000,
+    input,
+    windowsConsole: "none",
+  });
 }
 
 export interface ApplyResult {

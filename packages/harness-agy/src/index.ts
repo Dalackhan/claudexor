@@ -66,9 +66,22 @@ function accessArgs(access: AccessProfile): string[] {
   }
 }
 
+/**
+ * Agy's print mode treats an openable CONIN$ as an interactive terminal
+ * (print-command.ts, antigravity-cli#508), and its runs select print mode from
+ * piped stdin. Until a supported agy is proven to ignore CONIN$, its runs and
+ * this version probe keep starting without a console on Windows, while other
+ * harnesses get an invisible one; console programs an agy run starts may open
+ * windows of their own.
+ */
+const AGY_WINDOWS_CONSOLE = "none";
+
 async function detectVersion(): Promise<string | null> {
   try {
-    const r = await runCapture(AGY_BIN(), ["--version"], { timeoutMs: 10_000 });
+    const r = await runCapture(AGY_BIN(), ["--version"], {
+      timeoutMs: 10_000,
+      windowsConsole: AGY_WINDOWS_CONSOLE,
+    });
     return r.stdout.trim() || `${AGY_BIN()} (version unknown)`;
   } catch {
     return null;
@@ -510,6 +523,7 @@ async function* runAgy(
       input,
       spec,
       env: route.env,
+      windowsConsole: AGY_WINDOWS_CONSOLE,
       label: "agy",
       redact: redactSecrets,
       observeStderr: completion.observeStderr,

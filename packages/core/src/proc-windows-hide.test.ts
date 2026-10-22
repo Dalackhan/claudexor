@@ -1,11 +1,12 @@
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 // A pass-through spy over the REAL spawn: the recorded options prove the window
 // policy on every platform, while each child still runs for real, so the
-// Windows CI leg consumes the hidden-window spawn instead of a fake.
+// Windows CI leg consumes the hidden-console spawn instead of a fake.
 const spawnSpy = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -14,19 +15,23 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, spawn: spawnSpy };
 });
 
-import { runCaptureRaw, spawnProcess } from "./proc.js";
-import { windowsQuietChildrenPreload } from "./npm-launch.js";
+import { runCapture, runCaptureRaw, spawnProcess, type SpawnOptions } from "./proc.js";
+import { backgroundSpawnShape } from "./runtime-env.js";
 
-// The hidden window is added to, never traded for, the existing background
-// spawn shape: piped stdio in its own process group.
-const BACKGROUND_SPAWN = {
-  windowsHide: true,
-  detached: true,
-  stdio: ["pipe", "pipe", "pipe"],
-};
+const PIPED = { stdio: ["pipe", "pipe", "pipe"] };
 
-describe("background process window policy", () => {
-  it("hides the console window for streamed child processes", async () => {
+describe("background spawn shape", () => {
+  it("detaches on POSIX and gives Windows an invisible console unless a consumer asks for none", () => {
+    for (const platform of ["linux", "darwin"] as const) {
+      expect(backgroundSpawnShape(platform)).toEqual({ detached: true, windowsHide: true });
+      expect(backgroundSpawnShape(platform, "none")).toEqual({ detached: true, windowsHide: true });
+    }
+    expect(backgroundSpawnShape("win32")).toEqual({ detached: false, windowsHide: true });
+    expect(backgroundSpawnShape("win32", "hidden")).toEqual({ detached: false, windowsHide: true });
+    expect(backgroundSpawnShape("win32", "none")).toEqual({ detached: true, windowsHide: true });
+  });
+
+  it("starts streamed children with piped stdio in that shape", async () => {
     const stdout: string[] = [];
     let exitCode: number | null | undefined;
     for await (const ev of spawnProcess(process.execPath, ["-e", "console.log('probe-ok')"])) {
@@ -37,10 +42,10 @@ describe("background process window policy", () => {
     expect(stdout).toEqual(["probe-ok"]);
     expect(exitCode).toBe(0);
     expect(spawnSpy).toHaveBeenCalledOnce();
-    expect(spawnSpy.mock.calls[0]?.[2]).toMatchObject(BACKGROUND_SPAWN);
+    expect(spawnSpy.mock.calls[0]?.[2]).toMatchObject({ ...backgroundSpawnShape(), ...PIPED });
   });
 
-  it("hides the console window for raw capture child processes", async () => {
+  it("starts raw capture children with piped stdio in that shape", async () => {
     const result = await runCaptureRaw(process.execPath, [
       "-e",
       "process.stdout.write('a\\r\\nb')",
@@ -48,91 +53,204 @@ describe("background process window policy", () => {
 
     expect(result).toMatchObject({ code: 0, signal: null, stdout: "a\r\nb" });
     expect(spawnSpy).toHaveBeenCalledOnce();
-    expect(spawnSpy.mock.calls[0]?.[2]).toMatchObject(BACKGROUND_SPAWN);
+    expect(spawnSpy.mock.calls[0]?.[2]).toMatchObject({ ...backgroundSpawnShape(), ...PIPED });
+  });
+
+  it("passes a consumer's console policy to both spawners", async () => {
+    const none: SpawnOptions = { windowsConsole: "none" };
+    expect((await runCapture(process.execPath, ["-e", "0"], none)).code).toBe(0);
+    expect((await runCaptureRaw(process.execPath, ["-e", "0"], none)).code).toBe(0);
+    const shape = { ...backgroundSpawnShape(process.platform, "none"), ...PIPED };
+    expect(spawnSpy.mock.calls.map((call) => call[2])).toEqual([
+      expect.objectContaining(shape),
+      expect.objectContaining(shape),
+    ]);
   });
 });
 
-// Recorded npm cmd-shim bytes select a copied node.exe for a vendor script
-// whose native console child inherits stdio, as Codex's wrapper does.
-describe.skipIf(process.platform !== "win32")("Windows npm wrapper children", () => {
-  it.each(["raw", "stream"])(
-    "the %s background consumer preloads quiet defaults for a wrapper's native child",
-    async (mode) => {
-      const root = mkdtempSync(join(tmpdir(), "quiet-wrapper-"));
-      try {
-        const packageRoot = join(root, "node_modules", "@fixture", "tool");
-        const script = join(packageRoot, "bin", "tool.cjs");
-        mkdirSync(dirname(script), { recursive: true });
-        writeFileSync(
-          script,
-          `#!/usr/bin/env node
-          const {spawnSync} = require("node:child_process");
-          const result = spawnSync(process.execPath, ["-e", "console.log(process.env.MARKER)"],
-            {stdio: "inherit", env: process.env});
-          process.exit(result.status ?? 1);`,
-        );
-        writeFileSync(
-          join(packageRoot, "package.json"),
-          JSON.stringify({ name: "@fixture/tool", bin: { tool: "bin/tool.cjs" } }),
-        );
-        const shim = join(root, "tool.cmd");
-        const recorded = new URL("./fixtures/npm-launch/node.cmd", import.meta.url);
-        writeFileSync(shim, readFileSync(recorded, "utf8").replace(/\r?\n/g, "\r\n"));
-        copyFileSync(process.execPath, join(root, "node.exe"));
-        // NODE_OPTIONS preloads run before the command-line preload, so this
-        // records what reaches Node's own spawnSync inside the wrapper.
-        const recorder = join(root, "recorder.cjs");
-        const record = join(root, "record.jsonl");
-        writeFileSync(
-          recorder,
-          `const cp = require("node:child_process");
-          const original = cp.spawnSync;
-          cp.spawnSync = function (file, args, options) {
-            require("node:fs").appendFileSync(process.env.RECORD,
-              JSON.stringify({args, windowsHide: options.windowsHide, stdio: options.stdio}) + "\\n");
-            return Reflect.apply(original, this, arguments);
-          };`,
-        );
-        const env = {
-          PATH: root,
-          MARKER: "grandchild-reached",
-          RECORD: record,
-          NODE_OPTIONS: `--require "${recorder.replace(/\\/g, "/")}"`,
-        };
-        const opts = { env, timeoutMs: 15_000 };
-        if (mode === "raw") {
-          const result = await runCaptureRaw(shim, [], opts);
-          expect(result.code, result.stderr).toBe(0);
-          expect(result.stdout.trim()).toBe("grandchild-reached");
-        } else {
-          const events = [];
-          for await (const event of spawnProcess(shim, [], opts)) events.push(event);
-          expect(events).toContainEqual(
-            expect.objectContaining({ type: "stdout", line: "grandchild-reached" }),
-          );
-          expect(events.at(-1)).toMatchObject({ type: "exit", code: 0 });
+const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const fixture = resolve(packageRoot, "dist", "native-test", "claudexor-conpty-test-child.exe");
+// An npm wrapper's shape: its native child gets no options of its own (Codex's wrapper).
+const INHERITING_WRAPPER =
+  'const r = require("node:child_process").spawnSync(process.argv[1], ["--console-state"], ' +
+  '{ stdio: "inherit" }); process.exit(r.status ?? 1);';
+
+interface ConsoleState {
+  consoleCodePage: number;
+  windowPresent: boolean;
+  windowVisible: boolean;
+  coninAvailable: boolean;
+}
+
+// The console-less shape the engine used before (and agy still selects) is the
+// control: a console program its child starts gets a console window of its
+// own, so the probes below can see the defect they rule out. A Windows Terminal
+// default host shows that window as a pseudo-console window, hence the control
+// asserts a window exists rather than its visibility.
+describe.skipIf(process.platform !== "win32")("Windows console of background children", () => {
+  it("gives the direct child an invisible console it can read input from", async () => {
+    requireFixture();
+    for (const capture of [runCapture, runCaptureRaw]) {
+      const state = consoleState((await capture(fixture, ["--console-state"])).stdout);
+      expect(state).toEqual({
+        consoleCodePage: expect.any(Number),
+        windowPresent: false,
+        windowVisible: false,
+        // An openable CONIN$ is why agy keeps the console-less shape.
+        coninAvailable: true,
+      });
+      expect(state.consoleCodePage).toBeGreaterThan(0);
+    }
+  });
+
+  it.each([
+    [
+      "a native program",
+      process.env.ComSpec ?? "cmd.exe",
+      ["/d", "/c", fixture, "--console-state"],
+    ],
+    ["a Node wrapper's inheriting child", process.execPath, ["-e", INHERITING_WRAPPER, fixture]],
+  ])("lets %s inherit that console instead of opening a window", async (_label, bin, args) => {
+    requireFixture();
+    const inherited = consoleState((await runCapture(bin, args)).stdout);
+    expect(inherited, JSON.stringify(inherited)).toMatchObject({
+      windowPresent: false,
+      windowVisible: false,
+    });
+    expect(inherited.consoleCodePage).toBeGreaterThan(0);
+  });
+
+  it("gives that grandchild a console window of its own in the console-less shape", async () => {
+    requireFixture();
+    // The control runs through the Node wrapper, which hands its pipes to the grandchild
+    // explicitly, so the report still reaches the capture from inside a new console.
+    const wrapper = ["-e", INHERITING_WRAPPER, fixture];
+    const control = consoleState(
+      (await runCapture(process.execPath, wrapper, { windowsConsole: "none" })).stdout,
+    );
+    expect(control.windowPresent, JSON.stringify(control)).toBe(true);
+    expect(control.consoleCodePage).toBeGreaterThan(0);
+  });
+
+  it("still stops the whole tree on abort and leaves an unrelated process alone", async () => {
+    requireFixture();
+    const bystander = startFixture(["--wait"]);
+    try {
+      const abort = new AbortController();
+      let pids: [number, number] | undefined;
+      for await (const ev of spawnProcess(fixture, ["--spawn-descendant"], {
+        abortSignal: abort.signal,
+      })) {
+        if (ev.type === "stdout" && ev.line.startsWith("PIDS|")) {
+          pids = parsePids(ev.line);
+          abort.abort();
         }
-        expect(spawnSpy.mock.calls[0]?.[1]).toEqual([
-          "--require",
-          windowsQuietChildrenPreload(),
-          script,
-        ]);
-        expect(spawnSpy.mock.calls[0]?.[2]).toMatchObject(BACKGROUND_SPAWN);
-        expect(
-          readFileSync(record, "utf8")
-            .trim()
-            .split("\n")
-            .map((line) => JSON.parse(line)),
-        ).toEqual([
-          {
-            args: ["-e", "console.log(process.env.MARKER)"],
-            windowsHide: true,
-            stdio: "inherit",
-          },
-        ]);
+      }
+      expect(pids).toBeDefined();
+      for (const pid of pids!) expect(await goneWithin(pid, 10_000), `pid ${pid}`).toBe(true);
+      expect(alive(bystander.pid!)).toBe(true);
+    } finally {
+      stopTree(bystander.pid);
+    }
+  });
+
+  it.each([
+    ["hidden", true],
+    ["none", false],
+  ] as const)(
+    "a %s-console child of a daemon that dies abruptly ends with it: %s",
+    async (windowsConsole, ends) => {
+      requireFixture();
+      const daemon = startDaemon(backgroundSpawnShape("win32", windowsConsole));
+      let pids: [number, number] | undefined;
+      try {
+        pids = parsePids(await firstLine(daemon, "PIDS|"));
+        daemon.kill("SIGKILL");
+        // libuv's kill-on-close Job holds the direct child only (its descendants
+        // never join it), so only the direct child's fate is the claim here.
+        expect(await goneWithin(pids[0], 5_000)).toBe(ends);
       } finally {
-        rmSync(root, { recursive: true, force: true });
+        if (pids) for (const pid of pids) stopTree(pid);
+        stopTree(daemon.pid);
       }
     },
   );
 });
+
+function requireFixture(): void {
+  expect(existsSync(fixture), `missing fixture: ${fixture}`).toBe(true);
+}
+
+function consoleState(output: string): ConsoleState {
+  const match = /CONSOLE\|([0-9]+)\|([01])\|([01])\|([01])\|END/.exec(output);
+  if (!match) throw new Error(`no console state in ${JSON.stringify(output)}`);
+  return {
+    consoleCodePage: Number(match[1]),
+    windowPresent: match[2] === "1",
+    windowVisible: match[3] === "1",
+    coninAvailable: match[4] === "1",
+  };
+}
+
+function parsePids(line: string): [number, number] {
+  const match = /PIDS\|([0-9]+)\|([0-9]+)\|END/.exec(line);
+  if (!match) throw new Error(`no pids in ${JSON.stringify(line)}`);
+  return [Number(match[1]), Number(match[2])];
+}
+
+function startFixture(args: string[]): ChildProcessWithoutNullStreams {
+  return spawn(fixture, args, { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+}
+
+// A stand-in daemon: one Node process starting the fixture in the given shape.
+function startDaemon(shape: { detached: boolean; windowsHide: true }) {
+  const source = [
+    `const { spawn } = require("node:child_process");`,
+    `const child = spawn(process.argv[1], ["--spawn-descendant"], { ...JSON.parse(process.argv[2]), stdio: ["pipe", "pipe", "pipe"] });`,
+    `child.stdout.pipe(process.stdout);`,
+    `setInterval(() => {}, 1000);`,
+  ].join("\n");
+  return spawn(process.execPath, ["-e", source, fixture, JSON.stringify(shape)], {
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+}
+
+async function firstLine(child: ChildProcessWithoutNullStreams, prefix: string): Promise<string> {
+  return await new Promise<string>((resolveLine, rejectLine) => {
+    let buffered = "";
+    const timer = setTimeout(() => rejectLine(new Error(`no ${prefix} line`)), 10_000);
+    child.stdout.on("data", (chunk: Buffer) => {
+      buffered += chunk.toString("utf8");
+      const line = buffered.split(/\r?\n/).find((candidate) => candidate.startsWith(prefix));
+      if (line) {
+        clearTimeout(timer);
+        resolveLine(line);
+      }
+    });
+    child.once("error", rejectLine);
+  });
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+async function goneWithin(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (alive(pid)) {
+    if (Date.now() > deadline) return false;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  }
+  return true;
+}
+
+function stopTree(pid: number | undefined): void {
+  if (pid === undefined || !alive(pid)) return;
+  spawnSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { windowsHide: true });
+}

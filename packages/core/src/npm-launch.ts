@@ -1,6 +1,5 @@
-import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, realpathSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { isLaunchableExecutable } from "./executable-inspection.js";
 
 /** A vendor entry remains the identity. Its interpreter is only launch transport. */
@@ -216,43 +215,12 @@ export function interpretedCommand(
   args: readonly string[],
   env: NodeJS.ProcessEnv,
   interpreter?: HarnessInterpreter,
-  quietWindowsChildren = false,
 ): { binary: string; args: string[]; env: NodeJS.ProcessEnv } {
   return interpreter
     ? {
         binary: interpreter.binary,
-        args: [
-          ...interpreter.args,
-          ...(quietWindowsChildren ? ["--require", windowsQuietChildrenPreload()] : []),
-          entrypoint,
-          ...args,
-        ],
+        args: [...interpreter.args, entrypoint, ...args],
         env: { ...env, ...interpreter.env },
       }
     : { binary: entrypoint, args: [...args], env };
-}
-
-const QUIET_CHILDREN_PRELOAD = "windows-quiet-children.cjs";
-
-/**
- * The outer Node's spawn options shape only its own creation; a vendor JS
- * wrapper creates its native child (e.g. Codex's spawn(..., {stdio: "inherit"}))
- * with the wrapper's options. Background captures `--require` this packaged
- * CommonJS file, which Node 16 and later load before an ESM or CommonJS entry;
- * the vendor script, its argv and environment stay unchanged. It ships in core's
- * `dist` (`src` under test); a single-file engine bundle finds it in the core
- * runtime deployed beside itself. A missing file is a launch error, never a
- * silently visible child.
- */
-export function windowsQuietChildrenPreload(moduleUrl: string = import.meta.url): string {
-  const here = dirname(fileURLToPath(moduleUrl));
-  const candidates = [
-    join(here, QUIET_CHILDREN_PRELOAD),
-    join(here, "browser-mcp-runtime", "dist", QUIET_CHILDREN_PRELOAD),
-  ];
-  const preload = candidates.find((candidate) => existsSync(candidate));
-  if (!preload) {
-    throw new Error(`Windows background preload is missing: ${candidates.join(" or ")}`);
-  }
-  return preload;
 }

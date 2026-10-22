@@ -3,15 +3,22 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HarnessRunSpec, type CredentialProfile, type HarnessEvent } from "@claudexor/schema";
-import type { CliRunLoopOptions } from "@claudexor/core";
+import type { CliRunLoopOptions, SpawnOptions } from "@claudexor/core";
 import { claudexorOwnedRoot } from "@claudexor/util";
 import { createAgyAdapter } from "./index.js";
 
-const observed = vi.hoisted(() => ({ options: [] as CliRunLoopOptions[] }));
+const observed = vi.hoisted(() => ({
+  options: [] as CliRunLoopOptions[],
+  captures: [] as Array<SpawnOptions | undefined>,
+}));
 vi.mock("@claudexor/core", async (original) => {
   const actual = await original<typeof import("@claudexor/core")>();
   return {
     ...actual,
+    runCapture: async (_bin: string, _args: string[], options?: SpawnOptions) => {
+      observed.captures.push(options);
+      return { code: 0, signal: null, stdout: "1.1.13\n", stderr: "" };
+    },
     runCliHarness: (options: CliRunLoopOptions) => {
       observed.options.push(options);
       return actual.runCliHarness({
@@ -39,6 +46,7 @@ vi.mock("@claudexor/core", async (original) => {
 const roots: string[] = [];
 afterEach(() => {
   observed.options.length = 0;
+  observed.captures.length = 0;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 function spec(prompt: string, instructions?: string): HarnessRunSpec {
@@ -78,6 +86,14 @@ async function collect(input: HarnessRunSpec): Promise<HarnessEvent[]> {
   return events;
 }
 
+describe("AGY Windows console policy", () => {
+  it("keeps the version probe console-less, like the run", async () => {
+    const manifest = await createAgyAdapter({ prepareProfileKeychain: () => undefined }).discover();
+    expect(manifest.version).toBe("1.1.13");
+    expect(observed.captures).toEqual([expect.objectContaining({ windowsConsole: "none" })]);
+  });
+});
+
 describe("AGY native raw stdin selection", () => {
   it.each(["short", "large", "whitespace"])(
     "delivers %s prompt and instructions without a print flag",
@@ -95,6 +111,8 @@ describe("AGY native raw stdin selection", () => {
       const options = observed.options[0]!;
       expect(options.input).toBe(expected);
       expect(options.session).toBeUndefined();
+      // An openable CONIN$ selects agy's interactive mode: runs stay console-less on Windows.
+      expect(options.windowsConsole).toBe("none");
       for (const flag of ["-p", "--print", "--prompt"]) expect(options.args).not.toContain(flag);
       expect(options.args).not.toContain(expected);
       expect(options.args[options.args.indexOf("--conversation") + 1]).toBe(

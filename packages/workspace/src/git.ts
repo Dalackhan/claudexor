@@ -234,7 +234,7 @@ export async function isolatedCloneAdd(
   const cloned = await runCaptureRaw(
     "git",
     ["clone", "--shared", "--no-checkout", "--", repo, path],
-    { timeoutMs: 120_000 },
+    { timeoutMs: 120_000, windowsConsole: "none" },
   );
   assertCaptureComplete(cloned);
   if (cloned.code !== 0) {

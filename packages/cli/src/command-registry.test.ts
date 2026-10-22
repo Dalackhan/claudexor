@@ -188,6 +188,7 @@ describe("command registry — the one owner of the CLI surface", () => {
       "reviewer-model",
       "reviewer-effort",
       "in-place",
+      "auxiliary-writable-root",
     ];
     const askMode = ["n", "deep-scan", "output-schema"];
     const planMode = ["n", "council"];

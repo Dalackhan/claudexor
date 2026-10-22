@@ -42,6 +42,8 @@ interface TaskContractBuildInput {
   paidBudget?: PaidBudget;
   routingGoal?: RoutingGoal;
   access?: AccessProfile;
+  /** Canonical admitted grant (`admitRun`), never the caller spelling. */
+  auxiliaryWritableRoots?: string[];
   web?: ExternalContextPolicy;
   externalContextPolicy?: ExternalContextPolicy;
   outputSchema?: Record<string, unknown> | null;
@@ -179,6 +181,7 @@ export function buildTaskContract(
     access: {
       requested_profile: requestedAccess,
       effective_profile: effectiveAccess,
+      auxiliary_writable_roots: input.auxiliaryWritableRoots ?? [],
     },
     external_context: {
       policy: externalContextPolicy,

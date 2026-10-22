@@ -17,6 +17,7 @@ import {
   runStartRequiresGit,
   resolveRunAccess,
   runAccessStrategyViolation,
+  runAuxiliaryWritableRootsViolation,
   runExecutionWorkspaceViolation,
   type AccessProfile,
   type ControlRunStartRequest,
@@ -37,16 +38,11 @@ const modeIntent = {
   plan: "plan",
 } as const satisfies Record<NonNullable<ControlRunStartRequest["mode"]>, Intent>;
 
+type HarnessStatusProjection = Pick<HarnessStatus, "id" | "status" | "enabledIntents"> &
+  Partial<Pick<HarnessStatus, "manifest">>;
+
 interface RunRequirementsPreflightDependencies {
-  statusAll?: (
-    cwd: string,
-    harnessIds?: string[],
-  ) => Promise<
-    Array<
-      Pick<HarnessStatus, "id" | "status" | "enabledIntents"> &
-        Partial<Pick<HarnessStatus, "manifest">>
-    >
-  >;
+  statusAll?: (cwd: string, harnessIds?: string[]) => Promise<HarnessStatusProjection[]>;
   registry?: AdapterRegistry;
   accessDefault?: (cwd: string) => AccessProfile;
   gitCapability?: () => Promise<GitCapability>;
@@ -151,7 +147,9 @@ export function createRunRequirementsPreflight(
         },
       );
     }
-    const workspaceViolation = runExecutionWorkspaceViolation(request, access);
+    const workspaceViolation =
+      runExecutionWorkspaceViolation(request, access) ??
+      runAuxiliaryWritableRootsViolation(request, access);
     if (workspaceViolation) {
       throw Object.assign(requestError(workspaceViolation.message, 400, workspaceViolation.code), {
         retryable: workspaceViolation.retryable,
@@ -166,7 +164,9 @@ export function createRunRequirementsPreflight(
           ((candidate) => runStartRequiresGit(candidate, { effectiveAccess: access })),
       });
     }
-    if ((request.attachments?.length ?? 0) === 0 && request.browser !== true) return;
+    const hasAuxiliaryRoots = (request.execution.auxiliaryWritableRoots?.length ?? 0) > 0;
+    const needsManifests = (request.attachments?.length ?? 0) > 0 || request.browser === true;
+    if (!hasAuxiliaryRoots && !needsManifests) return;
     const config = loadConfig(cwd).global;
     // Execution's pool: the request's (a thread turn carries its sticky pool),
     // else Settings; either is strict. Only Auto membership reads host status.
@@ -175,30 +175,51 @@ export function createRunRequirementsPreflight(
     const intent = modeIntent[request.mode ?? "agent"];
     const profileId = runCredentialProfileId(request, dependencies.threadProfileId ?? (() => null));
     const registry = dependencies.registry ?? buildRegistry({ includeFakes: true });
+    const candidateIds = (statuses: HarnessStatusProjection[]) => {
+      try {
+        return resolveCandidateHarnessIds({
+          harnesses: pool,
+          credentialProfileId: profileId,
+          config,
+          registry,
+          statuses,
+          intent,
+        });
+      } catch (error) {
+        if (error instanceof HarnessUnavailableError)
+          throw requestError(error.message, 400, "harness_unavailable");
+        throw error;
+      }
+    };
+    const auxiliaryCapable = (id: string) =>
+      registry.get(id)?.capabilityProfile?.access_control.auxiliary_writable_roots === true;
+    const autoIds = [...registry.keys()].filter((id) => config.harnesses[id]?.enabled !== false);
+    // Auxiliary roots are static adapter facts. Drop incompatible Auto lanes
+    // before discovery and profile cardinality; pools and pins remain strict.
+    if (hasAuxiliaryRoots) {
+      const selectedIds = explicitPool ? pool! : profileId ? candidateIds([]) : [];
+      for (const id of selectedIds) {
+        if (!registry.get(id))
+          throw requestError(`unknown harness lane: ${id}`, 400, "harness_unavailable");
+        if (!auxiliaryCapable(id))
+          throw auxiliaryUnsupported(`${id} cannot apply execution.auxiliaryWritableRoots`);
+      }
+      if (selectedIds.length === 0 && !autoIds.some(auxiliaryCapable))
+        throw auxiliaryUnsupported(
+          "no installed harness can apply execution.auxiliaryWritableRoots",
+        );
+    }
+    if (!needsManifests) return;
     const probeIds = explicitPool
       ? []
-      : [...registry.keys()].filter((id) => config.harnesses[id]?.enabled !== false);
+      : autoIds.filter((id) => !hasAuxiliaryRoots || auxiliaryCapable(id));
     const statuses =
       probeIds.length === 0
         ? []
         : dependencies.statusAll
           ? await dependencies.statusAll(cwd, probeIds)
           : await buildGateway({ includeFakes: false }).statusAll({ cwd }, probeIds);
-    let harnessIds: string[];
-    try {
-      harnessIds = resolveCandidateHarnessIds({
-        harnesses: pool,
-        credentialProfileId: profileId,
-        config,
-        registry,
-        statuses,
-        intent,
-      });
-    } catch (error) {
-      if (error instanceof HarnessUnavailableError)
-        throw requestError(error.message, 400, "harness_unavailable");
-      throw error;
-    }
+    const harnessIds = candidateIds(statuses);
 
     // Static lane facts only: account readiness, quota and model admission
     // stay with execution, which checks them before any provider starts.
@@ -279,7 +300,7 @@ export function createRunRequirementsPreflight(
       .map((harnessId) => eligibleManifests.find((entry) => entry.harnessId === harnessId))
       .filter((entry): entry is (typeof eligibleManifests)[number] => entry !== undefined);
     // Like execution, validate profile cardinality only after Auto has dropped
-    // lanes that cannot receive the mandatory attachments. Explicit pools remain
+    // lanes incompatible with auxiliary roots or mandatory attachments. Explicit pools remain
     // strict: resolveAttachmentPool above refuses any incompatible selected lane.
     for (const { harnessId } of compatibleManifests) {
       const cardinality = credentialProfilePolicyState({
@@ -313,4 +334,13 @@ export function createRunRequirementsPreflight(
 
 function requestError(message: string, status: number, code: string): Error {
   return Object.assign(new Error(message), { status, code });
+}
+
+function auxiliaryUnsupported(message: string): Error {
+  return Object.assign(requestError(message, 400, "auxiliary_writable_roots_unsupported"), {
+    retryable: false,
+    requiredActions: [
+      "Select a harness whose catalog row declares accessControl.auxiliaryWritableRoots, or omit execution.auxiliaryWritableRoots. For continueFrom, replace the complete execution group through POST /v2/runs (auxiliaryWritableRoots: [] clears it), or start a new run; claudexor_run_continue inherits execution.",
+    ],
+  });
 }

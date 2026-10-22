@@ -94,6 +94,7 @@ const MCP_TO_CLI = {
       isolation: { type: "string", booleanCli: "in-place" },
       workspaceKind: { type: "string", cli: "workspace-kind" },
       scopePaths: { type: "array", cli: "scope-path" },
+      auxiliaryWritableRoots: { type: "array", cli: "auxiliary-writable-root" },
       delegated: {
         type: "boolean",
         reason: "external orchestrator workspace custody; public CLI starts its own managed runs",

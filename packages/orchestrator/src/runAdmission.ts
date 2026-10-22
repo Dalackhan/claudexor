@@ -1,12 +1,19 @@
+import { loadConfig } from "@claudexor/config";
+import type { OrchestratorDeps, RunInput } from "./orchestrator.js";
+import { resolveRunInputDefaults } from "./run-input-resolution.js";
+import { resolveEngineReview } from "./candidateReview.js";
 import type { AccessProfile, ModeKind } from "@claudexor/schema";
 import {
+  ModeKind as ModeKindSchema,
   normalizeUserOutputSchema,
   resolveRunAccess,
   runAccessStrategyViolation,
+  runAuxiliaryWritableRootsViolation,
   runExecutionWorkspaceViolation,
 } from "@claudexor/schema";
 import { assertMandatoryContext } from "@claudexor/context";
-import { noProjectRepoRoot } from "@claudexor/util";
+import { assertNoInlineSecretValues, newId, noProjectRepoRoot } from "@claudexor/util";
+import { admitAuxiliaryWritableRoots } from "@claudexor/workspace";
 import { assertOutputSchemaCompiles } from "./structuredOutput.js";
 import { assertWriteIsolation } from "./write-isolation.js";
 import { assertCouncilWidth } from "./council.js";
@@ -27,6 +34,8 @@ export interface RunAdmissionInput {
   outputSchema?: Record<string, unknown> | null;
   council?: boolean;
   n?: number;
+  /** Caller-spelled service directories; admission returns their canonical grant. */
+  auxiliaryWritableRoots?: string[];
 }
 
 export interface RunAdmissionDeps {
@@ -34,6 +43,14 @@ export interface RunAdmissionDeps {
   projectProtectedPaths: () => readonly string[];
   mandatoryFiles: () => readonly string[];
   maxCouncilMembers?: number;
+  /** Configured credential-profile homes an auxiliary grant must never reach. */
+  credentialHomes?: () => readonly string[];
+}
+
+export interface RunAdmission {
+  outputSchema: Record<string, unknown> | null | undefined;
+  /** Canonical auxiliary writable directories; [] = no extra engine grant. */
+  auxiliaryWritableRoots: string[];
 }
 
 interface AdmissionViolation {
@@ -65,7 +82,7 @@ export function admitRun(
   input: RunAdmissionInput,
   mode: ModeKind,
   deps: RunAdmissionDeps,
-): Record<string, unknown> | null | undefined {
+): RunAdmission {
   if (input.council) assertCouncilWidth(input.n, deps.maxCouncilMembers);
   const effectiveAccess = resolveRunAccess(
     { mode, access: input.access },
@@ -83,6 +100,12 @@ export function admitRun(
           ...(input.executionRoot === undefined ? {} : { workspaceRoot: input.executionRoot }),
         },
       },
+      effectiveAccess,
+    ),
+  );
+  throwAdmissionViolation(
+    runAuxiliaryWritableRootsViolation(
+      { mode, execution: { auxiliaryWritableRoots: input.auxiliaryWritableRoots } },
       effectiveAccess,
     ),
   );
@@ -117,5 +140,81 @@ export function admitRun(
   if (input.repoRoot !== NO_PROJECT_ROOT) {
     assertMandatoryContext(input.executionRoot ?? input.repoRoot, deps.mandatoryFiles());
   }
-  return outputSchema;
+  const executionRoot = input.executionRoot ?? input.repoRoot;
+  return {
+    outputSchema,
+    auxiliaryWritableRoots: admitAuxiliaryWritableRoots(input.auxiliaryWritableRoots, {
+      repoRoot: input.repoRoot,
+      executionRoot,
+      credentialHomes: deps.credentialHomes?.() ?? [],
+    }),
+  };
+}
+
+/** Resolve and admit the input before a run is announced or acquires process custody. */
+export function prepareRunAdmission(
+  input: RunInput,
+  deps: OrchestratorDeps,
+  onDelegatedLedgerAttached: () => void,
+): { resolved: RunInput; mode: ModeKind; runId: string } {
+  let resolved = resolveRunInputDefaults(input, {
+    config: loadConfig(input.repoRoot),
+    registryIds: deps.registry.keys(),
+    routingGoal: deps.routingGoal,
+  });
+  // INV-062 at the ENGINE boundary: every surface fences prompts already,
+  // but a direct embedder (or the daemon-less local REPL fallback) reaches
+  // this entry without one. Prompts, per-run instructions, AND outputSchema
+  // are durable artifacts (all land in the TaskContract) — the hard block
+  // applies here too, so no in-process path can ever bypass it. outputSchema
+  // rides the schema-aware branch: its property NAMES are field names (a
+  // `token` field is legitimate), but string VALUES (const/default/enum) are
+  // scanned for real secrets, matching the HTTP boundary exactly.
+  assertNoInlineSecretValues(
+    {
+      prompt: resolved.prompt,
+      instructions: resolved.instructions,
+      outputSchema: resolved.outputSchema ?? undefined,
+    },
+    "$",
+    "run input",
+  );
+  const parsedMode = ModeKindSchema.safeParse(resolved.mode ?? "agent");
+  if (!parsedMode.success) {
+    throw new Error(`unknown mode: ${String(resolved.mode)}`);
+  }
+  const mode: ModeKind = parsedMode.data;
+  if (mode === "agent") resolved.review = resolveEngineReview(resolved, deps);
+  if (resolved.delegate === true && mode !== "agent") {
+    throw new Error(`Delegate is an agent-only strategy (got mode=${mode})`);
+  }
+  const runId = resolved.runId ?? newId("run");
+  resolved = {
+    ...resolved,
+    runId,
+    taskId: resolved.taskId ?? newId("task"),
+    onDelegatedLedgerAttached,
+  };
+  if (resolved.delegate === true) {
+    resolved = {
+      ...resolved,
+      delegationParentRunId: runId,
+    };
+  }
+  // Admission returns the CANONICAL auxiliary grant; routing, the contract
+  // and every writable lane read that list, never the caller spelling.
+  ({
+    outputSchema: resolved.outputSchema,
+    auxiliaryWritableRoots: resolved.auxiliaryWritableRoots,
+  } = admitRun(resolved, mode, {
+    maxCouncilMembers: deps.runtimeConcurrencyCaps?.max_council_members,
+    accessDefault: loadConfig(resolved.repoRoot).trust.access_default,
+    projectProtectedPaths: () => loadConfig(resolved.repoRoot).project.constraints.protected_paths,
+    mandatoryFiles: () => loadConfig(resolved.repoRoot).project.context.mandatory_files,
+    credentialHomes: () =>
+      loadConfig(resolved.repoRoot).global.credential_profiles.flatMap((profile) =>
+        profile.isolation_locator ? [profile.isolation_locator] : [],
+      ),
+  }));
+  return { resolved, mode, runId };
 }

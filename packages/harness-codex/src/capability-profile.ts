@@ -29,7 +29,13 @@ export const CODEX_CAPABILITY_PROFILE: HarnessCapabilityProfile =
     },
     // workspace_write: the seatbelt is the BASE sandbox. Native auto_review
     // (on-request) may admit single actions outside it; see INTEGRATIONS.md.
-    access_control: { readonly_mechanism: "fs_sandbox", write_mechanism: "fs_sandbox" },
+    // Auxiliary writable roots ride a per-turn sandboxPolicy that a later run
+    // never inherits (LIVE-VERIFIED 0.162.1, see app-server-session.ts).
+    access_control: {
+      readonly_mechanism: "fs_sandbox",
+      write_mechanism: "fs_sandbox",
+      auxiliary_writable_roots: true,
+    },
     isolation: { supported_containment: ["host_user_context", "env_or_file_injection"] },
     mcp_injection: true,
     // Codex's workspace-write seatbelt cancels the belt's daemon-crossing MCP

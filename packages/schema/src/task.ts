@@ -16,6 +16,7 @@ import { PaidBudget, RoutingGoal } from "./budget.js";
 import { EffortHint } from "./harness.js";
 import { ProcessingPreference } from "./processing.js";
 import { PromptCacheTtl } from "./prompt-cache.js";
+import { AuxiliaryWritableRoots } from "./auxiliary-writable-roots.js";
 
 export const TestCommandInvocation = z
   .object({
@@ -296,6 +297,7 @@ export const TaskContract = z
         effective_profile: RecordedAccessProfile.default("workspace_write").describe(
           "Access profile actually enforced by the engine (mode/trust clamps applied; never client-supplied).",
         ),
+        auxiliary_writable_roots: AuxiliaryWritableRoots,
       })
       .default({
         requested_profile: "workspace_write",
@@ -375,6 +377,7 @@ export const ActiveTaskContract = TaskContract.extend({
     .object({
       requested_profile: AccessProfile.default("workspace_write"),
       effective_profile: AccessProfile.default("workspace_write"),
+      auxiliary_writable_roots: AuxiliaryWritableRoots,
     })
     .default({ requested_profile: "workspace_write", effective_profile: "workspace_write" }),
 }).describe("Immutable contract produced for a new active run.");

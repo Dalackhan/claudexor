@@ -126,12 +126,17 @@ export const ControlThreadTurnRequest = ControlRunStartRequest.omit({
     mode: ModeKind.optional().describe(
       "Turn mode override; omission inherits the thread's default mode.",
     ),
-    execution: RunExecution.pick({ workspaceKind: true, scopePaths: true, isolation: true })
+    execution: RunExecution.pick({
+      workspaceKind: true,
+      scopePaths: true,
+      isolation: true,
+      auxiliaryWritableRoots: true,
+    })
       .partial()
       .strict()
       .optional()
       .describe(
-        "Directory geometry for this turn; project identity and execution root remain thread-owned.",
+        "Directory geometry and this turn's own auxiliary writable directories; project identity and execution root remain thread-owned, and an omitted list grants nothing.",
       ),
     /** Source plan whose open questions this follow-up answers. The thread
      * route validates ownership/current-head/duplicate submission. */

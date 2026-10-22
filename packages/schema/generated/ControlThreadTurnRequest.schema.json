@@ -458,10 +458,18 @@
               ],
               "default": "envelope",
               "description": "Run isolation: envelope (isolated worktree in the external per-project runtime namespace, the default) or live (the project tree itself)."
+            },
+            "auxiliaryWritableRoots": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Exact existing absolute directories, created by the caller, that an Agent run with effective workspace_write may also write (service caches or scratch outside the execution tree). [] grants nothing extra; so does omission, except that a continueFrom successor omitting execution inherits its predecessor's whole execution group. Requires a lane whose capability_profile.access_control.auxiliary_writable_roots is true; the files are never part of the project result."
             }
           },
           "additionalProperties": false,
-          "description": "Directory geometry for this turn; project identity and execution root remain thread-owned."
+          "description": "Directory geometry and this turn's own auxiliary writable directories; project identity and execution root remain thread-owned, and an omitted list grants nothing."
         },
         "answersPlanRunId": {
           "$ref": "#/definitions/ControlThreadTurnRequest/properties/planRunId",

@@ -294,6 +294,8 @@ export function createDaemonAgentRunner(deps: {
         delegated: p.execution.delegated,
         workspaceKind: p.execution.workspaceKind,
         scopePaths: p.execution.scopePaths,
+        // Caller spelling; the engine's run admission owns canonicalization.
+        auxiliaryWritableRoots: p.execution.auxiliaryWritableRoots,
         signal: timeLimit.signal,
         onRunStart,
       })

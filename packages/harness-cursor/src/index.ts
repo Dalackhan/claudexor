@@ -104,10 +104,12 @@ export const CURSOR_CAPABILITY_PROFILE: HarnessCapabilityProfile =
     // allowlist, not a filesystem sandbox. `--sandbox enabled` alone was proven
     // NOT to enforce readonly: a print-mode agent run "has access to all tools,
     // including write and shell", and a live probe wrote a file through it.
-    access_control: { readonly_mechanism: "tool_allowlist", write_mechanism: "tool_policy" },
-    isolation: {
-      supported_containment: ["env_or_file_injection"],
+    access_control: {
+      readonly_mechanism: "tool_allowlist",
+      write_mechanism: "tool_policy",
+      auxiliary_writable_roots: false,
     },
+    isolation: { supported_containment: ["env_or_file_injection"] },
     // Engine-owned MCP injection (delegation belt): `mcp.json` written into
     // the Claudexor-owned lane CURSOR_CONFIG_DIR plus `--approve-mcps`
     // (mcp-config.ts). requires_full_access stays false: cursor's access

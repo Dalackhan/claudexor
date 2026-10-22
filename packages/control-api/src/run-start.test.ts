@@ -384,3 +384,85 @@ describe("delegated execution.workspaceRoot", () => {
     ).toThrow(/does not exist/);
   });
 });
+
+describe("execution.auxiliaryWritableRoots at the run-start boundary", () => {
+  function fixture() {
+    const parent = mkdtempSync(join(tmpdir(), "claudexor-aux-start-"));
+    roots.push(parent);
+    const project = join(parent, "project");
+    const cache = join(parent, "cache");
+    mkdirSync(project);
+    mkdirSync(cache);
+    const link = join(parent, "cache-link");
+    symlinkSync(cache, link);
+    return { project, cache, link, missing: join(parent, "missing") };
+  }
+  const start = (project: string, roots: string[], extra: Record<string, unknown> = {}) =>
+    normalizeRunStartRequest({
+      prompt: "bootstrap",
+      mode: "agent",
+      scope: { kind: "project", root: project },
+      execution: { auxiliaryWritableRoots: roots },
+      ...extra,
+    });
+  const refusal = (run: () => unknown) => {
+    try {
+      run();
+    } catch (error) {
+      return error;
+    }
+    throw new Error("expected a typed refusal");
+  };
+
+  it("keeps the caller spelling; canonicalization belongs to engine admission", () => {
+    const { project, link } = fixture();
+    expect(start(project, [link]).execution.auxiliaryWritableRoots).toEqual([link]);
+    expect(start(project, []).execution.auxiliaryWritableRoots).toEqual([]);
+  });
+
+  it("refuses relative and missing paths, deferring only existence for thread-bound runs", () => {
+    const { project, missing } = fixture();
+    expect(refusal(() => start(project, ["cache"]))).toMatchObject({
+      code: "auxiliary_writable_root_invalid",
+      status: 400,
+      retryable: false,
+    });
+    expect(refusal(() => start(project, [missing]))).toMatchObject({
+      code: "auxiliary_writable_root_invalid",
+      retryable: true,
+    });
+    const deferred = (roots: string[]) =>
+      normalizeRunStartRequest(
+        {
+          prompt: "turn",
+          mode: "agent",
+          scope: { kind: "project", root: project },
+          execution: { auxiliaryWritableRoots: roots },
+        },
+        { deferExecutionWorkspaceAvailability: true },
+      );
+    expect(deferred([missing]).execution.auxiliaryWritableRoots).toEqual([missing]);
+    expect(refusal(() => deferred(["cache"]))).toMatchObject({
+      code: "auxiliary_writable_root_invalid",
+    });
+  });
+
+  it("refuses read-only modes and explicit non-workspace_write access, never changing access", () => {
+    const { project, cache } = fixture();
+    for (const extra of [
+      { mode: "ask" },
+      { mode: "plan" },
+      { access: "readonly" },
+      { access: "full" },
+      { access: "inherit_native" },
+    ]) {
+      expect(refusal(() => start(project, [cache], extra))).toMatchObject({
+        code: "auxiliary_writable_roots_access_conflict",
+        status: 400,
+      });
+    }
+    // An omitted Agent access is the project default: the preflight decides it.
+    expect(start(project, [cache]).access).toBeUndefined();
+    expect(start(project, [cache], { access: "workspace_write" }).access).toBe("workspace_write");
+  });
+});

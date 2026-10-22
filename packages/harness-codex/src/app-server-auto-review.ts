@@ -8,13 +8,9 @@ import {
   type InteractionRequest,
 } from "@claudexor/schema";
 import { nowIso, redactSecrets, sensitiveResourcePolicy } from "@claudexor/util";
-import {
-  asObject,
-  codexAppServerApprovalParams,
-  type CodexThreadLifecycle,
-  type JsonObject,
-} from "./app-server-protocol.js";
+import { asObject, type CodexThreadLifecycle, type JsonObject } from "./app-server-protocol.js";
 import { reviewPath } from "./app-server-approvals.js";
+import { codexTurnParams } from "./app-server-session.js";
 
 const COMPLETED = "item/autoApprovalReview/completed";
 const MAX_DETAILS = 32_000;
@@ -28,6 +24,8 @@ interface ReviewDependencies {
 
 interface HandbackInput {
   turnId: string;
+  /** The run's auxiliary-root turn policy, repeated on the authorized retry turn. */
+  sandboxPolicy?: JsonObject;
   finalAnswer: string;
   /** The completed root turn's typed terminal events (its final answer). */
   completed: HarnessEvent[];
@@ -94,7 +92,12 @@ export class CodexAutoReview {
       await input.cancel();
       throw new Error("Cancelled while awaiting native access authorization");
     }
-    const retried = await this.retry(retries, input.request, input.readLifecycle);
+    const retried = await this.retry(
+      retries,
+      input.request,
+      input.readLifecycle,
+      input.sandboxPolicy,
+    );
     const lateFailure = this.failure ?? input.failure();
     if (lateFailure) throw lateFailure;
     if (retried) return true;
@@ -176,6 +179,7 @@ export class CodexAutoReview {
     events: JsonObject[],
     request: (method: string, params: JsonObject) => Promise<JsonObject>,
     readLifecycle: () => Promise<CodexThreadLifecycle>,
+    sandboxPolicy?: JsonObject,
   ): Promise<boolean> {
     if (!events.length || !this.live()) return false;
     const fresh = await readLifecycle();
@@ -202,7 +206,7 @@ export class CodexAutoReview {
     if (!this.live()) return false;
     await request("turn/start", {
       threadId,
-      ...codexAppServerApprovalParams(this.deps.spec),
+      ...codexTurnParams(this.deps.spec, sandboxPolicy),
       input: [
         {
           type: "text",
@@ -332,7 +336,13 @@ export class CodexAutoReview {
     )
       return "native review contains unsupported context fields";
     const cwd = action["cwd"];
-    if (typeof cwd !== "string" || !isAbsolute(cwd) || !reviewPath(cwd, this.deps.spec.cwd))
+    // A granted auxiliary root is a legitimate working directory to OFFER for
+    // controller authorization; nothing outside the run's grant is offered.
+    if (
+      typeof cwd !== "string" ||
+      !isAbsolute(cwd) ||
+      !reviewPath(cwd, this.deps.spec.cwd, this.deps.spec.auxiliary_writable_roots)
+    )
       return "the denied action has an unreviewable working directory";
     const source = action["source"] === "unifiedExec" ? "unified_exec" : action["source"];
     let nativeAction: JsonObject;

@@ -153,6 +153,18 @@ export const CatalogHarness = z
     writeMechanism: WriteMechanism.default("none").describe(
       "HOW workspace_write is confined (fs_sandbox | tool_policy | none) — fs_sandbox is the base sandbox; a native automatic reviewer may still admit individual actions outside it. tool_policy means an allowed shell is unconfined (no FS/network fence); consumers choosing lanes by confinement read THIS field, never a harness name.",
     ),
+    accessControl: z
+      .object({
+        auxiliaryWritableRoots: z
+          .boolean()
+          .describe(
+            "True when this harness applies execution.auxiliaryWritableRoots natively under workspace_write, and a later run whose effective execution carries no list (a new thread turn without one) keeps no earlier grant; false lanes refuse an explicit pool and drop from an auto pool.",
+          ),
+      })
+      .default({ auxiliaryWritableRoots: false })
+      .describe(
+        "Negotiated access-control grants beyond the access profile. Engines that predate this row omit it (= no auxiliary writable roots).",
+      ),
     delegation: DelegationCapability.describe(
       "Whether this installed runtime can offer Delegate through this harness.",
     ),

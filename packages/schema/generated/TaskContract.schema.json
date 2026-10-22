@@ -412,6 +412,14 @@
               "$ref": "#/definitions/TaskContract/properties/access/properties/requested_profile",
               "default": "workspace_write",
               "description": "Access profile actually enforced by the engine (mode/trust clamps applied; never client-supplied)."
+            },
+            "auxiliary_writable_roots": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [],
+              "description": "Canonical auxiliary writable directories granted to this run's writable Agent lanes; empty = no extra engine grant. Read-only lanes never receive them."
             }
           },
           "additionalProperties": false,

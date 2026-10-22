@@ -12,9 +12,27 @@ describe("MCP run-control applicability", () => {
       "git",
       "directory",
     ]);
-    const execution = { workspaceKind: "directory", scopePaths: ["assets", "brief.txt"] };
+    const execution = {
+      workspaceKind: "directory",
+      scopePaths: ["assets", "brief.txt"],
+      auxiliaryWritableRoots: ["/srv/cache"],
+    };
     await tool.handler({ prompt: "go", processingPreference: "standard", execution }, {});
     expect(received).toMatchObject({ mode: "agent", execution, processingPreference: "standard" });
+  });
+  it("advertises a per-turn auxiliary root list on thread turns only beside the run execution", () => {
+    const all = defaultClaudexorTools(async () => ({}));
+    const run = all.find((entry) => entry.name === "claudexor_run")!.inputSchema as any;
+    const turn = all.find((entry) => entry.name === "claudexor_thread_turn")!.inputSchema as any;
+    expect(run.properties.execution.properties.auxiliaryWritableRoots).toMatchObject({
+      type: "array",
+      items: { type: "string", minLength: 1 },
+    });
+    expect(turn.properties.execution).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      properties: { auxiliaryWritableRoots: { type: "array" } },
+    });
   });
   const tools = defaultClaudexorTools(async () => ({ summary: "ok" }));
 

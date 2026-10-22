@@ -75,6 +75,7 @@ export async function threadQuery(
         ...(input["web"] ? { web: input["web"] } : {}),
         ...(input["maxSeconds"] ? { maxSeconds: input["maxSeconds"] } : {}),
         ...(input["timeLimitMode"] ? { timeLimitMode: input["timeLimitMode"] } : {}),
+        ...(input["execution"] ? { execution: input["execution"] } : {}),
       };
   const response = await controlApiFetch(connection.addr, path, {
     method: "POST",

@@ -10202,6 +10202,54 @@ describe("DaemonControlApiServer", () => {
     });
   });
 
+  it("POST /runs returns an accepted auxiliary-root handle before checking the directory again", async () => {
+    const { daemon, record } = fakeDaemon();
+    const cache = mkdtempSync(join(tmpdir(), "claudexor-aux-replay-"));
+    rmSync(cache, { recursive: true, force: true });
+    const body = {
+      prompt: "bootstrap",
+      mode: "agent",
+      scope: { kind: "project", root: record.runDir },
+      access: "workspace_write",
+      execution: { auxiliaryWritableRoots: [cache] },
+    };
+    let found: "accepted" | "absent" = "accepted";
+    let findCalls = 0;
+    let enqueueCalls = 0;
+    const wrapped: DaemonFacadeClient = {
+      ...daemon,
+      async findAccepted(params) {
+        findCalls += 1;
+        expect(params).toMatchObject({ execution: { auxiliaryWritableRoots: [cache] } });
+        return found === "accepted" ? record : null;
+      },
+      async enqueue() {
+        enqueueCalls += 1;
+        throw new Error("neither a replay nor a refused path may enqueue");
+      },
+    };
+    await withDaemonServer(wrapped, async (base) => {
+      const post = () =>
+        apiFetch(`${base}/runs`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}`, "Idempotency-Key": "aux-root-start" },
+          body: JSON.stringify(body),
+        });
+      const replay = await post();
+      expect(replay.status).toBe(200);
+      expect(await replay.json()).toMatchObject({ jobId: record.id, runId: record.runId });
+      found = "absent";
+      const refused = await post();
+      expect(refused.status).toBe(400);
+      expect(await refused.json()).toMatchObject({
+        code: "auxiliary_writable_root_invalid",
+        retryable: true,
+      });
+      expect(findCalls).toBe(3);
+      expect(enqueueCalls).toBe(0);
+    });
+  });
+
   it("POST /runs refuses an absent historical-access replay only after both durable probes miss", async () => {
     const { daemon, record } = fakeDaemon();
     let findCalls = 0;

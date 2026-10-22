@@ -538,11 +538,14 @@ invariant or operator decision before proceeding.
   must disclose which applies. A read-only turn reuses an existing isolated
   worktree, but before the first write turn it reads the stable project
   directly and does not materialize Git state. Every turn and mode of a
-  delegated thread reads and writes only its bound workspace: Claudexor never
-  provisions, promotes, resets, applies, deletes, or falls back from it, and an
-  unavailable workspace is a typed refusal. verify: thread schema defaults;
+  delegated thread reads and writes project work only in its bound workspace:
+  Claudexor never provisions, promotes, resets, applies, deletes, or falls back
+  from it, and an unavailable workspace is a typed refusal. A write turn's
+  explicit caller-owned auxiliary service directories are side effects outside
+  the product, never captured or applied. verify: thread schema defaults;
   in-place, lazy isolated-workspace, and delegated-workspace tests
-  (`packages/cli/src/thread-delegated-workspace.test.ts`); canary
+  (`packages/cli/src/thread-delegated-workspace.test.ts`,
+  `packages/control-api/src/thread-delegated.test.ts`); canary
   `[INV-073:delegated-thread-two-rounds]`.
 - **INV-074** Absolute host paths such as `/tmp/...` are not project diffs
   and do not prove project success. Project tmp requests default to

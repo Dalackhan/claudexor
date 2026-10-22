@@ -37,6 +37,7 @@ export const RunFailureCode = z
     "delegated_confinement_unavailable",
     "delegated_evidence_incomplete",
     "access_profile_incompatible",
+    "auxiliary_writable_roots_unsupported",
     "retired_access_profile",
   ])
   .describe(

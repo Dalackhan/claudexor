@@ -55,6 +55,7 @@ describe("portable Agent Skill, Copilot plugin, and MCP distribution", () => {
       );
       for (const name of [
         "claudexor_run_wait",
+        "claudexor_runs_wait",
         "claudexor_run_event_read",
         "claudexor_run_message",
         "claudexor_run_continue",

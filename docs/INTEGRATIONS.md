@@ -10,9 +10,9 @@ changing Claudexor.
 
 | Surface | Current role | Stability |
 |---|---|---|
-| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, retry, run-again, apply, decision, review), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
+| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, runs-wait, retry, run-again, apply, decision, review), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). `runs-wait` observes existing handles read-only through `--targets-json` and optional `--wait-ms`, with `--json` or `--json-stream` output. | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
 | Daemon and control API | Local durable queue, Agent runs, caller-owned model and image operations, artifacts, SSE events, settings, harness status, secrets metadata, apply, and run control. | Stable contract: endpoints and DTOs per `docs/reference/endpoints.json` + generated schemas (add-only fields). Loopback + bearer token only. |
-| MCP server | Exposes Claudexor tools to MCP clients. | Stable contract: the tool set with input/output schemas. Tool list follows the implementation, not old docs. |
+| MCP server | Exposes Claudexor tools to MCP clients. `claudexor_runs_wait` projects the same read-only observation with `targets: [{runId, seen?}]` and optional `waitMs`. | Stable contract: the tool set with input/output schemas. Tool list follows the implementation, not old docs. |
 | ACP server | Lets compatible editors or agents talk to Claudexor as a local agent surface. | Experimental (may change in minors, disclosed in the CHANGELOG). |
 | Host plugins | User-global Claude Code, Codex, Cursor, and OpenCode integrations managed by `claudexor plugin`. | Experimental file layout (regenerate with `claudexor plugin repair all`). Installs owned local files/config only; host enablement can still require reload/manual action. |
 | Engine runtime closure | Node-free release artifact containing reviewed daemon and CLI entrypoints for a host that owns its daemon lifecycle, such as [Ouroboros](https://github.com/razzant/ouroboros). | Exact-pin contract: one link-free archive and the existing signed runtime manifest; the host supplies the tested full Node toolchain and verifies archive plus `--probe` identity. |
@@ -765,7 +765,7 @@ per-model capability marks, and last service, absent for an older engine, and a 
 `routingEvidenceProblem` while the listing stays authoritative),
 `claudexor_runs`, `claudexor_inspect`, `claudexor_run_status`,
 `claudexor_run_result`, `claudexor_run_cancel`, `claudexor_run_time_limit`,
-`claudexor_run_wait`, `claudexor_run_event_read`, `claudexor_run_message`,
+`claudexor_run_wait`, `claudexor_runs_wait`, `claudexor_run_event_read`, `claudexor_run_message`,
 `claudexor_run_continue`,
 `claudexor_run_interactions`, `claudexor_answer_interaction`,
 `claudexor_apply_check`, and
@@ -825,7 +825,38 @@ path. A missing, moved or unmounted root is refused (`project_root_missing`)
 before the replay lookup, so nothing is replayed or started; `claudexor_runs`
 still lists the earlier run.
 
-**Waiting.** `claudexor_run_wait` reads the run's event stream after `afterSeq`
+**Waiting for several jobs.** `claudexor_runs_wait` observes attention from
+1..1000 existing job/run handles with one `POST /v2/runs/wait-many`. Pass
+`targets: [{runId, seen?}, ...]` and optional `waitMs` (integer 0..50000,
+default 25000). The CLI exposes the same read:
+
+```bash
+claudexor runs-wait --targets-json '[{"runId":"job-a"},{"runId":"job-b"}]' --wait-ms 25000 --json
+```
+
+`summaries[i]` corresponds to `targets[i]`, including duplicates. Each row
+contains only lifecycle `status`, `pending`, `token` and `problem`; failed
+observations keep status/pending/token null and name the problem.
+`attention` contains ascending input indexes whose terminal lifecycle or pending
+question has an unseen token. Echo a row's token as that target's `seen` to
+suppress unchanged attention, allowing another job's question or terminal to
+wake the next call. Replacing a question changes its token even at the same
+pending count. Tokens acknowledge only current observation: they are neither
+event cursors, answers, authorization nor output-readiness claims. Read question
+bodies with `claudexor_run_interactions` and output with `claudexor_run_result`.
+
+`waitMs: 0` reads once. Timeout returns the current snapshot without another
+wait; ordinary progress does not wake a call. Healthy attention takes precedence
+over per-target problems, which remain visible. Results are capped at 128 KiB
+of logical JSON and requests at 1 MiB; MCP text mirrors the structured result.
+CLI `--json-stream` emits one compact line, including on error. Observation flags
+do not set run limits. Discovery gets 5s and HTTP, including its body read, gets
+`waitMs+5s`, for a total of up to `waitMs+10s`. Host abort closes only the read;
+the existing read-only discovery handshake may settle in the background. Missing
+or unsupported daemons fail without auto-start, reconnect or fallback to
+individual waits. This tool is absent from the Delegate belt.
+
+**Waiting on events.** `claudexor_run_wait` reads the run's event stream after `afterSeq`
 (the previous `nextSeq`, never `snapshotSeq`). Events already written at its
 first snapshot, the `snapshotSeq` fence, are returned first in a bounded page
 (50 events and 64 KiB by default), whether or not a question is pending. Then

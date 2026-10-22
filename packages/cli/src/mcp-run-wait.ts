@@ -25,7 +25,7 @@ const Snapshot = ControlRunDetail.pick({ lastSeq: true, pendingInteractions: tru
 
 /** The existing discovery API has no signal parameter; bound the caller's wait.
  * Its read-only handshake may still settle in the background after cancellation. */
-async function connectForObservation(signal?: AbortSignal) {
+export async function connectForObservation(signal?: AbortSignal) {
   signal?.throwIfAborted();
   let onAbort = () => {};
   let timer: ReturnType<typeof setTimeout> | undefined;

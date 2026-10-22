@@ -11,6 +11,7 @@ export * from "./daemon-local-client.js";
 export * from "./daemon-shutdown-rpc.js";
 export * from "./events.js";
 export * from "./interactions.js";
+export * from "./run-observation.js";
 export * from "./live-input.js";
 export * from "./operator-decisions.js";
 export * from "./threads.js";

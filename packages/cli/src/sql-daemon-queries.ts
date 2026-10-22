@@ -1,4 +1,39 @@
-import type { CommandBackend, EngineStore } from "@claudexor/daemon";
+import {
+  readRunObservations,
+  type CommandBackend,
+  type EngineStore,
+  type createSqlDaemonServices,
+} from "@claudexor/daemon";
+
+type ControlReadGraph = Pick<
+  ReturnType<typeof createSqlDaemonServices>,
+  "commands" | "interactions" | "terminalFiles"
+>;
+
+/** Lazy read composition follows the attached graph through recovery. No identity
+ * is synthesized when the durable engine store is absent or closed. */
+export function sqlControlReadSources(
+  current: () => ControlReadGraph,
+  storeId: () => string | undefined,
+) {
+  return {
+    runObservations: async (ids: readonly string[], signal?: AbortSignal) => {
+      const identity = storeId();
+      if (!identity)
+        throw Object.assign(
+          new Error("durable store identity is unavailable for run observation"),
+          {
+            code: "run_observation_unavailable",
+            status: 503,
+            retryable: false,
+          },
+        );
+      const graph = current();
+      return readRunObservations(graph.commands.queries, graph.interactions, identity, ids, signal);
+    },
+    terminalFilesPending: (id: string) => current().terminalFiles.pending(id),
+  };
+}
 
 /** Storage is attached after import; callers keep the same command boundary.
  * Recovery admission refuses product calls before any of these dereference SQL. */
@@ -9,6 +44,7 @@ export function deferredCommands(current: () => CommandBackend): CommandBackend 
     findById: (id) => current().findById!(id),
     pruneHistory: (...args) => current().pruneHistory(...args),
     queries: {
+      observationRecords: (ids) => current().queries.observationRecords!(ids),
       getByRunId: (id) => current().queries.getByRunId(id),
       select: (query) => current().queries.select(query),
       publicList: (query) => current().queries.publicList(query),

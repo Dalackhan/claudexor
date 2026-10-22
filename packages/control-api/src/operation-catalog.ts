@@ -259,6 +259,7 @@ const operations: ControlOperationDescriptor[] = [
     completion: "durable_handle",
     idempotency: "key_required",
   }),
+  j("POST", "/v2/runs/wait-many", "read_only", "RunWaitManyInput", "RunWaitManyResult"),
   j("GET", "/v2/runs/:id", "read_only", null, "ControlRunDetail"),
   j("GET", "/v2/runs/:id/time-limit", "read_only", null, "RunTimeLimitSnapshot"),
   j("PATCH", "/v2/runs/:id/time-limit", "mutating", "RunTimeLimitRequest", "RunTimeLimitSnapshot"),

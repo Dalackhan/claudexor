@@ -338,6 +338,26 @@ for (const name of ["claudexor_account_resources", "claudexor_account_reset"]) {
     failures.push(`Account tool '${name}' must expose its typed wire result`);
 }
 
+// Collection observation is a read verb, separate from inference run controls.
+const RUN_OBSERVATION_TOOL_FLAGS = { targets: "targets-json", waitMs: "wait-ms" };
+const runsWaitTool = tools.find((tool) => tool.name === "claudexor_runs_wait");
+const runsWaitCommand = cliRegistry.CLI_COMMANDS.find((command) => command.id === "runs-wait");
+if (runsWaitCommand?.mutability !== "read")
+  failures.push("runs-wait must be registered as a read command");
+for (const [field, flag] of Object.entries(RUN_OBSERVATION_TOOL_FLAGS)) {
+  const expectedType = field === "targets" ? "array" : "integer";
+  if (runsWaitTool?.inputSchema.properties?.[field]?.type !== expectedType)
+    failures.push(`Collection wait tool is missing ${expectedType} field '${field}'`);
+  if (!cliValueFlags.includes(flag) || !runsWaitCommand?.flags.includes(flag))
+    failures.push(
+      `Collection wait field '${field}' maps to missing runs-wait value flag '--${flag}'`,
+    );
+  for (const command of cliRegistry.CLI_COMMANDS) {
+    if (command.id !== "runs-wait" && command.flags.includes(flag))
+      failures.push(`Observation flag '--${flag}' leaked into '${command.id}'`);
+  }
+}
+
 const mappedCliFlags = new Set(
   Object.values(MCP_TO_CLI)
     .flatMap((mapping) => [
@@ -347,7 +367,12 @@ const mappedCliFlags = new Set(
     .filter(Boolean),
 );
 for (const flag of cliValueFlags) {
-  if (mappedCliFlags.has(flag) || Object.values(ACCOUNT_TOOL_FLAGS).includes(flag)) continue;
+  if (
+    mappedCliFlags.has(flag) ||
+    Object.values(ACCOUNT_TOOL_FLAGS).includes(flag) ||
+    Object.values(RUN_OBSERVATION_TOOL_FLAGS).includes(flag)
+  )
+    continue;
   if (flag in CLI_ONLY_EXEMPT) continue;
   failures.push(
     `CLI value flag '--${flag}' has no MCP argument and no exemption — grow the MCP schema or add a justified exemption`,
@@ -439,6 +464,7 @@ for (const readTool of [
   "claudexor_run_status",
   "claudexor_run_result",
   "claudexor_run_wait",
+  "claudexor_runs_wait",
   "claudexor_run_event_read",
   "claudexor_run_message",
   "claudexor_run_continue",

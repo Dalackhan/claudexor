@@ -1213,6 +1213,18 @@
       "error_schema": "ControlProblem"
     },
     {
+      "method": "POST",
+      "path": "/v2/runs/wait-many",
+      "mutating": false,
+      "applicability": "run",
+      "summary": "Wait once for unacknowledged lifecycle or pending-question attention across addressed runs.",
+      "auth": "loopback_bearer",
+      "request_schema": "RunWaitManyInput",
+      "parameters": [],
+      "response_schema": "RunWaitManyResult",
+      "error_schema": "ControlProblem"
+    },
+    {
       "method": "GET",
       "path": "/v2/secrets",
       "mutating": false,

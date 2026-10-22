@@ -2624,6 +2624,7 @@ No memory, loop, timing or store measurements impose automatic admission thresho
 - `GET /v2/runs/:id/run-again`
 - `GET /v2/runs/:id/time-limit`
 - `PATCH /v2/runs/:id/time-limit`
+- `POST /v2/runs/wait-many`
 - `GET /v2/secrets`
 - `POST /v2/secrets`
 - `DELETE /v2/secrets/:id`

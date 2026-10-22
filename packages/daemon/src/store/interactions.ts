@@ -1,12 +1,13 @@
 import { ControlPendingInteraction } from "@claudexor/schema";
 import {
   interactionKey,
+  digestPendingIdentities,
   parseInteractionResolution,
   pendingInteraction,
   type InteractionContext,
   type InteractionTerminal,
 } from "../interactions.js";
-import type { InteractionStorePort } from "../store-contracts.js";
+import type { InteractionStorePort, PendingIdentityDigest } from "../store-contracts.js";
 import type { SqlEventLedger } from "./event-store.js";
 import { requireTransaction, runMutation, type SqlWriteContext } from "./mutation.js";
 import type { EngineStore } from "./store.js";
@@ -103,6 +104,19 @@ export class SqlInteractionStore implements InteractionStorePort {
         .all(runId, this.events.generation.pid) as Array<{ request: Uint8Array }>
     ).map((row) =>
       ControlPendingInteraction.parse(JSON.parse(Buffer.from(row.request).toString("utf8"))),
+    );
+  }
+
+  pendingIdentityDigest(runId: string): PendingIdentityDigest {
+    const rows = this.store
+      .prepare(
+        "SELECT id FROM interaction WHERE run_id=? AND pid=? AND state='pending' ORDER BY id",
+      )
+      .iterate(runId, this.events.generation.pid) as Iterable<{ id: string }>;
+    return digestPendingIdentities(
+      (function* () {
+        for (const row of rows) yield row.id;
+      })(),
     );
   }
 

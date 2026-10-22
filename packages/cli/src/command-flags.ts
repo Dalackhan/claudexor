@@ -116,6 +116,12 @@ const FROZEN_REVIEW_FLAGS: readonly CliFlagSpec[] = [
 export const FROZEN_REVIEW_FLAG_NAMES = FROZEN_REVIEW_FLAGS.map((flag) => flag.name);
 
 export const CLI_FLAGS: readonly CliFlagSpec[] = [
+  valueFlag("targets-json", "<array>", "runs-wait: JSON array of {runId, seen?} targets (1..1000)"),
+  valueFlag(
+    "wait-ms",
+    "<ms>",
+    "runs-wait: observation wait 0..50000ms (default 25000); never a run deadline",
+  ),
   valueFlag(
     "harness",
     "<id[,id...]>",

@@ -1,4 +1,8 @@
-import { directDelegatedChildrenFromRecords, type CommandListQuery } from "@claudexor/schema";
+import {
+  directDelegatedChildrenFromRecords,
+  type CommandListQuery,
+  type RunObservationRecord,
+} from "@claudexor/schema";
 import { parseCommandListQuery } from "../command-list-select.js";
 import { publicJobRecord, type JobRecord } from "../job-record.js";
 import type { CommandQueries } from "../store-contracts.js";
@@ -48,6 +52,20 @@ export class SqlCommandQueries implements CommandQueries, ModelResourceQueries {
     private readonly store: EngineStore,
     private readonly blobs: BlobFiles,
   ) {}
+
+  /** One addressed selection of live product scalars, with no summary or body
+   * decoding. Lifecycle validation belongs to the per-target snapshot boundary. */
+  observationRecords(ids: readonly string[]): RunObservationRecord[] {
+    if (ids.length === 0) return [];
+    return this.store
+      .prepare(
+        `SELECT c.id AS jobId,c.run_id AS runId,p.name AS partition,p.epoch,
+          c.state,c.created_at AS createdAt FROM command c JOIN partition p ON p.id=c.pid
+        WHERE c.live=1 AND c.kind='product' AND
+          (c.id IN (SELECT value FROM json_each(?1)) OR c.run_id IN (SELECT value FROM json_each(?1)))`,
+      )
+      .all(JSON.stringify([...new Set(ids)])) as RunObservationRecord[];
+  }
 
   getByRunId(runId: string): JobRecord | undefined {
     const row = this.rows("c.run_id = ?", [runId])[0];

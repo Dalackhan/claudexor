@@ -74,6 +74,13 @@ Pass a stable `idempotencyKey` with an explicit `repoPath` on a one-shot launch
 when its response may need recovery; retry the same key and arguments, not a
 new launch. A queued launch returns its `jobId` with `runId: null`; pass the
 `jobId` as `runId` to the follow-up tools until the run binds.
+Use `claudexor_runs_wait` to observe 1..1000 `targets` entries shaped
+`{runId, seen?}` with compact positional summaries and attention indexes.
+For example, call it with `{"targets":[{"runId":"job-a"},{"runId":"job-b"}],"waitMs":0}`.
+Echo each summary token as `seen` to suppress unchanged terminal or question
+attention. A token is neither an event cursor nor an answer. Read output and
+question bodies separately with `claudexor_run_result` and
+`claudexor_run_interactions`. Read abort or timeout never cancels the worker.
 Use `claudexor_run_wait` to follow events and resume with `nextSeq` as
 `afterSeq`. It returns events already written first, even while a question is
 pending, then waits for a batch or, with `wake: "event"`, the first new event.

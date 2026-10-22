@@ -16,6 +16,7 @@ import type {
   ProjectNesting,
   ResourceAttachmentRef,
   RunEvent,
+  RunObservationRecord,
   Session,
   Thread,
   ThreadTurn,
@@ -81,6 +82,11 @@ export interface ResourceStorePort {
   >;
 }
 
+export interface PendingIdentityDigest {
+  pending: boolean;
+  digest: string;
+}
+
 export interface InteractionStorePort {
   request(ctx: InteractionContext): ControlPendingInteraction;
   resolve(
@@ -94,6 +100,8 @@ export interface InteractionStorePort {
   ): string[];
   status(runId: string, interactionId: string): "pending" | "resolved" | "missing";
   pendingForRun(runId: string): ControlPendingInteraction[];
+  /** SQL observation capability; legacy answer-only ports need not implement it. */
+  pendingIdentityDigest?(runId: string): PendingIdentityDigest;
 }
 
 export interface ProjectThreadPort {
@@ -231,6 +239,9 @@ export interface ProjectThreadPort {
 }
 
 export interface CommandQueries {
+  /** Required by compact observation; absent on legacy, non-observing fixtures.
+   * Persisted scalar facts must be validated per target before public use. */
+  observationRecords?(ids: readonly string[]): RunObservationRecord[];
   getByRunId(runId: string): JobRecord | undefined;
   select(query: CommandListQuery): JobRecord[];
   publicList(query: CommandListQuery): JobRecord[];

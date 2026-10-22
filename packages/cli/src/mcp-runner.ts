@@ -25,6 +25,7 @@ import { runTimeLimitQuery } from "./mcp-run-time-limit.js";
 import { runMessageQuery } from "./mcp-run-message.js";
 import { runContinueQuery } from "./mcp-run-continue.js";
 import { runWaitQuery } from "./mcp-run-wait.js";
+import { runsWaitQuery } from "./mcp-runs-wait.js";
 import { runEventReadQuery } from "./mcp-run-event-read.js";
 import { journalRecoveryQuery } from "./mcp-journal-recovery.js";
 
@@ -64,6 +65,10 @@ export interface McpSurfaceRunnerOptions {
 export function mcpSurfaceRunner(options: McpSurfaceRunnerOptions = {}) {
   return async (p: any, hooks?: SurfaceRunnerHooks) => {
     const beltContext = Boolean(options.delegationParentRunId);
+    if (p?.mode === "__runs_wait") {
+      const { mode: _mode, ...input } = p;
+      return runsWaitQuery(input, beltContext, hooks?.signal);
+    }
     if (p?.mode === "__run_wait") {
       const { mode: _mode, ...input } = p;
       return runWaitQuery(input, beltContext, hooks?.signal);

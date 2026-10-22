@@ -1006,10 +1006,11 @@ end through the harness itself or the tree kill.
 A consumer passes `windowsConsole: "none"` to keep `DETACHED_PROCESS` and no
 console at all: agy does so for its runs and `--version` probe, because its
 print mode treats an openable `CONIN$` as interactive, and console programs an
-agy run starts may still open windows. Claudexor's own `git` calls do the same:
-a console-less git starts its own children without consoles, and a credential
-or host-key prompt fails at once instead of waiting on an invisible console
-until the call's timeout. Codex's quota and `model/list`
+agy run starts may still open windows. Claudexor's own `git` calls keep the
+console-less start they always had, so they open no window; Git for Windows'
+`cmd\git.exe` launcher gives the real git a windowless console of its own, so a
+credential or host-key prompt there waits until the call's timeout, as before.
+Codex's quota and `model/list`
 app-server probes, the install `--version` proof and the `login --help` probe
 start their direct child with `windowsHide` only. So do the daemon-hosted
 no-Terminal sign-in children (URL disclosure and the device-code app-server):

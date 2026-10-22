@@ -14,8 +14,8 @@ On Windows, background harness runs and captures start the vendor with an invisi
 console instead of none, so the shells, `git`, MCP servers and other console programs
 a run starts inherit it instead of opening windows of their own. Agy keeps the
 console-less start because its print mode treats an openable console input as
-interactive, and Claudexor's own `git` calls keep it too, so a push's credential or
-host-key prompt still fails at once instead of waiting on an invisible console.
+interactive, and Claudexor's own `git` calls keep the console-less start they always
+had.
 Cancellation still stops the whole tree with `taskkill /T`, and a background child
 now also ends when the daemon process dies. The no-Terminal sign-in
 children (URL disclosure and the device-code app-server) open no console window, and

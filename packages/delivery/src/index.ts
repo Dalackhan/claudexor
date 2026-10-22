@@ -56,8 +56,8 @@ export async function revertInPlaceFromAnchor(repo: string, anchorId: string) {
 }
 
 async function git(repo: string, args: string[], input?: string) {
-  // Raw capture: the patch rides stdin already; stdout may carry diffs too. No console on
-  // Windows: a push's credential or host-key prompt fails at once (ARCHITECTURE runtime map).
+  // Raw capture: the patch rides stdin already; stdout may carry diffs too. Console-less
+  // on Windows, as git calls always started (ARCHITECTURE runtime map).
   return runCaptureRaw("git", ["-C", repo, ...args], {
     timeoutMs: 60_000,
     input,

@@ -1,5 +1,22 @@
 # claudexor
 
+## 4.6.1
+
+### Patch Changes
+
+- 4faf3d2: Disambiguate recent project folders with the shortest distinguishing parent suffix and add full-path hover help. The macOS project chip keeps its ordinary folder glyph; its hover and VoiceOver text say whether the selected folder is in a primary Git checkout or a linked worktree, including reftable repositories, without implying the main branch or where a thread executes. A selected thread with unloaded metadata says “Project unavailable” instead of showing the draft project, and draft help identifies the project for the new thread. Ordinary folders and remote or unavailable selections never inherit another local checkout's Git status.
+- 1b02c73: Keep compatible newer daemons and alternate builds of the same version running
+  when another macOS app copy connects. Add an explicit idle-only same-version
+  build switch in Settings, refresh identity before replacement, and coordinate app
+  lifecycle transactions across copies sharing a service root. An unusable
+  lifecycle lock is named in the app instead of reported as another action.
+  When another copy holds that lock, the build offer stays available for an explicit
+  retry. Engine notices appear alongside Install, and the offline screen shows a
+  refused lock. Install also refuses before any stop when a newer engine, or another build
+  of the same version, is already serving.
+- Updated dependencies [ed646a5]
+  - @claudexor/cli@4.6.1
+
 ## 4.6.0
 
 ### Patch Changes

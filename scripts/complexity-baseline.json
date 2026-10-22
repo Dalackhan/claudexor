@@ -24,7 +24,7 @@
   "packages/harness-cursor/src/index.ts": 502,
   "packages/mcp-server/src/index.ts": 570,
   "packages/orchestrator/src/attemptTelemetry.ts": 829,
-  "packages/orchestrator/src/orchestrator.ts": 7441,
+  "packages/orchestrator/src/orchestrator.ts": 7458,
   "packages/orchestrator/src/planRun.ts": 479,
   "packages/review/src/reviewEngine.ts": 1253,
   "packages/budget/src/ledger.ts": 611,

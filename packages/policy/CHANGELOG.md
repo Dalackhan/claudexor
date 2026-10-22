@@ -1,5 +1,13 @@
 # @claudexor/policy
 
+## 4.6.1
+
+### Patch Changes
+
+- @claudexor/context@4.6.1
+- @claudexor/schema@4.6.1
+- @claudexor/util@4.6.1
+
 ## 4.6.0
 
 ### Patch Changes

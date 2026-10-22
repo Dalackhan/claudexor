@@ -1,5 +1,38 @@
 # @claudexor/cli
 
+## 4.7.0
+
+### Minor Changes
+
+- 74fb275: Add `execution.auxiliaryWritableRoots`: exact caller-created service directories (a shared download cache, outside-Git scratch) an Agent run with effective `workspace_write` may also write. Admission records the canonical list in `TaskContract.access.auxiliary_writable_roots` and refuses unsafe, missing or conflicting grants with typed codes, including any overlap with the execution or source tree. Lanes negotiate it through `capability_profile.access_control.auxiliary_writable_roots` and the catalog's `accessControl.auxiliaryWritableRoots`: Codex applies it per turn through its native sandbox policy; a new turn with no roots drops the earlier grant, while `continueFrom` with no execution group inherits the predecessor's whole group. Other adapters refuse an explicit pool and drop from Auto. The CLI gains repeatable `--auxiliary-writable-root`; MCP run tools, `claudexor_thread_turn` and ACP carry the same member.
+
+### Patch Changes
+
+- Updated dependencies [74fb275]
+  - @claudexor/schema@4.7.0
+  - @claudexor/core@4.7.0
+  - @claudexor/workspace@4.7.0
+  - @claudexor/orchestrator@4.7.0
+  - @claudexor/control-api@4.7.0
+  - @claudexor/mcp-server@4.7.0
+  - @claudexor/harness-codex@4.7.0
+  - @claudexor/harness-acp@4.7.0
+  - @claudexor/harness-agy@4.7.0
+  - @claudexor/harness-claude@4.7.0
+  - @claudexor/harness-cursor@4.7.0
+  - @claudexor/harness-fake@4.7.0
+  - @claudexor/harness-opencode@4.7.0
+  - @claudexor/harness-raw-api@4.7.0
+  - @claudexor/acp-server@4.7.0
+  - @claudexor/config@4.7.0
+  - @claudexor/daemon@4.7.0
+  - @claudexor/delivery@4.7.0
+  - @claudexor/gateway@4.7.0
+  - @claudexor/review@4.7.0
+  - @claudexor/artifact-store@4.7.0
+  - @claudexor/secrets@4.7.0
+  - @claudexor/util@4.7.0
+
 ## 4.6.2
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "claudexor-benchmark-runner",
-  "version": "4.6.2",
+  "version": "4.7.0",
   "license": "MIT",
   "description": "SWE-bench Verified prediction runner (claudexor-bench): exported tasks -> claudexor agent per instance -> official-shape predictions.",
   "private": true,

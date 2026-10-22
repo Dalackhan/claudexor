@@ -1,5 +1,11 @@
 # @claudexor/synthesis
 
+## 4.7.0
+
+### Patch Changes
+
+- @claudexor/arbitration@4.7.0
+
 ## 4.6.2
 
 ### Patch Changes

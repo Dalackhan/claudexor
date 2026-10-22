@@ -410,7 +410,6 @@ struct ThreadsScreen: View {
                             model.showRemoteDirectoryBrowser(connectionID: $0)
                         },
                         onNoProject: { model.clearProject() })
-                .id([composerSelectionContext.locationID, composerSelectionContext.threadID ?? "", composerSelectionContext.repoRoot])
             if threadHasProject {
                 HarnessAccountChip(
                     current: primaryFamily,

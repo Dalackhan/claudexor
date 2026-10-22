@@ -3,69 +3,66 @@ import Darwin
 import Foundation
 
 enum ProjectCheckoutStatus: Equatable, Sendable {
-    case mainCheckout
-    case worktree(String)
+    /// Inside the checkout that holds the repository's own metadata (a clone or `git init`
+    /// folder, also with a separate Git directory). Not the main branch.
+    case primaryCheckout
+    /// Inside a registered linked worktree; the value is that worktree's root folder name.
+    case linkedWorktree(String)
     case ordinaryFolder
     case unavailable
 }
 
 /// Presentation only: this never resolves a run's execution address or changes selection.
+/// Checkout topology is hover and accessibility text; it never changes the chip's glyph or tint.
 struct ProjectCheckoutPresentation {
     let name: String
+    /// The checkout line and the selected full path; empty when no project is selected.
+    let help: String
     private let actionHelp: String
-    private let showsCheckoutHelp: Bool
-    private(set) var symbolName: String?
-    private(set) var isWorktree = false
-    private(set) var help: String
 
-    var chipHelp: String { showsCheckoutHelp ? help + "\n\n" + actionHelp : actionHelp }
-    var accessibilityValue: String { showsCheckoutHelp ? name + "\n" + help : name }
+    var chipHelp: String { help.isEmpty ? actionHelp : help + "\n\n" + actionHelp }
+    var accessibilityValue: String { help.isEmpty ? name : name + "\n" + help }
 
     init(
         context: ComposerSelectionContext, observedContext: ComposerSelectionContext?, status: ProjectCheckoutStatus?,
         metadataKnown: Bool = true, recent: [String] = [], connectionName: String? = nil
     ) {
         let path = context.repoRoot
-        let missingMetadata = context.threadID != nil && !metadataKnown
         actionHelp = context.threadID != nil
             ? "Project for this thread (bound). Pick another to start a new thread there."
-            : "Working directory for the new thread — pick a recent project or Browse…"
-        showsCheckoutHelp = !path.isEmpty || missingMetadata
-        if missingMetadata {
+            : "Project for the new thread — pick a recent project or Browse…"
+        if context.threadID != nil && !metadataKnown {
             name = "Project unavailable"
+            help = "Project metadata unavailable"
         } else if path.isEmpty {
-            name = context.threadID == nil ? "Choose project" : "No project"
+            if context.threadID != nil, let connectionName {
+                name = "\(connectionName) · No project"
+            } else {
+                name = context.threadID == nil ? "Choose project" : "No project"
+            }
+            help = ""
         } else {
             let folder = ProjectPathSelection.recentProjectLabel(path, among: recent)
             name = connectionName.map { "\($0) · \(folder)" } ?? folder
+            help = Self.checkoutLine(context: context, observedContext: observedContext, status: status) + "\n" + path
         }
-        help = "Checkout status unavailable" + (path.isEmpty ? "" : "\n" + path)
-        guard !missingMetadata else {
-            help = "Project metadata unavailable"
-            return
-        }
-        guard !path.isEmpty else { return }
+    }
+
+    /// Names the selected folder's Git role; a nested folder is "in" its checkout, not its root.
+    /// It never names the main branch or where a thread executes.
+    private static func checkoutLine(
+        context: ComposerSelectionContext, observedContext: ComposerSelectionContext?, status: ProjectCheckoutStatus?
+    ) -> String {
         guard context.locationID == ExecutionLocationID.local.rawValue else {
-            help = "Checkout status unavailable on remote host\n\(path)"
-            return
+            return "Git checkout status unavailable on remote host"
         }
-        if observedContext == nil, status == nil {
-            help = "Checking checkout…\n\(path)"
-            return
-        }
-        guard observedContext == context, let status else { return }
+        if observedContext == nil, status == nil { return "Checking Git checkout…" }
+        guard observedContext == context, let status else { return "Git checkout status unavailable" }
         switch status {
-        case .mainCheckout:
-            symbolName = "arrow.triangle.branch"
-            help = "Main checkout: \(path)"
-        case .worktree(let name):
-            symbolName = "arrow.triangle.branch"
-            isWorktree = true
-            help = "Worktree: \(name)\n\(path)"
-        case .ordinaryFolder:
-            help = "Folder: \(path)"
-        case .unavailable:
-            break
+        case .primaryCheckout: return "In a primary Git checkout"
+        case .linkedWorktree(let root): return "In the linked Git worktree “\(root)”"
+        case .ordinaryFolder: return "Not in a Git checkout"
+        case .unavailable: return "Git checkout status unavailable"
         }
     }
 }
@@ -149,7 +146,7 @@ enum ProjectPathSelection {
         do {
             _ = try FileManager.default.attributesOfItem(atPath: commonPointer.path)
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
-            return isRepository(admin) ? .mainCheckout : .unavailable
+            return isRepository(admin) ? .primaryCheckout : .unavailable
         } catch {
             return .unavailable
         }
@@ -162,7 +159,7 @@ enum ProjectPathSelection {
               backlink.path == marker.resolvingSymlinksInPath().path,
               isRepository(common), hasValidHead(admin)
         else { return .unavailable }
-        return .worktree(checkout.lastPathComponent)
+        return .linkedWorktree(checkout.lastPathComponent)
     }
 
     private static func isRepository(_ directory: URL) -> Bool {
@@ -171,18 +168,14 @@ enum ProjectPathSelection {
             && hasValidHead(directory)
     }
 
-    /// Check HEAD syntax only: an unborn symbolic ref need not resolve to an object.
+    /// Git's own repository-discovery rule for HEAD: a `ref:` into `refs/` (an unborn branch need
+    /// not resolve, and the reftable format's `refs/heads/.invalid` placeholder qualifies) or a
+    /// detached 40/64-hex object id. Unlike Git, the value must be one token on one line.
     private static func hasValidHead(_ directory: URL) -> Bool {
         guard let head = metadataText(directory.appendingPathComponent("HEAD")) else { return false }
         if head.hasPrefix("ref:") {
-            let reference = String(head.dropFirst(4)).trimmingCharacters(in: .whitespaces)
-            let componentsValid = reference.split(separator: "/", omittingEmptySubsequences: false).allSatisfy {
-                !$0.isEmpty && !$0.hasPrefix(".") && !$0.hasSuffix(".lock")
-            }
-            return reference.hasPrefix("refs/") && !reference.hasSuffix(".")
-                && !reference.contains("..") && !reference.contains("@{")
-                && componentsValid
-                && reference.utf8.allSatisfy { $0 > 32 && $0 != 127 && ![126, 94, 58, 63, 42, 91, 92].contains($0) }
+            let reference = head.dropFirst(4).trimmingCharacters(in: .whitespaces)
+            return reference.hasPrefix("refs/") && reference.utf8.allSatisfy { $0 > 32 && $0 != 127 }
         }
         return (head.utf8.count == 40 || head.utf8.count == 64) && head.utf8.allSatisfy {
             (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0)

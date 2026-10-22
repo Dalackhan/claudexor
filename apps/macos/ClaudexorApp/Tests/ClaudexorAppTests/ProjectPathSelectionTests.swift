@@ -1,3 +1,4 @@
+import ClaudexorKit
 import Foundation
 import Testing
 @testable import ClaudexorApp
@@ -12,7 +13,7 @@ import Testing
         var checkout = URL(fileURLWithPath: #filePath)
         for _ in 0..<6 { checkout.deleteLastPathComponent() }
         #expect(fixture.root.deletingLastPathComponent().path
-            == checkout.appendingPathComponent("tmp").resolvingSymlinksInPath().path)
+            == checkout.appendingPathComponent(".build/test-fixtures").resolvingSymlinksInPath().path)
     }
 
     @Test func uniqueBasenamesStayQuiet() {
@@ -84,8 +85,8 @@ import Testing
         let head = main.appendingPathComponent(".git/HEAD")
         let config = main.appendingPathComponent(".git/config")
         let before = try [Data(contentsOf: head), Data(contentsOf: config)]
-        #expect(fixture.status(main) == .mainCheckout)
-        #expect(fixture.status(nested) == .mainCheckout)
+        #expect(fixture.status(main) == .primaryCheckout)
+        #expect(fixture.status(nested) == .primaryCheckout)
         #expect(try [Data(contentsOf: head), Data(contentsOf: config)] == before)
     }
 
@@ -108,7 +109,7 @@ import Testing
         let admin = try fixture.adminDirectory(for: linked)
         try Data("garbage\n".utf8).write(to: admin.appendingPathComponent("HEAD"))
         #expect(fixture.status(linked) == .unavailable)
-        #expect(fixture.status(fixture.root.appendingPathComponent("primary checkout")) == .mainCheckout)
+        #expect(fixture.status(fixture.root.appendingPathComponent("primary checkout")) == .primaryCheckout)
     }
 
     @Test func registeredWorktreeWithMalformedCommonRepositoryHeadIsUnavailable() throws {
@@ -121,7 +122,8 @@ import Testing
         #expect(fixture.status(linked) == .unavailable)
     }
 
-    @Test(arguments: ["ref: refs/heads/unborn\n", "ref:\trefs/heads/feature/topic\n",
+    // Git's own discovery accepts any `ref:` into refs/, including reftable's placeholder.
+    @Test(arguments: ["ref: refs/heads/unborn\n", "ref:\trefs/heads/feature/topic\n", "ref: refs/heads/.invalid\n",
                       String(repeating: "a", count: 40) + "\n", String(repeating: "B", count: 64) + "\n"])
     func validSymbolicAndDetachedHeadsRemainSupported(head: String) throws {
         let fixture = try CheckoutFixture()
@@ -131,8 +133,8 @@ import Testing
         let admin = try fixture.adminDirectory(for: linked)
         try Data(head.utf8).write(to: main.appendingPathComponent(".git/HEAD"))
         try Data(head.utf8).write(to: admin.appendingPathComponent("HEAD"))
-        #expect(fixture.status(main) == .mainCheckout)
-        #expect(fixture.status(linked) == .worktree("linked checkout"))
+        #expect(fixture.status(main) == .primaryCheckout)
+        #expect(fixture.status(linked) == .linkedWorktree("linked checkout"))
     }
 
     @Test func linkedDetachedWorktreeWithSpacesAndItsSubdirectoryAreDetected() throws {
@@ -142,8 +144,8 @@ import Testing
         let nested = try fixture.directory("linked checkout/source/nested")
         let marker = linked.appendingPathComponent(".git")
         let before = try Data(contentsOf: marker)
-        #expect(fixture.status(linked) == .worktree("linked checkout"))
-        #expect(fixture.status(nested) == .worktree("linked checkout"))
+        #expect(fixture.status(linked) == .linkedWorktree("linked checkout"))
+        #expect(fixture.status(nested) == .linkedWorktree("linked checkout"))
         #expect(try Data(contentsOf: marker) == before)
     }
 
@@ -153,7 +155,7 @@ import Testing
         let linked = try fixture.linkedWorktree()
         let alias = fixture.root.appendingPathComponent("checkout alias")
         try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: linked)
-        #expect(fixture.status(alias) == .worktree("linked checkout"))
+        #expect(fixture.status(alias) == .linkedWorktree("linked checkout"))
     }
 
     @Test func relativeGitdirAndCommonDirPointersAreSupported() throws {
@@ -165,7 +167,7 @@ import Testing
         try Data("gitdir: \(relativeAdmin)\n".utf8).write(to: linked.appendingPathComponent(".git"))
         // Git's native fixture already uses ../.. for commondir.
         #expect(try String(contentsOf: admin.appendingPathComponent("commondir"), encoding: .utf8) == "../..\n")
-        #expect(fixture.status(linked) == .worktree("linked checkout"))
+        #expect(fixture.status(linked) == .linkedWorktree("linked checkout"))
     }
 
     @Test func separateGitDirectoryIsAPrimaryCheckoutNotALinkedWorktree() throws {
@@ -175,7 +177,71 @@ import Testing
         let metadata = fixture.root.appendingPathComponent("separate metadata")
         try fixture.git(["init", "--template=", "--initial-branch=main",
                          "--separate-git-dir", metadata.path, main.path])
-        #expect(fixture.status(main) == .mainCheckout)
+        #expect(fixture.status(main) == .primaryCheckout)
+    }
+
+    @Test func reftableCheckoutsAreRecognizedFromGitsDiscoveryPlaceholder() throws {
+        let fixture = try CheckoutFixture()
+        defer { fixture.cleanUp() }
+        let linked = try fixture.linkedWorktree(refFormat: "reftable")
+        let main = fixture.root.appendingPathComponent("primary checkout")
+        let admin = try fixture.adminDirectory(for: linked)
+        // Refs live in reftable/; HEAD is a placeholder Git writes only to stay discoverable.
+        for head in [main.appendingPathComponent(".git/HEAD"), admin.appendingPathComponent("HEAD")] {
+            #expect(try String(contentsOf: head, encoding: .utf8) == "ref: refs/heads/.invalid\n")
+        }
+        #expect(fixture.status(main) == .primaryCheckout)
+        #expect(fixture.status(try fixture.directory("primary checkout/source/nested")) == .primaryCheckout)
+        #expect(fixture.status(linked) == .linkedWorktree("linked checkout"))
+        #expect(fixture.status(try fixture.directory("linked checkout/source/nested")) == .linkedWorktree("linked checkout"))
+    }
+
+    @Test(arguments: ["files", "reftable"])
+    func classificationLeavesEveryFixtureEntryUnchanged(refFormat: String) throws {
+        let fixture = try CheckoutFixture()
+        defer { fixture.cleanUp() }
+        let linked = try fixture.linkedWorktree(refFormat: refFormat)
+        let folders = [
+            fixture.root.appendingPathComponent("primary checkout"), linked,
+            try fixture.directory("primary checkout/source/nested"), try fixture.directory("linked checkout/nested"),
+        ]
+        let before = try fixture.entries()
+        #expect(before.keys.contains("primary checkout/.git/index"))
+        for folder in folders { #expect(fixture.status(folder) != .unavailable) }
+        // No index, ref, lock or content change, and no entry created or removed in any directory.
+        #expect(try fixture.entries() == before)
+    }
+
+    /// The chip resets observation per selection identity; this replays its states with real
+    /// classifier results, so a late or stale observation can never label another selection.
+    @Test func switchingSelectionsAndRemovingAFolderNeverReusesAnotherObservation() throws {
+        let fixture = try CheckoutFixture()
+        defer { fixture.cleanUp() }
+        let linked = try fixture.linkedWorktree()
+        let ordinary = try fixture.directory("ordinary folder")
+        let local = ExecutionLocationID.local.rawValue
+        let a = ComposerSelectionContext(locationID: local, threadID: "a", repoRoot: linked.path)
+        let b = ComposerSelectionContext(locationID: local, threadID: nil, repoRoot: ordinary.path)
+        let remoteA = ComposerSelectionContext(
+            locationID: "ssh:11111111-1111-4111-8111-111111111111", threadID: "a", repoRoot: linked.path)
+        func help(_ selected: ComposerSelectionContext, _ observed: ComposerSelectionContext?,
+                  _ status: ProjectCheckoutStatus?) -> String {
+            ProjectCheckoutPresentation(context: selected, observedContext: observed, status: status).help
+        }
+
+        let aStatus = fixture.status(linked)
+        #expect(help(a, a, aStatus) == "In the linked Git worktree “linked checkout”\n\(linked.path)")
+        #expect(help(b, a, aStatus) == "Git checkout status unavailable\n\(ordinary.path)")
+        let bStatus = fixture.status(ordinary)
+        #expect(help(b, b, bStatus) == "Not in a Git checkout\n\(ordinary.path)")
+        #expect(help(a, b, bStatus) == "Git checkout status unavailable\n\(linked.path)")
+        #expect(help(a, a, fixture.status(linked)) == "In the linked Git worktree “linked checkout”\n\(linked.path)")
+        #expect(help(remoteA, a, aStatus) == "Git checkout status unavailable on remote host\n\(linked.path)")
+
+        try FileManager.default.removeItem(at: linked)
+        let removed = fixture.status(linked)
+        #expect(removed == .unavailable)
+        #expect(help(a, a, removed) == "Git checkout status unavailable\n\(linked.path)")
     }
 
     @Test(arguments: ["not a gitdir pointer\n", "gitdir: missing metadata\n", "gitdir: .\n"])
@@ -221,7 +287,7 @@ import Testing
         try Data(contentsOf: linked.appendingPathComponent(".git"))
             .write(to: fake.appendingPathComponent(".git"))
         #expect(fixture.status(fake) == .unavailable)
-        #expect(fixture.status(linked) == .worktree("linked checkout"))
+        #expect(fixture.status(linked) == .linkedWorktree("linked checkout"))
     }
 
     @Test func unrelatedCommonDirectoryAndBrokenBacklinkAreUnavailable() throws {
@@ -257,7 +323,7 @@ private struct CheckoutFixture {
     init() throws {
         var checkout = URL(fileURLWithPath: #filePath)
         for _ in 0..<6 { checkout.deleteLastPathComponent() }
-        let scratch = checkout.appendingPathComponent("tmp").resolvingSymlinksInPath()
+        let scratch = checkout.appendingPathComponent(".build/test-fixtures").resolvingSymlinksInPath()
         root = scratch.appendingPathComponent("checkout-provenance-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
@@ -281,18 +347,42 @@ private struct CheckoutFixture {
             for: folder.path, isLocal: isLocal, searchBoundary: root.path)
     }
 
-    func repository(_ name: String) throws -> URL {
+    func repository(_ name: String, refFormat: String? = nil) throws -> URL {
         let target = try directory(name)
-        try git(["init", "--template=", "--initial-branch=main", target.path])
+        let format = refFormat.map { ["--ref-format=\($0)"] } ?? []
+        try git(["init", "--template=", "--initial-branch=main"] + format + [target.path])
         return target
     }
 
-    func linkedWorktree() throws -> URL {
-        let main = try repository("primary checkout")
+    func linkedWorktree(refFormat: String? = nil) throws -> URL {
+        let main = try repository("primary checkout", refFormat: refFormat)
         try git(["-C", main.path, "commit", "--allow-empty", "--no-verify", "--no-gpg-sign", "-m", "Fixture"])
         let linked = root.appendingPathComponent("linked checkout")
         try git(["-C", main.path, "worktree", "add", "--detach", linked.path, "HEAD"])
         return linked
+    }
+
+    /// Each entry's mode, inode, size, modification time and regular-file bytes. Creating and
+    /// removing a lock file still changes its directory's modification time.
+    func entries() throws -> [String: String] {
+        let base = root.resolvingSymlinksInPath().path
+        let walker = try #require(FileManager.default.enumerator(atPath: base))
+        var result = ["": try entry(base)]
+        for case let relative as String in walker {
+            result[relative] = try entry(base + "/" + relative)
+        }
+        return result
+    }
+
+    private func entry(_ path: String) throws -> String {
+        var info = stat()
+        try #require(lstat(path, &info) == 0, "lstat failed: \(path)")
+        var value = "\(info.st_mode) \(info.st_ino) \(info.st_size) "
+            + "\(info.st_mtimespec.tv_sec).\(info.st_mtimespec.tv_nsec)"
+        if info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) {
+            value += " " + (try Data(contentsOf: URL(fileURLWithPath: path))).base64EncodedString()
+        }
+        return value
     }
 
     func adminDirectory(for linked: URL) throws -> URL {

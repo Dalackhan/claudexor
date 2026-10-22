@@ -82,7 +82,7 @@ struct AccentButtonStyle: ButtonStyle {
 
 // MARK: - Project chip (composer: choose the working directory / project)
 
-/// The composer's project picker (issue #8). Shows the working directory and lets
+/// The composer's project picker (issue #8). Shows the selected project and lets
 /// you switch it from an MRU menu or Browse… A thread's repo is bound, so the chip
 /// is informational on an open thread and choosing another project starts a NEW
 /// draft thread there (the model owns that semantics).
@@ -108,18 +108,21 @@ struct ProjectChip: View {
     var body: some View {
         let remote = remoteConnections.first { ExecutionLocationID.remote($0.id).rawValue == context.locationID }
         let labelRecents = context.locationID == ExecutionLocationID.local.rawValue ? recent : remote?.savedProjects ?? []
+        let probe = ProjectCheckoutProbe(context: context, refresh: checkoutRefresh)
+        // Until this selection's probe publishes, a previous selection's result reads as not yet checked.
+        let observed = checkout?.context == context ? checkout : nil
         let presentation = ProjectCheckoutPresentation(
-            context: context, observedContext: checkout?.context, status: checkout?.status,
+            context: context, observedContext: observed?.context, status: observed?.status,
             metadataKnown: metadataKnown, recent: labelRecents, connectionName: remote?.displayName)
         return ChipMenu(
             tint: hasProject ? Color.secondary : Theme.accent,
             fill: .outlined(stroke: hasProject ? Theme.separator : Theme.accent.opacity(0.5)),
             help: presentation.chipHelp
         ) {
-            Image(systemName: presentation.symbolName ?? (hasProject ? "folder.fill" : "folder.badge.questionmark"))
+            // Constant glyph in the chip's tint: checkout topology lives only in help and the AX value.
+            Image(systemName: hasProject ? "folder.fill" : "folder.badge.questionmark")
                 .imageScale(.small)
                 .frame(width: 14, height: 14)
-                .foregroundStyle(presentation.isWorktree || !hasProject ? Theme.accent : Color.secondary)
                 .accessibilityHidden(true)
             Text(presentation.name).lineLimit(1)
         } menu: {
@@ -176,18 +179,16 @@ struct ProjectChip: View {
         .accessibilityLabel("Project")
         .accessibilityValue(presentation.accessibilityValue)
         .onHover { inside in
-            guard inside, context.locationID == ExecutionLocationID.local.rawValue,
-                  !context.repoRoot.isEmpty else { return }
+            guard inside, probe.localPath != nil else { return }
             // Refresh on inspection, including a folder removed since selection. No lasting cache.
             checkout = nil
             checkoutRefresh &+= 1
         }
-        .task(id: checkoutRefresh) {
-            let selected = context
-            guard selected.locationID == ExecutionLocationID.local.rawValue,
-                  !selected.repoRoot.isEmpty else { return }
+        // A new selection restarts only this probe, never the chip, so focus stays on the menu after a pick.
+        .task(id: probe) {
+            // Cleared for every selection, so a remote or no-project hop cannot resurrect older evidence.
             checkout = nil
-            let path = selected.repoRoot
+            guard let path = probe.localPath else { return }
             let worker = Task.detached(priority: .utility) {
                 ProjectPathSelection.checkoutStatus(for: path, isLocal: true)
             }
@@ -197,8 +198,20 @@ struct ProjectChip: View {
                 worker.cancel()
             }
             guard !Task.isCancelled else { return }
-            checkout = (selected, status)
+            checkout = (probe.context, status)
         }
+    }
+}
+
+/// The chip's checkout-probe identity: the complete selection plus an explicit refresh.
+struct ProjectCheckoutProbe: Equatable {
+    let context: ComposerSelectionContext
+    let refresh: Int
+
+    /// Only a local selected folder is observed; remote hosts and no-project selections never are.
+    var localPath: String? {
+        context.locationID == ExecutionLocationID.local.rawValue && !context.repoRoot.isEmpty
+            ? context.repoRoot : nil
     }
 }
 

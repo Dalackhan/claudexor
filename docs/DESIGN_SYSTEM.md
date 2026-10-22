@@ -841,7 +841,7 @@ views in the shared design-system files; screens compose them.
     until-clean, create and delegate are Agent STRATEGY knobs and Council is a
     Plan knob — all in the "⋯" popover, never intents; Spec and deep-scan are
     not intents),
-    the `ProjectChip` (the working directory — MRU recent + Browse…; sets the new
+    the `ProjectChip` (the project — MRU recent + Browse…; sets the new
     thread's project, an open thread's repo is bound; the ONLY place project
     selection lives in the app), the `HarnessAccountChip` (which
     harness answers in chat + the thread's account, sticky on the thread), the composite **`AccessChip`**
@@ -1330,7 +1330,7 @@ views in the shared design-system files; screens compose them.
   tabs, not top-level screens. (Review is inline per turn, not a Settings
   section; delivery is server-owned via the run decision/apply endpoints.)
   Settings groups are flat, solid, and shadowless. Settings does NOT own
-  project selection — there is no Current Project field; the working directory
+  project selection — there is no Current Project field; the project
   is picked only in the chat composer's `ProjectChip`. Global and per-harness
   Settings **auto-save** exact partial `/settings` patches by logical field lane;
   there is no Save button. Discrete controls save immediately. Text and numeric
@@ -1457,7 +1457,7 @@ DesignSystemComponents.swift, DesignTokens.swift.)
   user's mental model). The accessible NAME is the short, stable
   "Conversation message" — never the punctuation-heavy placeholder. One owner
   (`ComposerInputCopy`); surfaces read it, never re-phrase it.
-- **`ProjectChip`** — the composer's working-directory picker. Capsule (logo + folder
+- **`ProjectChip`** — the composer's project picker. Capsule (logo + folder
   name + chevron) opening a `Menu` of MRU recents (`model.recentProjects`, persisted) +
   "Browse…" (`NSOpenPanel`). In the draft state it sets the new thread's project; an
   open thread's repo is bound, so picking another project starts a new draft there.
@@ -1473,29 +1473,46 @@ DesignSystemComponents.swift, DesignTokens.swift.)
   `/work/red/app` / `/work/blue/app`). Unique names stay short. Local recents
   and each remote connection's saved folders are compared separately; menu
   rows keep full-path help. `ProjectCheckoutPresentation` owns the chip's name,
-  help and accessibility value. The existing icon slot stays fixed at 14 × 14 points:
+  help and accessibility value. The glyph never encodes Git topology: a
+  selected project always shows the ordinary folder in the chip's secondary
+  tint, and no project or unavailable thread metadata keeps the choose-project
+  folder in the existing accent treatment, in a fixed 14 × 14 point slot. Hover
+  help gives one checkout line, the selected full path, then the picker action;
+  the accessibility value gives the name, then the same line and path:
 
-  | State | Icon / tone | Hover and accessibility value |
-  |---|---|---|
-  | Initial / no project | Choose-project folder / existing accent treatment | Existing picker action; no previous checkout path |
-  | Selected thread metadata unavailable | Choose-project folder / existing accent treatment | Project unavailable; project metadata unavailable, with no draft or previous path |
-  | Loading local checkout | Folder / secondary | Checking checkout and the selected full path |
-  | Main Git checkout | Branch / secondary | Main checkout and the selected full path |
-  | Linked Git worktree | Branch / accent | Worktree name and the selected full path |
-  | Ordinary folder | Folder / secondary | Folder and the selected full path |
-  | Unavailable | Folder / secondary | Checkout status unavailable and only the current path, when known |
-  | Remote | Folder / secondary | Remote checkout status unavailable and the remote path; the chip retains its connection prefix |
+  | State | Checkout line |
+  |---|---|
+  | Loading local checkout | Checking Git checkout… |
+  | Folder inside a primary Git checkout | In a primary Git checkout |
+  | Folder inside a linked Git worktree | In the linked Git worktree “worktree folder name” |
+  | No Git checkout from the folder up to `/` | Not in a Git checkout |
+  | Missing folder, or metadata unreadable or not recognized | Git checkout status unavailable |
+  | Remote | Git checkout status unavailable on remote host; the chip keeps its connection prefix |
+  | Selected thread metadata unavailable | Project metadata unavailable, with no draft or previous path |
+  | Initial / no project | No checkout line; only the picker action |
 
-  The branch symbol replaces the folder glyph; it adds no permanent status text
-  or popup. The menu's accessible name is `Project`, with dynamic selection
-  and checkout details in its value. Read-only local metadata observation runs
-  off-main, validates Git common-directory membership and its reciprocal
-  checkout backlink plus symbolic-reference or 40/64-hex HEAD syntax, and
-  refreshes when the chip appears or is hovered. A selection identity change
-  resets observation; cancelled completions cannot
-  publish into the new selection. Remote selections never trigger local
-  filesystem observation. Checkout identity does not imply a thread's execution
-  address or change its workspace selection.
+  The primary checkout is the one holding the repository's own metadata (a
+  clone or `git init` folder, also with a separate Git directory); it never
+  means the main branch. A nested folder is in its checkout, not its root. No
+  line names the execution root: an isolated or delegated thread can run in
+  another tree, which the window subtitle discloses (INV-073). The menu's
+  accessible name is `Project`, with dynamic selection and checkout details in
+  its value. Read-only local metadata observation runs off-main, validates Git
+  common-directory membership and its reciprocal checkout backlink, and accepts
+  HEAD by Git's own discovery rule: a `ref:` into `refs/` (an unborn branch, or
+  the reftable format's placeholder) or a 40/64-hex detached id. It refreshes
+  when the chip appears or is hovered, and when the selected location, thread
+  or folder changes. A selection change restarts only that observation, never
+  the chip, so keyboard and VoiceOver focus stay on the menu after a pick; the
+  previous result is never shown for the new selection, and cancelled
+  completions cannot publish into it. Changes to Git or the filesystem under
+  the same selection are not watched: details may stay stale until one of those
+  refresh triggers, including for keyboard and VoiceOver users. Metadata calls
+  are synchronous off-main; an unavailable volume can delay a probe, and
+  cancellation cannot interrupt an already blocked filesystem call.
+  Remote selections never trigger local filesystem observation. Checkout
+  identity does not imply a thread's execution address or change its workspace
+  selection.
   A selected thread's matching detail or location-scoped summary establishes
   whether its project metadata is known. Missing metadata never becomes
   `No project`; a confirmed scopeless thread retains that label.

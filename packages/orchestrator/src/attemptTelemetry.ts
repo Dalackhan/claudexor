@@ -22,6 +22,7 @@ import { redactSecrets } from "@claudexor/util";
 import * as belt from "./delegationToolEvidence.js";
 import * as marks from "./attemptOutputMarkers.js";
 import { observeProcessing, type ProcessingTelemetry } from "./processing-telemetry.js";
+import { observePromptCacheTtl, type PromptCacheTelemetry } from "./prompt-cache-telemetry.js";
 import {
   type TransientFailureObservation,
   classifyCompletedCrash,
@@ -90,7 +91,7 @@ export interface DelegationBeltState {
   toolEvidence: boolean;
 }
 
-export interface AttemptTelemetry extends ProcessingTelemetry {
+export interface AttemptTelemetry extends ProcessingTelemetry, PromptCacheTelemetry {
   requestRefusal?: HarnessRequestRefusal;
   effortResolution?: EffortResolution;
   requestRequirements: RequestRequirementResolution[];
@@ -283,6 +284,7 @@ function bumpWebVerification(t: AttemptTelemetry, retrieval: string | undefined)
 export function observeAttemptTelemetry(t: AttemptTelemetry, ev: HarnessEvent): void {
   if (ev.type === "error" && ev.request_refusal) t.requestRefusal = ev.request_refusal;
   observeProcessing(t, ev);
+  observePromptCacheTtl(t, ev);
   if (ev.effort_resolution) t.effortResolution = ev.effort_resolution;
   marks.observeAttemptOutputMarkers(t.outputMarkers, ev);
   // Delegation belt readiness (QA-024): normalized startup/error events carry
@@ -673,6 +675,7 @@ export function attemptTelemetryRecord(
     request_refusal: t.requestRefusal,
     processing: t.processing,
     processing_cost_basis: t.processingCostBasis,
+    prompt_cache_ttl: t.promptCacheTtl,
     attempt_id: attemptId,
     harness_id: harnessId,
     observed_model: t.observedModel,

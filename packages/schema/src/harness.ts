@@ -28,6 +28,7 @@ import {
   ProcessingReceipt,
   UsageCostBasis,
 } from "./processing.js";
+import { PromptCacheTtl, PromptCacheTtlReceipt, PromptCacheTtlSupport } from "./prompt-cache.js";
 import { AuthCapabilities } from "./platform-auth.js";
 import { InteractionRequest, LiveInputCapability } from "./harness-interaction.js";
 import {
@@ -410,10 +411,11 @@ export const HarnessCapabilityProfile = z
      * answers `unsupported` without a native write when this is none.
      */
     live_input: LiveInputCapability.default("none"),
+    prompt_cache_ttls: PromptCacheTtlSupport,
   })
   .default({})
   .describe(
-    "Structured per-harness facts the engine consumes: auth routing, isolation containment, readonly mechanism, finite attachment inputs, MCP injection, and live input into a running session.",
+    "Structured per-harness facts the engine consumes: auth routing, isolation containment, readonly mechanism, finite attachment inputs, MCP injection, live input into a running session, and translated prompt-cache lifetimes.",
   );
 export type HarnessCapabilityProfile = z.infer<typeof HarnessCapabilityProfile>;
 
@@ -547,6 +549,7 @@ export type ExtraMcpServer = z.infer<typeof ExtraMcpServer>;
 export const HarnessRunSpec = z
   .object({
     processing_preference: ProcessingPreference.optional(),
+    prompt_cache_ttl: PromptCacheTtl.optional(),
     processing: ProcessingReceipt.optional().describe(
       "Prepared native service choice for this exact attempt.",
     ),
@@ -732,6 +735,7 @@ export const HarnessEvent = z
     effort_resolution: EffortResolution.optional(),
     processing: ProcessingReceipt.optional(),
     processing_cost_basis: ProcessingCostBasis.optional(),
+    prompt_cache_ttl: PromptCacheTtlReceipt.optional(),
     type: z
       .enum([
         "started",

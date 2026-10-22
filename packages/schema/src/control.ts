@@ -47,6 +47,7 @@ import { RuntimeConcurrencyState } from "./runtime-concurrency.js";
 import { RunContinuityReceipt, RunResumable } from "./run-continuity.js";
 import { ContinueCarrierPreference, ControlRetainedEnvelope } from "./run-continuation.js";
 import { ProcessingPreference } from "./processing.js";
+import { PromptCacheTtl } from "./prompt-cache.js";
 export { RunExecution } from "./control-run-execution.js";
 export { ControlTimelineEvent } from "./control-timeline.js";
 export const ControlReviewerPanelEntry = z
@@ -120,6 +121,7 @@ export const ControlRunStartRequest = z
       ),
     effort: EffortHint.optional().describe("Requested reasoning effort."),
     processingPreference: ProcessingPreference.optional(),
+    promptCacheTtl: PromptCacheTtl.optional(),
     /** Harness-scoped effort map (harness id → effort). Specific beats general:
      * an entry here wins over the scalar `effort` and the per-harness settings
      * default, analogous to `models`. Exact Retry replays the frozen
@@ -241,7 +243,7 @@ export const ControlRunStartRequest = z
       "Server-owned Exact Retry lineage; direct POST /runs rejects it.",
     ),
     continueFrom: Id.optional().describe(
-      "Continue a terminal predecessor run owned by this daemon; one accepted successor per predecessor. Omitted mode, scope, execution, harness and model come from the predecessor; prompt is the continuation text and may be empty.",
+      "Continue a terminal predecessor run owned by this daemon; one accepted successor per predecessor. Omitted mode, scope, execution, harness, model and promptCacheTtl come from the predecessor; prompt is the continuation text and may be empty.",
     ),
     continueCarrier: ContinueCarrierPreference.optional().describe(
       "Carrier preference for continueFrom; omitted = auto.",

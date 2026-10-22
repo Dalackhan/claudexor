@@ -11,7 +11,7 @@ import {
   TaskContract,
   restoreRecordedRunReviewRequest,
 } from "@claudexor/schema";
-import type { EffortHint, ProcessingPreference } from "@claudexor/schema";
+import type { EffortHint, ProcessingPreference, PromptCacheTtl } from "@claudexor/schema";
 import type {
   DaemonControlApiOptions,
   DaemonFacadeClient,
@@ -109,6 +109,9 @@ async function exactRetry(
       ...(frozen.efforts ? { efforts: { ...frozen.efforts, ...(original.efforts ?? {}) } } : {}),
       ...(original.processingPreference === undefined && frozen.processingPreference !== undefined
         ? { processingPreference: frozen.processingPreference }
+        : {}),
+      ...(original.promptCacheTtl === undefined && frozen.promptCacheTtl !== undefined
+        ? { promptCacheTtl: frozen.promptCacheTtl }
         : {}),
       parentRunId: source.runId ?? source.id,
       retryOf: source.runId ?? source.id,
@@ -405,6 +408,7 @@ function readFrozenRouting(source: DaemonRunRecord): {
   models?: Record<string, string>;
   efforts?: Record<string, EffortHint>;
   processingPreference?: ProcessingPreference;
+  promptCacheTtl?: PromptCacheTtl;
 } {
   if (!source.runDir) return {};
   let contract: TaskContract;
@@ -426,6 +430,9 @@ function readFrozenRouting(source: DaemonRunRecord): {
     ...(efforts ? { efforts } : {}),
     ...(contract.processing_preference !== undefined
       ? { processingPreference: contract.processing_preference }
+      : {}),
+    ...(contract.prompt_cache_ttl !== undefined
+      ? { promptCacheTtl: contract.prompt_cache_ttl }
       : {}),
   };
 }

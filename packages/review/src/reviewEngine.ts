@@ -92,6 +92,7 @@ export interface ReviewerSpec {
   processingPreference?: ProcessingPreference;
   processing?: PreparedHarnessProcessing;
   processingAllowPaid?: boolean;
+  promptCacheTtl?: HarnessRunSpec["prompt_cache_ttl"];
   authPreference?: AuthPreference | null;
   /** Exact resolved profile (null = pool/default); `profilePinned: false` = the pool chose it. */
   credentialProfile?: CredentialProfile | null;
@@ -520,6 +521,7 @@ export async function reviewCandidate(input: ReviewCandidateInput): Promise<Revi
         processing: reviewer.processing?.receipt,
         processing_cost_basis: reviewer.processing?.costBasis,
         processing_allow_paid: reviewer.processingAllowPaid,
+        prompt_cache_ttl: reviewer.promptCacheTtl,
         auth_preference: reviewer.authPreference ?? "auto",
         credential_profile: reviewer.credentialProfile ?? null,
         env_inheritance: input.envInheritance ?? "mirror_native",

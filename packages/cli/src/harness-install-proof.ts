@@ -112,6 +112,8 @@ function proveVersion(
     encoding: "utf8",
     timeout: VERSION_PROBE_TIMEOUT_MS,
     maxBuffer: VERSION_PROBE_MAX_BYTES,
+    // A captured probe: no console window for the direct child on Windows.
+    windowsHide: true,
   });
   if (versionResult.status !== 0) {
     return {

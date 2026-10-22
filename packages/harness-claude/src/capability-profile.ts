@@ -87,6 +87,9 @@ export const CLAUDE_CAPABILITY_PROFILE: HarnessCapabilityProfile =
     // final text runs as the next native turn of the same process. Recorded on
     // Claude Code 2.1.283 (fixtures/stream-json/recorded-live-*-2.1.283.jsonl).
     live_input: "next_tool_boundary",
+    // CLAUDE_CODE_PROMPT_CACHE_TTL + CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL
+    // (Claude Code 2.1.242+), set together by prompt-cache.ts.
+    prompt_cache_ttls: ["5m", "1h"],
     attachment_inputs: [
       {
         kind: "image",

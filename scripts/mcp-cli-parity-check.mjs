@@ -230,6 +230,8 @@ const CLI_ONLY_EXEMPT = {
     "structured CLI spelling of reviewerPanel; MCP carries the same entries as JSON objects, including credentialProfileId, rather than exposing a second flag",
   "max-turns":
     "per-run turn cap; embedder contract is CLI/HTTP-first, MCP exposure deferred (DT2.1-1)",
+  "prompt-cache-ttl":
+    "native prompt-cache lifetime; embedder contract is CLI/HTTP-first and delegation-belt children inherit the parent's captured value, so no MCP argument is exposed",
   "prompt-file":
     "terminal input plumbing (file/stdin prompt sources); MCP callers pass the prompt inline",
   target:

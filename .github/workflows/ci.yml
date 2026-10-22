@@ -73,6 +73,8 @@ jobs:
           browser="$RUNNER_TEMP/linux-materialized-browser"
           node --input-type=module -e 'import { copyTreeMaterialized } from "./scripts/lib/remote-runtime-archive.mjs"; copyTreeMaterialized(process.argv[1], process.argv[2]);' "$resources/browser-mcp-runtime" "$browser"
           node "$browser/dist/browser-mcp-launcher.js" --help
+          # The bundles' Windows background preload ships in this deployed core.
+          node --require "$browser/dist/windows-quiet-children.cjs" -e 'process.exit(0)'
 
       - name: Typecheck (packages + tests + scripts)
         run: pnpm typecheck && pnpm typecheck:tests
@@ -299,6 +301,7 @@ jobs:
           packages/core/src/process-identity.test.ts
           packages/core/src/process-tree.test.ts
           packages/core/src/proc-windows-hide.test.ts
+          packages/core/src/windows-quiet-children.test.ts
           packages/core/src/capabilities.test.ts
           packages/core/src/win32-conpty-helper.test.ts
           packages/harness-agy/src/conformance.test.ts

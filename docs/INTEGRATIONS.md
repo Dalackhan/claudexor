@@ -65,6 +65,15 @@ A confirmed processing refusal may authorize a separate caller-owned Standard
 request/reservation; it does not erase the first operation's physical dispatch
 or permit retrying an unknown outcome.
 
+The native prompt-cache lifetime is the optional `promptCacheTtl` run control.
+Send `5m` or `1h` only when the routed harness row of `GET /v2/agent-capabilities`
+lists that exact value in `promptCacheTtls`; omit the key for Default, and for
+engines whose catalog lacks it, because the run and thread-turn requests are
+strict. Continuations follow the `continueFrom` inheritance rule in
+[ARCHITECTURE](ARCHITECTURE.md#7-control-api). Read the requested, configured and observed facts from the
+attempt receipt described in [ARCHITECTURE](ARCHITECTURE.md#prompt-cache-lifetime);
+a configured lifetime is not proof that the provider applied it.
+
 Effort preferences resolve in the engine at the final model/account/harness.
 Embedding callers preserve the original request and consume the typed
 receipt; they do not duplicate adaptation or parse disclosure text. A caller
@@ -290,6 +299,11 @@ gate's explicit exemptions):
   `processingPreference` on Agent requests and as `options.processingPreference`
   on raw model requests. Structured reviewer entries accept their own optional
   `processingPreference`; raw `serviceTier` remains the exact native override.
+- `--prompt-cache-ttl 5m|1h`: native prompt-cache lifetime for every session of
+  the run on a harness that declares it, carried as `promptCacheTtl`; omission
+  keeps native defaults. Plan answers the same command submits inline carry it
+  too. The MCP and ACP run tools do not expose it; delegation
+  belt children inherit the parent's value.
 - `--workspace-kind directory` and repeatable `--scope-path <relative-path>`:
   `execution.workspaceKind` and `execution.scopePaths` select the copied input
   footprint or direct capture coverage; `--scope-path .` selects the whole
@@ -866,7 +880,8 @@ attempt needs a new key. Host cancellation stops the HTTP request, not the run.
 **Successors.** `claudexor_run_continue` starts one successor of a terminal
 single-candidate Agent or Ask run through the existing `continueFrom` admission
 and returns the launch handle. The engine inherits only the mode, scope,
-execution, harness and model groups. Every other control takes its ordinary
+execution, harness and model groups and the prompt-cache lifetime, which this
+tool cannot change: another lifetime, Default included, needs a new run. Every other control takes its ordinary
 new-run default, not the predecessor's value, unless restated: `access`, `web`
 or `externalContextPolicy`, `credentialProfileId`, `paidBudget`, `maxSeconds`
 and `timeLimitMode`, `review`, `reviewerPanel`, `reviewerModels`,
@@ -1834,7 +1849,7 @@ subscription sessions are always preferred.
 | `CLAUDEXOR_ROOT_MODE` | plugins / mcp-server | Provenance marker (`explicit`) alongside an operator-chosen or externally owned `CLAUDEXOR_CONFIG_DIR`; its absence next to a frozen non-default root is treated as legacy skew and refused. Standalone default-root installs serialize neither. |
 | `CLAUDEXOR_MANAGED` | plugins | Generated-artifact ownership marker; does not select daemon lifecycle ownership. |
 | `CLAUDEXOR_DELEGATION_PARENT_RUN_ID` / `CLAUDEXOR_DELEGATION_REPO_ROOT` / `CLAUDEXOR_DELEGATION_DEPTH` / `CLAUDEXOR_DELEGATION_MAX_SUBRUNS` / `CLAUDEXOR_DELEGATION_BUDGET` | mcp-server (delegation belt) | Injected by the daemon into the `agent --delegate` belt process (`claudexor mcp serve-belt`); carry the parent run id, the original normalized user-project root, nesting depth (belt refuses depth>0), the per-parent sub-run cap, and the resolved parent budget used to bind children to one live daemon-owned paid-budget authority. The bound root prevents a child from falling into the parent harness envelope or being redirected by a raw tool argument. These bootstrap values seed a conservative process-local refusal ledger so the belt can fail closed between daemon responses; daemon family accounting remains the authoritative cap, every child reports its own spend, and the parent reports the aggregate. Never set by hand. |
-| `CLAUDEXOR_DELEGATION_PROCESSING_PREFERENCE` / `CLAUDEXOR_DELEGATION_WORKSPACE_KIND` / `CLAUDEXOR_DELEGATION_SCOPE_PATHS` | orchestrator / mcp-server (delegation belt) | Injected captured Processing preference, workspace kind and JSON array of selected relative paths. The belt carries them into child requests with the parent's bound project; omission preserves the legacy request. These are internal transport fields, never user-set overrides. |
+| `CLAUDEXOR_DELEGATION_PROCESSING_PREFERENCE` / `CLAUDEXOR_DELEGATION_PROMPT_CACHE_TTL` / `CLAUDEXOR_DELEGATION_WORKSPACE_KIND` / `CLAUDEXOR_DELEGATION_SCOPE_PATHS` | orchestrator / mcp-server (delegation belt) | Injected captured Processing preference, prompt-cache lifetime, workspace kind and JSON array of selected relative paths. The belt carries them into child requests with the parent's bound project; omission preserves the legacy request. These are internal transport fields, never user-set overrides. |
 | `CLAUDEXOR_REVIEWER_TIMEOUT_MS` | config | Per-reviewer timeout override for review panels. |
 | `CLAUDEXOR_REVIEW_WAVE_ID` | release review | Operator-generated UUID identifying one release review wave; each operator reviewer artifact's metadata must carry it, and the sealed release attestation refuses mixed or sequential wave artifacts. |
 | `CLAUDEXOR_HARNESS_INACTIVITY_TIMEOUT_MS` | config | Inactivity window before a silent harness stream is failed (not a wall-clock cap). |

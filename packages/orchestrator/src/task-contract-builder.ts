@@ -7,6 +7,7 @@ import type {
   ModeKind,
   PaidBudget,
   ProcessingPreference,
+  PromptCacheTtl,
   ProtectedPathApproval,
   RoutingGoal,
   TestCommandInvocation,
@@ -50,6 +51,7 @@ interface TaskContractBuildInput {
   models?: Record<string, string>;
   efforts?: Record<string, EffortHint>;
   processingPreference?: ProcessingPreference;
+  promptCacheTtl?: PromptCacheTtl;
 }
 
 export interface TaskContractDefaults {
@@ -212,5 +214,6 @@ export function buildTaskContract(
     // state or leave pure Auto routing as a drift seam.
     routing_efforts: input.efforts ?? {},
     processing_preference: input.processingPreference,
+    prompt_cache_ttl: input.promptCacheTtl,
   });
 }

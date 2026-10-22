@@ -19,6 +19,8 @@ import {
 } from "./process-group.js";
 
 export interface SpawnOptions {
+  /** JSON-RPC/NDJSON stdout uses LF delimiters; Unicode separators are payload. */
+  stdoutFraming?: "lf";
   /** Bounded protocol frames/queue and independently drained stderr. */
   streamLimits?: ProcessStreamLimits;
   cwd?: string;
@@ -143,7 +145,13 @@ export async function* spawnProcess(
   args: string[],
   opts: SpawnOptions = {},
 ): AsyncGenerator<ProcEvent> {
-  const invocation = prepareHarnessCommand(cmd, args, composeSpawnEnv(opts.inheritEnv, opts.env));
+  const invocation = prepareHarnessCommand(
+    cmd,
+    args,
+    composeSpawnEnv(opts.inheritEnv, opts.env),
+    process.platform,
+    true,
+  );
   const env = invocation.env;
   const child = spawn(invocation.binary, invocation.args, {
     cwd: opts.cwd,
@@ -267,6 +275,7 @@ export async function* spawnProcess(
       requestCancel();
     },
     opts.streamLimits,
+    opts.stdoutFraming,
   );
 
   child.on("error", (err) => {

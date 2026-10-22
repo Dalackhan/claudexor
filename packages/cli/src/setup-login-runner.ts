@@ -513,10 +513,10 @@ function probeLoginHelp(
     try {
       const invocation = interpretedCommand(binary, ["login", "--help"], probeEnv, interpreter);
       probe = spawnProcess(invocation.binary, invocation.args, {
-        // Same provider-secret-scrubbed allowlist env as the real vendor
-        // spawn — the probe must never inherit the Terminal's full env.
+        // The real vendor spawn's scrubbed allowlist env, never the Terminal's.
         env: invocation.env,
         stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true, // captured help, unlike the sign-in: no console window
       });
     } catch {
       settle(false);

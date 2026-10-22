@@ -5,6 +5,7 @@ import {
   applyClaudeRunProcessing,
   claudeProcessingObserver,
 } from "./processing.js";
+import { claudePromptCacheObserver, withClaudePromptCacheTtl } from "./prompt-cache.js";
 import type {
   AccessProfile,
   CredentialProfile,
@@ -570,6 +571,7 @@ async function* runClaude(
   runtime: ClaudeRuntimeDeps,
   live: ClaudeLiveInput,
 ): AsyncIterable<HarnessEvent> {
+  spec = withClaudePromptCacheTtl(spec);
   const abortSignal = abortSignalFromSpec(spec);
   if (spec.access === "readonly") {
     const readonlyProfile = await runtime.probeReadonlyProfile(
@@ -702,11 +704,9 @@ async function* runClaude(
   // Scrub all provider secrets, then re-add only this route's credential.
   const env: Record<string, string | null | undefined> =
     subscriptionSource === "native_session" ? nativeEnv : { ...spec.env, ...providerScrubEnv() };
-  if (route === "api_key" && key) {
-    env.ANTHROPIC_API_KEY = key;
-  } else if (subscriptionSource === "oauth_token_env" && oauthToken) {
+  if (route === "api_key" && key) env.ANTHROPIC_API_KEY = key;
+  else if (subscriptionSource === "oauth_token_env" && oauthToken)
     env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
-  }
 
   // Disclose the actual auth route on every normalized event.
   const credentialRoute = useSubscription
@@ -715,6 +715,7 @@ async function* runClaude(
   const credentialSource = useSubscription ? subscriptionSource! : ("api_key_env" as const);
   const observeProcessing =
     processing && claudeProcessingObserver(processing, spec.processing_cost_basis!);
+  const observePromptCache = claudePromptCacheObserver(spec);
   const baseParser = withClaudeApiFailureParser(
     createClaudeParser({
       deniedTools: toolPermissionSets(spec).deny,
@@ -742,7 +743,7 @@ async function* runClaude(
       parseEvent: (obj, sessionId) => {
         const parsed = baseParser(obj, sessionId);
         const processed = observeProcessing ? observeProcessing(obj, parsed, sessionId) : parsed;
-        const out = live.observe(obj, processed, sessionId);
+        const out = live.observe(obj, observePromptCache(obj, processed, sessionId), sessionId);
         if (out) {
           for (const ev of out) {
             // Keep every event attributable to its fixed auth route.

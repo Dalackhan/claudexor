@@ -14,7 +14,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { ChildProcess, SpawnOptions } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ProcessGroupService,
@@ -137,16 +137,32 @@ else fs.writeFileSync('observed.json', JSON.stringify({ args: process.argv.slice
     expect(spec.executable.realpath).toBe(spec.binary);
     expect(spec.executable.realpath).not.toBe(process.execPath);
     issuePermit(spec);
+    const spawned: Array<{ args: readonly string[]; options: SpawnOptions }> = [];
     expect(
       await runSetupLoginWorker(manifestPath, {
         processGroupService: processGroups(),
         selfPid: 4242,
+        spawnProcess: ((command: string, args: readonly string[], options: SpawnOptions) => {
+          spawned.push({ args, options });
+          return spawn(command, args, options);
+        }) as never,
       }),
     ).toBe(0);
     expect(JSON.parse(readFileSync(join(spec.cwd, "observed.json"), "utf8"))).toEqual({
       args: spec.args,
       marker: "sealed",
     });
+    // The captured help probe has no console window and no preload; the
+    // sign-in it precedes keeps its own terminal policy.
+    expect(spawned.map((call) => call.args)).toEqual([
+      ["--no-warnings", spec.binary, "login", "--help"],
+      ["--no-warnings", spec.binary, ...spec.args],
+    ]);
+    expect(spawned[0]?.options).toMatchObject({
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    expect(spawned[1]?.options.windowsHide).toBeUndefined();
   });
 
   it("still refuses changed script bytes when the sealed interpreter is unchanged", async () => {

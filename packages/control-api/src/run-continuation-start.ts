@@ -14,14 +14,17 @@ import {
 import { paramsRecord, type DaemonFacadeClient } from "./run-record.js";
 
 /** What a continuation needs to find its carrier and workspace: the work's
- * kind, project and execution tree, harness and model. Nothing else is
- * inherited implicitly. Either explicit key replaces its whole related group. */
+ * kind, project and execution tree, harness and model, plus the native
+ * prompt-cache lifetime the predecessor's sessions were started under. Nothing
+ * else is inherited implicitly. Either explicit key replaces its whole related
+ * group. */
 const INHERITED_GROUPS = [
   ["mode"],
   ["scope"],
   ["execution"],
   ["harnesses", "primaryHarness"],
   ["model", "models"],
+  ["promptCacheTtl"],
 ] as const;
 
 /**

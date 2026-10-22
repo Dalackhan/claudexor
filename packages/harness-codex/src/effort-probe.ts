@@ -213,6 +213,8 @@ export async function probeCodexEfforts(
       child = spawn(command.binary, command.args, {
         stdio: ["pipe", "pipe", "ignore"],
         env: command.env,
+        // A captured background probe: no console window for the direct child on Windows.
+        windowsHide: true,
       });
     } catch {
       resolve(null);

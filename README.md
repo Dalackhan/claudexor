@@ -289,6 +289,9 @@ does not bypass built-in critical/security human gates.
 does not change the reasoning effort or routing goal. Native capabilities and
 observed service remain visible, and Fast stays within existing money limits.
 See the [Processing rule](docs/DEVELOPMENT.md#processing-preference).
+`--prompt-cache-ttl 5m|1h` sets the native prompt-cache lifetime of Claude Code's
+main conversation and helpers; omitting it keeps native defaults. See
+[Prompt-cache lifetime](docs/ARCHITECTURE.md#prompt-cache-lifetime).
 
 Inside an ordinary folder, select directory execution explicitly:
 

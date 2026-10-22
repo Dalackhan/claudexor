@@ -86,8 +86,9 @@ an explicit message `idempotencyKey`; `accepted` is not observed delivery, and
 a pending question refuses the message. Keep the same key and body after an
 unknown outcome.
 Use `claudexor_run_continue` for an authorized successor of a terminal run. Its
-optional prompt may be empty. Only mode, scope, execution, harness and model
-carry over: restate access, web, account, budget, time limit and review settings
+optional prompt may be empty. Only mode, scope, execution, harness, model and
+prompt-cache lifetime carry over (another lifetime, Default included, needs a
+new run): restate access, web, account, budget, time limit and review settings
 the successor must keep. Retain its handle and use the same key and arguments
 to recover an unknown response. These controllers do not restart a daemon or
 expand Delegate access.

@@ -130,6 +130,9 @@ public enum RuntimeInstallError: Error, LocalizedError, Equatable {
     case unpackFailed(String)
     case unpackedScriptMissing
     case notMonotonic(target: String)
+    /// The engine serving at stop admission is not older than the signed
+    /// candidate; the offer predates a replacement by another app copy.
+    case notNewerThanServing(target: String, serving: RuntimeClosureIdentity)
     case probeMismatch(expected: RuntimeClosureIdentity, got: RuntimeClosureIdentity?)
     case daemonBusy
     case handshakeMismatch(expected: RuntimeClosureIdentity, got: RuntimeClosureIdentity?)
@@ -142,6 +145,8 @@ public enum RuntimeInstallError: Error, LocalizedError, Equatable {
     case recoveryFailed(step: String, remediation: String)
     case rollbackIdentityUnavailable
     case lifecycleBusy
+    /// The shared lifecycle lock is unusable; no other action is implied.
+    case lifecycleUnavailable(LocalRuntimeLifecycleRefusal)
     case lockHeld
     case io(String)
 
@@ -153,6 +158,8 @@ public enum RuntimeInstallError: Error, LocalizedError, Equatable {
         case .unpackedScriptMissing: return "The unpacked runtime is missing its daemon script."
         case let .notMonotonic(t):
             return "Runtime \(t) is not newer than the installed runtime; refusing a downgrade."
+        case let .notNewerThanServing(t, s):
+            return "Update not applied: v\(t) is not newer than the running engine (v\(s.version)). The running engine was not stopped."
         case let .probeMismatch(e, g):
             return "The unpacked runtime reported \(Self.describe(g)), expected \(Self.describe(e))."
         case .daemonBusy: return "Update not applied: the engine is busy or its activity could not be confirmed. Try Install again when the engine is idle."
@@ -168,6 +175,8 @@ public enum RuntimeInstallError: Error, LocalizedError, Equatable {
             return "The exact prior engine identity could not be verified; the running engine was not stopped."
         case .lifecycleBusy:
             return "Another engine lifecycle action is already in progress; retry the update."
+        case let .lifecycleUnavailable(refusal):
+            return "Update not applied: \(refusal.reason). The running engine was not stopped."
         case .lockHeld: return "Another runtime update is already in progress."
         case let .io(m): return "Runtime update file error: \(m)"
         }

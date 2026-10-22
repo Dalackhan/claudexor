@@ -25,6 +25,8 @@ struct LocalDaemonBuildSwitch: Sendable, Equatable {
 }
 
 enum LocalDaemonReconciliationFailure: Sendable, Equatable {
+    /// The shared lifecycle lock is unusable; nothing was observed or changed.
+    case lifecycleUnavailable(LocalRuntimeLifecycleRefusal)
     case targetScriptUnavailable
     case targetAuthorityUnavailable
     case targetProbeFailed
@@ -59,6 +61,10 @@ enum LocalDaemonReconciliationPolicy: Sendable, Equatable {
     /// The protocol-compatible daemon remains usable. A non-nil notice explains
     /// why exact closure coherence could not be established yet.
     case useCompatible(notice: String?)
+    /// Another lifecycle owner held the lease, so nothing was observed or
+    /// changed. The daemon remains usable; facts published from an earlier
+    /// observation are neither confirmed nor retired by this result.
+    case unobserved
     /// The reconciler replaced the daemon. Discovery/token/client state must be
     /// reacquired before any daemon-owned projection is hydrated.
     case reconnect
@@ -90,9 +96,10 @@ enum LocalDaemonReconciliationPolicy: Sendable, Equatable {
             self = .useCompatible(
                 notice: "The running engine is newer, or version order cannot be verified. Continuing with the compatible running engine.")
         case .deferredForLifecycle:
-            // The install chip owns the visible lifecycle status while its exact
-            // session lease is held; steady polling remains compatible and quiet.
-            self = .useCompatible(notice: nil)
+            self = .unobserved
+        case let .failed(.lifecycleUnavailable(refusal)):
+            self = .useCompatible(
+                notice: "Engine refresh is unavailable: \(refusal.reason). Continuing with the compatible running engine.")
         case .failed(.targetScriptUnavailable), .failed(.targetAuthorityUnavailable),
              .failed(.targetProbeFailed), .failed(.targetAuthorityMismatch(_, _)):
             self = .useCompatible(
@@ -168,8 +175,11 @@ actor LocalDaemonReconciler {
         // Exact session admission precedes target resolution and the first await.
         // It excludes RuntimeInstallCoordinator's independent actor from the same
         // stop/start lifecycle rather than relying on a sampled UI boolean.
-        guard let lifecycleLease = lifecycleOwner.claim(.reconciliation) else {
-            return .deferredForLifecycle
+        let lifecycleLease: LocalRuntimeLifecycleLease
+        switch lifecycleOwner.claim(.reconciliation) {
+        case let .acquired(lease): lifecycleLease = lease
+        case .contended: return .deferredForLifecycle
+        case let .refused(refusal): return .failed(.lifecycleUnavailable(refusal))
         }
 
         let daemon = self.daemon

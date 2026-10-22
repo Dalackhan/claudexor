@@ -7,7 +7,8 @@ import ClaudexorKit
 //
 //   verify monotonic → download → sha256-verify against the SIGNED manifest →
 //   full unpack to versions/<v> → re-verify → strip quarantine → probe-start the
-//   unpacked daemon (exact `{version,buildSha}` probe) → idle-gate →
+//   unpacked daemon (exact `{version,buildSha}` probe) → idle-gate → fresh
+//   serving identity, still older than the candidate →
 //   identity-proven daemon stop → ATOMIC current.json swap (single rename inside
 //   a whole-critical-section lock) → relaunch → handshake-verify exact identity
 //   AND normal admission → rollback to last-known-good when the engine is wrong
@@ -159,9 +160,16 @@ public actor RuntimeInstallCoordinator {
         // Session admission is the first operation in this async transaction.
         // The filesystem lock protects pointer writers; this exact lease also
         // excludes the steady reconciler's stop/start lifecycle.
-        guard let lifecycleLease = lifecycleOwner.claim(.installation) else {
+        let lifecycleLease: LocalRuntimeLifecycleLease
+        switch lifecycleOwner.claim(.installation) {
+        case let .acquired(lease):
+            lifecycleLease = lease
+        case .contended:
             fail(.failed(reason: "another engine lifecycle action is in progress"))
             throw RuntimeInstallError.lifecycleBusy
+        case let .refused(refusal):
+            fail(.failed(reason: refusal.reason))
+            throw RuntimeInstallError.lifecycleUnavailable(refusal)
         }
         defer { lifecycleOwner.release(lifecycleLease) }
 
@@ -236,6 +244,16 @@ public actor RuntimeInstallCoordinator {
             try? installer.removeVersionDir(manifest.version)
             fail(.failed(reason: "engine identity became unavailable before replacement admission"))
             throw RuntimeInstallError.daemonBusy
+        }
+        // The cached offer was decided against the engine serving at check
+        // time; another app copy may have replaced it since. The same
+        // monotonic rule gates the engine serving now, so Install never
+        // replaces a newer engine or another build of the same version.
+        guard isMonotonicUpgrade(target: manifest.version, floors: [forwardServing.version]) else {
+            try? installer.removeVersionDir(manifest.version)
+            fail(.failed(reason: "not newer than the running engine"))
+            throw RuntimeInstallError.notNewerThanServing(
+                target: manifest.version, serving: forwardServing)
         }
 
         // 7. Daemon-owned atomic idle proof + admission fence + exact stop. The

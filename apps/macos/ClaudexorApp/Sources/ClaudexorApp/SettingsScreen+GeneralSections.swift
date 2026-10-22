@@ -51,11 +51,7 @@ extension SettingsScreen {
                 Text("Running v\(request.serving.version) (\(AboutInfo.shortSha(request.serving.buildSha))); this app selected \(AboutInfo.shortSha(request.target.buildSha)).")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Switch Engine Build") {
-                    Task {
-                        if let generation = await model.switchLocalDaemonBuild(request) {
-                            await model.connect(ifCurrentGeneration: generation, allowInitialLaunch: false)
-                        }
-                    }
+                    Task { await model.requestLocalDaemonBuildSwitch(request) }
                 }
                 .buttonStyle(.bordered)
                 .disabled(model.runtimeInstalling)

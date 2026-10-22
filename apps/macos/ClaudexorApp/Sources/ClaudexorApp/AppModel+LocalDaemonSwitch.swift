@@ -1,6 +1,15 @@
 import Foundation
 import ClaudexorKit
 
+/// What one Settings switch request leaves for the connection loop that takes
+/// over its generation.
+enum LocalDaemonBuildSwitchReceipt: Equatable {
+    /// The compatible engine still serves the exact client: keep polling it.
+    case resume(generation: Int)
+    /// The client was retired or must be re-acquired before anything hydrates.
+    case reconnect(generation: Int)
+}
+
 extension AppModel {
     private func daemonReconciliationOwner() -> LocalDaemonReconciler {
         if let localDaemonReconciler { return localDaemonReconciler }
@@ -25,6 +34,9 @@ extension AppModel {
                 !Task.isCancelled && self?.connectionGeneration == generation
             })
         guard !Task.isCancelled, connectionGeneration == generation else { return .superseded }
+        // Contention is no observation: it neither confirms nor retires the
+        // published offer. Each caller decides what its own boundary keeps.
+        if result == .deferredForLifecycle { return .unobserved }
         localDaemonBuildSwitch = nil
         // A fresh lifecycle observation must not authorize publishing the older
         // caller's handshake, even when both builds speak a compatible protocol.
@@ -42,20 +54,67 @@ extension AppModel {
         return LocalDaemonReconciliationPolicy(result)
     }
 
-    /// Settings alone calls this bounded, one-shot action. Its caller starts an
-    /// ordinary connection loop afterward only if this generation still owns it.
-    /// Reconnect and passive polls never pass a build-switch request.
-    func switchLocalDaemonBuild(_ request: LocalDaemonBuildSwitch) async -> Int? {
+    /// Retire only the value this pending switch published. A replacement
+    /// notice, including a failure carried into reconnect, belongs to its owner.
+    func retireLocalDaemonBuildSwitchProgress() {
+        guard let progress = localDaemonBuildSwitchProgress else { return }
+        localDaemonBuildSwitchProgress = nil
+        if localDaemonReconciliationNotice == progress.notice {
+            localDaemonReconciliationNotice = nil
+        }
+    }
+
+    /// Guidance published with an offer has no action once admission closes.
+    /// Terminal failures/refusals have no offer and keep their own reason.
+    func retireLocalDaemonBuildSwitchOffer() {
+        if localDaemonBuildSwitch != nil { localDaemonReconciliationNotice = nil }
+        localDaemonBuildSwitch = nil
+    }
+
+    /// Settings' Switch Engine Build action: one request, then the connection
+    /// loop that request's generation belongs to.
+    func requestLocalDaemonBuildSwitch(_ request: LocalDaemonBuildSwitch) async {
+        switch await switchLocalDaemonBuild(request) {
+        case let .resume(generation)?:
+            await resumeLocalConnection(generation: generation)
+        case let .reconnect(generation)?:
+            await connect(ifCurrentGeneration: generation, allowInitialLaunch: false)
+        case nil:
+            break
+        }
+    }
+
+    /// The bounded, one-shot switch behind that action. Reconnect and passive
+    /// polls never pass a build-switch request. Its new generation retires the
+    /// polling loop, so the receipt names the loop that continues; nil means a
+    /// newer connection already owns everything.
+    func switchLocalDaemonBuild(_ request: LocalDaemonBuildSwitch) async -> LocalDaemonBuildSwitchReceipt? {
         guard localDaemonBuildSwitch == request, !runtimeInstalling else { return nil }
         connectionGeneration += 1
         let generation = connectionGeneration
         localDaemonBuildSwitch = nil
+        // Replaces guidance that points at the button this request just hid.
+        let progress = "Switching engine build if work is idle…"
+        localDaemonBuildSwitchProgress = (generation, progress)
+        localDaemonReconciliationNotice = progress
+        defer {
+            if localDaemonBuildSwitchProgress?.generation == generation {
+                retireLocalDaemonBuildSwitchProgress()
+            }
+        }
         let policy = await localDaemonPolicy(
             for: engineIdentity, generation: generation, switchBuild: request)
         guard connectionGeneration == generation, !Task.isCancelled else { return nil }
         switch policy {
         case let .useCompatible(notice):
             localDaemonReconciliationNotice = notice
+            return .resume(generation: generation)
+        case .unobserved:
+            // Another lifecycle owner held the lease, so nothing was checked or
+            // changed. Offer the same exact pair again; retrying is the user's call.
+            localDaemonBuildSwitch = request
+            localDaemonReconciliationNotice = "Another engine lifecycle action is in progress. Try Switch Engine Build again."
+            return .resume(generation: generation)
         case let .failOffline(notice):
             enterHardOffline()
             localDaemonReconciliationNotice = notice
@@ -71,6 +130,6 @@ extension AppModel {
         case .superseded:
             return nil
         }
-        return generation
+        return .reconnect(generation: generation)
     }
 }

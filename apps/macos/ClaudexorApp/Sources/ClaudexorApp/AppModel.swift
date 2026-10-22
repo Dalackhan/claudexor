@@ -216,6 +216,8 @@ final class AppModel {
     }
     @ObservationIgnored let localRuntimeLifecycleOwner: LocalRuntimeLifecycleOwner
     var localDaemonBuildSwitch: LocalDaemonBuildSwitch?
+    /// Only the pending explicit switch owns this progress publication.
+    @ObservationIgnored var localDaemonBuildSwitchProgress: (generation: Int, notice: String)?
     /// One lifecycle owner for the entire AppModel session. It is created lazily
     /// so tests can replace `makeDaemonControl` before the first reconciliation;
     /// the actor itself coalesces overlapping connect/poll attempts.

@@ -600,7 +600,7 @@ final class ReconciliationDaemonStub: RuntimeDaemonControl, @unchecked Sendable 
         daemon.targetIdentity = target
         let model = appModel(daemon)
         let lease = try! #require(
-            model.localRuntimeLifecycleOwner.claim(.installation))
+            model.localRuntimeLifecycleOwner.claim(.installation).lease)
         defer { model.localRuntimeLifecycleOwner.release(lease) }
         model.runtimeInstalling = true
         model.runtimeInstallStatus = "Installing…"

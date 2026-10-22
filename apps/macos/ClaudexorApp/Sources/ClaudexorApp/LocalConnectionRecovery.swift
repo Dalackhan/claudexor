@@ -20,9 +20,16 @@ struct LocalConnectionRecoveryLoop {
     private let lifecycleOwner: LocalRuntimeLifecycleOwner
     private let prepareProbe: @MainActor () -> Void
     private let probe: @MainActor () async -> LocalConnectionProbeResult
+    /// One fresh discovery read and handshake that adopts nothing, asked while
+    /// this loop holds its outage lease and before it consumes the allowance.
+    private let engineAnswers: @MainActor () async -> Bool
     private let pollConnected: @MainActor () async -> LocalConnectionProbeResult
     private let startDaemon: @MainActor (LocalRuntimeLaunchPermit) -> Bool
     private let enterOffline: @MainActor () -> Void
+    /// Publishes the refusal an outage start meets, again only if it changes
+    /// within that outage, or nil once that lock is usable again. Contention is
+    /// never reported here.
+    private let lifecycleRefused: @MainActor (LocalRuntimeLifecycleRefusal?) -> Void
     private let pause: @MainActor () async -> Void
 
     init(
@@ -31,9 +38,11 @@ struct LocalConnectionRecoveryLoop {
         lifecycleOwner: LocalRuntimeLifecycleOwner,
         prepareProbe: @escaping @MainActor () -> Void,
         probe: @escaping @MainActor () async -> LocalConnectionProbeResult,
+        engineAnswers: @escaping @MainActor () async -> Bool,
         pollConnected: @escaping @MainActor () async -> LocalConnectionProbeResult,
         startDaemon: @escaping @MainActor (LocalRuntimeLaunchPermit) -> Bool,
         enterOffline: @escaping @MainActor () -> Void,
+        lifecycleRefused: @escaping @MainActor (LocalRuntimeLifecycleRefusal?) -> Void = { _ in },
         pause: @escaping @MainActor () async -> Void
     ) {
         self.generation = generation
@@ -41,26 +50,40 @@ struct LocalConnectionRecoveryLoop {
         self.lifecycleOwner = lifecycleOwner
         self.prepareProbe = prepareProbe
         self.probe = probe
+        self.engineAnswers = engineAnswers
         self.pollConnected = pollConnected
         self.startDaemon = startDaemon
         self.enterOffline = enterOffline
+        self.lifecycleRefused = lifecycleRefused
         self.pause = pause
     }
 
-    func run(launchAvailable initialLaunchAvailable: Bool = true) async {
+    /// `resumingConnection` continues a client that an explicit build-switch
+    /// request left serving, as an already confirmed connection, without a probe.
+    func run(
+        launchAvailable initialLaunchAvailable: Bool = true, resumingConnection: Bool = false
+    ) async {
         var launchAvailable = initialLaunchAvailable
+        var resuming = resumingConnection
         var startupLease: LocalRuntimeLifecycleLease?
         var startupDeadline: ContinuousClock.Instant?
+        var reportedRefusal: LocalRuntimeLifecycleRefusal?
         // Exact release also invalidates the queued launch permit. A retired
         // connection therefore cannot leave a probe that spawns after unlock.
         defer { if let startupLease { lifecycleOwner.release(startupLease) } }
         while isCurrent {
-            prepareProbe()
+            if !resuming { prepareProbe() }
             // A lifecycle can replace or install the successor while this
             // handshake is suspended. Its completion must make a negative
             // result stale rather than authorize a second fallback launch.
             let lifecycleSnapshot = lifecycleOwner.completionSnapshot()
-            let result = await probe()
+            let result: LocalConnectionProbeResult
+            if resuming {
+                resuming = false
+                result = .connected
+            } else {
+                result = await probe()
+            }
             // Manual Reconnect advances the generation while discovery or a
             // handshake is suspended. Its predecessor may publish nothing.
             guard isCurrent else { return }
@@ -74,6 +97,9 @@ struct LocalConnectionRecoveryLoop {
             switch result {
             case .connected:
                 launchAvailable = true
+                // This connection replaced any refusal notice, so the next
+                // outage reports the refusal it meets, even an identical one.
+                reportedRefusal = nil
                 connected: while isCurrent {
                     await pause()
                     guard isCurrent else { return }
@@ -113,14 +139,36 @@ struct LocalConnectionRecoveryLoop {
 
             case .unavailable:
                 if launchAvailable {
-                    guard let lease = lifecycleOwner.claim(
+                    let claim = lifecycleOwner.claim(
                         .outageRecovery,
                         ifNoCompletionSince: lifecycleSnapshot)
-                    else {
-                        // Busy and completed-since-snapshot are deliberately
-                        // the same recovery decision: preserve the allowance
-                        // and require a fresh probe before any launch.
+                    // An unusable lock is not another app's transaction. Name
+                    // it, keep the allowance, and re-check after the ordinary
+                    // pause in case the user repairs it.
+                    let refusal: LocalRuntimeLifecycleRefusal? =
+                        if case let .refused(refusal) = claim { refusal } else { nil }
+                    if refusal != reportedRefusal {
+                        lifecycleRefused(refusal)
+                        reportedRefusal = refusal
+                    }
+                    guard let lease = claim.lease else {
+                        // Busy, completed-since-snapshot and refused are the
+                        // same launch decision: preserve the allowance and
+                        // require a fresh probe before any launch.
                         enterOffline()
+                        await pause()
+                        continue
+                    }
+                    // The probe preceded this lease. Another app copy may have
+                    // finished starting or replacing the engine and released the
+                    // shared lock since, which this app's completion snapshot
+                    // cannot see. Re-read discovery once under the lease.
+                    let answering = await engineAnswers()
+                    if answering || !isCurrent {
+                        lifecycleOwner.release(lease)
+                        guard isCurrent else { return }
+                        // The ordinary next probe adopts that engine; the
+                        // allowance stays for a real outage.
                         await pause()
                         continue
                     }

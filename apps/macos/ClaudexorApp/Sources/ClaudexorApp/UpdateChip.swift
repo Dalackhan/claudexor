@@ -11,6 +11,7 @@ import SwiftUI
 /// actions. When there is no advertised update it renders
 /// NOTHING except an honest status line for a finished install or the
 /// app-update-required / failure / dev-build cases (never a fake "up to date").
+/// A local engine lifecycle notice sits above all of these, never instead.
 struct UpdateChip: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openURL) private var openURL
@@ -21,10 +22,9 @@ struct UpdateChip: View {
     static let releaseURL = URL(
         string: "https://github.com/\(GitHubRuntimeReleaseTransport.repoSlug)/releases/latest")!
 
-    /// Which state the chip shows, in priority order.
+    /// Which update state the chip shows, in priority order.
     enum Content: Equatable {
         case installing(String?)
-        case reconciliationNotice(String)
         /// `outcome` is the last install attempt's status; a later check may
         /// offer another version without rewriting that historical result.
         case offer(UpdateAvailability, outcome: String?)
@@ -33,11 +33,18 @@ struct UpdateChip: View {
         case hidden
     }
 
+    /// The local engine's live lifecycle notice. It is shown above the update
+    /// state, never instead of its Install, View release or outcome; only an
+    /// active install, which owns the engine lifecycle, replaces it.
+    static func notice(for model: AppModel) -> String? {
+        guard !model.runtimeInstalling,
+              let notice = model.localDaemonReconciliationNotice, !notice.isEmpty
+        else { return nil }
+        return notice
+    }
+
     static func content(for model: AppModel) -> Content {
         if model.runtimeInstalling { return .installing(model.runtimeInstallStatus) }
-        if let notice = model.localDaemonReconciliationNotice, !notice.isEmpty {
-            return .reconciliationNotice(notice)
-        }
         let outcome = model.runtimeInstallStatus.flatMap { $0.isEmpty ? nil : $0 }
         if let update = model.updateAvailability { return .offer(update, outcome: outcome) }
         if let outcome { return .installOutcome(outcome) }
@@ -48,6 +55,20 @@ struct UpdateChip: View {
     }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let notice = Self.notice(for: model) {
+                // Closure coherence is a live safety state, so it stays visible
+                // above a cached update or an install outcome.
+                LocalEngineNoticeLine(notice: notice)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, Theme.Spacing.md)
+                    .padding(.vertical, Theme.Spacing.xs)
+            }
+            updateContent
+        }
+    }
+
+    @ViewBuilder private var updateContent: some View {
         switch Self.content(for: model) {
         case let .installing(status):
             // Live install progress — honest per-phase text, no fake success.
@@ -60,20 +81,6 @@ struct UpdateChip: View {
             .padding(.horizontal, Theme.Spacing.md)
             .padding(.vertical, Theme.Spacing.xs)
             .help(status ?? "Installing the engine update…")
-        case let .reconciliationNotice(notice):
-            // Closure coherence is a live safety state, so it stays visible even
-            // when a cached update is also available. An active install remains
-            // first because it currently owns the daemon lifecycle.
-            HStack(spacing: Theme.Spacing.xs) {
-                Image(systemName: "exclamationmark.circle")
-                    .font(.caption2).foregroundStyle(Theme.status(.warn))
-                Text(notice)
-                    .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, Theme.Spacing.md)
-            .padding(.vertical, Theme.Spacing.xs)
-            .help(notice)
         case let .offer(update, outcome):
             VStack(alignment: .leading, spacing: 0) {
                 // A failed, rolled-back or refused attempt stays readable above
@@ -144,5 +151,23 @@ struct UpdateChip: View {
         .padding(.horizontal, Theme.Spacing.md)
         .padding(.vertical, Theme.Spacing.xs)
         .help(status)
+    }
+}
+
+/// The local engine lifecycle notice. The update chip and the Connecting/
+/// Offline placeholder render this one producer's text the same way.
+struct LocalEngineNoticeLine: View {
+    let notice: String
+    /// The sidebar keeps two lines with the full text on hover.
+    var lineLimit: Int? = 2
+
+    var body: some View {
+        HStack(spacing: Theme.Spacing.xs) {
+            Image(systemName: "exclamationmark.circle")
+                .font(.caption2).foregroundStyle(Theme.status(.warn))
+            Text(notice)
+                .font(.caption2).foregroundStyle(.secondary).lineLimit(lineLimit)
+        }
+        .help(notice)
     }
 }

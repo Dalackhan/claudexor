@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { registerChildProcess, unregisterChildProcess } from "./process-registry.js";
 import { composeSpawnEnv } from "./env-scope.js";
-import { prepareHarnessCommand } from "./runtime-env.js";
+import { backgroundSpawnShape, prepareHarnessCommand } from "./runtime-env.js";
 import { runScopeMarkerOf } from "./process-scope.js";
 import { killWindowsProcessTree, resolveKillTreeStrategy } from "./process-tree.js";
 import { defaultProcessGroupService, type ProcessGroupHandle } from "./process-group.js";
@@ -30,20 +30,13 @@ export async function runCaptureRaw(
   args: string[],
   opts: RawCaptureOptions = {},
 ): Promise<CaptureResult> {
-  const invocation = prepareHarnessCommand(
-    cmd,
-    args,
-    composeSpawnEnv(opts.inheritEnv, opts.env),
-    process.platform,
-    true,
-  );
+  const invocation = prepareHarnessCommand(cmd, args, composeSpawnEnv(opts.inheritEnv, opts.env));
   const env = invocation.env;
   const child = spawn(invocation.binary, invocation.args, {
     cwd: opts.cwd,
     env,
     stdio: ["pipe", "pipe", "pipe"],
-    windowsHide: true,
-    detached: true,
+    ...backgroundSpawnShape(process.platform, opts.windowsConsole),
   });
   if (typeof child.pid === "number") registerChildProcess(child.pid, cmd, runScopeMarkerOf(env));
   child.once("exit", (code, signal) => opts.onExit?.(code, signal));
@@ -65,7 +58,7 @@ export async function runCaptureRaw(
   // then, so the PID cannot have been recycled).
   const captureGroupService = opts.processGroups ?? defaultProcessGroupService;
   let captureGroupHandle: ProcessGroupHandle | undefined;
-  if (typeof child.pid === "number") {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
     const capture = captureGroupService.captureLeader(child.pid);
     if (capture.status === "known") captureGroupHandle = capture.handle;
   }

@@ -1,4 +1,5 @@
 import Foundation
+import ClaudexorKit
 
 @usableFromInline
 enum LocalDaemonBootPolicy {
@@ -12,9 +13,20 @@ enum LocalDaemonBootPolicy {
 enum LocalDaemonReconciliationDeferral: Sendable, Equatable {
     case busy
     case activityUnknown
+    case explicitBuildSwitchRequired
+    case targetNotNewer
+}
+
+/// One user action bound to the two builds shown by Settings. Never persisted
+/// or replayed by connection polling, and invalidated by a changed observation.
+struct LocalDaemonBuildSwitch: Sendable, Equatable {
+    let serving: RuntimeClosureIdentity
+    let target: RuntimeClosureIdentity
 }
 
 enum LocalDaemonReconciliationFailure: Sendable, Equatable {
+    /// The shared lifecycle lock is unusable; nothing was observed or changed.
+    case lifecycleUnavailable(LocalRuntimeLifecycleRefusal)
     case targetScriptUnavailable
     case targetAuthorityUnavailable
     case targetProbeFailed
@@ -49,6 +61,10 @@ enum LocalDaemonReconciliationPolicy: Sendable, Equatable {
     /// The protocol-compatible daemon remains usable. A non-nil notice explains
     /// why exact closure coherence could not be established yet.
     case useCompatible(notice: String?)
+    /// Another lifecycle owner held the lease, so nothing was observed or
+    /// changed. The daemon remains usable; facts published from an earlier
+    /// observation are neither confirmed nor retired by this result.
+    case unobserved
     /// The reconciler replaced the daemon. Discovery/token/client state must be
     /// reacquired before any daemon-owned projection is hydrated.
     case reconnect
@@ -73,10 +89,17 @@ enum LocalDaemonReconciliationPolicy: Sendable, Equatable {
         case .deferred(.activityUnknown, _, _):
             self = .useCompatible(
                 notice: "Engine refresh is deferred until active work can be checked.")
+        case .deferred(.explicitBuildSwitchRequired, _, _):
+            self = .useCompatible(
+                notice: "A different build of this engine version is running. Use Settings → General → Switch Engine Build when work is idle.")
+        case .deferred(.targetNotNewer, _, _):
+            self = .useCompatible(
+                notice: "The running engine is newer, or version order cannot be verified. Continuing with the compatible running engine.")
         case .deferredForLifecycle:
-            // The install chip owns the visible lifecycle status while its exact
-            // session lease is held; steady polling remains compatible and quiet.
-            self = .useCompatible(notice: nil)
+            self = .unobserved
+        case let .failed(.lifecycleUnavailable(refusal)):
+            self = .useCompatible(
+                notice: "Engine refresh is unavailable: \(refusal.reason). Continuing with the compatible running engine.")
         case .failed(.targetScriptUnavailable), .failed(.targetAuthorityUnavailable),
              .failed(.targetProbeFailed), .failed(.targetAuthorityMismatch(_, _)):
             self = .useCompatible(
@@ -134,20 +157,29 @@ actor LocalDaemonReconciler {
         self.handshakePollTimeout = handshakePollTimeout
     }
 
-    /// `serving` should normally be the identity from the handshake that made
-    /// the app consider the local daemon connected. Passing nil asks the port to
-    /// re-read discovery and handshake; inability to prove it fails closed.
+    /// A connection observation is only a hint. Lifecycle decisions always use
+    /// a fresh serving identity read while the lifecycle lease is held.
     func reconcile(
-        serving: RuntimeClosureIdentity? = nil,
+        serving _: RuntimeClosureIdentity? = nil,
+        switchBuild: LocalDaemonBuildSwitch? = nil,
         isCurrent: @escaping @Sendable () async -> Bool = { true }
     ) async -> LocalDaemonReconciliationResult {
-        if let inFlight { return await inFlight.value }
+        if let inFlight {
+            let result = await inFlight.value
+            guard switchBuild != nil else { return result }
+            // A passive task cannot consume an explicit action. Its ownership
+            // is released before its result resolves; re-admit with fresh facts.
+            return await reconcile(switchBuild: switchBuild, isCurrent: isCurrent)
+        }
         guard await isCurrent() else { return .supersededBeforeLifecycle }
         // Exact session admission precedes target resolution and the first await.
         // It excludes RuntimeInstallCoordinator's independent actor from the same
         // stop/start lifecycle rather than relying on a sampled UI boolean.
-        guard let lifecycleLease = lifecycleOwner.claim(.reconciliation) else {
-            return .deferredForLifecycle
+        let lifecycleLease: LocalRuntimeLifecycleLease
+        switch lifecycleOwner.claim(.reconciliation) {
+        case let .acquired(lease): lifecycleLease = lease
+        case .contended: return .deferredForLifecycle
+        case let .refused(refusal): return .failed(.lifecycleUnavailable(refusal))
         }
 
         let daemon = self.daemon
@@ -155,22 +187,24 @@ actor LocalDaemonReconciler {
         let pollInterval = handshakePollInterval
         let pollTimeout = handshakePollTimeout
         let task = Task {
-            await Self.perform(
-                daemon: daemon, targetClosure: targetClosure, serving: serving,
+            let result = await Self.perform(
+                daemon: daemon, targetClosure: targetClosure, switchBuild: switchBuild,
                 handshakePollInterval: pollInterval, handshakePollTimeout: pollTimeout,
                 isCurrent: isCurrent)
+            // Cleanup belongs to the task, so an old waiter cannot clear a
+            // successor task or release its lease after this result resolves.
+            inFlight = nil
+            lifecycleOwner.release(lifecycleLease)
+            return result
         }
         inFlight = task
-        let result = await task.value
-        inFlight = nil
-        lifecycleOwner.release(lifecycleLease)
-        return result
+        return await task.value
     }
 
     private static func perform(
         daemon: any RuntimeDaemonControl,
         targetClosure: @Sendable () -> LocalRuntimeClosureSelection?,
-        serving suppliedServing: RuntimeClosureIdentity?,
+        switchBuild: LocalDaemonBuildSwitch?,
         handshakePollInterval: TimeInterval,
         handshakePollTimeout: TimeInterval,
         isCurrent: @escaping @Sendable () async -> Bool
@@ -200,16 +234,27 @@ actor LocalDaemonReconciler {
             // exact probe is the authority for this launch target.
             target = probed
         }
-        let serving: RuntimeClosureIdentity?
-        if let suppliedServing {
-            serving = suppliedServing
-        } else {
-            serving = await daemon.handshakeIdentity()
-        }
-        guard let serving else {
+        guard let serving = await daemon.handshakeIdentity() else {
             return .failed(.servingIdentityUnavailable)
         }
         if serving == target { return .coherent(target) }
+        if let switchBuild,
+           switchBuild != LocalDaemonBuildSwitch(serving: serving, target: target) {
+            return .supersededBeforeLifecycle
+        }
+        if serving.version == target.version {
+            guard switchBuild != nil else {
+                return .deferred(.explicitBuildSwitchRequired, serving: serving, target: target)
+            }
+        } else {
+            // SemanticVersion also accepts incomplete versions and strips
+            // suffixes. Only the engine's stable x.y.z contract proves order.
+            guard stableVersion(serving.version), stableVersion(target.version),
+                  let current = SemanticVersion(serving.version),
+                  let next = SemanticVersion(target.version), next > current else {
+                return .deferred(.targetNotNewer, serving: serving, target: target)
+            }
+        }
 
         switch await daemon.isBusy() {
         case true:
@@ -226,6 +271,12 @@ actor LocalDaemonReconciler {
         // Once stop is invoked the exact stop/start/proof transaction must run
         // to a safe terminal state even if a newer connect begins meanwhile.
         guard await isCurrent() else { return .supersededBeforeLifecycle }
+        guard let freshServing = await daemon.handshakeIdentity() else {
+            return .failed(.servingIdentityUnavailable)
+        }
+        guard freshServing == serving, await isCurrent() else {
+            return .supersededBeforeLifecycle
+        }
 
         do {
             try await daemon.stopForRuntimeReplacement(expectedIdentity: serving)
@@ -256,6 +307,13 @@ actor LocalDaemonReconciler {
             } else {
                 try? await Task.sleep(nanoseconds: nanoseconds)
             }
+        }
+    }
+
+    private static func stableVersion(_ value: String) -> Bool {
+        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count == 3 && parts.allSatisfy { part in
+            !part.isEmpty && part.utf8.allSatisfy { (48...57).contains($0) }
         }
     }
 }

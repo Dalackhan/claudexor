@@ -7,7 +7,8 @@ import ClaudexorKit
 //
 //   verify monotonic → download → sha256-verify against the SIGNED manifest →
 //   full unpack to versions/<v> → re-verify → strip quarantine → probe-start the
-//   unpacked daemon (exact `{version,buildSha}` probe) → idle-gate →
+//   unpacked daemon (exact `{version,buildSha}` probe) → idle-gate → fresh
+//   serving identity, still older than the candidate →
 //   identity-proven daemon stop → ATOMIC current.json swap (single rename inside
 //   a whole-critical-section lock) → relaunch → handshake-verify exact identity
 //   AND normal admission → rollback to last-known-good when the engine is wrong
@@ -54,80 +55,6 @@ public struct RuntimeServingHandshake: Sendable, Equatable {
     public init(identity: RuntimeClosureIdentity, recoveryOnly: Bool) {
         self.identity = identity
         self.recoveryOnly = recoveryOnly
-    }
-}
-
-/// One process-local authority for every mutation of the app-owned local daemon
-/// lifecycle. The opaque token makes release exact: a stale caller can never
-/// clear a newer owner's admission. `claim` is synchronous, so both reconciliation
-/// and installation acquire it before their first suspension.
-public enum LocalRuntimeLifecycleOperation: Sendable, Equatable {
-    case reconciliation
-    case installation
-    case outageRecovery
-}
-
-public struct LocalRuntimeLifecycleLease: Sendable, Equatable {
-    fileprivate let id: UUID
-    public let operation: LocalRuntimeLifecycleOperation
-}
-
-/// Opaque process-local receipt for lifecycle completions. A caller snapshots
-/// it before suspending work, then uses the owner to atomically prove that no
-/// lifecycle finished before it claims a follow-up action.
-struct LocalRuntimeLifecycleCompletionSnapshot: Sendable, Equatable {
-    fileprivate let sequence: UInt64
-}
-
-public final class LocalRuntimeLifecycleOwner: @unchecked Sendable {
-    private let lock = NSLock()
-    private var current: LocalRuntimeLifecycleLease?
-    private var completionSequence: UInt64 = 0
-
-    public init() {}
-
-    public func claim(_ operation: LocalRuntimeLifecycleOperation) -> LocalRuntimeLifecycleLease? {
-        lock.withLock {
-            claimWhileLocked(operation)
-        }
-    }
-
-    /// Snapshot immediately before an awaited observation whose result could be
-    /// stale by the time it returns.
-    func completionSnapshot() -> LocalRuntimeLifecycleCompletionSnapshot {
-        lock.withLock {
-            LocalRuntimeLifecycleCompletionSnapshot(sequence: completionSequence)
-        }
-    }
-
-    /// Atomically claim only when the owner is idle and no lifecycle completed
-    /// since `snapshot`. Returning nil changes neither fact, so a recovery caller
-    /// can retain its launch allowance and obtain a fresh observation.
-    func claim(
-        _ operation: LocalRuntimeLifecycleOperation,
-        ifNoCompletionSince snapshot: LocalRuntimeLifecycleCompletionSnapshot
-    ) -> LocalRuntimeLifecycleLease? {
-        lock.withLock {
-            guard completionSequence == snapshot.sequence else { return nil }
-            return claimWhileLocked(operation)
-        }
-    }
-
-    public func release(_ lease: LocalRuntimeLifecycleLease) {
-        lock.withLock {
-            guard current == lease else { return }
-            current = nil
-            completionSequence += 1
-        }
-    }
-
-    private func claimWhileLocked(
-        _ operation: LocalRuntimeLifecycleOperation
-    ) -> LocalRuntimeLifecycleLease? {
-        guard current == nil else { return nil }
-        let lease = LocalRuntimeLifecycleLease(id: UUID(), operation: operation)
-        current = lease
-        return lease
     }
 }
 
@@ -233,9 +160,16 @@ public actor RuntimeInstallCoordinator {
         // Session admission is the first operation in this async transaction.
         // The filesystem lock protects pointer writers; this exact lease also
         // excludes the steady reconciler's stop/start lifecycle.
-        guard let lifecycleLease = lifecycleOwner.claim(.installation) else {
+        let lifecycleLease: LocalRuntimeLifecycleLease
+        switch lifecycleOwner.claim(.installation) {
+        case let .acquired(lease):
+            lifecycleLease = lease
+        case .contended:
             fail(.failed(reason: "another engine lifecycle action is in progress"))
             throw RuntimeInstallError.lifecycleBusy
+        case let .refused(refusal):
+            fail(.failed(reason: refusal.reason))
+            throw RuntimeInstallError.lifecycleUnavailable(refusal)
         }
         defer { lifecycleOwner.release(lifecycleLease) }
 
@@ -310,6 +244,16 @@ public actor RuntimeInstallCoordinator {
             try? installer.removeVersionDir(manifest.version)
             fail(.failed(reason: "engine identity became unavailable before replacement admission"))
             throw RuntimeInstallError.daemonBusy
+        }
+        // The cached offer was decided against the engine serving at check
+        // time; another app copy may have replaced it since. The same
+        // monotonic rule gates the engine serving now, so Install never
+        // replaces a newer engine or another build of the same version.
+        guard isMonotonicUpgrade(target: manifest.version, floors: [forwardServing.version]) else {
+            try? installer.removeVersionDir(manifest.version)
+            fail(.failed(reason: "not newer than the running engine"))
+            throw RuntimeInstallError.notNewerThanServing(
+                target: manifest.version, serving: forwardServing)
         }
 
         // 7. Daemon-owned atomic idle proof + admission fence + exact stop. The

@@ -90,7 +90,7 @@ async function listFiles(repoRoot: string): Promise<string[]> {
     const r = await runCapture(
       "git",
       ["-C", repoRoot, "ls-files", "--cached", "--others", "--exclude-standard"],
-      { timeoutMs: 30_000 },
+      { timeoutMs: 30_000, windowsConsole: "none" },
     );
     if (r.code === 0) {
       const files = r.stdout

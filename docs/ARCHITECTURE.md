@@ -434,6 +434,29 @@ mode's intent (`explain` for Ask, `audit` for Ask's `--deep-scan` sweep,
 mode requires it. Surfaces keep aggregate/default doctor evidence distinct from
 exact-profile evidence and routing gates on the identity actually selected.
 
+Attachment and Browser request admission (requests with neither skip it) uses
+execution's pool projection and candidate membership: the request's pool (a thread
+turn carries its sticky pool), else Settings `routing.eligible_harnesses`, is
+strict; otherwise Auto membership comes from host status, enabled account rows and
+a pinned profile's harnesses (`orchestrator/route-admission.ts`). One precedence
+owner resolves the profile for admission and the run: an explicit per-turn id
+wins, explicit `null` clears the thread pin for that turn (the run still keeps the
+thread's durable account binding), and omission inherits it. Admission checks
+static facts only. Missing, disabled or wrong-harness pins and unavailable lanes
+refuse with 400 `harness_unavailable`, including an empty Auto candidate pool.
+Every explicit-pool lane must accept each mandatory attachment; Auto may drop
+incompatible lanes. Remaining lanes with ambiguous platform bindings refuse with
+409 `credential_profile_ambiguous`; Browser needs one effective remaining lane
+under its access and web declarations. One bounded asymmetry remains: Browser-only
+Auto on Windows can reject ambiguous AGY rows that execution would have dropped
+as unready. Admission deliberately does not probe readiness to resolve that edge.
+Account readiness, quota and model admission belong to the run (owner decision),
+so a named profile admits its harness even when the default store is logged out.
+An accepted run whose selected account is not ready fails after run preparation
+(artifacts, Git boundary, `CLAUDE.md` bridge, in-place snapshot) and before any
+provider starts; run-level Exact Retry replays the same request. A direct
+`POST /v2/runs` carrying `threadId` is refused before admission reads that thread.
+
 Read-only routing additionally re-derives the env-sensitive readiness
 evidence in the run's own resolved context: a read-only run spawns inside a
 scoped throwaway HOME, so the router resolves that context ONCE (a typed
@@ -989,29 +1012,34 @@ credential homes and provider-variable scrubbing remain specific to each probe.
 The same runtime environment producer supplies an absent OS login name from
 `os.userInfo()`, preserving supplied identity and later environment
 patches. It never derives the name from a profile or scratch HOME.
-The shared `spawnProcess`/`runCaptureRaw` helpers start each child detached
-(its own process group), with piped stdio and `windowsHide`. Those options
-shape only the direct child's creation: when that child is a Node-interpreted
-npm wrapper, the native program it starts with inherited stdio is created with
-the wrapper's own spawn options. So for a Windows Node-interpreted vendor entry
-these helpers also `--require` core's packaged CommonJS
-`windows-quiet-children.cjs`; the single-file bundles find it in the core
-runtime deployed beside them, and a missing file is a launch error. It
-defaults `windowsHide` for the vendor's own exported `spawn`/`spawnSync`
-calls, keeping explicit values and Node's argument validation. Options are
-copied with their descriptors and prototype; exotic accessors that require
-the original object's private-field identity remain unsupported.
-The selected
-interpreter (an older Node beside the npm shim included), vendor script,
-argv, environment and binary identity are unchanged. `NODE_OPTIONS` is not
-touched, but Node children that inherit the wrapper's `execArgv` (`fork`,
-default workers) load it too. `exec*`, `fork` itself and windows that native
-descendants create independently are outside it. Codex's quota and
-`model/list` app-server probes, the install `--version` proof and the
-`login --help` probe start their direct child with `windowsHide` only: not
-detached and without the preload. Interactive sign-in (`profiles login`, the
-Terminal/ConPTY setup runner), `setup attach` and vendor update keep their own
-terminal policy.
+The shared `spawnProcess`/`runCaptureRaw` helpers start every child as a fully
+piped background process through one spawn shape (`backgroundSpawnShape`,
+`runtime-env.ts`). On POSIX the child is detached: it leads its own session and
+process group, so a cancel signals the whole tree. On Windows it is not
+detached, so libuv's `windowsHide` adds `CREATE_NO_WINDOW` (Windows ignores that
+flag beside `DETACHED_PROCESS`): the child owns an invisible console, and every
+console program it or its descendants start without flags of their own (shells,
+`git`, MCP servers, the native program behind an npm wrapper) inherits that
+console instead of opening a window. A descendant that detaches again or asks
+for a new console is outside it. The Windows tree kill is
+`taskkill /PID <root> /T /F` (`process-tree.ts`), which follows parent links and
+needs no process group; the child also joins libuv's kill-on-close Job, so it
+normally ends with the daemon process. Its descendants never join that Job: they
+end through the harness itself or the tree kill.
+A consumer passes `windowsConsole: "none"` to keep `DETACHED_PROCESS` and no
+console at all: agy does so for its runs and `--version` probe, because its
+print mode treats an openable `CONIN$` as interactive, and console programs an
+agy run starts may still open windows. Claudexor's own `git` calls keep the
+console-less start they always had, so they open no window; Git for Windows'
+`cmd\git.exe` launcher gives the real git a windowless console of its own, so a
+credential or host-key prompt there waits until the call's timeout, as before.
+Codex's quota and `model/list`
+app-server probes, the install `--version` proof and the `login --help` probe
+start their direct child with `windowsHide` only. So do the daemon-hosted
+no-Terminal sign-in children (URL disclosure and the device-code app-server):
+their runner and worker are detached and have no console to share.
+Interactive sign-in (`profiles login`, the Terminal/ConPTY setup runner),
+`setup attach` and vendor update keep their own terminal policy.
 
 ### Account resources and explicit resets
 
@@ -5878,9 +5906,13 @@ signed manifest → FULL unpack to `versions/<version>/` → re-verify → strip
 `com.apple.quarantine` (after hash verification) → probe-start the unpacked
 daemon with the app-bundled Node via `claudexord --probe` (prints
 `{version,buildSha}` and exits without binding a socket or opening the store) →
-require that exact pair to equal the signed manifest → claim one process-session
-lifecycle lease shared with steady daemon reconciliation before the first async
-install step → advisory idle probe (cheap early deferral) → daemon-atomic
+require that exact pair to equal the signed manifest → claim the shared app
+lifecycle lease described under Layout below before the first async install
+step → advisory idle probe (cheap early deferral) → read the exact serving
+identity and require the signed version to be strictly newer than it under the
+same monotonic rule (a cached offer can predate another app copy's replacement,
+so a newer engine or another build of the same version is refused before any
+stop) → daemon-atomic
 runtime-replacement admission (`claudexord --stop`: synchronously prove no
 queued/running run, active setup job, or unreconciled setup termination and fence
 every ingress; busy/unknown
@@ -5941,18 +5973,69 @@ the closure.
   equal-version pointer also falls back so a newly installed DMG cannot retain
   different bytes under the same version. On connection, the app side-effect-
   free probes the selected script and compares its exact `{version, buildSha}`
-  with the live handshake before hydrating daemon state. A mismatch is replaced
-  only after the daemon atomically proves idle and fences admission; busy or
-  unknown activity keeps the compatible daemon alive and visibly defers
-  reconciliation. A successful replacement retires the old client and re-reads
+  with the live handshake before hydrating daemon state. Exact version and SHA
+  are coherent regardless of entry path. Automatic replacement requires a
+  strictly newer stable x.y.z target; a newer serving version or unorderable
+  versions keep the compatible daemon. Equal-version alternate builds require
+  the one-shot Settings action described in DESIGN_SYSTEM. The action binds both
+  displayed identities and expires if either changes; ordinary Reconnect and
+  passive polls never request that switch. Replacement still requires the daemon
+  to atomically prove idle and fence admission; busy or unknown activity keeps
+  the compatible daemon alive and visibly defers reconciliation. A successful
+  replacement retires the old client and re-reads
   discovery before hydrating;
   any failure after lifecycle work begins goes offline rather than reusing an
   ambiguous process. An installed selection's probe must also equal the pointer's
   exact `{version,engineSha}` authority; the signed bundled selection uses its
   stamped probe as authority. The three-second identity poll retries deferred
   work when the daemon becomes idle. Reconciliation and in-app installation
-  claim the same exact session lifecycle lease before their first suspension,
-  so their stop/start transactions cannot overlap. Node is ALWAYS the
+  claim the same exact lifecycle lease before target observation. Its nonblocking
+  descriptor lock lives in the canonical discovery directory, independent of app
+  or socket spelling, and serializes participating app copies across the full
+  stop/start/proof transaction. On first launch the app creates a missing private
+  service directory before scheduling daemon startup. An existing owned canonical
+  directory is validated by uid, POSIX canonical path and pathname/descriptor inode identity, then
+  repaired to private permissions through that descriptor, matching engine
+  admission. Directory and lock opens do not follow leaf links; the app does not
+  acquire the engine's writer slot. Admission separates contention from refusal.
+  A lease held in this or another participating app, or one completed in this
+  app after the caller's observation, is contention. Contention is no new
+  observation: a passive poll keeps the notice and Settings offer published for
+  the same serving identity, and an explicit Switch Engine Build checks and
+  changes nothing, offers the same exact pair again with the reason and keeps
+  polling its connection without reconnecting or retrying. Outage recovery keeps
+  its start allowance and installation reports another lifecycle action. A
+  completion in another app is invisible to that process-local check, so outage
+  recovery re-reads discovery and handshakes once while it holds the lease,
+  before it consumes the allowance; an engine that answers is adopted by the
+  next ordinary probe instead of being started again. An unusable service
+  directory or lock file
+  (a link, foreign owner, non-private or multiply linked lock, or any other open
+  or lock error) is a refusal naming that path, never another owner.
+  Reconciliation keeps the compatible engine and shows the refusal as its notice;
+  outage recovery stays Offline with that notice, reported again by each later
+  outage, and re-checks after its ordinary pause without consuming the start;
+  installation fails before any download or stop. The sidebar update chip shows
+  the notice above any update offer or install outcome, and the Connecting and
+  Offline placeholder shows it when the sidebar is not shown. The offer and
+  notice belong to the connection that observed them: a lost handshake retires
+  both, and a recovery-only answer retires the offer and its guidance. Superseded
+  switch progress is retired without clearing a later notice or the terminal
+  failure carried into reconnect. Discovery and serving
+  identity are re-read under
+  that lease, with another identity check before stop. Outage recovery shares
+  the lease through handshake readiness or the bounded boot window. A queued
+  outage launch must present its exact lease and unexpired deadline at the actual
+  spawn boundary, under the owner lock. A retired connection's loop releases its
+  lease when it next checks the generation, after its current pause or probe;
+  that exact release invalidates a launch that has not spawned yet. Exact release
+  explicitly unlocks
+  before closing so inherited descriptor references cannot prolong that lease.
+  Exact token and connection-generation guards prevent stale completion from
+  clearing a successor's ownership or publishing its predecessor's identity.
+  The app lock never replaces engine root/writer authority or the installer's
+  pointer lock; older apps and external clients still rely on those engine
+  controls. Node is ALWAYS the
   app-bundled binary; because the
   whole closure unpacks together, the Browser MCP resolves adjacent to the
   daemon inside the same version dir.
@@ -5961,10 +6044,16 @@ the closure.
   signature fail-closed → compare `version` to the running engine and gate on
   `minAppVersion` → surface "Update available → vX.Y.Z" with an Install action.
   The last install attempt's historical outcome stays visible above any later
-  Install and "View release" offer. A selected engine, including one observed
+  Install and "View release" offer, and a local engine notice sits above both,
+  never instead of them; only an active install replaces it. A selected engine,
+  including one observed
   only in recovery mode, retires its offer; a recovery-only install clears the
   stale serving identity so a re-check uses the selected runtime pointer until
-  normal connection adopts an identity. There is no background update timer.
+  normal connection adopts an identity. A refused install whose offer is no longer
+  newer than the observed serving version recomputes the cached decision against
+  that version and clears its ETag, so a subsequent 304 cannot rearm the stale
+  offer. That observation does not report an installation. There is no background
+  update timer.
 - **Build-sha stamping (QA-002).** `build-engine-resources.sh` stamps `CLAUDEXOR_BUILD_SHA`
   into the esbuild daemon and CLI bundles via `--define`, and
   `build-runtime-closure.mjs` embeds the SAME sha in the manifest and refuses to

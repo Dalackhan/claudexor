@@ -1,3 +1,4 @@
+import { runCredentialProfileId } from "./run-credential-profile.js";
 import { mkdirSync } from "node:fs";
 import type {
   AccountEvidence,
@@ -156,14 +157,10 @@ export function createDaemonAgentRunner(deps: {
     };
     // INV-135 precedence: explicit per-turn profile > thread sticky >
     // unpinned; an explicit NULL forces unpinned (release wave round-11).
-    const requestedProfileId =
-      p.credentialProfileId === null
-        ? null
-        : typeof p.credentialProfileId === "string" && p.credentialProfileId
-          ? p.credentialProfileId
-          : threadId
-            ? (threads.getThread(threadId)?.credential_profile_id ?? null)
-            : null;
+    const requestedProfileId = runCredentialProfileId(
+      p,
+      (id) => threads.getThread(id)?.credential_profile_id,
+    );
     const continuityContext = threadContinuityContext({
       threads,
       threadId,

@@ -94,9 +94,13 @@ enum DaemonLauncher {
     /// daemon-script path is resolved through the installed runtime. The engine's probe
     /// names the heap ceiling first and runs off the caller's thread (outage recovery
     /// calls this on the main actor), so the spawn follows a moment later and a failed
-    /// spawn surfaces through the callers' existing handshake polls.
+    /// spawn surfaces through the callers' existing handshake polls. Outage
+    /// recovery supplies an exact lease/deadline permit, checked after the probe
+    /// under ownership at Process.run, so retired queued work cannot spawn late.
     @discardableResult
-    static func startIfNeeded(scriptURL: URL? = nil) -> Bool {
+    static func startIfNeeded(
+        scriptURL: URL? = nil, launchPermit: LocalRuntimeLaunchPermit? = nil
+    ) -> Bool {
         guard let node = bundledNode, let daemon = scriptURL ?? resolvedDaemon() else { return false }
         let fm = FileManager.default
         guard fm.isExecutableFile(atPath: node.path), fm.fileExists(atPath: daemon.path) else {
@@ -112,7 +116,14 @@ enum DaemonLauncher {
             process.environment = environment
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
-            try? process.run()
+            let spawn = {
+                do { try process.run(); return true } catch { return false }
+            }
+            if let launchPermit {
+                _ = launchPermit.perform(spawn)
+            } else {
+                _ = spawn()
+            }
         }
         return true
     }

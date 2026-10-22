@@ -1,5 +1,15 @@
 # @claudexor/gateway
 
+## 4.6.0
+
+### Patch Changes
+
+- Updated dependencies [b344c39]
+- Updated dependencies [a81897c]
+- Updated dependencies [2593b90]
+  - @claudexor/core@4.6.0
+  - @claudexor/schema@4.6.0
+
 ## 4.5.0
 
 ### Patch Changes

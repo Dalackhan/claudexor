@@ -322,7 +322,6 @@ export function prepareHarnessCommand(
   args: readonly string[],
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
-  background = false,
 ): ReturnType<typeof interpretedCommand> & { resolution: HarnessCommandResolution } {
   const pathValue =
     env.PATH ??
@@ -338,15 +337,34 @@ export function prepareHarnessCommand(
     });
   }
   return {
-    ...interpretedCommand(
-      command?.entrypoint ?? bin,
-      args,
-      env,
-      command?.interpreter,
-      background && platform === "win32",
-    ),
+    ...interpretedCommand(command?.entrypoint ?? bin, args, env, command?.interpreter),
     resolution,
   };
+}
+
+/**
+ * Windows console policy for a background child whose stdio is never inherited.
+ * `hidden` (the default) leaves out DETACHED_PROCESS, so `windowsHide` adds
+ * CREATE_NO_WINDOW: the child owns an invisible console, and every console
+ * program it starts without flags of its own inherits that console instead of
+ * opening a window. `none` keeps DETACHED_PROCESS, so the child has no console
+ * at all, for a vendor that treats an openable CONIN$ as an interactive
+ * terminal; console programs that child starts open windows of their own.
+ */
+export type WindowsConsolePolicy = "hidden" | "none";
+
+/**
+ * Spawn shape of `spawnProcess` and `runCaptureRaw`. POSIX: own session and
+ * process group, so a cancel signals the whole tree. Windows has no groups:
+ * the tree is stopped by `taskkill /T` (process-tree.ts), which follows parent
+ * links, and a child that is not detached joins libuv's kill-on-close Job, so
+ * it also ends when the daemon process does (its descendants never join it).
+ */
+export function backgroundSpawnShape(
+  platform: NodeJS.Platform = process.platform,
+  windowsConsole: WindowsConsolePolicy = "hidden",
+): { detached: boolean; windowsHide: true } {
+  return { detached: platform !== "win32" || windowsConsole === "none", windowsHide: true };
 }
 
 /**

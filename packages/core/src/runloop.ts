@@ -1,5 +1,6 @@
 import type { HarnessEvent, HarnessRunSpec } from "@claudexor/schema";
 import { spawnProcess, type ChildStdin } from "./proc.js";
+import type { WindowsConsolePolicy } from "./runtime-env.js";
 import type { ProcessTreeTerminationOutcome, ReapProcessTreeOptions } from "./process-tree.js";
 
 /**
@@ -61,6 +62,8 @@ export interface CliRunLoopOptions {
    */
   parseEvent: (obj: unknown, sessionId: string) => HarnessEvent[] | null;
   env?: Record<string, string | null | undefined>;
+  /** Forwarded to spawnProcess: the adapter's Windows console policy (default `hidden`). */
+  windowsConsole?: WindowsConsolePolicy;
   /** Label used in synthesized error messages; defaults to `bin`. */
   label?: string;
   /** Redactor applied to stderr detail before it is surfaced. */
@@ -163,6 +166,7 @@ export async function* runCliHarness(opts: CliRunLoopOptions): AsyncGenerator<Ha
       env: opts.env,
       inheritEnv: spec.env_inheritance,
       abortSignal,
+      ...(opts.windowsConsole ? { windowsConsole: opts.windowsConsole } : {}),
       ...(opts.input !== undefined ? { input: opts.input } : {}),
       ...(opts.reap ? { reap: opts.reap } : {}),
       onTerminationUnconfirmed: (info) => {

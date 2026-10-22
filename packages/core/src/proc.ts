@@ -4,7 +4,11 @@ import { readProcessLines, type ProcessStreamLimits } from "./process-lines.js";
 import { composeSpawnEnv } from "./env-scope.js";
 import { postExitDrain } from "./process-drain.js";
 import { runScopeMarkerOf } from "./process-scope.js";
-import { prepareHarnessCommand } from "./runtime-env.js";
+import {
+  backgroundSpawnShape,
+  prepareHarnessCommand,
+  type WindowsConsolePolicy,
+} from "./runtime-env.js";
 import {
   reapProcessTree,
   type KillTreeStrategy,
@@ -25,6 +29,8 @@ export interface SpawnOptions {
   streamLimits?: ProcessStreamLimits;
   cwd?: string;
   env?: Record<string, string | null | undefined>;
+  /** Windows console of the child (`runtime-env.ts`); default `hidden`. Ignored on POSIX. */
+  windowsConsole?: WindowsConsolePolicy;
   /**
    * Base env composition for the child: `mirror_native` (default) inherits the
    * parent env; `clean` starts from a minimal allowlist (agent env isolation).
@@ -145,25 +151,18 @@ export async function* spawnProcess(
   args: string[],
   opts: SpawnOptions = {},
 ): AsyncGenerator<ProcEvent> {
-  const invocation = prepareHarnessCommand(
-    cmd,
-    args,
-    composeSpawnEnv(opts.inheritEnv, opts.env),
-    process.platform,
-    true,
-  );
+  const invocation = prepareHarnessCommand(cmd, args, composeSpawnEnv(opts.inheritEnv, opts.env));
   const env = invocation.env;
   const child = spawn(invocation.binary, invocation.args, {
     cwd: opts.cwd,
     env,
     stdio: ["pipe", "pipe", "pipe"],
     // Fully piped background children; interactive login/attach own their terminal policy.
-    windowsHide: true,
-    // Put the child in its own process group so we can signal the WHOLE tree.
-    // Harnesses spawn grandchildren (shell tools, MCP servers); without this a
-    // cancel/timeout signals only the direct child and grandchildren leak,
-    // keep writing to the worktree, or hang the run forever.
-    detached: true,
+    // POSIX: the child leads its own process group so a cancel/timeout signals the
+    // WHOLE tree (harnesses start shell tools and MCP servers that would otherwise
+    // leak, keep writing to the worktree, or hang the run). Windows: an invisible
+    // console the child's console programs inherit; the tree kill is taskkill /T.
+    ...backgroundSpawnShape(process.platform, opts.windowsConsole),
   });
   if (typeof child.pid === "number") registerChildProcess(child.pid, cmd, runScopeMarkerOf(env));
   // Bounded post-exit output drain (#449 item 2): see `process-drain.ts`.
@@ -187,7 +186,7 @@ export async function* spawnProcess(
   child.once("close", () => resolveClosed());
 
   // Seed the DIRECT group identity NOW, while the child is provably alive and is
-  // its own group leader (detached => pgid == pid). If the direct child later
+  // its own group leader (POSIX detached => pgid == pid). If the direct child later
   // exits before the cancel-time tree snapshot but a grandchild survives in the
   // SAME pgid, that pgid is no longer reachable by ppid BFS (its chain to the
   // root is gone) and would never be enumerated — so reapProcessTree could
@@ -195,7 +194,7 @@ export async function* spawnProcess(
   // group tracked (and raw-probeable) until it is proven empty.
   const groupService = opts.processGroups ?? defaultProcessGroupService;
   let directGroupHandle: ProcessGroupHandle | undefined;
-  if (typeof child.pid === "number") {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
     const capture = groupService.captureLeader(child.pid);
     if (capture.status === "known") directGroupHandle = capture.handle;
   }

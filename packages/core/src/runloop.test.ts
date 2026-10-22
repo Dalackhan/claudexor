@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import { HarnessRunSpec, type HarnessEvent } from "@claudexor/schema";
 import { runCliHarness } from "./runloop.js";
-import { spawnProcess, type ChildStdin } from "./proc.js";
+import { spawnProcess, type ChildStdin, type SpawnOptions } from "./proc.js";
 
 const spec = (): HarnessRunSpec =>
   HarnessRunSpec.parse({
@@ -107,6 +107,28 @@ describe("runCliHarness one-shot input", () => {
     };
 
     await expect(collect()).rejects.toThrow(/mutually exclusive stdin owners/);
+  });
+});
+
+describe("runCliHarness Windows console policy", () => {
+  it("hands an adapter's console policy to the spawner and adds none of its own", async () => {
+    const seen: Array<SpawnOptions | undefined> = [];
+    const spawn: typeof spawnProcess = (bin, args, options) => {
+      seen.push(options);
+      return spawnProcess(bin, args, options);
+    };
+    for (const windowsConsole of ["none", undefined] as const) {
+      const run = runCliHarness({
+        bin: process.execPath,
+        args: ["-e", "0"],
+        spec: spec(),
+        spawn,
+        ...(windowsConsole ? { windowsConsole } : {}),
+        parseEvent: () => [],
+      });
+      for await (const event of run) void event;
+    }
+    expect(seen.map((options) => options?.windowsConsole)).toEqual(["none", undefined]);
   });
 });
 

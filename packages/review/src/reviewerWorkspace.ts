@@ -385,7 +385,7 @@ export async function buildReviewerCandidateInventory(
   const result = await runCaptureRaw(
     "git",
     ["-C", sourceRoot, "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--"],
-    { env: reviewerGitEnv(), timeoutMs: 30_000 },
+    { env: reviewerGitEnv(), timeoutMs: 30_000, windowsConsole: "none" },
   );
   if (result.code !== 0) {
     const detail = redactSecrets(
@@ -485,6 +485,7 @@ async function runGitOrThrow(label: string, cwd: string, args: string[]): Promis
     cwd,
     env: reviewerGitEnv(),
     timeoutMs: 60_000,
+    windowsConsole: "none",
   });
   if (result.code === 0) return;
   const detail = redactSecrets((result.stderr || result.stdout || `exit ${result.code}`).trim());

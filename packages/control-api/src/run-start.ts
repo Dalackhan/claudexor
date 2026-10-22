@@ -454,6 +454,8 @@ export async function handleRunCreate(
         await assertContinuationAdmissible(ctx.daemon, recorded);
         params = normalizeRunStart(ControlRunStartRequest.parse(recorded));
         await ctx.validateResources?.(params.attachments ?? []);
+        // A threadId is refused below; requirements would first read its pin.
+        if (params.threadId) return;
         await ctx.preflightRunRequirements?.(params);
       },
     );

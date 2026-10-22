@@ -753,6 +753,27 @@ frequency and volume are. The contracts:
     in this thread." The Canvas mode is retired (artifacts fold into this panel).
     The workspace is the sanctioned extension of the one-screen doctrine — never
     a third top-level screen.
+- **Local engine build selection (Settings → General).** Reconnect reloads the
+  connection without requesting an alternate build of the same version. When
+  reconciliation observes a different build of the selected version, General
+  shows the running and selected version/SHA and a separate **Switch Engine
+  Build** button. The existing reconciliation notice points here. The button
+  requests one idle-only switch bound to those identities; busy or unknown work
+  refuses it, and a changed identity requires a new observation and action.
+  While that request runs, the notice says the build is switching if work is
+  idle. A refusal keeps the same connection without a reconnect. If another
+  lifecycle action holds the shared lock, nothing is checked or changed: the
+  same pair is offered again with that reason, and the app never retries on its
+  own. The notice sits above the sidebar update chip's offer or install
+  outcome, never instead of them, and the Connecting/Offline placeholder shows
+  it when the sidebar is hidden.
+  A queued button action retains its displayed pair and cannot adopt a later
+  poll's offer. If replacement proof fails, canonical offline cleanup retires
+  stale projections and discovery keeps waiting for a late engine without a
+  second fallback launch.
+  Installation disables it with an explanatory tooltip. It never grants a
+  downgrade or makes passive polling switch builds. Newer or unorderable serving
+  versions retain the compatible connection with an explanatory notice.
 - Budget, Harness Doctor, and preferences live in the Settings scene (⌘,), not in
   the main window. Detachable pop-out windows remain out of scope.
 
@@ -841,7 +862,7 @@ views in the shared design-system files; screens compose them.
     until-clean, create and delegate are Agent STRATEGY knobs and Council is a
     Plan knob — all in the "⋯" popover, never intents; Spec and deep-scan are
     not intents),
-    the `ProjectChip` (the working directory — MRU recent + Browse…; sets the new
+    the `ProjectChip` (the project — MRU recent + Browse…; sets the new
     thread's project, an open thread's repo is bound; the ONLY place project
     selection lives in the app), the `HarnessAccountChip` (which
     harness answers in chat + the thread's account, sticky on the thread), the composite **`AccessChip`**
@@ -1330,7 +1351,7 @@ views in the shared design-system files; screens compose them.
   tabs, not top-level screens. (Review is inline per turn, not a Settings
   section; delivery is server-owned via the run decision/apply endpoints.)
   Settings groups are flat, solid, and shadowless. Settings does NOT own
-  project selection — there is no Current Project field; the working directory
+  project selection — there is no Current Project field; the project
   is picked only in the chat composer's `ProjectChip`. Global and per-harness
   Settings **auto-save** exact partial `/settings` patches by logical field lane;
   there is no Save button. Discrete controls save immediately. Text and numeric
@@ -1457,7 +1478,7 @@ DesignSystemComponents.swift, DesignTokens.swift.)
   user's mental model). The accessible NAME is the short, stable
   "Conversation message" — never the punctuation-heavy placeholder. One owner
   (`ComposerInputCopy`); surfaces read it, never re-phrase it.
-- **`ProjectChip`** — the composer's working-directory picker. Capsule (logo + folder
+- **`ProjectChip`** — the composer's project picker. Capsule (logo + folder
   name + chevron) opening a `Menu` of MRU recents (`model.recentProjects`, persisted) +
   "Browse…" (`NSOpenPanel`). In the draft state it sets the new thread's project; an
   open thread's repo is bound, so picking another project starts a new draft there.
@@ -1468,6 +1489,54 @@ DesignSystemComponents.swift, DesignTokens.swift.)
   SCOPE choice, never a deletion (the MRU list is untouched). The chip stays
   visible as the choose-project CTA in that state — the ONLY place project
   selection lives; Settings owns no Current Project field.
+  Duplicate folder names in recents and the selected chip append the shortest
+  distinguishing contiguous parent suffix (`app — red` / `app — blue` for
+  `/work/red/app` / `/work/blue/app`). Unique names stay short. Local recents
+  and each remote connection's saved folders are compared separately; menu
+  rows keep full-path help. `ProjectCheckoutPresentation` owns the chip's name,
+  help and accessibility value. The glyph never encodes Git topology: a
+  selected project always shows the ordinary folder in the chip's secondary
+  tint, and no project or unavailable thread metadata keeps the choose-project
+  folder in the existing accent treatment, in a fixed 14 × 14 point slot. Hover
+  help gives one checkout line, the selected full path, then the picker action;
+  the accessibility value gives the name, then the same line and path:
+
+  | State | Checkout line |
+  |---|---|
+  | Loading local checkout | Checking Git checkout… |
+  | Folder inside a primary Git checkout | In a primary Git checkout |
+  | Folder inside a linked Git worktree | In the linked Git worktree “worktree folder name” |
+  | No Git checkout from the folder up to `/` | Not in a Git checkout |
+  | Missing folder, or metadata unreadable or not recognized | Git checkout status unavailable |
+  | Remote | Git checkout status unavailable on remote host; the chip keeps its connection prefix |
+  | Selected thread metadata unavailable | Project metadata unavailable, with no draft or previous path |
+  | Initial / no project | No checkout line; only the picker action |
+
+  The primary checkout is the one holding the repository's own metadata (a
+  clone or `git init` folder, also with a separate Git directory); it never
+  means the main branch. A nested folder is in its checkout, not its root. No
+  line names the execution root: an isolated or delegated thread can run in
+  another tree, which the window subtitle discloses (INV-073). The menu's
+  accessible name is `Project`, with dynamic selection and checkout details in
+  its value. Read-only local metadata observation runs off-main, validates Git
+  common-directory membership and its reciprocal checkout backlink, and accepts
+  HEAD by Git's own discovery rule: a `ref:` into `refs/` (an unborn branch, or
+  the reftable format's placeholder) or a 40/64-hex detached id. It refreshes
+  when the chip appears or is hovered, and when the selected location, thread
+  or folder changes. A selection change restarts only that observation, never
+  the chip, so keyboard and VoiceOver focus stay on the menu after a pick; the
+  previous result is never shown for the new selection, and cancelled
+  completions cannot publish into it. Changes to Git or the filesystem under
+  the same selection are not watched: details may stay stale until one of those
+  refresh triggers, including for keyboard and VoiceOver users. Metadata calls
+  are synchronous off-main; an unavailable volume can delay a probe, and
+  cancellation cannot interrupt an already blocked filesystem call.
+  Remote selections never trigger local filesystem observation. Checkout
+  identity does not imply a thread's execution address or change its workspace
+  selection.
+  A selected thread's matching detail or location-scoped summary establishes
+  whether its project metadata is known. Missing metadata never becomes
+  `No project`; a confirmed scopeless thread retains that label.
 - **`OptionSection` / `OptionRow`** — the "⋯" popover building blocks: a caption-titled
   section, and a `labelWidth`-aligned label+control row (replaces ad-hoc `.fixedSize()` /
   magic-width pickers so every option lines up). Solid surface, token spacing.

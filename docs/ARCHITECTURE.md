@@ -989,29 +989,29 @@ credential homes and provider-variable scrubbing remain specific to each probe.
 The same runtime environment producer supplies an absent OS login name from
 `os.userInfo()`, preserving supplied identity and later environment
 patches. It never derives the name from a profile or scratch HOME.
-The shared `spawnProcess`/`runCaptureRaw` helpers start each child detached
-(its own process group), with piped stdio and `windowsHide`. Those options
-shape only the direct child's creation: when that child is a Node-interpreted
-npm wrapper, the native program it starts with inherited stdio is created with
-the wrapper's own spawn options. So for a Windows Node-interpreted vendor entry
-these helpers also `--require` core's packaged CommonJS
-`windows-quiet-children.cjs`; the single-file bundles find it in the core
-runtime deployed beside them, and a missing file is a launch error. It
-defaults `windowsHide` for the vendor's own exported `spawn`/`spawnSync`
-calls, keeping explicit values and Node's argument validation. Options are
-copied with their descriptors and prototype; exotic accessors that require
-the original object's private-field identity remain unsupported.
-The selected
-interpreter (an older Node beside the npm shim included), vendor script,
-argv, environment and binary identity are unchanged. `NODE_OPTIONS` is not
-touched, but Node children that inherit the wrapper's `execArgv` (`fork`,
-default workers) load it too. `exec*`, `fork` itself and windows that native
-descendants create independently are outside it. Codex's quota and
-`model/list` app-server probes, the install `--version` proof and the
-`login --help` probe start their direct child with `windowsHide` only: not
-detached and without the preload. Interactive sign-in (`profiles login`, the
-Terminal/ConPTY setup runner), `setup attach` and vendor update keep their own
-terminal policy.
+The shared `spawnProcess`/`runCaptureRaw` helpers start every child as a fully
+piped background process through one spawn shape (`backgroundSpawnShape`,
+`runtime-env.ts`). On POSIX the child is detached: it leads its own session and
+process group, so a cancel signals the whole tree. On Windows it is not
+detached, so libuv's `windowsHide` adds `CREATE_NO_WINDOW` (Windows ignores that
+flag beside `DETACHED_PROCESS`): the child owns an invisible console, and every
+console program it or its descendants start without flags of their own (shells,
+`git`, MCP servers, the native program behind an npm wrapper) inherits that
+console instead of opening a window. A descendant that detaches again or asks
+for a new console is outside it. The Windows tree kill is
+`taskkill /PID <root> /T /F` (`process-tree.ts`), which follows parent links and
+needs no process group; the child also joins libuv's kill-on-close Job, so it
+normally ends with the daemon process, while its descendants may break away.
+A consumer passes `windowsConsole: "none"` to keep `DETACHED_PROCESS` and no
+console at all: agy does so for its runs and `--version` probe, because its
+print mode treats an openable `CONIN$` as interactive, and console programs an
+agy run starts may still open windows. Codex's quota and `model/list`
+app-server probes, the install `--version` proof and the `login --help` probe
+start their direct child with `windowsHide` only. So do the daemon-hosted
+no-Terminal sign-in children (URL disclosure and the device-code app-server):
+their runner and worker are detached and have no console to share.
+Interactive sign-in (`profiles login`, the Terminal/ConPTY setup runner),
+`setup attach` and vendor update keep their own terminal policy.
 
 ### Account resources and explicit resets
 

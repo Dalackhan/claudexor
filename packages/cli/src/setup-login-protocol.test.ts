@@ -152,8 +152,8 @@ else fs.writeFileSync('observed.json', JSON.stringify({ args: process.argv.slice
       args: spec.args,
       marker: "sealed",
     });
-    // The captured help probe has no console window and no preload; the
-    // sign-in it precedes keeps its own terminal policy.
+    // The captured help probe has no console window; the Terminal sign-in it
+    // precedes keeps its own terminal policy.
     expect(spawned.map((call) => call.args)).toEqual([
       ["--no-warnings", spec.binary, "login", "--help"],
       ["--no-warnings", spec.binary, ...spec.args],
@@ -163,6 +163,34 @@ else fs.writeFileSync('observed.json', JSON.stringify({ args: process.argv.slice
       windowsHide: true,
     });
     expect(spawned[1]?.options.windowsHide).toBeUndefined();
+  });
+
+  it("hides the no-Terminal sign-in child that the console-less worker starts", async () => {
+    const { manifestPath, spec } = prepare("process.exit(0);\n", {
+      loginMode: "url_disclosure",
+      deviceCodePath: join(root, "setup-protocol", "runner-devicecode.json"),
+      interpreter: { binary: process.execPath, args: [] },
+    });
+    issuePermit(spec);
+    const spawned: SpawnOptions[] = [];
+    expect(
+      await runSetupLoginWorker(manifestPath, {
+        processGroupService: processGroups(),
+        selfPid: 4242,
+        spawnProcess: ((command: string, args: readonly string[], options: SpawnOptions) => {
+          spawned.push(options);
+          return spawn(command, args, options);
+        }) as never,
+      }),
+    ).toBe(0);
+    // Without the flag Windows gives this child a visible console of its own;
+    // the Terminal sign-in above keeps the window it exists to show.
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]).toMatchObject({
+      detached: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
   });
 
   it("still refuses changed script bytes when the sealed interpreter is unchanged", async () => {
@@ -900,12 +928,19 @@ describe("D-17 device-code runner worker", () => {
       userCode: "SECR-ET99",
     };
 
+    let appServerOptions: SpawnOptions | undefined;
     const exit = await runSetupLoginWorker(manifestPath, {
       processGroupService: processGroups(),
       selfPid: 4242,
-      spawnProcess: (() => fakeAppServer(disclosure).child) as never,
+      spawnProcess: ((_command: string, _args: readonly string[], options: SpawnOptions) => {
+        appServerOptions = options;
+        return fakeAppServer(disclosure).child;
+      }) as never,
     });
     expect(exit).toBe(0);
+    // No Terminal: the console-less worker's app-server opens no console window.
+    expect(appServerOptions).toMatchObject({ stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    expect(appServerOptions?.detached).toBeFalsy(); // it stays in the worker's process group
 
     // The one-time code rides ONLY the transient sidecar.
     const sidecar = readRunnerDeviceCode(spec.deviceCodePath!);

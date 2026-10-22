@@ -95,6 +95,8 @@ describe("AGY native raw stdin selection", () => {
       const options = observed.options[0]!;
       expect(options.input).toBe(expected);
       expect(options.session).toBeUndefined();
+      // An openable CONIN$ selects agy's interactive mode: runs stay console-less on Windows.
+      expect(options.windowsConsole).toBe("none");
       for (const flag of ["-p", "--print", "--prompt"]) expect(options.args).not.toContain(flag);
       expect(options.args).not.toContain(expected);
       expect(options.args[options.args.indexOf("--conversation") + 1]).toBe(

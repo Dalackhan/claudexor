@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Build a complete four-target SSH runtime package for an unsigned local
- * Claudexor.app. The package is signed with an ephemeral Ed25519 authority
- * whose public half is bundled beside the manifest; the private half exists
- * only in this process and is never written.
+ * Build a complete four-target SSH runtime package for a local ad-hoc-signed
+ * (non-Developer-ID) Claudexor.app. The package is signed with an ephemeral
+ * Ed25519 authority whose public half is bundled beside the manifest; the
+ * private half exists only in this process and is never written.
  *
  * Production builds must never consume this source. build-app.sh compiles the
  * reader behind CLAUDEXOR_DEV_REMOTE_RUNTIME and refuses that flag together
@@ -172,7 +172,7 @@ function main() {
     buildSha,
     protocolMajor: REMOTE_RUNTIME_PROTOCOL_MAJOR,
     minAppVersion: version,
-    notes: `Unsigned local Claudexor.app development SSH runtime ${version}.`,
+    notes: `Local ad-hoc-signed (non-Developer-ID) Claudexor.app development SSH runtime ${version}.`,
     assets: metadata,
     keyId: "unsigned",
     algorithm: "Ed25519",

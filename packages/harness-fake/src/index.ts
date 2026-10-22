@@ -126,7 +126,11 @@ function buildManifest(id: string, provider: ProviderFamily): HarnessManifest {
         preferred_source: "none",
         credential_transports: [{ source: "none", kind: "none", relocatable_by: ["none"] }],
       },
-      access_control: { readonly_mechanism: "none", write_mechanism: "none" },
+      access_control: {
+        readonly_mechanism: "none",
+        write_mechanism: "none",
+        auxiliary_writable_roots: false,
+      },
       isolation: { supported_containment: ["env_or_file_injection"] },
       // Only the live-input fixtures have a channel; every other fake keeps
       // `none` so the engine answers `unsupported` without a native write.

@@ -73,7 +73,11 @@ export const CLAUDE_CAPABILITY_PROFILE: HarnessCapabilityProfile =
       ],
       managed_login: CLAUDE_MANAGED_LOGIN,
     },
-    access_control: { readonly_mechanism: "tool_allowlist", write_mechanism: "tool_policy" },
+    access_control: {
+      readonly_mechanism: "tool_allowlist",
+      write_mechanism: "tool_policy",
+      auxiliary_writable_roots: false,
+    },
     isolation: {
       supported_containment: ["scoped_home_keychain_bridge", "env_or_file_injection"],
     },

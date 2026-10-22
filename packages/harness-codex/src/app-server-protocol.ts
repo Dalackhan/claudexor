@@ -15,6 +15,7 @@ import { codexEffortFor } from "./effort-probe.js";
 import { parseCodexEvent, type CodexParseState } from "./parse.js";
 import { codexRateLimitEvents } from "./quota.js";
 import { CodexRpcError } from "./rpc-error.js";
+import { codexSandboxMode } from "./sandbox.js";
 export { CodexRpcError } from "./rpc-error.js";
 
 export type JsonObject = Record<string, unknown>;
@@ -396,13 +397,6 @@ export async function readCodexLifecycle(
   };
 }
 
-function sandboxMode(access: HarnessRunSpec["access"]): string | null {
-  if (access === "readonly") return "read-only";
-  if (access === "workspace_write") return "workspace-write";
-  if (access === "full") return "danger-full-access";
-  return null;
-}
-
 export function codexAppServerThreadParams(
   spec: HarnessRunSpec,
   /** The run's ONE effort receipt (`submitted`); arg-shape callers resolve on the snapshot. */
@@ -440,7 +434,7 @@ export function codexAppServerThreadParams(
   };
   if (effort) config["model_reasoning_effort"] = effort;
   if (spec.processing?.submittedNative) config["service_tier"] = spec.processing.submittedNative;
-  const sandbox = sandboxMode(spec.access);
+  const sandbox = codexSandboxMode(spec.access);
   return {
     cwd: spec.cwd,
     model: spec.model_hint,

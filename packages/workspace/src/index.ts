@@ -15,6 +15,7 @@ export * from "./directory-workspace.js";
 export * from "./files-io.js";
 export * from "./files-apply.js";
 export * from "./continuation-sources.js";
+export * from "./auxiliary-writable-roots.js";
 
 export {
   readContinuationEvidence,

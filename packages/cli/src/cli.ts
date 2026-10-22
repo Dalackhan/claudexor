@@ -339,10 +339,15 @@ async function orchestrate(
     const cacheTtl = flagStr(args, "prompt-cache-ttl");
     promptCacheTtl = cacheTtl === undefined ? undefined : PromptCacheTtl.parse(cacheTtl);
     const scopePaths = stringFlagValues(flagValues(args, "scope-path"), "scope-path");
+    const auxiliaryWritableRoots = stringFlagValues(
+      flagValues(args, "auxiliary-writable-root"),
+      "auxiliary-writable-root",
+    );
     execution = RunExecution.parse({
       isolation: flagBool(args, "in-place") ? "live" : "envelope",
       workspaceKind: flagStr(args, "workspace-kind"),
       ...(scopePaths.length ? { scopePaths } : {}),
+      ...(auxiliaryWritableRoots.length ? { auxiliaryWritableRoots } : {}),
     });
     resolvedHarnesses = harnessList(args);
     resolvedPrimaryHarness = flagStr(args, "primary-harness");

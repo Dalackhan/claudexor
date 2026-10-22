@@ -727,6 +727,7 @@
                               "delegated_confinement_unavailable",
                               "delegated_evidence_incomplete",
                               "access_profile_incompatible",
+                              "auxiliary_writable_roots_unsupported",
                               "retired_access_profile"
                             ],
                             "description": "Machine-readable failure sub-code within a RunFailure category, including historical delegated-run failures and active access-profile refusals."

@@ -30,9 +30,13 @@ public struct RunScope: Codable, Sendable, Equatable {
 
 public struct RunExecution: Codable, Sendable, Equatable {
     public var isolation: String
+    /// Caller-created service directories an Agent run may also write
+    /// (`execution.auxiliaryWritableRoots`); nil is omitted on the wire.
+    public var auxiliaryWritableRoots: [String]?
 
-    public init(isolation: String = "envelope") {
+    public init(isolation: String = "envelope", auxiliaryWritableRoots: [String]? = nil) {
         self.isolation = isolation
+        self.auxiliaryWritableRoots = auxiliaryWritableRoots
     }
 }
 

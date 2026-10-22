@@ -1,13 +1,16 @@
 import type { HarnessEvent, HarnessRunSpec } from "@claudexor/schema";
 import { nowIso } from "@claudexor/util";
 import { codexAppServerInput } from "./attachments.js";
-import { asObject, codexAppServerApprovalParams, type JsonObject } from "./app-server-protocol.js";
+import { asObject, type JsonObject } from "./app-server-protocol.js";
+import { codexTurnParams } from "./app-server-session.js";
 import { ownsNotification } from "./app-server-threads.js";
 
 /** Start under the run's policy and bind the receipt to the root turn, not a child. */
 export async function startCodexTurn(input: {
   spec: HarnessRunSpec;
   threadId: string;
+  /** The run's auxiliary-root turn policy; undefined keeps the thread's own sandbox. */
+  sandboxPolicy?: JsonObject;
   requiredMcpServers: string[];
   request(method: string, params: JsonObject): Promise<JsonObject>;
   nextNotification(
@@ -19,7 +22,7 @@ export async function startCodexTurn(input: {
   const { spec, threadId, request, nextNotification } = input;
   const turnResult = await request("turn/start", {
     threadId,
-    ...codexAppServerApprovalParams(spec),
+    ...codexTurnParams(spec, input.sandboxPolicy),
     input: codexAppServerInput(spec),
     ...(spec.output_schema != null ? { outputSchema: spec.output_schema } : {}),
   });

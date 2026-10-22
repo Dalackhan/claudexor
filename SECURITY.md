@@ -59,6 +59,14 @@ What Claudexor already does, so you can calibrate reports:
   stop the process from reaching other same-user host paths. In particular,
   trusted `full` can read or mutate out-of-project state, and those effects are
   outside Claudexor's patch capture, review, revert, and rollback custody.
+- `execution.auxiliaryWritableRoots` is a caller grant, not a confinement claim:
+  under `workspace_write` a capable adapter may write those exact directories,
+  and the same custody gap applies to what it writes there. Admission refuses
+  roots that would reach HOME itself, Claudexor state, the project, the execution
+  tree or their Git metadata, but cannot judge whether a granted directory is
+  safe to share; sharing one mutable environment between concurrent runs, or
+  granting a vendor's own configuration directory under HOME, is the caller's
+  decision.
 - Repository trust gates authorization for an operator at a surface to request
   native `full`; it is not a containment claim. `workspace_write` and `readonly`
   mean the selected adapter's native policy, whose exact enforcement differs by
@@ -85,7 +93,8 @@ What Claudexor already does, so you can calibrate reports:
   on mutating delegated attempts; the immutable contract records the resulting
   `full` effective profile but not which authority admitted it.
 - The macOS app cannot originate the marker: its `RunExecution` carries only
-  `isolation`. It can re-issue a run that already recorded one, because Retry
+  `isolation` and an optional `auxiliaryWritableRoots` list that no app control
+  sets. It can re-issue a run that already recorded one, because Retry
   Exact replays the recorded request and the Run Again draft keeps
   `execution`, so both carry `delegated` forward into a new `full` run without a
   grant; `claudexor retry` and `claudexor run-again` behave the same way.

@@ -84,6 +84,7 @@ function lane(
     defaultReady?: boolean;
     attachments?: boolean;
     browser?: boolean;
+    auxiliaryWritableRoots?: boolean;
     implement?: boolean;
     enabledIntents?: Intent[];
   } = {},
@@ -105,7 +106,8 @@ function lane(
       provider_family: "local",
       capability_profile: {
         attachment_inputs: options.attachments === false ? [] : [textInput],
-        mcp_injection_requires_full_access: true,
+        mcp_injection_requires_full_access: !options.auxiliaryWritableRoots,
+        access_control: { auxiliary_writable_roots: options.auxiliaryWritableRoots ?? false },
       },
       capabilities: {
         implement: options.implement ?? true,
@@ -125,6 +127,9 @@ function lane(
   );
   const adapter: HarnessAdapter = {
     id,
+    capabilityProfile: HarnessCapabilityProfile.parse({
+      access_control: { auxiliary_writable_roots: options.auxiliaryWritableRoots ?? false },
+    }),
     discover,
     doctor,
     probeCredentialProfile: probe,
@@ -519,6 +524,79 @@ describe("requirements admission resolves static facts; the run checks account r
       if (code) await expect(result).rejects.toMatchObject({ code });
       else await expect(result).resolves.toBeUndefined();
       expect(probes(agy, codex)).toEqual([]);
+    },
+  );
+
+  it.each([
+    { selection: "auto", roots: true, code: undefined },
+    { selection: "auto", roots: true, nativeBrowser: true, code: "browser_unavailable" },
+    { selection: "auto", roots: true, browser: false, code: undefined },
+    {
+      selection: "settings",
+      roots: true,
+      browser: false,
+      code: "auxiliary_writable_roots_unsupported",
+    },
+    { selection: "pin", roots: true, browser: false, code: "auxiliary_writable_roots_unsupported" },
+    { selection: "request", roots: true, code: "auxiliary_writable_roots_unsupported" },
+    { selection: "settings", roots: true, code: "auxiliary_writable_roots_unsupported" },
+    { selection: "pin", roots: true, code: "auxiliary_writable_roots_unsupported" },
+    { selection: "auto", roots: false, code: "credential_profile_ambiguous" },
+    { selection: "request", roots: false, code: "credential_profile_ambiguous" },
+    { selection: "settings", roots: false, code: "credential_profile_ambiguous" },
+    { selection: "pin", roots: false, code: "credential_profile_ambiguous" },
+  ])(
+    "auxiliary roots compose with profile cardinality: $selection/roots=$roots/browser=$browser",
+    async ({ selection, roots, browser = true, nativeBrowser = false, code }) => {
+      // Real Windows AGY cardinality policy, projected onto this test host.
+      // The other lane declares workspace-write Browser to isolate pool admission;
+      // the real Codex Browser access contract is covered separately below.
+      const agy = lane("agy", { defaultReady: true });
+      agy.adapter = {
+        ...agy.adapter,
+        capabilityProfile: HarnessCapabilityProfile.parse({
+          ...AGY_CAPABILITY_PROFILE,
+          auth: {
+            ...AGY_CAPABILITY_PROFILE.auth,
+            credential_profile_policies:
+              AGY_CAPABILITY_PROFILE.auth.credential_profile_policies!.map((policy) => ({
+                ...policy,
+                platforms: ["darwin", "linux", "win32"],
+              })),
+          },
+        }),
+      };
+      const codex = lane("codex", { defaultReady: true, auxiliaryWritableRoots: true });
+      if (nativeBrowser) codex.discover.mockImplementation(realCodex().discover);
+      updateGlobalConfig((config) => ({
+        ...config,
+        credential_profiles: [profile("old-one", "agy"), profile("old-two", "agy")],
+        routing: {
+          ...config.routing,
+          eligible_harnesses: selection === "settings" ? ["codex", "agy"] : [],
+        },
+      }));
+      const { preflight, statusAll } = fixture([codex, agy], null);
+      const result = preflight(
+        request({
+          browser,
+          attachments: [],
+          access: "workspace_write",
+          harnesses: selection === "request" ? ["codex", "agy"] : undefined,
+          credentialProfileId: selection === "pin" ? "old-one" : undefined,
+          execution: roots ? { auxiliaryWritableRoots: ["/fixture/download-cache"] } : {},
+        }),
+      );
+      if (code) await expect(result).rejects.toMatchObject({ code });
+      else await expect(result).resolves.toBeUndefined();
+      expect(probes(agy, codex)).toEqual([]);
+      if (roots) {
+        expect(agy.discover).not.toHaveBeenCalled();
+        expect(agy.doctor).not.toHaveBeenCalled();
+        if (selection === "auto" && browser)
+          expect(statusAll).toHaveBeenCalledWith("/fixture/project", ["codex"]);
+        else expect(statusAll).not.toHaveBeenCalled();
+      }
     },
   );
 

@@ -229,7 +229,27 @@ describe("delegated boundary disclosure", () => {
     );
     expect(disclosure).toContain(DELIBERATE_NO_OUTER_BOUNDARY_REASON);
     expect(disclosure).toContain("not containment");
+    expect(disclosure).toContain("Stay within\nthe execution workspace and do not access");
     expect(outerBoundaryNotice(scopedHarnessHome(wsm, envelope, true, false))).toBeNull();
+  });
+
+  it("names explicit auxiliary grants instead of claiming the workspace is the only target", () => {
+    const envelope = envelopeAt(base, repoRoot, true);
+    const roots = ["/srv/cache/uv", "/srv/scratch"];
+    const delegated = outerBoundaryNotice(
+      scopedHarnessHome(wsm, envelope, true, true, "workspace_write"),
+      roots,
+    );
+    expect(delegated).toContain(
+      "the execution workspace and the granted service directories below",
+    );
+    expect(delegated).toContain("/srv/cache/uv, /srv/scratch");
+    expect(delegated).toContain("never part of the project result");
+    // An ordinary lane has no boundary disclosure, but still learns its grant.
+    expect(outerBoundaryNotice(scopedHarnessHome(wsm, envelope, true, false), roots)).toContain(
+      "/srv/cache/uv, /srv/scratch",
+    );
+    expect(outerBoundaryNotice(scopedHarnessHome(wsm, envelope, true, false), [])).toBeNull();
   });
 });
 

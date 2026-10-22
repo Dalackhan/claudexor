@@ -83,6 +83,13 @@ export class RequestRequirementsResolver {
       : requestedAccess;
   }
 
+  /** Explicit auxiliary writable roots need the lane's OWN workspace_write
+   * access plus a native per-turn mechanism; patch producers and read-only
+   * lanes never receive them. */
+  auxiliaryWritableRootsCapable(laneAccess: AccessProfile, declared: boolean): boolean {
+    return laneAccess === "workspace_write" && declared;
+  }
+
   assertConvergenceWorkspace(
     inPlace: boolean,
     routes: { implementationTransport: ImplementationTransport }[],

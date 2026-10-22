@@ -709,6 +709,39 @@ describe("mcp daemon body mapping", () => {
     }
   });
 
+  it("forwards a turn's own auxiliary writable roots and nothing when omitted", async () => {
+    const { mcpSurfaceRunner } = await import("./mcp-runner.js");
+    const daemonRun = await import("./daemon-run.js");
+    const ensureSpy = vi.spyOn(daemonRun, "ensureDaemon").mockResolvedValue({
+      client: {} as never,
+      addr: { baseUrl: "http://x", token: "t" } as never,
+      engine: { engineVersion: null, engineBuildSha: null, servingMode: "normal" },
+    });
+    const bodies: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return {
+          ok: true,
+          status: 202,
+          json: async () => ({ jobId: "j", turnId: "t", threadId: "th", state: "queued" }),
+        } as never;
+      }),
+    );
+    try {
+      const runner = mcpSurfaceRunner();
+      const execution = { auxiliaryWritableRoots: ["/srv/cache"] };
+      await runner({ mode: "__thread_turn", threadId: "th", prompt: "grant", execution });
+      await runner({ mode: "__thread_turn", threadId: "th", prompt: "omit" });
+      expect(bodies[0]).toMatchObject({ prompt: "grant", execution });
+      expect(bodies[1]).not.toHaveProperty("execution");
+    } finally {
+      ensureSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("reads the daemon thread detail without creating a run or starting an absent daemon", async () => {
     const { mcpSurfaceRunner } = await import("./mcp-runner.js");
     const daemonRun = await import("./daemon-run.js");

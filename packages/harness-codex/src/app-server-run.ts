@@ -5,7 +5,6 @@ import {
   asObject,
   CodexServerRequestRefusal,
   codexAppServerEvents,
-  codexAppServerThreadParams,
   codexRequestRefusal,
   codexRequiredMcpStatuses,
   createCodexSteer,
@@ -21,6 +20,7 @@ import { CodexCancellation } from "./app-server-cancel.js";
 import { CodexApprovals } from "./app-server-approvals.js";
 import { CodexAutoReview } from "./app-server-auto-review.js";
 import { startCodexTurn } from "./app-server-start.js";
+import { codexAppServerThreadRequest, codexTurnSandboxPolicy } from "./app-server-session.js";
 import {
   CodexSubagentThreads,
   codexCompletedEvent,
@@ -366,15 +366,7 @@ export async function* runCodexAppServer(
       capabilities: { experimentalApi: true },
     });
     await notify("initialized", null);
-    const threadResult = await request(
-      input.spec.resume_session_id ? "thread/resume" : "thread/start",
-      input.spec.resume_session_id
-        ? {
-            ...codexAppServerThreadParams(input.spec, input.effort),
-            threadId: input.spec.resume_session_id,
-          }
-        : codexAppServerThreadParams(input.spec, input.effort),
-    );
+    const threadResult = await request(...codexAppServerThreadRequest(input.spec, input.effort));
     const thread = asObject(threadResult["thread"]);
     const threadId = thread?.["id"];
     if (typeof threadId !== "string") throw new Error("Codex app-server omitted thread id");
@@ -391,9 +383,12 @@ export async function* runCodexAppServer(
     // arrival order now that start named the root; resume was bound upfront.
     if (rootWasUnknown) notifications.forEach(observeOwnNotification);
     await waitForCodexMcp(requiredMcpStatuses, nextNotification);
+    // Explicit auxiliary roots ride only the turn policy (app-server-session.ts).
+    const sandboxPolicy = codexTurnSandboxPolicy(input.spec, threadResult["sandbox"]);
     yield await startCodexTurn({
       spec: input.spec,
       threadId,
+      sandboxPolicy,
       requiredMcpServers: parseState.requiredMcpServers ?? [],
       request,
       nextNotification,
@@ -509,6 +504,7 @@ export async function* runCodexAppServer(
           autoReview.pending;
         const handbackInput = {
           turnId: String(pendingTerminal?.["id"]),
+          sandboxPolicy,
           finalAnswer,
           completed: terminal.events,
           request,

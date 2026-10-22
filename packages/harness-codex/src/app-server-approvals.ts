@@ -124,10 +124,10 @@ export class CodexApprovals {
         this.items.delete(item["id"]);
         // Cache only reviewable changes, never an unbounded transcript/tool output.
         if (item["type"] === "fileChange") {
-          const changes = fileChanges(item["changes"], this.deps.spec.cwd);
+          const changes = fileChanges(item["changes"], this.deps.spec);
           if (changes) this.items.set(item["id"], { changes });
         } else if (item["type"] === "commandExecution") {
-          const command = commandDetails(item, this.deps.spec.cwd);
+          const command = commandDetails(item, this.deps.spec);
           if (command && safeReview(command)) this.items.set(item["id"], command);
         }
       }
@@ -202,7 +202,7 @@ export class CodexApprovals {
       if (params["kind"] != null && params["kind"] !== "command") return null;
       const command = commandDetails(
         { command: params["command"] ?? item?.["command"], cwd: params["cwd"] ?? item?.["cwd"] },
-        this.deps.spec.cwd,
+        this.deps.spec,
       );
       if (!command) return null;
       action = command;
@@ -260,7 +260,10 @@ function safeReview(value: JsonObject): string | null {
     : null;
 }
 
-function fileChanges(value: unknown, cwd: string): JsonObject[] | null {
+/** The run's reviewable surface: its cwd plus the auxiliary roots it was granted. */
+type ReviewScope = Pick<HarnessRunSpec, "cwd" | "auxiliary_writable_roots">;
+
+function fileChanges(value: unknown, scope: ReviewScope): JsonObject[] | null {
   if (!Array.isArray(value) || !value.length) return null;
   const changes: JsonObject[] = [];
   for (const raw of value) {
@@ -275,7 +278,14 @@ function fileChanges(value: unknown, cwd: string): JsonObject[] | null {
     )
       return null;
     const paths = [change["path"], kind?.["move_path"]];
-    if (paths.some((path) => path != null && (typeof path !== "string" || !reviewPath(path, cwd))))
+    if (
+      paths.some(
+        (path) =>
+          path != null &&
+          (typeof path !== "string" ||
+            !reviewPath(path, scope.cwd, scope.auxiliary_writable_roots)),
+      )
+    )
       return null;
     changes.push({
       path: change["path"],
@@ -289,14 +299,14 @@ function fileChanges(value: unknown, cwd: string): JsonObject[] | null {
   return safeReview({ changes }) ? changes : null;
 }
 
-function commandDetails(value: JsonObject, cwd: string): JsonObject | null {
+function commandDetails(value: JsonObject, scope: ReviewScope): JsonObject | null {
   const command = value["command"];
   const directory = value["cwd"];
   return typeof command === "string" &&
     command.trim() &&
     typeof directory === "string" &&
     isAbsolute(directory) &&
-    reviewPath(directory, cwd)
+    reviewPath(directory, scope.cwd, scope.auxiliary_writable_roots)
     ? { command, cwd: directory }
     : null;
 }
@@ -320,7 +330,13 @@ function canonicalTarget(path: string): string | null {
   }
 }
 
-export function reviewPath(path: string, cwd: string): boolean {
+/** A reviewable path lies in the run's cwd or one of its granted auxiliary
+ * roots; reviewing it only OFFERS the action, never grants it automatically. */
+export function reviewPath(
+  path: string,
+  cwd: string,
+  grantedRoots: readonly string[] = [],
+): boolean {
   const root = canonicalTarget(resolve(cwd));
   const target = canonicalTarget(resolve(cwd, path));
   if (
@@ -330,11 +346,15 @@ export function reviewPath(path: string, cwd: string): boolean {
     sensitiveResourcePolicy.classifyPath(target).sensitive
   )
     return false;
-  const rel = relative(root, target);
-  return (
-    rel === "" ||
-    (!isAbsolute(rel) &&
-      rel !== ".." &&
-      !rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`))
+  return [root, ...grantedRoots.map((granted) => canonicalTarget(resolve(granted)))].some(
+    (scope) => {
+      const rel = scope === null ? ".." : relative(scope, target);
+      return (
+        rel === "" ||
+        (!isAbsolute(rel) &&
+          rel !== ".." &&
+          !rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`))
+      );
+    },
   );
 }

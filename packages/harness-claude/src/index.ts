@@ -351,11 +351,8 @@ export function createClaudeAdapter(deps: Partial<ClaudeRuntimeDeps> = {}): Harn
         capability_profile: {
           ...CLAUDE_CAPABILITY_PROFILE,
           access_control: {
+            ...CLAUDE_CAPABILITY_PROFILE.access_control,
             readonly_mechanism: readonlyProfile.supported ? "tool_allowlist" : "none",
-            // workspace_write pre-approves Bash with no FS/network fence
-            // (claude has no sandbox): BROADER than codex's seatbelt, said
-            // typed here instead of prose in another repo.
-            write_mechanism: "tool_policy",
           },
           auth: {
             ...CLAUDE_CAPABILITY_PROFILE.auth,

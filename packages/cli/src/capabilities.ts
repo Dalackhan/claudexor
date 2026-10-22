@@ -11,6 +11,7 @@ import {
   WorkspaceKind,
   type CatalogHarness,
   type ControlHarnessModelsResponse,
+  type HarnessCapabilityProfile,
 } from "@claudexor/schema";
 import { loadConfig } from "@claudexor/config";
 import { validateModel } from "@claudexor/core";
@@ -44,6 +45,13 @@ const NO_PROJECT_ROOT = "/nonexistent-claudexor-project";
  * service, the `claudexor capabilities` verb, and the MCP
  * `claudexor_capabilities` tool — three views, one composer.
  */
+/** The negotiated access-control row: capability-profile facts, never a harness name. */
+export function catalogAccessControl(
+  profile: HarnessCapabilityProfile | undefined,
+): CatalogHarness["accessControl"] {
+  return { auxiliaryWritableRoots: profile?.access_control.auxiliary_writable_roots ?? false };
+}
+
 export async function buildAgentCapabilityCatalog(): Promise<AgentCapabilityCatalog> {
   const [statuses, git] = await Promise.all([
     buildGateway({ includeFakes: false }).statusAll({ cwd: NO_PROJECT_ROOT }),
@@ -107,6 +115,7 @@ export async function buildAgentCapabilityCatalog(): Promise<AgentCapabilityCata
         accessProfilesSupported: [...(s.manifest?.access_profiles_supported ?? [])],
         readonlyMechanism: profile?.access_control.readonly_mechanism ?? "none",
         writeMechanism: profile?.access_control.write_mechanism ?? "none",
+        accessControl: catalogAccessControl(profile),
         delegation: delegationCapabilityFor(s.manifest),
         liveInput: profile?.live_input ?? "none",
         setupLogin: await effectiveSetupLoginCapability(s.id, {

@@ -64,6 +64,7 @@ export * from "./control.js";
 export * from "./control-process-scope.js";
 export * from "./control-harness-list.js";
 export * from "./run-strategy.js";
+export * from "./auxiliary-writable-roots.js";
 export * from "./plan.js";
 export * from "./status-projection.js";
 export * from "./control-operation-responses.js";

@@ -13,6 +13,7 @@ import {
   RecordedControlRunStartRequest,
   RETIRED_EXTERNAL_SANDBOX_FULL,
   runAccessStrategyViolation,
+  runAuxiliaryWritableRootsViolation,
   runExecutionWorkspaceRootAllowed,
   runExecutionWorkspaceViolation,
   runStartStrategyViolations,
@@ -25,6 +26,10 @@ import {
   safeProblemMessage,
   safeProblemRequiredActions,
 } from "@claudexor/util";
+import {
+  assertAuxiliaryWritableRootSpelling,
+  auxiliaryWritableRootDirectory,
+} from "@claudexor/workspace";
 import type { DaemonFacadeClient } from "./daemon-server.js";
 import { assertContinuationAdmissible, resolveContinuationBody } from "./run-continuation-start.js";
 export { acceptedTaskGroupReceipt, unboundRunStartResponse } from "./run-start-receipt.js";
@@ -171,8 +176,11 @@ export function normalizeRunStart(
   // this filesystem-only normalizer does not own. The project-aware preflight
   // resolves that default and applies the same shared requirement below; only
   // an explicitly mutating request can be decided at this boundary.
+  // The same split decides auxiliary roots: mode and an explicit access here,
+  // the configured default in the preflight; engine admission canonicalizes.
   const workspaceViolation =
-    parsed.access === undefined ? null : runExecutionWorkspaceViolation(parsed, parsed.access);
+    (parsed.access === undefined ? null : runExecutionWorkspaceViolation(parsed, parsed.access)) ??
+    runAuxiliaryWritableRootsViolation({ ...parsed, mode }, parsed.access);
   if (workspaceViolation) {
     throw Object.assign(new Error(workspaceViolation.message), {
       status: 400,
@@ -180,6 +188,11 @@ export function normalizeRunStart(
       retryable: workspaceViolation.retryable,
       requiredActions: [...workspaceViolation.requiredActions],
     });
+  }
+  for (const root of parsed.execution?.auxiliaryWritableRoots ?? []) {
+    if (options.deferExecutionWorkspaceAvailability === true)
+      assertAuxiliaryWritableRootSpelling(root);
+    else auxiliaryWritableRootDirectory(root);
   }
   if (parsed.scope.kind === "project") {
     // Existence is the only filesystem precondition here: a NON-GIT folder is

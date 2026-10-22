@@ -145,6 +145,14 @@
                     "minLength": 1
                   },
                   "description": "Agent-selected input footprint. Directory copies materialize this entire selection; direct runs need no whole-tree baseline."
+                },
+                "auxiliaryWritableRoots": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "description": "Exact existing absolute directories, created by the caller, that an Agent run with effective workspace_write may also write (service caches or scratch outside the execution tree). [] grants nothing extra; so does omission, except that a continueFrom successor omitting execution inherits its predecessor's whole execution group. Requires a lane whose capability_profile.access_control.auxiliary_writable_roots is true; the files are never part of the project result."
                 }
               },
               "additionalProperties": false,

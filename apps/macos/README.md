@@ -14,6 +14,7 @@ not build it as part of normal package tasks.
 - `ClaudexorApp/` - SwiftUI app.
 - `packaging/` - app bundle metadata, entitlements, and LaunchAgent template.
 - `scripts/build-app.sh` - local/release app packaging script.
+- `scripts/sign-local-app.sh` - ad-hoc root seal and strict verification for local bundles.
 
 ## Toolchain
 

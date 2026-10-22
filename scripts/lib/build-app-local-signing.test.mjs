@@ -173,14 +173,15 @@ shellTest("injected signing failure propagates without reaching verification", (
   const fakeCodesign = join(bin, "codesign");
   writeFileSync(
     fakeCodesign,
-    '#!/bin/sh\nprintf "%s\\n" "$1" >> "$HOME/calls"\necho signing-failed >&2\nexit 71\n',
+    '#!/bin/sh\nprintf "%s\\n" "$*" >> "$HOME/calls"\necho signing-failed >&2\nexit 71\n',
     { mode: 0o755 },
   );
   f.env.PATH = `${bin}:/usr/bin:/bin`;
-  const result = run(f, "/bin/bash", [helper, join(f.root, "Claudexor.app")]);
+  const app = join(f.root, "Claudexor.app");
+  const result = run(f, "/bin/bash", [helper, app]);
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(71);
   expect(result.stderr).toContain("signing-failed");
-  expect(readFileSync(join(f.env.HOME, "calls"), "utf8")).toBe("--force\n");
+  expect(readFileSync(join(f.env.HOME, "calls"), "utf8")).toBe(`--force --sign - ${app}\n`);
 });
 
 shellTest("injected verification failure propagates after signing succeeds", () => {
@@ -190,12 +191,16 @@ shellTest("injected verification failure propagates after signing succeeds", () 
   const fakeCodesign = join(bin, "codesign");
   writeFileSync(
     fakeCodesign,
-    '#!/bin/sh\nprintf "%s\\n" "$1" >> "$HOME/calls"\nif [ "$1" = "--verify" ]; then echo verification-failed >&2; exit 72; fi\nexit 0\n',
+    '#!/bin/sh\nprintf "%s\\n" "$*" >> "$HOME/calls"\nif [ "$1" = "--verify" ]; then echo verification-failed >&2; exit 72; fi\nexit 0\n',
     { mode: 0o755 },
   );
   f.env.PATH = `${bin}:/usr/bin:/bin`;
-  const result = run(f, "/bin/bash", [helper, join(f.root, "Claudexor.app")]);
+  const app = join(f.root, "Claudexor.app");
+  const result = run(f, "/bin/bash", [helper, app]);
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(72);
   expect(result.stderr).toContain("verification-failed");
-  expect(readFileSync(join(f.env.HOME, "calls"), "utf8")).toBe("--force\n--verify\n");
+  // Exact argv pins the promised strict deep verification, not only its first flag.
+  expect(readFileSync(join(f.env.HOME, "calls"), "utf8")).toBe(
+    `--force --sign - ${app}\n--verify --deep --strict --verbose=2 ${app}\n`,
+  );
 });

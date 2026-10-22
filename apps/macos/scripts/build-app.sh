@@ -61,7 +61,7 @@ DEV_REMOTE_RUNTIME="${CLAUDEXOR_DEV_REMOTE_RUNTIME:-0}"
 WIN32_CONPTY_EXPECTED_SHA256="${CLAUDEXOR_WIN32_CONPTY_SHA256:-}"
 REQUIRE_WIN32_CONPTY="${CLAUDEXOR_REQUIRE_WIN32_CONPTY_HELPER:-0}"
 if [ "$DEV_REMOTE_RUNTIME" = "1" ] && [ -n "${SIGN_IDENTITY:-}" ]; then
-  echo "ERROR: CLAUDEXOR_DEV_REMOTE_RUNTIME is for unsigned local bundles only" >&2
+  echo "ERROR: CLAUDEXOR_DEV_REMOTE_RUNTIME is for local ad-hoc-signed (non-Developer-ID) bundles only" >&2
   exit 1
 fi
 

@@ -978,11 +978,23 @@
                                 ],
                                 "description": "How a live message enters a running session: mid_turn (consumed inside the active turn), next_tool_boundary (queued until the same turn's next tool boundary), none (no truthful channel; the engine answers unsupported).",
                                 "default": "none"
+                              },
+                              "prompt_cache_ttls": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "enum": [
+                                    "5m",
+                                    "1h"
+                                  ],
+                                  "description": "Native prompt-cache lifetime for the main conversation and helper requests of a harness that declares it. Omission sends no override: native defaults, profile settings and the inherited environment stay in effect."
+                                },
+                                "description": "Prompt-cache lifetimes this adapter translates into native controls; a requested lifetime outside the list (or with the list absent) is disclosed as ignored."
                               }
                             },
                             "additionalProperties": false,
                             "default": {},
-                            "description": "Structured per-harness facts the engine consumes: auth routing, isolation containment, readonly mechanism, finite attachment inputs, MCP injection, and live input into a running session."
+                            "description": "Structured per-harness facts the engine consumes: auth routing, isolation containment, readonly mechanism, finite attachment inputs, MCP injection, live input into a running session, and translated prompt-cache lifetimes."
                           },
                           "capabilities": {
                             "type": "object",

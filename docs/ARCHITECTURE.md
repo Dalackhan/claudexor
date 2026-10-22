@@ -2035,6 +2035,54 @@ assembled from different accounts. A network failure stays unknown, not proof of
 absent authentication. Native array-only inventories have no observation receipt
 and use a null observation time; manifest hints stay identified as manifest data.
 
+### Prompt-cache lifetime
+
+`promptCacheTtl: "5m" | "1h"` on `POST /v2/runs` and `POST /v2/threads/:id/turns`
+(CLI `--prompt-cache-ttl`) chooses the native prompt-cache lifetime of every
+session a run starts on a harness that translates it. Omission is Default: no
+native control is set or removed, so vendor defaults, profile settings and the
+inherited environment keep deciding. An adapter declares the exact values it
+translates in `capability_profile.prompt_cache_ttls`; `GET /v2/agent-capabilities`
+projects them as `harnesses[].promptCacheTtls` (empty when undeclared), and
+`runControlKeys` lists the request key, so a caller gates on the routed harness
+row instead of a harness name and keeps the key off engines that lack it.
+
+The value is frozen into the task contract (`context/task.yaml`
+`prompt_cache_ttl`). Continuations follow the `continueFrom` rule in the
+[Control API](#7-control-api) map. Exact Retry replays the
+recorded request and re-injects the frozen value when that request omitted it.
+Routing forwards the value to every task-producing lane, the continuity summary
+pass and reviewers only where the adapter declares it; elsewhere it is an
+`ignored_settings` disclosure on `harness.started`, or `review.preflight` for a
+reviewer. Delegation-belt children carry the parent's value in their own
+request (`CLAUDEXOR_DELEGATION_PROMPT_CACHE_TTL` hands it to the belt), and
+their routing applies the same rule. Best-of synthesis emits no
+`harness.started`, so an undeclared synthesis harness runs without the lifetime
+and without that disclosure.
+
+The Claude adapter sets both `CLAUDE_CODE_PROMPT_CACHE_TTL` and
+`CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` (main conversation and every other
+request bucket, Claude Code 2.1.242 or later). A process variable outranks the
+profile's lifetime settings; `FORCE_PROMPT_CACHING_5M` still outranks it. The
+adapter never removes forcing or disabling controls. It discloses, once per
+session, the ones known to govern instead: with the CLI's own truthy parsing,
+`FORCE_PROMPT_CACHING_5M` against a requested `1h`, `DISABLE_PROMPT_CACHING`, and
+a per-family `DISABLE_PROMPT_CACHING_<FAMILY>` only when the session asked for
+that bare alias. A CLI whose init frame reports a version before 2.1.242 is
+disclosed the same way; an unreported version proves nothing. Profile settings
+files and managed settings are not inspected.
+
+Each Claude attempt records a `PromptCacheTtlReceipt` in `final/telemetry.yaml`
+(`attempts[].prompt_cache_ttl`): `requested` (the lifetime routed to that
+session; the captured intent stays in the task contract), `submitted`
+(configuration, not provider proof), `reason`, and `observed` with `write_5m_tokens` and
+`write_1h_tokens` summed from the result usage's
+`cache_creation.ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens`. The
+split describes what that usage reports, not which request buckets it
+aggregates. A result without the split makes the attempt's counts unknown;
+zero writes are `none`, not disabled caching. Lifecycle, outcome and cost never
+derive from the receipt, and `inputTokenUsage` keeps its three keys.
+
 ### Caller-owned model operations
 
 #### Image generation and editing
@@ -2616,14 +2664,17 @@ not retry automatically.
   its run started holds no claim, one that ran and failed stays the head.
   Exact Retry and `rerun_with_feedback` replay the original request, so for a
   successor that ran they answer the same `continuation_superseded`: the
-  caller continues the head instead. Omitted `mode`, `scope`, `execution`, `harnesses`, `primaryHarness`, `model`
-  and `models` come from the predecessor before request defaults. Setting either
+  caller continues the head instead. Omitted `mode`, `scope`, `execution`, `harnesses`, `primaryHarness`, `model`,
+  `models` and `promptCacheTtl` come from the predecessor before request defaults. Setting either
   `harnesses` or `primaryHarness` inherits neither; setting either `model` or
   `models` inherits neither. With no caller model choice, the first try pins the
   predecessor's attested model only when the target route lists that id, ahead
   of a changed settings default; otherwise the inherited request/default applies.
   The receipt discloses the actual `observedModel`; terminal telemetry compares
   it with the composed first try's requested model, including an inherited pin.
+  An explicit `promptCacheTtl` replaces the inherited lifetime, but the request
+  has no spelling for Default, so a successor of a run with a lifetime keeps one;
+  going back to Default takes a new run.
   Nothing else is inherited;
   `prompt` is the
   caller's continuation text — empty only here. The first try of the

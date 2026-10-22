@@ -287,6 +287,7 @@ export function createDaemonAgentRunner(deps: {
         effort: p.effort,
         efforts: p.efforts,
         processingPreference: p.processingPreference,
+        promptCacheTtl: p.promptCacheTtl,
         processingIntent: exactRetryProcessingIntent(p, deps.commands, repoRoot),
         tests: Array.isArray(p.tests) ? p.tests : undefined,
         protectedPathApprovals: Array.isArray(p.protectedPathApprovals)

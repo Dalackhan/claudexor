@@ -21,6 +21,7 @@ import { ProcessingReceipt, ProcessingCostBasis } from "./processing.js";
 import { RunDelegationInfo } from "./delegation.js";
 import { RunFacts } from "./run-facts.js";
 import { InputTokenUsage, HarnessRequestRefusal } from "./harness.js";
+import { PromptCacheTtlReceipt } from "./prompt-cache.js";
 
 /** Engine-owned final/telemetry.yaml: surfaces project, never re-derive evidence.
  * Legacy runs without this artifact disclose unavailable telemetry. */
@@ -384,6 +385,7 @@ export const AttemptTelemetryRecord = z
     effort_resolution: EffortResolution.optional(),
     processing: ProcessingReceipt.optional(),
     processing_cost_basis: ProcessingCostBasis.optional(),
+    prompt_cache_ttl: PromptCacheTtlReceipt.optional(),
     usage_cost: UsageCostSummary.optional(),
     attempt_id: Id.describe("Attempt id."),
     harness_id: Id.describe("Harness that ran the attempt."),
@@ -458,14 +460,12 @@ export const AttemptTelemetryRecord = z
       .nonnegative()
       .default(0)
       .describe("Tool errors with no later successful recovery."),
-    /** tool_result events that arrived WITHOUT a status field (never treated as ok). */
     statusless_tool_results: z
       .number()
       .int()
       .nonnegative()
       .default(0)
       .describe("tool_result events that arrived without a status field (never treated as ok)."),
-    /** Native lines/events the adapter could not parse or did not recognize (never silently zero). */
     dropped_events: z
       .number()
       .int()

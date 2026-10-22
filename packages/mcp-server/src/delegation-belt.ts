@@ -21,6 +21,7 @@
 import {
   MAX_DELEGATED_CHILDREN,
   ProcessingPreference,
+  PromptCacheTtl,
   WorkspaceKind,
   WorkspaceScopePath,
   type PaidBudget,
@@ -47,6 +48,8 @@ export interface DelegationPolicy {
    * sub-run is bounded by what is left of it after prior sub-runs. */
   parentBudget: PaidBudget;
   processingPreference?: ProcessingPreference;
+  /** The parent run's captured prompt-cache lifetime; every child inherits it. */
+  promptCacheTtl?: PromptCacheTtl;
   workspaceKind?: WorkspaceKind;
   scopePaths?: string[];
 }
@@ -157,6 +160,9 @@ export function readDelegationPolicy(env: NodeJS.ProcessEnv): DelegationPolicy {
   const kind = WorkspaceKind.safeParse(env[DELEGATION_ENV.workspaceKind]);
   if (env[DELEGATION_ENV.processingPreference] !== undefined && !processing.success)
     throw new Error("invalid captured delegation processingPreference");
+  const promptCacheTtl = PromptCacheTtl.safeParse(env[DELEGATION_ENV.promptCacheTtl]);
+  if (env[DELEGATION_ENV.promptCacheTtl] !== undefined && !promptCacheTtl.success)
+    throw new Error("invalid captured delegation promptCacheTtl");
   if (env[DELEGATION_ENV.workspaceKind] !== undefined && !kind.success)
     throw new Error("invalid captured delegation workspaceKind");
   let scopePaths: string[] | undefined;
@@ -169,6 +175,7 @@ export function readDelegationPolicy(env: NodeJS.ProcessEnv): DelegationPolicy {
   }
   return {
     ...(processing.success ? { processingPreference: processing.data } : {}),
+    ...(promptCacheTtl.success ? { promptCacheTtl: promptCacheTtl.data } : {}),
     ...(kind.success ? { workspaceKind: kind.data } : {}),
     ...(scopePaths !== undefined ? { scopePaths } : {}),
     parentRunId:

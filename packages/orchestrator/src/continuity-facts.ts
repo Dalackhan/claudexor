@@ -91,7 +91,11 @@ export interface ContinuitySummaryInputs {
   signal?: AbortSignal;
   processing?: Pick<
     import("@claudexor/schema").HarnessRunSpec,
-    "processing_preference" | "processing" | "processing_cost_basis" | "processing_allow_paid"
+    | "processing_preference"
+    | "processing"
+    | "processing_cost_basis"
+    | "processing_allow_paid"
+    | "prompt_cache_ttl"
   >;
   processingAdmission?: ProcessingAdmission;
   physicalDispatchStarted?: () => void;

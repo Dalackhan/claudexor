@@ -725,6 +725,29 @@ describe("runDeepScanReducer WorkReport contract parity (D-16)", () => {
     }
   });
 
+  it("discloses the reducer route's ignored knobs on harness.started (INV-105)", async () => {
+    const fixture = makeFiniteFixture();
+    const { paths, log } = fixture;
+    const detail =
+      "prompt_cache_ttl=1h (capability_profile.prompt_cache_ttls does not declare it for reducer)";
+    try {
+      const deps = makeDeps(inactiveMode);
+      const buildSpec: DeepScanReducerDeps["buildSpec"] = async (...args) => ({
+        ...(await deps.buildSpec(...args)),
+        ignored: [detail],
+      });
+      await runFiniteReducer(fixture, reducerAdapter("merged"), { deps: { buildSpec } });
+      const started = readFileSync(paths.eventsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { type: string; payload?: Record<string, unknown> })
+        .filter((event) => event.type === "harness.started");
+      expect(started.map((event) => event.payload?.["ignored_settings"])).toEqual([[detail]]);
+    } finally {
+      log.dispose();
+    }
+  });
+
   it("does not attribute a pre-start cancellation to a harness error", async () => {
     const fixture = makeFiniteFixture();
     const { log, ledger } = fixture;

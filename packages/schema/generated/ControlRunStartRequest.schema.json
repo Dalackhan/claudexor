@@ -194,6 +194,14 @@
           ],
           "description": "Advisory service preference. Fast or Economy may use ordinary Standard service; fallback never introduces Fast. Omission preserves native defaults. Explicit native serviceTier takes precedence."
         },
+        "promptCacheTtl": {
+          "type": "string",
+          "enum": [
+            "5m",
+            "1h"
+          ],
+          "description": "Native prompt-cache lifetime for the main conversation and helper requests of a harness that declares it. Omission sends no override: native defaults, profile settings and the inherited environment stay in effect."
+        },
         "efforts": {
           "type": "object",
           "additionalProperties": {
@@ -442,7 +450,7 @@
         },
         "continueFrom": {
           "$ref": "#/definitions/ControlRunStartRequest/properties/threadId",
-          "description": "Continue a terminal predecessor run owned by this daemon; one accepted successor per predecessor. Omitted mode, scope, execution, harness and model come from the predecessor; prompt is the continuation text and may be empty."
+          "description": "Continue a terminal predecessor run owned by this daemon; one accepted successor per predecessor. Omitted mode, scope, execution, harness, model and promptCacheTtl come from the predecessor; prompt is the continuation text and may be empty."
         },
         "continueCarrier": {
           "type": "string",

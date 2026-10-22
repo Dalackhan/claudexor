@@ -32,6 +32,7 @@ export const COMMON_RUN_FLAGS: readonly string[] = [
   "model",
   "effort",
   "processing",
+  "prompt-cache-ttl",
   "workspace-kind",
   "scope-path",
   "portfolio",
@@ -221,6 +222,11 @@ export const CLI_FLAGS: readonly CliFlagSpec[] = [
     "processing",
     "<standard|fast|economy>",
     "Advisory processing preference; fallback never introduces Fast.",
+  ),
+  valueFlag(
+    "prompt-cache-ttl",
+    "<5m|1h>",
+    "Native prompt-cache lifetime for Claude Code main conversation and helpers; omit to keep native defaults",
   ),
   valueFlag(
     "workspace-kind",

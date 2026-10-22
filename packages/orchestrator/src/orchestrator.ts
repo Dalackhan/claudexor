@@ -11,6 +11,7 @@ import {
   type RunScopeCustodian,
 } from "./runScope.js";
 import { delegationBeltFor } from "./delegationBelt.js";
+import { routePromptCacheTtl, withReviewerPromptCacheTtl } from "./prompt-cache-routing.js";
 import {
   bindProcessingAdmission,
   processingAttemptCostEvidence,
@@ -121,6 +122,7 @@ import type {
   PaidBudget,
   ProcessingPreference,
   ProcessingReceipt,
+  PromptCacheTtl,
   WorkspaceKind,
   CredentialUnusableObservation,
   QuotaAbsence,
@@ -531,6 +533,8 @@ export interface RunInput {
   /** Optional reasoning-effort hint forwarded to harnesses that support it. */
   effort?: EffortHint;
   processingPreference?: ProcessingPreference;
+  /** Native prompt-cache lifetime for routes that declare it; omitted = Default. */
+  promptCacheTtl?: PromptCacheTtl;
   /** Exact Retry only: the source run's frozen routing-time intent per harness
    * (no preference). Routing keeps it instead of adopting a changed or different
    * account's native setting; a preference still wins. */
@@ -970,7 +974,7 @@ export class Orchestrator {
       const reviewers = await this.resolveReviewers(input.repoRoot, input.authPreference, warn);
       return {
         reviewers: await prepareReviewerProcessing(
-          reviewers,
+          withReviewerPromptCacheTtl(reviewers, input.promptCacheTtl, warn),
           input,
           config,
           input.paidBudget ?? this.deps.paidBudget ?? config.budget.paid_budget_per_run,
@@ -2052,6 +2056,7 @@ export class Orchestrator {
       maxTurns: number | null;
       processing?: PreparedHarnessProcessing;
       processingAllowPaid?: boolean;
+      promptCacheTtl?: PromptCacheTtl;
     },
     intent: Intent,
   ): Pick<
@@ -2061,6 +2066,7 @@ export class Orchestrator {
     | "model_hint"
     | "effort_hint"
     | "processing_preference"
+    | "prompt_cache_ttl"
     | "processing"
     | "processing_cost_basis"
     | "processing_allow_paid"
@@ -2081,6 +2087,7 @@ export class Orchestrator {
       processing: knobs.processing?.receipt,
       processing_cost_basis: knobs.processing?.costBasis,
       processing_allow_paid: knobs.processingAllowPaid,
+      prompt_cache_ttl: knobs.promptCacheTtl,
       max_turns: knobs.maxTurns,
       ...(intent === "synthesize" ? {} : { instructions: contract.instructions }),
       // The answer contract rides every answer-producing lane, including synthesis.
@@ -2122,6 +2129,7 @@ export class Orchestrator {
     effort: EffortHint | null;
     processing?: PreparedHarnessProcessing;
     processingAllowPaid?: boolean;
+    promptCacheTtl?: PromptCacheTtl;
     webPolicy: ExternalContextPolicy;
     maxTurns: number | null;
     toolsAllow: string[];
@@ -2153,6 +2161,8 @@ export class Orchestrator {
         );
       }
     }
+    const promptCache = routePromptCacheTtl(routed.adapter, contract.prompt_cache_ttl);
+    if (promptCache.ignored) ignored.push(promptCache.ignored);
     // The per-harness web default applies only when the run-level policy is the
     // default "auto"; an explicit run policy always wins.
     const webPolicy = contractPolicy === "auto" && s?.web ? s.web : contractPolicy;
@@ -2175,6 +2185,7 @@ export class Orchestrator {
       effort,
       processing: routed.processing,
       processingAllowPaid: routed.processingAllowPaid,
+      promptCacheTtl: promptCache.ttl,
       webPolicy,
       maxTurns,
       toolsAllow,
@@ -2207,7 +2218,11 @@ export class Orchestrator {
     log?: EventLog,
     processing?: Pick<
       HarnessRunSpec,
-      "processing_preference" | "processing" | "processing_cost_basis" | "processing_allow_paid"
+      | "processing_preference"
+      | "processing"
+      | "processing_cost_basis"
+      | "processing_allow_paid"
+      | "prompt_cache_ttl"
     >,
     processingAdmission?: import("@claudexor/core").ProcessingAdmission,
     physicalDispatchStarted?: () => void,
@@ -2422,6 +2437,7 @@ export class Orchestrator {
       processing: knobs.processing?.receipt,
       processing_cost_basis: knobs.processing?.costBasis,
       processing_allow_paid: knobs.processingAllowPaid,
+      prompt_cache_ttl: knobs.promptCacheTtl,
     };
     const laneContinuity = runInput
       ? await this.resolveContinuity(
@@ -6312,6 +6328,7 @@ export class Orchestrator {
           effectiveWeb,
           model: knobs.model,
           workReportMode,
+          ignored: knobs.ignored,
         };
       },
       hardTimeoutMs: reviewerTimeoutMs(this.config(input.repoRoot)),

@@ -15,6 +15,7 @@ import { GitCapability } from "./git-capability.js";
 import { SetupLoginCapability } from "./readiness.js";
 import { WorkspaceKind } from "./files-manifest.js";
 import { ProcessingPreference } from "./processing.js";
+import { PromptCacheTtl } from "./prompt-cache.js";
 import { CatalogInputLimit } from "./harness-input.js";
 
 /**
@@ -92,6 +93,12 @@ export const CatalogHarness = z
   .object({
     inputLimits: z.array(CatalogInputLimit).optional(),
     processingPreferences: z.array(ProcessingPreference).optional(),
+    promptCacheTtls: z
+      .array(PromptCacheTtl)
+      .optional()
+      .describe(
+        "Exact promptCacheTtl values this harness's adapter translates into native controls; empty when a requested value would be disclosed as ignored, omitted by engines without the run control.",
+      ),
     accountCatalog: z.boolean().optional(),
     id: z
       .string()

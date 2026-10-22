@@ -102,6 +102,7 @@ export async function buildAgentCapabilityCatalog(): Promise<AgentCapabilityCata
         attachmentInputs: [...(profile?.attachment_inputs ?? [])],
         effortLevels: [...(s.manifest?.capabilities.effort_levels ?? [])],
         processingPreferences: [...(s.manifest?.capabilities.processing_preferences ?? [])],
+        promptCacheTtls: [...(profile?.prompt_cache_ttls ?? [])],
         accountCatalog: true,
         accessProfilesSupported: [...(s.manifest?.access_profiles_supported ?? [])],
         readonlyMechanism: profile?.access_control.readonly_mechanism ?? "none",

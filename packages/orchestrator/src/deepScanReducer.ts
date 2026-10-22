@@ -86,6 +86,8 @@ export interface DeepScanReducerDeps {
         effectiveWeb: ExternalContextPolicy;
         model: string | null;
         workReportMode: WorkReportEnvelopeMode;
+        /** Route knobs the reducer's harness cannot honor (INV-105). */
+        ignored?: string[];
       }>
     | {
         spec: HarnessRunSpec;
@@ -93,6 +95,8 @@ export interface DeepScanReducerDeps {
         effectiveWeb: ExternalContextPolicy;
         model: string | null;
         workReportMode: WorkReportEnvelopeMode;
+        /** Route knobs the reducer's harness cannot honor (INV-105). */
+        ignored?: string[];
       };
   hardTimeoutMs: number;
   /** Production defaults to the process-reap proof window. */
@@ -368,6 +372,7 @@ export async function runDeepScanReducer(
       harness_id: adapter.id,
       attempt_id: attemptId,
       external_context_policy: built.webPolicy,
+      ...(built.ignored?.length ? { ignored_settings: built.ignored } : {}),
     });
     const watched = withInactivityWatchdog(runModelGovernedRoute(args.routed, spec), {
       timeoutMs: deps.inactivityTimeoutMs,

@@ -63,6 +63,7 @@ import { codexPersistence } from "./native-home-retention.js";
 import { smokeIsolatedApiKey } from "./smoke.js";
 export { canonicalCodexProfileHome, codexAccountIdentity } from "./profile.js";
 import { codexImageArgs } from "./attachments.js";
+import { assertCodexExecSpec, codexSandboxMode } from "./sandbox.js";
 import {
   CodexAppServerController,
   runCodexAppServer,
@@ -107,21 +108,8 @@ import {
   type CodexLoginProbe,
 } from "./auth.js";
 
-function sandboxMode(access: AccessProfile): string | null {
-  switch (access) {
-    case "readonly":
-      return "read-only";
-    case "workspace_write":
-      return "workspace-write";
-    case "full":
-      return "danger-full-access";
-    case "inherit_native":
-      return null;
-  }
-}
-
 function sandboxArgs(access: AccessProfile): string[] {
-  const mode = sandboxMode(access);
+  const mode = codexSandboxMode(access);
   return mode ? ["--sandbox", mode] : [];
 }
 
@@ -305,7 +293,7 @@ export function codexExecArgs(
 
 /** Sandbox as `-c sandbox_mode=...` config (the only spelling `exec resume` accepts). */
 function sandboxConfigArgs(access: AccessProfile): string[] {
-  const mode = sandboxMode(access);
+  const mode = codexSandboxMode(access);
   return mode ? ["-c", `sandbox_mode="${mode}"`] : [];
 }
 
@@ -766,6 +754,7 @@ async function* runCodex(
       authRoute === "subscription",
     );
     const suppressNodeRepl = codexConfigHasNodeRepl(env["CODEX_HOME"]);
+    if (!runtime.runAppServer) assertCodexExecSpec(spec);
     const args = runtime.runAppServer
       ? [
           ...CODEX_FILE_AUTH_ARGS,

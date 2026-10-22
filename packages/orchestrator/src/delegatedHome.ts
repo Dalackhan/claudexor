@@ -138,13 +138,24 @@ export function followSpecHome(
  * fact, so it is stated to the model in plain words rather than left in an
  * artifact it never reads.
  */
-export function outerBoundaryNotice(home: ScopedHarnessHome | null | undefined): string | null {
+export function outerBoundaryNotice(
+  home: ScopedHarnessHome | null | undefined,
+  auxiliaryWritableRoots: readonly string[] = [],
+): string | null {
   const reason = home?.outerBoundaryUnavailableReason;
-  if (!reason) return null;
+  // An explicit grant is named on every lane that receives it; project work
+  // still belongs in the execution workspace.
+  const grant = auxiliaryWritableRoots.length
+    ? `Caller-granted writable service directories outside the execution workspace (caches or scratch, never part of the project result): ${auxiliaryWritableRoots.join(", ")}.`
+    : null;
+  if (!reason) return grant;
   return [
     `Engine disclosure: ${reason}`,
     "The scoped HOME selects native state and credentials; it is not containment. Stay within",
-    "the execution workspace and do not access unrelated operator or Claudexor state.",
+    grant
+      ? "the execution workspace and the granted service directories below; do not access unrelated operator or Claudexor state."
+      : "the execution workspace and do not access unrelated operator or Claudexor state.",
+    ...(grant ? [grant] : []),
   ].join("\n");
 }
 

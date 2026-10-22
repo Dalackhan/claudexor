@@ -357,6 +357,33 @@ absence with null mechanism/proof fields. Historical proven Seatbelt evidence
 and the retired `external_sandbox_full` literal remain decoder-only so old
 runs stay inspectable.
 
+`execution.auxiliaryWritableRoots` names exact caller-created service
+directories (a shared download cache, outside-Git scratch) that an Agent run
+with effective `workspace_write` may also write; omission and `[]` grant
+nothing. Any other mode or effective access is a typed
+`auxiliary_writable_roots_access_conflict`, never a changed profile. Request
+boundaries keep the caller spelling and refuse relative or missing paths
+(`auxiliary_writable_root_invalid`; thread turns defer existence to their
+durable job). Run admission resolves each root to its real directory,
+deduplicates it, creates nothing, and refuses (`auxiliary_writable_root_unsafe`)
+a filesystem root, HOME or its ancestors, Claudexor's own state or a configured
+credential-profile home, any overlap with the execution or source tree
+(ancestors and descendants included), and Git metadata of either tree; HOME descendants are
+allowed. Realpath spelling and directory-identity ancestry are checked, so macOS
+firmlink aliases cannot hide the same project directory. `TaskContract.access.auxiliary_writable_roots` records the canonical
+list. Only a lane whose own access is `workspace_write` and whose
+`capability_profile.access_control.auxiliary_writable_roots` is true (catalog
+`accessControl.auxiliaryWritableRoots`; Codex today) receives it: an explicit
+incapable lane refuses `auxiliary_writable_roots_unsupported` before spawning,
+Auto drops it with a `route.pool.degraded` `access` receipt. Requirements preflight
+filters these Auto lanes before discovery and profile-cardinality checks;
+request pools, Settings pools and credential pins retain typed refusal. Writable candidate
+synthesis keeps the grant; planner, reviewer, read-only reducer, Ask and patch-producer lanes do not. A thread turn
+carries its own list beside the fixed binding, and a turn without one has no
+grant; `continueFrom` inherits or replaces it with the execution group, and
+Exact Retry replays it. Files written there stay outside capture, apply, revert
+and run lifecycle.
+
 An exact idempotency replay is resolved before current access or filesystem
 admission: if the daemon already accepted the historical command, the same
 handle is returned. Only an absent replay may refuse retired

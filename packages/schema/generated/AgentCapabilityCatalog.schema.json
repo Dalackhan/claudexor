@@ -360,6 +360,23 @@
                 "description": "HOW workspace_write is confined (fs_sandbox | tool_policy | none) — fs_sandbox is the base sandbox; a native automatic reviewer may still admit individual actions outside it. tool_policy means an allowed shell is unconfined (no FS/network fence); consumers choosing lanes by confinement read THIS field, never a harness name.",
                 "default": "none"
               },
+              "accessControl": {
+                "type": "object",
+                "properties": {
+                  "auxiliaryWritableRoots": {
+                    "type": "boolean",
+                    "description": "True when this harness applies execution.auxiliaryWritableRoots natively under workspace_write, and a later run whose effective execution carries no list (a new thread turn without one) keeps no earlier grant; false lanes refuse an explicit pool and drop from an auto pool."
+                  }
+                },
+                "required": [
+                  "auxiliaryWritableRoots"
+                ],
+                "additionalProperties": false,
+                "default": {
+                  "auxiliaryWritableRoots": false
+                },
+                "description": "Negotiated access-control grants beyond the access profile. Engines that predate this row omit it (= no auxiliary writable roots)."
+              },
               "delegation": {
                 "type": "object",
                 "properties": {

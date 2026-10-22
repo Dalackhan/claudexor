@@ -191,6 +191,7 @@ export class AuthCapabilityVerifier {
           prompt: `Return exactly ${expected} and no other text. Do not call tools.`,
           cwd: scratchPath,
           access: "readonly",
+          auxiliary_writable_roots: [],
           external_context_policy: "off",
           tool_permission_policy: { web: "off", allow: [], deny: [] },
           model_hint: null,

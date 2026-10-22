@@ -270,6 +270,11 @@
                           ],
                           "description": "How workspace_write access is CONFINED for a harness: a filesystem/network base sandbox (codex seatbelt; the harness's native automatic reviewer may still admit individual actions outside it, so fs_sandbox does not mean every admitted action stays inside), a tool-permission policy with no FS/network fence (claude — an allowed shell is unconfined), or none (write intent is advisory).",
                           "default": "none"
+                        },
+                        "auxiliary_writable_roots": {
+                          "type": "boolean",
+                          "default": false,
+                          "description": "The adapter applies HarnessRunSpec.auxiliary_writable_roots natively under workspace_write, and a later spec carrying none receives no earlier grant; false = such a lane refuses (explicit pool) or is filtered (auto pool)."
                         }
                       },
                       "additionalProperties": false,

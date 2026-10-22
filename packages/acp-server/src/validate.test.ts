@@ -18,6 +18,12 @@ describe("ACP run-control applicability", () => {
         reviewerPanel: [{ harness: "claude", processingPreference: "fast" }],
       }),
     ).toBeNull();
+    expect(
+      validateRunControls({ execution: { auxiliaryWritableRoots: ["/srv/cache"] } }),
+    ).toBeNull();
+    expect(validateRunControls({ execution: { auxiliaryWritableRoots: [""] } })?.message).toContain(
+      "auxiliaryWritableRoots",
+    );
     expect(validateRunControls({ processingPreference: "fastest" })?.message).toContain(
       "processingPreference",
     );

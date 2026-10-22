@@ -95,7 +95,6 @@ import {
 import { capabilityIntents } from "@claudexor/gateway";
 import {
   reviewCandidateRuns,
-  resolveEngineReview,
   unreviewedCandidateEvidence,
   evaluateUnreviewedConvergence,
 } from "./candidateReview.js";
@@ -167,7 +166,6 @@ import {
   MAX_COUNCIL_MEMBERS_DEFAULT,
   type ExtraMcpServer,
   FinalVerifyRecord,
-  ModeKind as ModeKindSchema,
   QuotaSnapshot as QuotaSnapshotSchema,
   isBlocking,
   makeOutcomeFacts,
@@ -193,6 +191,7 @@ import {
 import {
   acceptedTryOutput,
   AccessProfileIncompatibleError,
+  AuxiliaryWritableRootsUnsupportedError,
   CLAUDEXOR_BROWSER_ARTIFACT_SUBDIR,
   countsAsAgentProgress,
   HarnessUnavailableError,
@@ -213,7 +212,6 @@ export { routingFailureClassification } from "./routing-failure.js";
 import { resolveReadOnlyCandidates, runParallelCandidates } from "./strategyConcurrency.js";
 import { planPrompt } from "./plan-prompt.js";
 import { verifiedPlanBrief, withPlanBrief } from "./planBrief.js";
-import { resolveRunInputDefaults } from "./run-input-resolution.js";
 import { beginAnnouncedRun } from "./runEventLog.js";
 import { arbitrationBudgetOptions } from "./decisionBudget.js";
 import { buildRevisePrompt } from "./revisePrompt.js";
@@ -228,7 +226,7 @@ import {
 } from "./runTerminals.js";
 import { type BudgetDenial, budgetFailureRecord, classifyBudgetFailure } from "./budgetFailure.js";
 import { finalizeStructuredOutput } from "./structuredOutput.js";
-import { admitRun } from "./runAdmission.js";
+import { prepareRunAdmission } from "./runAdmission.js";
 import {
   dropDeltaPastBudget,
   emitPlanProgress,
@@ -361,7 +359,6 @@ import {
 import {
   readTextSafe,
   appendLine,
-  assertNoInlineSecretValues,
   hashJson,
   newId,
   noProjectRepoRoot,
@@ -616,6 +613,9 @@ export interface RunInput {
   inPlace?: boolean;
   workspaceKind?: WorkspaceKind;
   scopePaths?: string[];
+  /** Caller-created service directories writable Agent lanes may also write;
+   * canonicalized by admission before routing (see `admitRun`). */
+  auxiliaryWritableRoots?: string[];
   /** External-orchestrator run: every attempt uses a scoped harness HOME even
    * in-place, keeping profile and writable vendor state explicit. This is not
    * an OS boundary. */
@@ -707,6 +707,8 @@ export interface RoutedAdapter {
   processingAllowPaid?: boolean;
   adapter: HarnessAdapter;
   adapterAccess: AccessProfile;
+  /** Canonical auxiliary writable roots THIS lane applies; [] on read-only lanes. */
+  auxiliaryWritableRoots: string[];
   webSupport: WebPolicySupport;
   providerFamily: ProviderFamily;
   supportsMaxTurns: boolean;
@@ -798,55 +800,9 @@ export class Orchestrator {
   }
 
   async run(input: RunInput): Promise<OrchestratorResult> {
-    let resolved = this.resolveRunInput(input);
-    // INV-062 at the ENGINE boundary: every surface fences prompts already,
-    // but a direct embedder (or the daemon-less local REPL fallback) reaches
-    // this entry without one. Prompts, per-run instructions, AND outputSchema
-    // are durable artifacts (all land in the TaskContract) — the hard block
-    // applies here too, so no in-process path can ever bypass it. outputSchema
-    // rides the schema-aware branch: its property NAMES are field names (a
-    // `token` field is legitimate), but string VALUES (const/default/enum) are
-    // scanned for real secrets, matching the HTTP boundary exactly.
-    assertNoInlineSecretValues(
-      {
-        prompt: resolved.prompt,
-        instructions: resolved.instructions,
-        outputSchema: resolved.outputSchema ?? undefined,
-      },
-      "$",
-      "run input",
-    );
-    const parsedMode = ModeKindSchema.safeParse(resolved.mode ?? "agent");
-    if (!parsedMode.success) {
-      throw new Error(`unknown mode: ${String(resolved.mode)}`);
-    }
-    const mode: ModeKind = parsedMode.data;
-    if (mode === "agent") resolved.review = resolveEngineReview(resolved, this.deps);
-    if (resolved.delegate === true && mode !== "agent") {
-      throw new Error(`Delegate is an agent-only strategy (got mode=${mode})`);
-    }
-    const runId = resolved.runId ?? newId("run");
     let delegatedLedgerAttached = false;
-    resolved = {
-      ...resolved,
-      runId,
-      taskId: resolved.taskId ?? newId("task"),
-      onDelegatedLedgerAttached: () => {
-        delegatedLedgerAttached = true;
-      },
-    };
-    if (resolved.delegate === true) {
-      resolved = {
-        ...resolved,
-        delegationParentRunId: runId,
-      };
-    }
-    resolved.outputSchema = admitRun(resolved, mode, {
-      maxCouncilMembers: this.deps.runtimeConcurrencyCaps?.max_council_members,
-      accessDefault: this.config(resolved.repoRoot).trust.access_default,
-      projectProtectedPaths: () =>
-        this.projectConfig(resolved.repoRoot).constraints.protected_paths,
-      mandatoryFiles: () => this.projectConfig(resolved.repoRoot).context.mandatory_files,
+    let { resolved, mode, runId } = prepareRunAdmission(input, this.deps, () => {
+      delegatedLedgerAttached = true;
     });
     // Reviewer panels are validated only inside Agent strategies that actually
     // review (race/convergence; Plan Council is the plan critique path) — AFTER run-dir
@@ -857,10 +813,6 @@ export class Orchestrator {
     // Whole-strategy terminal net: once a strategy ANNOUNCES its
     // run, any escaped throw still stamps failure.yaml + summary + run.failed
     // instead of orphaning events.jsonl.
-    const releaseRunState = (settledRunId: string) => {
-      this.routingRationaleByRun.delete(settledRunId);
-      this.deps.delegationBudgetAuthority?.releaseRun(settledRunId);
-    };
     // Process custody (owner 1A, #449; `runScope.ts`): the marker is minted and
     // recorded BEFORE the first launch, rides every spec env (`scopedSpecEnv`),
     // and every announced run HOLDS its terminal until the barrier has ended
@@ -908,7 +860,8 @@ export class Orchestrator {
         // settlement) on EVERY terminal.
         async (settledRunId) => {
           await custody.record();
-          releaseRunState(settledRunId);
+          this.routingRationaleByRun.delete(settledRunId);
+          this.deps.delegationBudgetAuthority?.releaseRun(settledRunId);
         },
       );
     } catch (error) {
@@ -1174,14 +1127,6 @@ export class Orchestrator {
    * a planner-only adapter with `implement: false` is dropped from an implement race), and
    * expand to n. Fails loudly if nothing can perform the intent.
    */
-  private resolveRunInput(input: RunInput): RunInput {
-    return resolveRunInputDefaults(input, {
-      config: this.config(input.repoRoot),
-      registryIds: this.deps.registry.keys(),
-      routingGoal: this.deps.routingGoal,
-    });
-  }
-
   private async resolveCandidateAdapters(
     input: RunInput,
     intent: Intent,
@@ -1265,8 +1210,11 @@ export class Orchestrator {
     // a loud typed refusal naming the lane + reason — never a silent
     // substitution or self-race duplication; an AUTO lane is dropped with a
     // typed omission recorded for the degradation receipt.
+    const auxiliaryUnsupported = new Set<string>();
     const dropLane = (harnessId: string, stage: RouteDropStage, detail: string): void => {
       if (explicitPool) {
+        if (auxiliaryUnsupported.has(harnessId))
+          throw new AuxiliaryWritableRootsUnsupportedError(detail);
         if (stage === "access") throw new AccessProfileIncompatibleError(detail);
         throw new HarnessUnavailableError(detail);
       }
@@ -1442,11 +1390,29 @@ export class Orchestrator {
         dropLane(id, "attachment", attachmentAdmission.message ?? `${id} rejects attachments`);
         continue;
       }
+      // Explicit auxiliary roots reach only a workspace_write lane whose adapter
+      // applies them natively; read-only lanes (plan, ask, patch producers,
+      // reviewers) never receive or require them.
+      const auxiliaryWritableRoots = readOnlyIntent ? [] : (input.auxiliaryWritableRoots ?? []);
+      const auxiliaryCapable = this.requestRequirements.auxiliaryWritableRootsCapable(
+        requiredAccess,
+        manifest.capability_profile.access_control.auxiliary_writable_roots,
+      );
+      if (auxiliaryWritableRoots.length > 0 && !auxiliaryCapable) {
+        auxiliaryUnsupported.add(id);
+        dropLane(
+          id,
+          "access",
+          `${id} (cannot apply execution.auxiliaryWritableRoots under ${requiredAccess})`,
+        );
+        continue;
+      }
       const reason = status.reasons.length > 0 ? `: ${status.reasons.join("; ")}` : "";
       if (status.enabledIntents.includes(intent) && accessSupported) {
         pool.push({
           adapter,
           adapterAccess: requiredAccess,
+          auxiliaryWritableRoots,
           webSupport,
           providerFamily: manifest.provider_family,
           supportsMaxTurns: manifest.capabilities.max_turns,
@@ -1519,6 +1485,13 @@ export class Orchestrator {
       }
     }
     if (pool.length === 0) {
+      if (
+        droppedLanes.length > 0 &&
+        droppedLanes.every((l) => auxiliaryUnsupported.has(l.harnessId))
+      )
+        throw new AuxiliaryWritableRootsUnsupportedError(
+          `no harness can apply the requested auxiliary writable roots (${dropped.join(", ")})`,
+        );
       if (droppedLanes.length > 0 && droppedLanes.every((lane) => lane.stage === "access")) {
         throw new AccessProfileIncompatibleError(
           `no harness can enforce the requested access profile (${droppedLanes.map((lane) => lane.detail).join(", ")})`,
@@ -2427,8 +2400,14 @@ export class Orchestrator {
       // Engine-derived read-only prompt constraints: protected/auto-protected
       // paths PLUS the exact typed gate argv the run will execute (QA-022 FIX B).
       prompt: promptWithEngineConstraints(
-        // The child is told that Claudexor adds no outer OS boundary (disclosure 2 of 3).
-        [prompt, outerBoundaryNotice(harnessHome), laneContinuity?.pointerLine, continuationPointer]
+        // The child is told that Claudexor adds no outer OS boundary (disclosure 2 of 3)
+        // and which explicit service directories it may write besides its tree.
+        [
+          prompt,
+          outerBoundaryNotice(harnessHome, routed.auxiliaryWritableRoots),
+          laneContinuity?.pointerLine,
+          continuationPointer,
+        ]
           .filter((s): s is string => typeof s === "string" && s.length > 0)
           .join("\n\n"),
         contract.constraints.protected_paths,
@@ -2448,6 +2427,8 @@ export class Orchestrator {
       extra_mcp_servers: delegationBeltFor(runInput, intent, routed, contract.budget.paid_budget),
       cwd: envelope.worktree_path,
       access: routed.adapterAccess,
+      // Writable lanes only: routing admitted this list for this exact lane.
+      auxiliary_writable_roots: routed.auxiliaryWritableRoots,
       ...this.harnessSpecKnobs(contract, knobs, intent),
       env_inheritance: envInheritance(this.config(contract.repo.root)),
       ...(sessionFields

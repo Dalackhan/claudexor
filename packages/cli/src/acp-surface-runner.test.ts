@@ -28,7 +28,11 @@ describe("ACP run-control projection", () => {
     expect(projectAcpRunControls({})).toEqual({});
   });
   it("keeps explicit Standard and directory footprint on the thread request", () => {
-    const execution = { workspaceKind: "directory", scopePaths: ["input", "image.bin"] };
+    const execution = {
+      workspaceKind: "directory",
+      scopePaths: ["input", "image.bin"],
+      auxiliaryWritableRoots: ["/srv/cache"],
+    };
     const reviewerPanel = [{ harness: "claude", processingPreference: "economy" }];
     expect(
       projectAcpRunControls({

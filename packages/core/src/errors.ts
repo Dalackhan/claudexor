@@ -45,6 +45,17 @@ export class DelegatedEvidenceIncompleteError extends ClaudexorError {
   readonly category = "internal" as const;
 }
 
+/** A writable lane cannot natively apply the run's explicit auxiliary writable roots. */
+export class AuxiliaryWritableRootsUnsupportedError extends ClaudexorError {
+  readonly code = "auxiliary_writable_roots_unsupported";
+  readonly category = "harness_unavailable" as const;
+  readonly status = 400;
+  readonly retryable = false;
+  readonly requiredActions = [
+    "Select a harness whose catalog row declares accessControl.auxiliaryWritableRoots, or omit execution.auxiliaryWritableRoots. For continueFrom, replace the complete execution group through POST /v2/runs (auxiliaryWritableRoots: [] clears it), or start a new run; claudexor_run_continue inherits execution.",
+  ];
+}
+
 /** A requested access mode cannot be represented by the selected native adapter. */
 export class AccessProfileIncompatibleError extends ClaudexorError {
   readonly code = "access_profile_incompatible";

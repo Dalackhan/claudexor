@@ -64,6 +64,7 @@ export const AGENT_MODE_FLAGS: readonly string[] = [
   "reviewer-model",
   "reviewer-effort",
   "in-place",
+  "auxiliary-writable-root",
 ];
 
 /** Additional controls owned by Ask's read-only answer pipeline. */
@@ -237,6 +238,11 @@ export const CLI_FLAGS: readonly CliFlagSpec[] = [
     "scope-path",
     "<relative-path>",
     "Selected file or directory footprint (repeatable); '.' selects the whole folder",
+  ),
+  valueFlag(
+    "auxiliary-writable-root",
+    "<absolute-dir>",
+    "Existing service directory (cache/scratch) the Agent may also write under workspace_write (repeatable); never part of the result",
   ),
   valueFlag(
     "primary-harness",

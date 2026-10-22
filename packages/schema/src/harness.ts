@@ -3,7 +3,13 @@ import { z } from "zod/v3";
 import { AuthSourceKind, AuthSourceReadiness, CredentialRoute } from "./auth.js";
 import { CredentialProfile } from "./credential-profile.js";
 import { ToolRef } from "./tool-ref.js";
-import { IsolationCapabilities } from "./harness-confinement.js";
+import { AccessControlCapabilities, IsolationCapabilities } from "./harness-confinement.js";
+export {
+  AccessControlCapabilities,
+  ReadonlyMechanism,
+  WriteMechanism,
+} from "./harness-confinement.js";
+import { AuxiliaryWritableRoots } from "./auxiliary-writable-roots.js";
 import {
   AccessProfile,
   AuthPreference,
@@ -326,32 +332,6 @@ export function knownModelIdsForRoute(
     .map((entry) => (typeof entry === "string" ? entry : entry.id));
 }
 
-export const ReadonlyMechanism = z
-  .enum(["fs_sandbox", "permission_deny", "tool_allowlist", "none"])
-  .describe(
-    "How read-only access is enforced for a harness: a filesystem sandbox, permission denial, a tool allowlist, or none (read-only intent is advisory).",
-  );
-export type ReadonlyMechanism = z.infer<typeof ReadonlyMechanism>;
-
-export const WriteMechanism = z
-  .enum(["fs_sandbox", "tool_policy", "none"])
-  .describe(
-    "How workspace_write access is CONFINED for a harness: a filesystem/network base sandbox (codex seatbelt; the harness's native automatic reviewer may still admit individual actions outside it, so fs_sandbox does not mean every admitted action stays inside), a tool-permission policy with no FS/network fence (claude — an allowed shell is unconfined), or none (write intent is advisory).",
-  );
-export type WriteMechanism = z.infer<typeof WriteMechanism>;
-
-export const AccessControlCapabilities = z
-  .object({
-    readonly_mechanism: ReadonlyMechanism.default("none"),
-    // Typed disclosure of the workspace_write asymmetry (owner decision
-    // 2026-08-30): a consumer choosing lanes by confinement reads THIS field,
-    // never a harness-name branch.
-    write_mechanism: WriteMechanism.default("none"),
-  })
-  .default({})
-  .describe("Declared access-control facts for a harness.");
-export type AccessControlCapabilities = z.infer<typeof AccessControlCapabilities>;
-
 /**
  * Structured per-harness facts the engine consumes: auth routing (scoped-home
  * keychain bridging), isolation containment, honest readonly mechanism, and
@@ -573,6 +553,7 @@ export const HarnessRunSpec = z
       ),
     cwd: z.string().describe("Working directory the harness process runs in."),
     access: AccessProfile.default("workspace_write"),
+    auxiliary_writable_roots: AuxiliaryWritableRoots,
     external_context_policy: ExternalContextPolicy.default("auto"),
     tool_permission_policy: z
       .object({

@@ -157,6 +157,73 @@ describe("delegated thread turns record their effective execution before accepta
   });
 });
 
+describe("per-turn auxiliary writable roots on a delegated thread", () => {
+  const thread = (project: string, copy: string) =>
+    Thread.parse({
+      ...delegatedThread(project, copy),
+      access: "workspace_write",
+    });
+
+  it("records each turn's own list beside the fixed binding; omission grants nothing", async () => {
+    const project = tempDir();
+    const copy = tempDir();
+    const cache = tempDir();
+    const first = turnCtx(thread(project, copy));
+    await handleThreadTurnCreate(
+      first.ctx,
+      {} as ServerResponse,
+      "th-del",
+      ControlThreadTurnRequest.parse({
+        prompt: "round 1",
+        mode: "agent",
+        execution: { auxiliaryWritableRoots: [cache] },
+      }),
+      "key-aux-1",
+    );
+    expect(first.enqueue.mock.calls[0]?.[0]).toMatchObject({
+      access: "workspace_write",
+      execution: {
+        delegated: true,
+        isolation: "live",
+        workspaceRoot: copy,
+        auxiliaryWritableRoots: [cache],
+      },
+    });
+    const second = turnCtx(thread(project, copy));
+    await handleThreadTurnCreate(
+      second.ctx,
+      {} as ServerResponse,
+      "th-del",
+      ControlThreadTurnRequest.parse({ prompt: "round 2", mode: "agent" }),
+      "key-aux-2",
+    );
+    const params = second.enqueue.mock.calls[0]?.[0] as ControlRunStartRequest;
+    expect(params.execution).toMatchObject({ delegated: true, workspaceRoot: copy });
+    expect(params.execution).not.toHaveProperty("auxiliaryWritableRoots");
+  });
+
+  it("refuses a grant on a read-only turn instead of clamping it away", async () => {
+    const { ctx, enqueue, json } = turnCtx(thread(tempDir(), tempDir()));
+    await handleThreadTurnCreate(
+      ctx,
+      {} as ServerResponse,
+      "th-del",
+      ControlThreadTurnRequest.parse({
+        prompt: "look",
+        mode: "ask",
+        execution: { auxiliaryWritableRoots: [tempDir()] },
+      }),
+      "key-aux-3",
+    );
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(json).toHaveBeenCalledWith(
+      expect.anything(),
+      400,
+      expect.objectContaining({ code: "auxiliary_writable_roots_access_conflict" }),
+    );
+  });
+});
+
 describe("shared normalizer: the narrow delegated root allowance", () => {
   it("accepts a delegated read-only root and refuses it without delegated authority", () => {
     const project = tempDir();

@@ -6,6 +6,7 @@ import {
   effortJsonSchema,
 } from "@claudexor/schema";
 import { mcpToolFailure } from "./tool-failure.js";
+import { auxiliaryWritableRootsSchema } from "./run-execution-schema.js";
 import { formatRunResult } from "./run-result-format.js";
 import { inlineJsonSchemaRefs } from "./inline-json-schema-refs.js";
 import type { McpTool, McpToolOutput, RunnerFn } from "./index.js";
@@ -75,6 +76,13 @@ export function threadTools(runner: RunnerFn): McpTool[] {
       web: { type: "string", enum: ExternalContextPolicy.options },
       maxSeconds: { type: "integer", minimum: 1, maximum: 604800 },
       timeLimitMode: { type: "string", enum: ["soft", "hard"] },
+      execution: {
+        type: "object",
+        additionalProperties: false,
+        properties: { auxiliaryWritableRoots: auxiliaryWritableRootsSchema },
+        description:
+          "This turn's own auxiliary writable directories; the thread's project and execution tree stay fixed, and omitting the list grants nothing.",
+      },
       idempotencyKey: {
         ...nonBlankString,
         maxLength: 256,

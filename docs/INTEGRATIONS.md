@@ -311,6 +311,15 @@ gate's explicit exemptions):
   `--in-place` maps to `execution.isolation: live` for direct work. These fields
   are also carried by the typed MCP/ACP run controls; legacy omission preserves existing behavior.
   See [directory execution](ARCHITECTURE.md#directory-execution).
+- `--auxiliary-writable-root <absolute-dir>` (repeatable, Agent only):
+  `execution.auxiliaryWritableRoots`, existing caller-created service
+  directories the run may also write under `workspace_write` (MCP run tools,
+  `claudexor_thread_turn` and ACP carry the same member). These directories must
+  be outside both the source and execution trees. `claudexor_run_continue`
+  inherits execution and cannot replace it: to clear or change an inherited
+  grant, use `POST /v2/runs` with `continueFrom` and a complete replacement
+  `execution` group (`auxiliaryWritableRoots: []` to clear), or start a new run.
+  See [native access](ARCHITECTURE.md#external-orchestrator-workspaces-and-native-access).
 - `--max-turns <n>`: per-run turn cap; beats per-harness settings, and a lane
   without native support discloses the ignored knob.
 - `--deny-path <glob>` (repeatable): globs no candidate may touch at all;
@@ -930,6 +939,19 @@ requests for the native reviewer. The base sandbox remains `workspace-write`;
 automatic review is not a guarantee that every admitted action stays inside it.
 Readonly and other access profiles keep their existing approval policy.
 
+Auxiliary writable roots ride only the run's `turn/start.sandboxPolicy`: the
+thread start/resume echo with its native writable roots, network and temp
+fields kept and the granted roots added; thread params never carry them, and
+omission sends no turn policy at all. On codex-cli 0.162.1 (real tool writes
+under the native sandbox, fresh app-server per resume) roots in thread config
+became permanent runtime workspace roots of the native thread, while a turn
+grant did not survive a fresh-process resume, so a later run whose effective
+execution carries no list (a new turn without one; a `continueFrom` successor
+that omits `execution` inherits its predecessor's) is back on native defaults. The authorized auto-review retry turn repeats the same
+policy. A non-`workspaceWrite` echo refuses
+`codex_auxiliary_roots_unavailable` before the turn, and the legacy exec
+transport refuses the list because a `-c` root could not be revoked later.
+
 When native automatic review denies a command or execve action, Claudexor waits
 for that root turn to settle, then returns its exact action, rationale and final
 output through the same interaction channel. There are no timed checkpoints.
@@ -1010,7 +1032,8 @@ this by switching the task to writable access without user authorization.
 Raw native command approvals are offered only for an already explicitly authorized
 `full` run: `workspace_write` also cannot grant an unsandboxed shell while
 preserving its write boundary. File-change approvals still require reviewable
-in-workspace paths/diffs and can be approved under `workspace_write`.
+paths/diffs in the workspace or a granted auxiliary root and can be approved
+under `workspace_write`.
 Missing, oversized or secret-bearing review details fail closed, as do unknown
 native request methods and runs without an interaction channel. Native
 resolution, turn end, cancellation and transport closure revoke pending requests;

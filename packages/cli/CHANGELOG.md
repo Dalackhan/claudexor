@@ -1,5 +1,33 @@
 # @claudexor/cli
 
+## 4.6.2
+
+### Patch Changes
+
+- @claudexor/acp-server@4.6.2
+- @claudexor/artifact-store@4.6.2
+- @claudexor/config@4.6.2
+- @claudexor/control-api@4.6.2
+- @claudexor/core@4.6.2
+- @claudexor/daemon@4.6.2
+- @claudexor/delivery@4.6.2
+- @claudexor/gateway@4.6.2
+- @claudexor/harness-acp@4.6.2
+- @claudexor/harness-agy@4.6.2
+- @claudexor/harness-claude@4.6.2
+- @claudexor/harness-codex@4.6.2
+- @claudexor/harness-cursor@4.6.2
+- @claudexor/harness-fake@4.6.2
+- @claudexor/harness-opencode@4.6.2
+- @claudexor/harness-raw-api@4.6.2
+- @claudexor/mcp-server@4.6.2
+- @claudexor/orchestrator@4.6.2
+- @claudexor/review@4.6.2
+- @claudexor/schema@4.6.2
+- @claudexor/secrets@4.6.2
+- @claudexor/util@4.6.2
+- @claudexor/workspace@4.6.2
+
 ## 4.6.1
 
 ### Patch Changes

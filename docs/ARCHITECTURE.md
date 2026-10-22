@@ -434,6 +434,29 @@ mode's intent (`explain` for Ask, `audit` for Ask's `--deep-scan` sweep,
 mode requires it. Surfaces keep aggregate/default doctor evidence distinct from
 exact-profile evidence and routing gates on the identity actually selected.
 
+Attachment and Browser request admission (requests with neither skip it) uses
+execution's pool projection and candidate membership: the request's pool (a thread
+turn carries its sticky pool), else Settings `routing.eligible_harnesses`, is
+strict; otherwise Auto membership comes from host status, enabled account rows and
+a pinned profile's harnesses (`orchestrator/route-admission.ts`). One precedence
+owner resolves the profile for admission and the run: an explicit per-turn id
+wins, explicit `null` clears the thread pin for that turn (the run still keeps the
+thread's durable account binding), and omission inherits it. Admission checks
+static facts only. Missing, disabled or wrong-harness pins and unavailable lanes
+refuse with 400 `harness_unavailable`, including an empty Auto candidate pool.
+Every explicit-pool lane must accept each mandatory attachment; Auto may drop
+incompatible lanes. Remaining lanes with ambiguous platform bindings refuse with
+409 `credential_profile_ambiguous`; Browser needs one effective remaining lane
+under its access and web declarations. One bounded asymmetry remains: Browser-only
+Auto on Windows can reject ambiguous AGY rows that execution would have dropped
+as unready. Admission deliberately does not probe readiness to resolve that edge.
+Account readiness, quota and model admission belong to the run (owner decision),
+so a named profile admits its harness even when the default store is logged out.
+An accepted run whose selected account is not ready fails after run preparation
+(artifacts, Git boundary, `CLAUDE.md` bridge, in-place snapshot) and before any
+provider starts; run-level Exact Retry replays the same request. A direct
+`POST /v2/runs` carrying `threadId` is refused before admission reads that thread.
+
 Read-only routing additionally re-derives the env-sensitive readiness
 evidence in the run's own resolved context: a read-only run spawns inside a
 scoped throwaway HOME, so the router resolves that context ONCE (a typed

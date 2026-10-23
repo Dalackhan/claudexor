@@ -110,12 +110,13 @@ export class SqlInteractionStore implements InteractionStorePort {
   pendingIdentityDigest(runId: string): PendingIdentityDigest {
     const rows = this.store
       .prepare(
-        "SELECT id FROM interaction WHERE run_id=? AND pid=? AND state='pending' ORDER BY id",
+        "SELECT CAST(id AS BLOB) AS id FROM interaction WHERE run_id=? AND pid=? AND state='pending' ORDER BY interaction.id",
       )
-      .iterate(runId, this.events.generation.pid) as Iterable<{ id: string }>;
+      .iterate(runId, this.events.generation.pid) as Iterable<{ id: Uint8Array }>;
     return digestPendingIdentities(
       (function* () {
-        for (const row of rows) yield row.id;
+        // Node 24.15 truncates SQLite TEXT at the storage key's NUL separator.
+        for (const row of rows) yield Buffer.from(row.id).toString("utf8");
       })(),
     );
   }

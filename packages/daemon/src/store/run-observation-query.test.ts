@@ -2,7 +2,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { interactionKey } from "../interactions.js";
+import { digestPendingIdentities, interactionKey } from "../interactions.js";
 import type { JobRecord } from "../job-record.js";
 import { applyCommandInTx, prepareCommandRow } from "./command-rows.js";
 import { SqlCommandQueries } from "./command-queries.js";
@@ -182,6 +182,12 @@ describe("SQL pendingIdentityDigest", () => {
     const bodies = vi.spyOn(f.pending, "pendingForRun");
     const first = f.pending.pendingIdentityDigest("run-a");
     expect(first).toEqual({ pending: true, digest: expect.any(String) });
+    expect(first).toEqual(
+      digestPendingIdentities([
+        interactionKey("run-a", "question-a"),
+        interactionKey("run-a", "question-z"),
+      ]),
+    );
     expect(first.digest.length).toBeGreaterThan(0);
     const reads = prepare.mock.calls.map(([sql]) => sql);
     expect(reads).toHaveLength(1);

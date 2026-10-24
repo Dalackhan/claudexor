@@ -857,17 +857,17 @@ const B = { prompt: "Review the tests", repoPath: "/absolute/project", taskGroup
 // Call claudexor_ask(B), then persist its complete accepted receipt + storeId.
 ```
 
-After losing only the controller transport, reconnect to the same backend and
-call `claudexor_task_group_runs` with
-`{taskGroupId: G, expectedStoreId: saved.storeId, limit: 1}`. This read needs
-neither a launch nor the previous working directory. Keep the returned original
-`jobId` handles and the actual nullable `runId` values: a queued job has
+If individual handles and request keys are lost but G and the accepting store's
+identity survive, reconnect to the same backend and call `claudexor_task_group_runs` with
+`{taskGroupId: G, expectedStoreId: saved.storeId, limit: 50}`. This read needs
+neither a launch, request keys nor the original project directory. Keep the original
+`jobId` handles and actual nullable `runId` values: a queued job has
 `runId: null` until binding. If `hasMore` is true, explicitly request the next
 page with the returned `nextCursor`; the tool does not follow it automatically.
 The CLI and HTTP expose the same single-page read:
 
 ```bash
-claudexor task-group-runs 11111111-1111-4111-8111-111111111111 --expected-store-id "$SAVED_STORE_ID" --limit 1 --json
+claudexor task-group-runs 11111111-1111-4111-8111-111111111111 --expected-store-id "$SAVED_STORE_ID" --limit 50 --json
 ```
 
 HTTP clients use `GET /v2/task-groups/:id/runs` with optional query parameters
@@ -897,9 +897,11 @@ Missing membership does not authorize resubmission. Group reads and waits never
 launch, retry, resume, answer or cancel work. A daemon crash can leave a recovered
 running job `interrupted`; discovery does not resume it.
 
-For an uncertain launch response, replay KA or KB with its **identical** saved
-body; changing or removing its group conflicts. Exact Retry retains the accepted
-group. A deliberately new continuation may explicitly supply `taskGroupId`, but
+For an uncertain launch response, if its key and body remain available and the
+idempotency binding is retained, replay KA or KB with its **identical** saved
+body; changing or removing its group conflicts. Lost keys cannot be reconstructed
+from a group page and never justify a replacement launch. Exact Retry retains the
+accepted group. A deliberately new continuation may explicitly supply `taskGroupId`, but
 omission does not inherit it. Thread turns, Delegate tools and ACP session
 settings do not take group input. Groups confer no rights or budget inheritance,
 and there is no app UI handoff contract. See the
@@ -936,6 +938,20 @@ do not set run limits. Discovery gets 5s and HTTP, including its body read, gets
 the existing read-only discovery handshake may settle in the background. Missing
 or unsupported daemons fail without auto-start, reconnect or fallback to
 individual waits. This tool is absent from the Delegate belt.
+
+A `problems` response still contains the healthy targets. Keep their handles and
+tokens; reconcile each problematic position separately before repeating a long
+wait. An unchanged problematic target can make every call return immediately.
+
+| Per-target problem | Controller action |
+| --- | --- |
+| `not_found` | Check the serving store identity, saved receipts and retained group view. Remove a target from the active watch only when reconciled as obsolete; retain unresolved receipt history. Absence does not authorize resubmission. |
+| `snapshot_unavailable` | Keep the target and retry the read with bounded backoff. A temporary read failure supplies no lifecycle fact. |
+| `not_observed` | Keep the target: this pass did not reach it, for example after cancellation. Read again when observation is wanted. |
+
+For example, if `[A, B, old]` returns healthy A/B summaries and `not_found` for
+`old`, continue watching A/B with their own `seen` tokens while reconciling `old`.
+Do not discard the entire batch or busy-loop the unchanged three-target request.
 
 **Waiting on events.** `claudexor_run_wait` reads the run's event stream after `afterSeq`
 (the previous `nextSeq`, never `snapshotSeq`). Events already written at its

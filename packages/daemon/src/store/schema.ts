@@ -22,12 +22,17 @@ CREATE TABLE account_last_service(harness_id TEXT NOT NULL, profile_id TEXT NOT 
   PRIMARY KEY(harness_id, profile_id, requested_model_key, binding_digest)) WITHOUT ROWID, STRICT;
 `;
 
-/** Version 3 indexes immutable accepted summary metadata; no membership backfill. */
+/** Shared with the group query so SQLite can prove partial-index eligibility.
+ * CASE guards extraction even for legal non-JSON summary bytes. */
+export const TASK_GROUP_PRESENT_SQL = `CASE WHEN json_valid(CAST(summary AS TEXT))
+  THEN json_extract(CAST(summary AS TEXT),'$.params.taskGroupId') END IS NOT NULL`;
+
+/** Version 3 indexes tagged accepted summaries; no membership backfill. */
 const TASK_GROUP_INDEX_SQL = `
 CREATE INDEX command_task_group ON command(json_extract(CAST(summary AS TEXT),'$.params.taskGroupId'),created_at DESC,id DESC)
-  WHERE live=1 AND kind='product' AND json_valid(CAST(summary AS TEXT));
+  WHERE live=1 AND kind='product' AND json_valid(CAST(summary AS TEXT)) AND ${TASK_GROUP_PRESENT_SQL};
 CREATE INDEX command_task_group_state ON command(json_extract(CAST(summary AS TEXT),'$.params.taskGroupId'),state,created_at DESC,id DESC)
-  WHERE live=1 AND kind='product' AND json_valid(CAST(summary AS TEXT));
+  WHERE live=1 AND kind='product' AND json_valid(CAST(summary AS TEXT)) AND ${TASK_GROUP_PRESENT_SQL};
 `;
 
 /**

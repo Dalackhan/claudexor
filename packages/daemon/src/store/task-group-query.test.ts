@@ -10,6 +10,7 @@ import { SqlCommandQueries } from "./command-queries.js";
 import { setGlobalGenerationInTx } from "./generations.js";
 import { createPartition, currentGeneration } from "./partitions.js";
 import { resourceFixture } from "./test-support/resource-fixture.js";
+import { ensureSchema } from "./schema.js";
 
 const GROUP = "11111111-1111-4111-8111-111111111111";
 const OTHER = "33333333-3333-4333-8333-333333333333";
@@ -93,6 +94,28 @@ async function fixture() {
 }
 
 describe("SQL taskGroupPage retained selection", () => {
+  it("reads an earlier unpublished v3 store without rebuilding its broader indexes", async () => {
+    const f = await fixture();
+    f.seed("tagged");
+    f.seed("untagged", { params: { mode: "ask", prompt: "ungrouped" } });
+    // Exact original PR498 predicates at 5b9d6d75; same version, broader membership.
+    f.store.db.exec(`DROP INDEX command_task_group; DROP INDEX command_task_group_state;
+      CREATE INDEX command_task_group ON command(json_extract(CAST(summary AS TEXT),'$.params.taskGroupId'),created_at DESC,id DESC)
+        WHERE live=1 AND kind='product' AND json_valid(CAST(summary AS TEXT));
+      CREATE INDEX command_task_group_state ON command(json_extract(CAST(summary AS TEXT),'$.params.taskGroupId'),state,created_at DESC,id DESC)
+        WHERE live=1 AND kind='product' AND json_valid(CAST(summary AS TEXT));`);
+    const exec = vi.spyOn(f.store.db, "exec");
+    ensureSchema(f.store.db);
+    expect(exec).not.toHaveBeenCalled();
+    for (const state of [null, "running"] as const)
+      expect(f.page({ state }).records.map((row) => row.jobId)).toEqual(["tagged"]);
+    expect(
+      f.store.db
+        .prepare("SELECT sum(ncell) AS n FROM dbstat WHERE name='command_task_group'")
+        .get(),
+    ).toEqual({ n: 2 }); // Existing v3 keeps its original storage cost.
+  });
+
   it.each([1, 10])(
     "uses actual ordered expression indexes at %ix unrelated history with raw summaries and no body hydration",
     async (scale) => {

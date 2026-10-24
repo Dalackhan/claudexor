@@ -78,6 +78,11 @@ describe("portable Agent Skill, Copilot plugin, and MCP distribution", () => {
         "Missing membership grants no resubmission authority.",
         "Exact Retry keeps",
         "Thread turns, Delegate tools and ACP session settings",
+        "With only group/store saved, recover retained",
+        "`problems` response keeps healthy summaries",
+        "`not_found` against store/receipts/group",
+        "`snapshot_unavailable` with bounded backoff",
+        "`not_observed` for",
       ]) {
         expect(generated).toContain(reference);
         expect(portable).toContain(reference);

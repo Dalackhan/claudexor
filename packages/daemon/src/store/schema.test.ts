@@ -11,6 +11,7 @@ import {
   ENGINE_APPLICATION_ID,
   ENGINE_SCHEMA_VERSION,
   ENGINE_TABLES,
+  TASK_GROUP_PRESENT_SQL,
   assertSchemaServable,
   ensureSchema,
   readSchemaIdentity,
@@ -406,6 +407,10 @@ describeStore("task group storage upgrade", () => {
         ["raw-null", Buffer.from([0])],
         ["raw-benchmark", Buffer.alloc(400, 0x62)],
         ["raw-truncated-json", Buffer.from('{"params":')],
+        ["json-null", Buffer.from("null")],
+        ["no-params", Buffer.from("{}")],
+        ["null-params", Buffer.from('{"params":null}')],
+        ["null-group", Buffer.from('{"params":{"taskGroupId":null}}')],
       ] as const)
         expect(insert.run(id, bytes).changes).toBe(1);
       insert.run(
@@ -421,6 +426,19 @@ describeStore("task group storage upgrade", () => {
       expect(readSchemaIdentity(db).userVersion).toBe(3);
       expect({ ...tableSnapshot(db), meta: [] }).toEqual({ ...before, meta: [] });
       assertGroupIndexes(db);
+      // Count actual B-tree entries, not SELECT rows filtered by the query.
+      // Untagged, JSON null, and invalid JSON must occupy neither group index.
+      const expectedMembers = source === "v2" ? 2 : 1;
+      expect(
+        db
+          .prepare(
+            "SELECT name,sum(ncell) AS entries FROM dbstat WHERE name IN ('command_task_group','command_task_group_state') GROUP BY name ORDER BY name",
+          )
+          .all(),
+      ).toEqual([
+        { name: "command_task_group", entries: expectedMembers },
+        { name: "command_task_group_state", entries: expectedMembers },
+      ]);
       expect(
         db
           .prepare("SELECT count(*) AS n FROM command WHERE json_valid(CAST(summary AS TEXT))=0")
@@ -429,7 +447,7 @@ describeStore("task group storage upgrade", () => {
       expect(
         db
           .prepare(
-            "SELECT id FROM command INDEXED BY command_task_group_state WHERE live=1 AND kind='product' AND json_valid(CAST(summary AS TEXT)) AND json_extract(CAST(summary AS TEXT),'$.params.taskGroupId')=? AND state='running' ORDER BY created_at DESC,id DESC",
+            `SELECT id FROM command INDEXED BY command_task_group_state WHERE live=1 AND kind='product' AND json_valid(CAST(summary AS TEXT)) AND ${TASK_GROUP_PRESENT_SQL} AND json_extract(CAST(summary AS TEXT),'$.params.taskGroupId')=? AND state='running' ORDER BY created_at DESC,id DESC`,
           )
           .all("11111111-1111-4111-8111-111111111111"),
       ).toEqual([{ id: "compat-tagged" }]);

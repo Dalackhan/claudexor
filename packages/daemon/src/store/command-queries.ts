@@ -20,6 +20,7 @@ import {
 import type { EngineStore } from "./store.js";
 import { servedGenerations, SERVED_PIDS_SQL } from "./generations.js";
 import { StoreError } from "./errors.js";
+import { TASK_GROUP_PRESENT_SQL } from "./schema.js";
 
 type SummaryRow = {
   id: string;
@@ -127,6 +128,7 @@ export class SqlCommandQueries implements CommandQueries, ModelResourceQueries {
       FROM command c INDEXED BY ${input.state === null ? "command_task_group" : "command_task_group_state"}
       JOIN partition p ON p.id=c.pid WHERE c.live=1 AND c.kind='product'
       AND json_valid(CAST(c.summary AS TEXT))
+      AND ${TASK_GROUP_PRESENT_SQL}
       AND json_extract(CAST(c.summary AS TEXT),'$.params.taskGroupId')=?${state}
       AND c.pid IN (${SERVED_PIDS_SQL})${keyset}
       ORDER BY c.created_at DESC,c.id DESC LIMIT ?`,

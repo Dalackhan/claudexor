@@ -82,7 +82,8 @@ request key and exact body before launch; keep accepted receipts and their
 `storeId` outside the ephemeral controller. `claudexor_task_group_runs` accepts
 `{taskGroupId, expectedStoreId?, limit?, state?, cursor?}` and returns exactly one
 page of original job handles with actual nullable run IDs. Supply the saved
-`expectedStoreId` when recovering. Limit is 1..200,
+`expectedStoreId` when recovering. With only group/store saved, recover retained
+handles without request keys or the original project directory. Limit is 1..200,
 default 50; cursor is at most 2048 characters; logical result JSON is at most
 131072 UTF-8 bytes. Resume explicitly with `nextCursor`; `hasMore` never causes
 automatic traversal. A store mismatch or stale cursor is a typed refusal.
@@ -104,6 +105,10 @@ Echo each summary token as `seen` to suppress unchanged terminal or question
 attention. A token is neither an event cursor nor an answer. Read output and
 question bodies separately with `claudexor_run_result` and
 `claudexor_run_interactions`. Read abort or timeout never cancels the worker.
+A `problems` response keeps healthy summaries: retain their handles/tokens.
+Reconcile `not_found` against store/receipts/group and remove only obsolete watch
+targets. Retry `snapshot_unavailable` with bounded backoff; keep `not_observed` for
+a later read. Never busy-loop unchanged problems or infer permission to relaunch.
 Use `claudexor_run_wait` to follow events and resume with `nextSeq` as
 `afterSeq`. It returns events already written first, even while a question is
 pending, then waits for a batch or, with `wake: "event"`, the first new event.

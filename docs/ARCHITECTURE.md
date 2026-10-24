@@ -3742,8 +3742,10 @@ kept only for cold import and an independent frozen copy kept for tests.
   any write.
 - Schema version 3 adds two expression indexes over accepted command-summary
   `params.taskGroupId`, ordered for group pages and group/state pages with the
-  live product and valid-JSON predicates. Non-JSON BLOB summaries remain writable
-  and are excluded from these indexes. Membership is committed in the original
+  live product, valid-JSON and guarded non-null group predicates. Untagged rows,
+  JSON null groups and non-JSON BLOB summaries remain writable and occupy neither
+  index. Building the indexes still scans existing rows, and writes still evaluate
+  their predicates. Membership is committed in the original
   acceptance transaction, before ACK/dispatch; there is no group table, backfill
   or retention pin. Fresh DDL and the atomic 2→3 migration have the same indexes;
   version 1 follows 1→2→3, and reopening the current version is write-free.
@@ -3751,6 +3753,11 @@ kept only for cold import and an independent frozen copy kept for tests.
   upgraded store requires restoring a compatible complete backup made with all
   writers stopped; swapping only the executable is insufficient. Source and
   isolated-fixture qualification do not migrate an installed store.
+  Earlier unpublished schema-3 stores keep their broader indexes on reopen and
+  remain query-compatible with this reader; they retain the original storage cost.
+  No automatic rebuild is added. Earlier experimental binaries whose forced-index
+  queries lack the tagged predicate cannot query the narrower indexes. Do not swap
+  experimental binaries against the same store; the complete-backup rule applies.
 - The flusher worker owns the power-loss barrier. Every 200 ms it fsyncs each
   directory registered since the previous pass, reads `data_version`, runs a
   PASSIVE checkpoint for space, and — whenever anything was committed since

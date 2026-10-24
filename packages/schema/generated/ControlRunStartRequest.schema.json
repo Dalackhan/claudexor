@@ -42,6 +42,11 @@
           "description": "Canonical run mode: ask and plan are read-only, agent writes. Strategy controls are separate schema-owned fields, never modes.",
           "default": "agent"
         },
+        "taskGroupId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Caller-generated UUID saved before launching the first member. Each job still needs its own idempotency key; the group grants no execution authority."
+        },
         "scope": {
           "anyOf": [
             {

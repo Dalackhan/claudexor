@@ -30,6 +30,74 @@ function connected(body: unknown = { jobId: "job-s", state: "queued" }) {
 describe("MCP sparse continuation query", () => {
   afterEach(() => vi.resetAllMocks());
 
+  it("forwards an explicit continuation group once and keeps the accepted receipt", async () => {
+    const taskGroupId = "11111111-1111-4111-8111-111111111111";
+    const storeId = "22222222-2222-4222-8222-222222222222";
+    connected({ jobId: "job-s", state: "queued", taskGroupId, storeId });
+    const result = await mcpSurfaceRunner()({
+      mode: "__run_continue",
+      runId: "run-p",
+      taskGroupId,
+      idempotencyKey: "group-key",
+    });
+    expect(JSON.parse(String(vi.mocked(controlApiFetch).mock.calls[0]![2]!.body))).toEqual({
+      continueFrom: "run-p",
+      taskGroupId,
+    });
+    expect(result).toMatchObject({ jobId: "job-s", taskGroupId, storeId });
+    expect(controlApiFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("carries an explicit group through the ordinary MCP launch producer", async () => {
+    const taskGroupId = "11111111-1111-4111-8111-111111111111";
+    const storeId = "22222222-2222-4222-8222-222222222222";
+    connected();
+    vi.mocked(enqueueAndAwait).mockResolvedValue({
+      jobId: "job-s",
+      runId: "",
+      runDir: "",
+      status: "queued",
+      taskGroupId,
+      storeId,
+    } as Awaited<ReturnType<typeof enqueueAndAwait>>);
+    expect(
+      await mcpSurfaceRunner({ requireExistingDaemon: true })({
+        mode: "agent",
+        prompt: "work",
+        repoPath: "/fixture",
+        deferred: true,
+        taskGroupId,
+      }),
+    ).toMatchObject({ taskGroupId, storeId });
+    expect(vi.mocked(enqueueAndAwait).mock.calls[0]?.[2]).toHaveProperty(
+      "taskGroupId",
+      taskGroupId,
+    );
+  });
+
+  it("keeps accepted pre-run failure metadata from server context", async () => {
+    const taskGroupId = "11111111-1111-4111-8111-111111111111";
+    const storeId = "22222222-2222-4222-8222-222222222222";
+    connected();
+    vi.mocked(controlApiFetch)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        json: async () => ({
+          code: "fixture_pre_run_failure",
+          message: "refused",
+          retryable: false,
+          context: { jobId: "job-f", state: "failed", taskGroupId, storeId },
+        }),
+      } as never)
+      .mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({}) } as never);
+    expect(await runContinueQuery({ runId: "run-p", taskGroupId })).toMatchObject({
+      jobId: "job-f",
+      taskGroupId,
+      storeId,
+    });
+  });
+
   it.each([undefined, "", "keep going"])(
     "posts only continuation fields with prompt %j, without runner defaults",
     async (prompt) => {
@@ -49,6 +117,8 @@ describe("MCP sparse continuation query", () => {
         }),
       });
       expect(result).toMatchObject({ jobId: "job-s", runId: "", status: "queued" });
+      expect(result).not.toHaveProperty("taskGroupId");
+      expect(result).not.toHaveProperty("storeId");
       expect(enqueueAndAwait).not.toHaveBeenCalled();
       expect(ensureDaemon).not.toHaveBeenCalled();
     },
@@ -95,6 +165,8 @@ describe("MCP sparse continuation query", () => {
   });
 
   it.each([
+    { taskGroupId: "not-a-uuid" },
+    { taskGroupId: null },
     { access: "full_access" },
     { web: "sometimes" },
     { paidBudget: { kind: "finite" } },

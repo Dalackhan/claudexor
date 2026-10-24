@@ -31,15 +31,15 @@ import { threadTools } from "./thread-tools.js";
 import { runTimeLimitTool } from "./run-time-limit-tool.js";
 import { runMessageTool } from "./run-message-tool.js";
 import { runContinueTool } from "./run-continue-tool.js";
-import { runWaitTool } from "./run-wait-tool.js";
+import { runObservationTools } from "./run-observation-tools.js";
 import { runStatusTool } from "./run-status-tool.js";
-import { runEventReadTool } from "./run-event-read-tool.js";
 import { inlineJsonSchemaRefs } from "./inline-json-schema-refs.js";
 import { processingPreferenceSchema } from "./reviewer-panel-schema.js";
 import {
   accessAndLimitProperties,
   externalContextProperties,
   reviewProperties,
+  taskGroupProperties,
 } from "./run-control-properties.js";
 const mcpRunToolResultSchema = inlineJsonSchemaRefs(
   mcpRunToolResultSchemaRaw as Record<string, unknown>,
@@ -246,6 +246,7 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
     additionalProperties: false,
     properties: {
       idempotencyKey: idempotencyKeySchema,
+      ...taskGroupProperties(),
       prompt: {
         type: "string",
         minLength: 1,
@@ -403,8 +404,7 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
     runTimeLimitTool(runner),
     runMessageTool(runner),
     runContinueTool(runner),
-    runWaitTool(runner),
-    runEventReadTool(runner),
+    ...runObservationTools(runner),
     {
       name: "claudexor_status",
       description:

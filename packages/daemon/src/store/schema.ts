@@ -5,7 +5,7 @@ import { StoreSchemaUnsupportedError } from "./errors.js";
 /** `PRAGMA application_id` of every engine store ("CXEN"). */
 export const ENGINE_APPLICATION_ID = 0x4358454e;
 /** `PRAGMA user_version`: the one schema this engine creates and serves. */
-export const ENGINE_SCHEMA_VERSION = 2;
+export const ENGINE_SCHEMA_VERSION = 3;
 
 /**
  * Version 2: the latest request each account served per requested model
@@ -20,6 +20,19 @@ CREATE TABLE account_last_service(harness_id TEXT NOT NULL, profile_id TEXT NOT 
   binding_digest TEXT NOT NULL, service_seq INTEGER NOT NULL, observed_at TEXT NOT NULL, run_id TEXT NOT NULL,
   attempt_id TEXT NOT NULL, try_index INTEGER NOT NULL,
   PRIMARY KEY(harness_id, profile_id, requested_model_key, binding_digest)) WITHOUT ROWID, STRICT;
+`;
+
+/** Shared with the group query so SQLite can prove partial-index eligibility.
+ * CASE guards extraction even for legal non-JSON summary bytes. */
+export const TASK_GROUP_PRESENT_SQL = `CASE WHEN json_valid(CAST(summary AS TEXT))
+  THEN json_extract(CAST(summary AS TEXT),'$.params.taskGroupId') END IS NOT NULL`;
+
+/** Version 3 indexes tagged accepted summaries; no membership backfill. */
+const TASK_GROUP_INDEX_SQL = `
+CREATE INDEX command_task_group ON command(json_extract(CAST(summary AS TEXT),'$.params.taskGroupId'),created_at DESC,id DESC)
+  WHERE live=1 AND kind='product' AND json_valid(CAST(summary AS TEXT)) AND ${TASK_GROUP_PRESENT_SQL};
+CREATE INDEX command_task_group_state ON command(json_extract(CAST(summary AS TEXT),'$.params.taskGroupId'),state,created_at DESC,id DESC)
+  WHERE live=1 AND kind='product' AND json_valid(CAST(summary AS TEXT)) AND ${TASK_GROUP_PRESENT_SQL};
 `;
 
 /**
@@ -113,7 +126,7 @@ CREATE TABLE import_partition(name TEXT PRIMARY KEY, status TEXT NOT NULL, pid I
   previous_frame_hash TEXT, source_size INTEGER, source_mtime TEXT, fingerprint TEXT, records INTEGER, digest TEXT, problem TEXT) STRICT;
 CREATE TABLE unclassified(pid INTEGER NOT NULL, seq INTEGER NOT NULL, type TEXT NOT NULL, reason TEXT NOT NULL, payload BLOB NOT NULL,
   PRIMARY KEY(pid, seq)) WITHOUT ROWID, STRICT;
-${ACCOUNT_LAST_SERVICE_SQL}`;
+${ACCOUNT_LAST_SERVICE_SQL}${TASK_GROUP_INDEX_SQL}`;
 
 /** Every table the DDL creates, in creation order (for tests and the importer seam). */
 export const ENGINE_TABLES: readonly string[] = Object.freeze(
@@ -128,6 +141,7 @@ export const ENGINE_TABLES: readonly string[] = Object.freeze(
  */
 const SCHEMA_MIGRATIONS: ReadonlyMap<number, (db: DatabaseSync) => void> = new Map([
   [1, (db: DatabaseSync) => db.exec(ACCOUNT_LAST_SERVICE_SQL)],
+  [2, (db: DatabaseSync) => db.exec(TASK_GROUP_INDEX_SQL)],
 ]);
 
 export interface SchemaIdentity {

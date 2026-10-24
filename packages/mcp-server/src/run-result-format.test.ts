@@ -3,6 +3,27 @@ import { McpRunToolResult } from "@claudexor/schema";
 import { formatRunResult, structuredRunResult } from "./run-result-format.js";
 
 describe("launch handle mirrors", () => {
+  it.each([
+    { jobId: "job-q", runId: "", status: "queued" },
+    { jobId: "job-f", runId: "", status: "failed" },
+    { jobId: "job-b", runId: "actual-run", status: "running" },
+  ])("mirrors accepted group/store metadata in both channels for $status", (handle) => {
+    const taskGroupId = "11111111-1111-4111-8111-111111111111";
+    const storeId = "22222222-2222-4222-8222-222222222222";
+    const receipt = { ...handle, summary: "accepted", taskGroupId, storeId };
+    const text = formatRunResult(receipt);
+    expect(text).toContain(`taskGroupId: ${taskGroupId}`);
+    expect(text).toContain(`storeId: ${storeId}`);
+    const structured = structuredRunResult(receipt);
+    expect(structured).toMatchObject({
+      jobId: handle.jobId,
+      runId: handle.runId || null,
+      taskGroupId,
+      storeId,
+    });
+    expect(McpRunToolResult.parse(structured)).toMatchObject({ taskGroupId, storeId });
+  });
+
   it("carries a queued job id in text and structured content", () => {
     const queued = {
       summary: "accepted as job job-q",
@@ -11,6 +32,8 @@ describe("launch handle mirrors", () => {
       status: "queued",
     };
     expect(formatRunResult(queued)).toBe("accepted as job job-q\n\njobId: job-q\nstatus: queued");
+    expect(structuredRunResult(queued)).not.toHaveProperty("taskGroupId");
+    expect(structuredRunResult(queued)).not.toHaveProperty("storeId");
     expect(McpRunToolResult.parse(structuredRunResult(queued))).toMatchObject({
       jobId: "job-q",
       runId: null,

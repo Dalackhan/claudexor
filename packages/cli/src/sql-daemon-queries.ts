@@ -1,4 +1,78 @@
-import type { CommandBackend, EngineStore } from "@claudexor/daemon";
+import {
+  readRunObservations,
+  type CommandBackend,
+  type EngineStore,
+  type createSqlDaemonServices,
+} from "@claudexor/daemon";
+import { readTaskGroupRuns } from "@claudexor/control-api";
+import type { TaskGroupRunsInput } from "@claudexor/schema";
+
+type ControlReadGraph = Pick<
+  ReturnType<typeof createSqlDaemonServices>,
+  "commands" | "interactions" | "terminalFiles"
+>;
+
+/** Lazy read composition follows the attached graph through recovery. No identity
+ * is synthesized when the durable engine store is absent or closed. */
+export function sqlControlReadSources(
+  current: () => ControlReadGraph,
+  storeId: () => string | undefined,
+) {
+  return {
+    taskGroupRuns: (input: TaskGroupRunsInput, signal?: AbortSignal) => {
+      let selected: { graph: ControlReadGraph; storeId: string } | undefined;
+      return readTaskGroupRuns(
+        input,
+        {
+          storeId,
+          page: (query) => {
+            const graph = current();
+            const queries = graph.commands.queries;
+            if (!queries.taskGroupPage)
+              throw Object.assign(new Error("indexed task group observation is unavailable"), {
+                code: "task_group_runs_unavailable",
+                status: 503,
+                retryable: false,
+              });
+            selected = { graph, storeId: query.storeId };
+            return queries.taskGroupPage(query);
+          },
+          snapshot: (ids, readSignal) => {
+            if (!selected)
+              throw Object.assign(new Error("task group page has not selected a store"), {
+                code: "task_group_runs_unavailable",
+                status: 503,
+                retryable: false,
+              });
+            return readRunObservations(
+              selected.graph.commands.queries,
+              selected.graph.interactions,
+              selected.storeId,
+              ids,
+              readSignal,
+            );
+          },
+        },
+        signal,
+      );
+    },
+    runObservations: async (ids: readonly string[], signal?: AbortSignal) => {
+      const identity = storeId();
+      if (!identity)
+        throw Object.assign(
+          new Error("durable store identity is unavailable for run observation"),
+          {
+            code: "run_observation_unavailable",
+            status: 503,
+            retryable: false,
+          },
+        );
+      const graph = current();
+      return readRunObservations(graph.commands.queries, graph.interactions, identity, ids, signal);
+    },
+    terminalFilesPending: (id: string) => current().terminalFiles.pending(id),
+  };
+}
 
 /** Storage is attached after import; callers keep the same command boundary.
  * Recovery admission refuses product calls before any of these dereference SQL. */
@@ -9,6 +83,17 @@ export function deferredCommands(current: () => CommandBackend): CommandBackend 
     findById: (id) => current().findById!(id),
     pruneHistory: (...args) => current().pruneHistory(...args),
     queries: {
+      observationRecords: (ids) => current().queries.observationRecords!(ids),
+      taskGroupPage: (input) => {
+        const queries = current().queries;
+        if (!queries.taskGroupPage)
+          throw Object.assign(new Error("indexed task group observation is unavailable"), {
+            code: "task_group_runs_unavailable",
+            status: 503,
+            retryable: false,
+          });
+        return queries.taskGroupPage(input);
+      },
       getByRunId: (id) => current().queries.getByRunId(id),
       select: (query) => current().queries.select(query),
       publicList: (query) => current().queries.publicList(query),

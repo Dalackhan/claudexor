@@ -1,4 +1,5 @@
 import paidBudgetSchemaRaw from "@claudexor/schema/generated/PaidBudget.schema.json" with { type: "json" };
+import taskGroupIdSchemaRaw from "@claudexor/schema/generated/TaskGroupId.schema.json" with { type: "json" };
 import {
   AccessProfile,
   ExternalContextPolicy,
@@ -9,6 +10,12 @@ import { inlineJsonSchemaRefs } from "./inline-json-schema-refs.js";
 import { reviewerPanelEntrySchema } from "./reviewer-panel-schema.js";
 
 const paidBudgetSchema = inlineJsonSchemaRefs(paidBudgetSchemaRaw);
+const taskGroupIdSchema = inlineJsonSchemaRefs(taskGroupIdSchemaRaw);
+
+/** Public one-shot metadata only; thread and Delegate declarations do not compose this. */
+export function taskGroupProperties(): Record<string, unknown> {
+  return { taskGroupId: taskGroupIdSchema };
+}
 
 /**
  * MCP shapes of the canonical per-run controls, one owner for every tool that

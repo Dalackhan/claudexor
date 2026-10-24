@@ -8,7 +8,6 @@ import { mkdirSync, statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isAbsolute } from "node:path";
 import {
-  ControlQueuedRunInfo,
   ControlRunStartRequest,
   PROJECT_NOT_REGISTERED_REQUIRED_ACTIONS,
   RecordedControlRunStartRequest,
@@ -18,6 +17,7 @@ import {
   runExecutionWorkspaceRootAllowed,
   runExecutionWorkspaceViolation,
   runStartStrategyViolations,
+  taskGroupLaunchMetadata,
 } from "@claudexor/schema";
 import {
   assertNoInlineSecretValues,
@@ -30,8 +30,9 @@ import {
   assertAuxiliaryWritableRootSpelling,
   auxiliaryWritableRootDirectory,
 } from "@claudexor/workspace";
-import type { DaemonFacadeClient, DaemonRunRecord } from "./daemon-server.js";
+import type { DaemonFacadeClient } from "./daemon-server.js";
 import { assertContinuationAdmissible, resolveContinuationBody } from "./run-continuation-start.js";
+export { acceptedTaskGroupReceipt, unboundRunStartResponse } from "./run-start-receipt.js";
 
 const NO_PROJECT_ROOT = noProjectRepoRoot();
 
@@ -108,6 +109,7 @@ export function normalizeRunStart(
   parsed: ControlRunStartRequest,
   options: RunStartNormalizationOptions = {},
 ): ControlRunStartRequest {
+  taskGroupLaunchMetadata(parsed);
   const mode = parsed.mode ?? "agent";
   // Empty chat is never a silent no-op (Bible): reject a blank prompt at the
   // engine boundary. Fail loud (400) rather than enqueue a doomed run that
@@ -376,52 +378,6 @@ export async function findAcceptedAroundPreflight<T>(
   return null;
 }
 
-export function unboundRunStartResponse(
-  rec: DaemonRunRecord,
-  terminal: boolean,
-  terminalContext: Record<string, unknown> = {},
-): { status: number; body: Record<string, unknown> } {
-  // errorStatus is served verbatim only inside the failure range; anything
-  // else (absent, or a non-4xx/5xx value from a defective writer) must not
-  // turn a terminal failure body into a 2xx/3xx response.
-  const errorStatus =
-    typeof rec.errorStatus === "number" &&
-    Number.isInteger(rec.errorStatus) &&
-    rec.errorStatus >= 400 &&
-    rec.errorStatus <= 599
-      ? rec.errorStatus
-      : 500;
-  const queued = ControlQueuedRunInfo.parse({
-    jobId: rec.id,
-    state: rec.state,
-    error: rec.error,
-  });
-  if (!terminal) return { status: 202, body: queued };
-  return {
-    status: errorStatus,
-    body: {
-      ...queued,
-      ...(rec.errorCode ? { code: rec.errorCode } : {}),
-      // The daemon producer owns retryability when it supplied the fact. A
-      // legacy typed refusal without the field keeps the prior conservative
-      // non-retryable fallback; an untyped terminal makes no claim.
-      ...(rec.errorRetryable !== undefined
-        ? { retryable: rec.errorRetryable }
-        : rec.errorCode
-          ? { retryable: false }
-          : {}),
-      requiredActions: rec.errorRequiredActions ?? [],
-      context: {
-        ...(rec.errorContext ?? {}),
-        // Server-owned handles override any producer context with the same key.
-        jobId: rec.id,
-        state: rec.state,
-        ...terminalContext,
-      },
-    },
-  };
-}
-
 /** POST /v2/runs: validates, deduplicates, durably enqueues, then returns its handle.
  *
  * D10: POST /runs is the ONE-SHOT, THREAD-LESS run surface. A thread turn is
@@ -538,6 +494,13 @@ export async function handleRunCreate(
   try {
     return await ctx.respondToAcceptedJob(res, job.id);
   } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "store_identity_unavailable"
+    )
+      return ctx.requestError(res, error, 500);
     return ctx.json(res, 500, {
       error: `job ${job.id} was accepted but its start could not be observed: ${error instanceof Error ? error.message : String(error)}`,
       jobId: job.id,

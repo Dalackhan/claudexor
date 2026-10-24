@@ -4,6 +4,16 @@
     "ControlRunStartInfo": {
       "type": "object",
       "properties": {
+        "taskGroupId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Caller-generated UUID saved before launching the first member. Each job still needs its own idempotency key; the group grants no execution authority."
+        },
+        "storeId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identity of the durable engine store that accepted this group member, stable across restarts."
+        },
         "jobId": {
           "type": "string",
           "description": "Daemon job id backing the run."

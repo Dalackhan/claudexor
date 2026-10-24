@@ -1,4 +1,7 @@
-import type { InteractionStorePort } from "./store-contracts.js";
+import { createHash } from "node:crypto";
+import { setImmediate as yieldToAdmission } from "node:timers/promises";
+import type { InteractionStorePort, PendingIdentityDigest } from "./store-contracts.js";
+import { StoreError } from "./store/errors.js";
 import type {
   ControlPendingInteraction,
   InteractionAnswerSet,
@@ -30,6 +33,18 @@ export interface InteractionResolution {
   runId: string;
   interactionIds: string[];
   terminal: InteractionTerminal;
+}
+
+/** The caller supplies the complete keys in storage order. JSON string encoding
+ * preserves boundaries without materializing an unbounded identity array. */
+export function digestPendingIdentities(keys: Iterable<string>): PendingIdentityDigest {
+  const hash = createHash("sha256").update('["claudexor.pending-identities",1');
+  let pending = false;
+  for (const key of keys) {
+    pending = true;
+    hash.update(",").update(JSON.stringify(key));
+  }
+  return { pending, digest: hash.update("]").digest("base64url") };
 }
 
 interface LiveEntry {
@@ -127,6 +142,37 @@ export class InteractionRegistry {
   pendingForRun(runId: string): ControlPendingInteraction[] {
     this.prune();
     return this.storesForRun(runId).flatMap((store) => store.pendingForRun(runId));
+  }
+
+  /** Reuse the existing expiry owner exactly once, then read identities only.
+   * A local read error is unknown; a typed store failure remains request-wide. */
+  async snapshotPendingIdentities(
+    runIds: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<Map<string, PendingIdentityDigest | Error>> {
+    const snapshots = new Map<string, PendingIdentityDigest | Error>();
+    if (signal?.aborted) return snapshots;
+    this.prune();
+    for (const runId of new Set(runIds)) {
+      if (snapshots.size > 0 && snapshots.size % 64 === 0) await yieldToAdmission();
+      if (signal?.aborted) break;
+      try {
+        const store = this.stores.forRun(runId);
+        if (store && !store.pendingIdentityDigest)
+          throw new Error("body-free pending identity reads unavailable");
+        snapshots.set(
+          runId,
+          store ? store.pendingIdentityDigest!(runId) : digestPendingIdentities([]),
+        );
+      } catch (error) {
+        if (error instanceof StoreError) throw error;
+        snapshots.set(
+          runId,
+          error instanceof Error ? error : new Error("pending identity read failed"),
+        );
+      }
+    }
+    return snapshots;
   }
 
   private storesForRun(runId: string): InteractionStorePort[] {

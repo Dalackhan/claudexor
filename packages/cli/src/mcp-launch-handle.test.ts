@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { McpRunToolResult } from "@claudexor/schema";
 import { keyedLaunchNeedsProject, projectLaunchHandle } from "./mcp-launch-handle.js";
+import { enqueueAndAwait } from "./daemon-run.js";
+import { acceptedPreRunFailure } from "./run-start-acceptance.js";
+import { CLI_FLAGS, RUN_FLAGS_BY_MODE } from "./command-flags.js";
 
 vi.mock("./live.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./live.js")>()),
@@ -28,6 +31,84 @@ const failure = {
 afterEach(() => vi.resetAllMocks());
 
 describe("MCP launch handles", () => {
+  const taskGroupId = "11111111-1111-4111-8111-111111111111";
+  const storeId = "22222222-2222-4222-8222-222222222222";
+
+  it("declares --task-group-id as a value on every public one-shot CLI mode", () => {
+    expect(CLI_FLAGS.find((flag) => flag.name === "task-group-id")).toMatchObject({
+      kind: "value",
+    });
+    for (const flags of Object.values(RUN_FLAGS_BY_MODE)) expect(flags).toContain("task-group-id");
+  });
+
+  it.each(["queued", "running", "failed"] as const)(
+    "projects accepted %s metadata through the real enqueue and handle owners",
+    async (status) => {
+      const serverReceipt =
+        status === "failed"
+          ? {
+              code: "fixture_pre_run_failure",
+              message: "pre-run failure",
+              retryable: false,
+              context: { jobId: "job-g", state: "failed", taskGroupId, storeId },
+            }
+          : status === "queued"
+            ? { jobId: "job-g", state: "queued", taskGroupId, storeId }
+            : { jobId: "job-g", runId: "actual-run", runDir: "/fixture/run", taskGroupId, storeId };
+      vi.mocked(controlApiFetch).mockResolvedValueOnce(
+        Response.json(serverReceipt, {
+          status: status === "failed" ? 403 : status === "queued" ? 202 : 200,
+        }),
+      );
+      const client = { status: vi.fn(async () => ({ state: status })) };
+      const accepted = await enqueueAndAwait(
+        client as never,
+        addr,
+        { prompt: "work", taskGroupId },
+        { waitForTerminal: false, acceptUnbound: true },
+      );
+      expect(accepted).toMatchObject({ jobId: "job-g" });
+      vi.mocked(controlApiFetch).mockResolvedValue(Response.json({}, { status: 404 }));
+      const handle = await projectLaunchHandle(addr, accepted, { deferred: true });
+      expect(handle).toMatchObject({ jobId: "job-g", taskGroupId, storeId });
+      expect(handle.runId).toBe(status === "running" ? "actual-run" : "");
+      const { structuredRunResult } = await import("../../mcp-server/src/run-result-format.js");
+      expect(McpRunToolResult.parse(structuredRunResult(handle))).toMatchObject({
+        taskGroupId,
+        storeId,
+      });
+    },
+  );
+
+  it("projects a pre-run failure's group from accepted server context", async () => {
+    const accepted = acceptedPreRunFailure(403, {
+      code: "fixture_pre_run_failure",
+      message: "pre-run failure",
+      retryable: false,
+      context: { jobId: "job-g", state: "failed", taskGroupId, storeId },
+    });
+    expect(accepted).not.toBeNull();
+    vi.mocked(controlApiFetch).mockResolvedValue(Response.json({}, { status: 404 }));
+    expect(await projectLaunchHandle(addr, accepted!, { deferred: true })).toMatchObject({
+      jobId: "job-g",
+      taskGroupId,
+      storeId,
+    });
+  });
+
+  it("rejects group metadata on CLI thread/resume transport before posting a turn", async () => {
+    vi.mocked(controlApiFetch).mockResolvedValue(Response.json({ jobId: "job" }, { status: 202 }));
+    await expect(
+      enqueueAndAwait(
+        {} as never,
+        addr,
+        { threadId: "thread", prompt: "work", taskGroupId },
+        { waitForTerminal: false, acceptUnbound: true },
+      ),
+    ).rejects.toBeDefined();
+    expect(controlApiFetch).not.toHaveBeenCalled();
+  });
+
   it("keeps a still-queued job as a handle without reading detail", async () => {
     const result = await projectLaunchHandle(
       addr,
@@ -35,6 +116,8 @@ describe("MCP launch handles", () => {
       { deferred: true, mode: "agent" },
     );
     expect(result).toMatchObject({ jobId: "job-q", runId: "", status: "queued" });
+    expect(result).not.toHaveProperty("taskGroupId");
+    expect(result).not.toHaveProperty("storeId");
     expect(String(result["summary"])).toContain("Follow it with claudexor_run_wait");
     expect(controlApiFetch).not.toHaveBeenCalled();
   });

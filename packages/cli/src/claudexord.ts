@@ -53,7 +53,7 @@ import { runStartupAccountsMigration } from "./accounts-unified-migration.js";
 import { runStopIfRequested } from "./runtime-replacement-stop.js";
 import { createSqlDaemonExecutors } from "./sql-daemon-runtime.js";
 import { SqlDaemonStorage } from "./sql-daemon-storage.js";
-import { deferredCommands, sqlActivityRecords, sqlStartupRoots } from "./sql-daemon-queries.js";
+import * as sqlReads from "./sql-daemon-queries.js";
 import { threadPurgeEffect } from "./thread-purge.js";
 import { accountResetServices } from "./account-reset-services.js";
 type Graph = ReturnType<typeof createSqlDaemonServices>;
@@ -118,7 +118,7 @@ export async function main(): Promise<void> {
       const next = new DaemonServer({
         socketPath,
         token,
-        commands: deferredCommands(() => graph().commands),
+        commands: sqlReads.deferredCommands(() => graph().commands),
         runtimeConcurrencyCaps: caps,
         servingMode: admission.snapshot,
         storeFacts: () => storage!.facts(),
@@ -180,7 +180,7 @@ export async function main(): Promise<void> {
         () => value.resources,
         () => value.quota,
         value.accounts,
-        () => sqlActivityRecords(value.store),
+        () => sqlReads.sqlActivityRecords(value.store),
         caps,
         value.purgeFiles,
       );
@@ -246,7 +246,7 @@ export async function main(): Promise<void> {
         storeId: () => storage.storeId(),
         bus,
         services,
-        terminalFilesPending: (id) => graph().terminalFiles.pending(id),
+        ...sqlReads.sqlControlReadSources(graph, () => storage.storeId()),
       });
     async function ensureRecoveryControl(): Promise<void> {
       if (shutdown?.requested()) return;
@@ -333,7 +333,7 @@ export async function main(): Promise<void> {
         }
         if (dutiesFor !== value) {
           await value.recoverAfterStartup();
-          const roots = sqlStartupRoots(value.store);
+          const roots = sqlReads.sqlStartupRoots(value.store);
           await runStartupCrashGc({
             daemonDir: daemonDir(),
             logPath: logPath(),

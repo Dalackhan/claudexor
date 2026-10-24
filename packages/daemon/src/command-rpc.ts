@@ -1,4 +1,4 @@
-import { continuedRunOf, delegatedParentOf } from "@claudexor/schema";
+import { continuedRunOf, delegatedParentOf, taskGroupLaunchMetadata } from "@claudexor/schema";
 import {
   commandStoreForRequest,
   type CommandAuthority,
@@ -19,6 +19,7 @@ export function admitCommandRequest(
   operation: string | undefined,
   delegation?: DelegationAdmissionAuthority,
 ): unknown {
+  taskGroupLaunchMetadata(raw, operation === "delegated-run");
   const from = continuedRunOf(raw);
   const request = admitContinuationRequest(
     raw,

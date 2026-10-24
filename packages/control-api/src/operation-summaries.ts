@@ -42,6 +42,10 @@ export const OPERATION_SUMMARIES: Record<string, string> = {
   "GET /v2/runs":
     "List a bounded, newest-first, keyset-paginated page of durable run summaries visible to the daemon.",
   "POST /v2/runs": "Start a run and return its durable handle.",
+  "POST /v2/runs/wait-many":
+    "Wait once for unacknowledged lifecycle or pending-question attention across addressed runs.",
+  "GET /v2/task-groups/:id/runs":
+    "Read one compact page of retained group members in current served generations; absence is not a permanent roster or replay authority.",
   "GET /v2/runs/:id": "Read a run's full detail snapshot.",
   "GET /v2/runs/:id/time-limit": "Read a run's live time-limit snapshot and revision.",
   "PATCH /v2/runs/:id/time-limit":

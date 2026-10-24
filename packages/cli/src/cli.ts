@@ -4,7 +4,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { ArtifactStore } from "@claudexor/artifact-store";
 import { CLAUDEXOR_VERSION, noProjectRepoRoot, readTextSafe, userConfigDir } from "@claudexor/util";
-import { resolveInstructions } from "./run-options.js";
+import { resolveInstructions, taskGroupOptions } from "./run-options.js";
 import { releaseCommand } from "./release-command.js";
 import { serveBeltBridge, serveMcpBridge } from "./bridge-serve.js";
 import { dispatchAcpCommand } from "./acp-auth-command.js";
@@ -34,6 +34,7 @@ import {
   type TestCommandInvocation,
   type ResourceAttachmentRef,
   runOutcomeLabel,
+  taskGroupReceiptMetadata,
 } from "@claudexor/schema";
 import {
   flagBool,
@@ -69,6 +70,8 @@ import { dispatchOpsCommand } from "./ops-commands.js";
 import { reviewCommand } from "./review-command.js";
 import { controlApiFetch, followRun } from "./live.js";
 import { retryCommand, runAgainCommand } from "./retry-command.js";
+import { runsWaitCommand } from "./runs-wait-command.js";
+import { taskGroupRunsCommand } from "./task-group-runs.js";
 import { assertCliRunParamsHaveNoInlineSecrets } from "./run-secret-scan.js";
 import { resolveLocalAttachment, type LocalAttachment } from "./local-attachment.js";
 import { uploadLocalAttachment } from "./attachment-upload.js";
@@ -311,12 +314,14 @@ async function orchestrate(
   let attachmentRequest: ReturnType<typeof attachmentInputs> | undefined;
   let resolvedProtectedPathApprovals: ProtectedPathApproval[] | undefined;
   let resolvedInstructions: string | undefined;
+  let groupMetadata: ReturnType<typeof taskGroupOptions>;
   let resolvedMaxSeconds: number | undefined;
   let resolvedTimeLimitMode: TimeLimitMode | undefined;
   let resolvedMaxTurns: number | undefined;
   let resolvedDenyPaths: string[] | undefined;
   let resolvedOutputSchema: Record<string, unknown> | undefined;
   try {
+    groupMetadata = taskGroupOptions(args);
     reviewerEffortOverrides = reviewerEfforts(args);
     resolvedReviewerModels = reviewerModels(args);
     resolvedReviewerPanel = reviewerPanel(args);
@@ -442,6 +447,7 @@ async function orchestrate(
     );
   }
   return daemonRun(args, outputMode, {
+    groupMetadata,
     mode,
     delegate,
     council,
@@ -479,6 +485,7 @@ async function orchestrate(
 }
 
 interface DaemonRunParams {
+  groupMetadata: ReturnType<typeof taskGroupOptions>;
   mode: ModeKind;
   delegate: boolean | undefined;
   council: boolean | undefined;
@@ -596,6 +603,7 @@ async function daemonRun(
     );
   }
   const body: Record<string, unknown> = {
+    ...p.groupMetadata,
     prompt: p.prompt,
     ...(p.instructions ? { instructions: p.instructions } : {}),
     ...(p.maxSeconds !== undefined ? { maxSeconds: p.maxSeconds } : {}),
@@ -654,6 +662,7 @@ async function daemonRun(
       terminalRunId = started.runId;
       printJsonLine({
         frame: "run.started",
+        ...taskGroupReceiptMetadata(started),
         runId: started.runId,
         runDir: started.runDir,
         jobId: started.jobId,
@@ -955,6 +964,10 @@ async function dispatch(args: ParsedArgs, outputMode: CliOutputMode): Promise<nu
   if (opsCommand) return opsCommand;
 
   switch (cmd) {
+    case "runs-wait":
+      return runsWaitCommand(args, json);
+    case "task-group-runs":
+      return taskGroupRunsCommand(args, json);
     case "init": {
       const res = initProjectConfig(cwd);
       if (json) printJson(res);

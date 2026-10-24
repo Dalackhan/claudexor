@@ -27,7 +27,13 @@ import {
   handshakeControlApi,
   type ControlApiAddress,
 } from "./live.js";
-import { ControlRunState, TERMINAL_LIFECYCLES } from "@claudexor/schema";
+import {
+  ControlRunState,
+  TERMINAL_LIFECYCLES,
+  taskGroupLaunchMetadata,
+  taskGroupReceiptMetadata,
+  type TaskGroupReceipt,
+} from "@claudexor/schema";
 import { acceptedPreRunFailure } from "./run-start-acceptance.js";
 export { projectOutcomeBanner } from "./run-detail-projections.js";
 export { projectRunOutcomeFacts, mergeDaemonRunOutcome } from "./daemon-outcome.js";
@@ -257,7 +263,7 @@ export async function waitForDaemonReady(
 // projection-owned TERMINAL_LIFECYCLES, never a local re-derivation.
 const TERMINAL_STATES: ReadonlySet<string> = TERMINAL_LIFECYCLES;
 
-export interface DaemonRunOutcome {
+export interface DaemonRunOutcome extends Partial<TaskGroupReceipt> {
   runId: string;
   runDir: string;
   /** The daemon job state (honest terminal: succeeded | blocked | failed | no_op | ...). */
@@ -301,6 +307,7 @@ export async function enqueueAndAwait(
     onPollTick?: (info: { runId: string }) => void | Promise<void>;
   } = { waitForTerminal: true },
 ): Promise<DaemonRunOutcome> {
+  taskGroupLaunchMetadata(body, opts.internalDaemonEnqueue);
   // Belt tools do not expose caller keys: their local budget/count admission
   // is per invocation. Never silently drop a key or bypass that boundary by
   // moving server-owned Delegate lineage onto public HTTP admission.
@@ -320,6 +327,7 @@ export async function enqueueAndAwait(
   let jobId = "";
   let runId = "";
   let runDir = "";
+  let metadata: Partial<TaskGroupReceipt> = {};
   if (opts.internalDaemonEnqueue) {
     const accepted = await client.enqueue(body, {
       clientId: "delegation-belt",
@@ -355,13 +363,14 @@ export async function enqueueAndAwait(
       );
     }
     jobId = String(start["jobId"] ?? "");
+    metadata = taskGroupReceiptMetadata(start);
     runId = typeof start["runId"] === "string" ? (start["runId"] as string) : "";
     runDir = typeof start["runDir"] === "string" ? (start["runDir"] as string) : "";
     // The daemon already waited for binding before answering 202: the
     // accepted job itself is the durable handle.
     if (opts.acceptUnbound && jobId && (!runId || !runDir)) {
       const state = ControlRunState.safeParse(start["state"]);
-      return { jobId, runId: "", runDir: "", status: state.success ? state.data : "" };
+      return { jobId, runId: "", runDir: "", status: state.success ? state.data : "", ...metadata };
     }
   }
 
@@ -426,6 +435,7 @@ export async function enqueueAndAwait(
           runDir: "",
           status: rec.state,
           jobId,
+          ...metadata,
           error: rec.error,
           errorCode: rec.errorCode,
           errorStatus: rec.errorStatus,
@@ -455,6 +465,7 @@ export async function enqueueAndAwait(
         runDir,
         status: rec?.state ?? (opts.acceptUnbound ? "" : "running"),
         jobId,
+        ...metadata,
         error: rec?.error,
         errorCode: rec?.errorCode,
         errorStatus: rec?.errorStatus,
@@ -473,6 +484,7 @@ export async function enqueueAndAwait(
           runDir: rec.runDir ?? runDir,
           status: rec.state,
           jobId,
+          ...metadata,
           error: rec.error,
           errorCode: rec.errorCode,
           errorStatus: rec.errorStatus,

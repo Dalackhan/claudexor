@@ -91,6 +91,10 @@ import { handleRunRetryRoute } from "./run-retry-routes.js";
 import { handleRunMessageRoute } from "./run-message-routes.js";
 import { handleRunEventPartRoute } from "./run-event-part-routes.js";
 import { handleRunTimeLimitRoute } from "./run-time-limit-routes.js";
+import { handleRunWaitManyRoute } from "./run-wait-many-routes.js";
+import { handleTaskGroupRunsRoute } from "./task-group-routes.js";
+import type { TaskGroupRunsInput, TaskGroupRunsResult } from "@claudexor/schema";
+import type { RunWaitManyHost } from "./run-wait-many.js";
 import {
   handleRunApplyRoutes,
   runIdempotentDelivery,
@@ -125,14 +129,7 @@ import {
   parseHarnessListQuery,
   parseRunApplicabilityQuery,
 } from "./catalog-query.js";
-import {
-  lruGet,
-  lruSet,
-  parseRunListQuery,
-  summarizeRunPage,
-  selectRunListPage,
-  type RunListQuery,
-} from "./run-list.js";
+import { lruGet, lruSet, serveRunList } from "./run-list.js";
 import { summaryFingerprint, type RunListFingerprint } from "./run-list-fingerprint.js";
 export {
   resetRunListFingerprintProbeCountForTests,
@@ -177,7 +174,6 @@ import {
   type ControlRunStartRequest,
   ControlReviewerPanelEntry,
   ControlRunDetail,
-  ControlRunListResponse,
   ControlRunSummary,
   ControlBudgetSnapshot,
   PaidBudget,
@@ -253,6 +249,9 @@ export interface DaemonControlApiOptions {
   servingMode?: () => ControlServingMode;
   /** Current durable store identity; unavailable before open or during replacement. */
   storeId?: () => string | undefined;
+  /** Body-free, positional run observations from the current durable store. */
+  runObservations?: RunWaitManyHost["snapshot"];
+  taskGroupRuns?: (input: TaskGroupRunsInput, signal?: AbortSignal) => Promise<TaskGroupRunsResult>;
   bus?: { subscribe(listener: (event: { run_id: string }) => void): () => void };
   /** Internal storage fact; a committed terminal may still need its file effects. */
   terminalFilesPending?: (runIdOrCommandId: string) => boolean;
@@ -687,6 +686,12 @@ export class DaemonControlApiServer {
     fallbackRetryable: boolean,
     fallbackMessage?: string,
   ): void {
+    if (status === 413) {
+      // The bounded reader leaves incomplete uploads paused so this problem
+      // reaches the client. Close after flushing; never drain an unbounded tail.
+      res.shouldKeepAlive = false;
+      res.once("finish", () => res.destroy());
+    }
     this.json(
       res,
       status,
@@ -770,13 +775,19 @@ export class DaemonControlApiServer {
     const dataRoutes = {
       daemon: this.opts.daemon,
       services: this.opts.services,
-      readBody: (request: IncomingMessage) => this.readBody(request),
+      runObservations: this.opts.runObservations,
+      taskGroupRuns: this.opts.taskGroupRuns,
+      bus: this.opts.bus,
+      pollMs: this.opts.pollMs,
+      readBody: (request: IncomingMessage, maxBytes?: number) => this.readBody(request, maxBytes),
       json: (response: ServerResponse, status: number, body: unknown) =>
         this.json(response, status, body),
       requestError: (response: ServerResponse, error: unknown, fallback?: 400 | 500) =>
         this.requestError(response, error, fallback),
     };
     for (const route of [
+      handleRunWaitManyRoute,
+      handleTaskGroupRunsRoute,
       handleResourceRoute,
       handleModelRoute,
       handleMaintenanceRoute,
@@ -819,7 +830,17 @@ export class DaemonControlApiServer {
     }
 
     if (method === "GET" && path === "/runs") {
-      return this.handleRunList(url, req, res);
+      return serveRunList(
+        {
+          daemon: this.opts.daemon,
+          summarize: (record) => this.summarizeRunOrDiagnostic(record),
+          requestError: (response, error) => this.requestError(response, error),
+          json: (response, status, body) => this.json(response, status, body),
+        },
+        url,
+        req,
+        res,
+      );
     }
 
     if (
@@ -829,6 +850,7 @@ export class DaemonControlApiServer {
           services: this.opts.services,
           findRun: (id) => this.findRun(id),
           waitForRunStart: (id) => this.waitForRunStart(id),
+          storeId: this.opts.storeId,
           serializeThreadMutation: (threadId, work) =>
             chainThreadMutation(this.threadTurnChains, threadId, work),
           json: (response, status, body) => this.json(response, status, body),
@@ -1958,11 +1980,13 @@ export class DaemonControlApiServer {
 
   private async respondToAcceptedJob(res: ServerResponse, jobId: string): Promise<void> {
     const rec = await this.waitForRunStart(jobId);
+    const metadata = runStart.acceptedTaskGroupReceipt(rec, this.opts.storeId);
     if (rec.runId && rec.runDir) {
       return this.json(
         res,
         200,
         ControlRunStartInfo.parse({
+          ...metadata,
           jobId: rec.id,
           runId: rec.runId,
           taskId: rec.taskId,
@@ -1970,7 +1994,12 @@ export class DaemonControlApiServer {
         }),
       );
     }
-    const { status, body } = runStart.unboundRunStartResponse(rec, TERMINAL_STATES.has(rec.state));
+    const { status, body } = runStart.unboundRunStartResponse(
+      rec,
+      TERMINAL_STATES.has(rec.state),
+      {},
+      metadata,
+    );
     return this.json(res, status, body);
   }
 
@@ -1990,46 +2019,6 @@ export class DaemonControlApiServer {
     return delegatedDescendantsFromRecords(
       parentRunId,
       await this.opts.daemon.list({ delegatedDescendantsOf: parentRunId }),
-    );
-  }
-
-  /**
-   * GET /v2/runs (QA-052): a bounded, newest-first, keyset-paginated page of run
-   * summaries. Ordering, filtering, and slicing all happen on the raw daemon
-   * records BEFORE any summary is materialized, so the expensive per-run
-   * artifact fingerprint/projection work is bounded by `limit` (page size), not
-   * by the total retained-record count. `limit`/`state`/`cursor` are typed and
-   * strict — an unknown or malformed param is a typed 400, never silently
-   * ignored. The bare (unparametered) call is still valid and now returns the
-   * newest `RUN_LIST_DEFAULT_LIMIT` runs with `hasMore`/`nextCursor` to page the
-   * rest.
-   */
-  private async handleRunList(url: URL, req: IncomingMessage, res: ServerResponse): Promise<void> {
-    let query: RunListQuery;
-    try {
-      query = parseRunListQuery(url);
-    } catch (error) {
-      return this.requestError(res, error);
-    }
-    const { page, hasMore, nextCursor } = selectRunListPage(
-      await this.opts.daemon.list({ page: query }),
-      query,
-    );
-    if (requestGone(req, res)) return;
-    const runs = await summarizeRunPage(
-      page,
-      (r) => this.summarizeRunOrDiagnostic(r),
-      () => !requestGone(req, res),
-    );
-    if (requestGone(req, res)) return;
-    return this.json(
-      res,
-      200,
-      ControlRunListResponse.parse({
-        runs,
-        nextCursor,
-        hasMore,
-      }),
     );
   }
 

@@ -150,6 +150,7 @@ describe("command registry — the one owner of the CLI surface", () => {
       "time-limit-mode",
       "max-turns",
       "prompt-file",
+      "task-group-id",
       "thread",
       "resume",
       "json-stream",

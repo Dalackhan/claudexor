@@ -1,6 +1,7 @@
 import { HARNESS_COMMAND_SPECS } from "./harness-command-specs.js";
 import { REMOTE_COMMAND_SPECS } from "./remote-command-specs.js";
 import { RETRY_COMMAND_SPECS } from "./retry-command-specs.js";
+import { RUN_OBSERVATION_COMMAND_SPECS } from "./run-observation-command-specs.js";
 import {
   OPS_COMMAND_SPECS_AFTER_REMOTE,
   OPS_COMMAND_SPECS_BEFORE_REMOTE,
@@ -174,6 +175,7 @@ export const CLI_COMMANDS: readonly CliCommandSpec[] = [
     recovery: true,
   },
   ...RETRY_COMMAND_SPECS,
+  ...RUN_OBSERVATION_COMMAND_SPECS,
   {
     id: "apply",
     positionalPatterns: [{ min: 1, max: 1 }],

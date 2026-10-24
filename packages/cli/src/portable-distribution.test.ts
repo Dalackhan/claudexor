@@ -55,11 +55,38 @@ describe("portable Agent Skill, Copilot plugin, and MCP distribution", () => {
       );
       for (const name of [
         "claudexor_run_wait",
+        "claudexor_runs_wait",
+        "claudexor_task_group_runs",
         "claudexor_run_event_read",
         "claudexor_run_message",
         "claudexor_run_continue",
       ])
         expect(generated, `generated skill omits ${name}`).toContain(`\`${name}\``);
+      // Independent API-reference literals shared by the shipped and generated
+      // skills. Keep the old safety and host snapshots intact.
+      for (const reference of [
+        "`taskGroupId`",
+        "`--task-group-id`",
+        "`storeId`",
+        "{taskGroupId, expectedStoreId?, limit?, state?, cursor?}",
+        "1..200",
+        "2048 characters",
+        "131072 UTF-8 bytes",
+        "`nextCursor`",
+        "`current_served_generations`",
+        "`retained_only`",
+        "Missing membership grants no resubmission authority.",
+        "Exact Retry keeps",
+        "Thread turns, Delegate tools and ACP session settings",
+        "With only group/store saved, recover retained",
+        "`problems` response keeps healthy summaries",
+        "`not_found` against store/receipts/group",
+        "`snapshot_unavailable` with bounded backoff",
+        "`not_observed` for",
+      ]) {
+        expect(generated).toContain(reference);
+        expect(portable).toContain(reference);
+      }
       for (const safety of [
         "NEVER paste live credentials into prompts",
         "NEVER auto-answer `claudexor decision`",

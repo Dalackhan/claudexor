@@ -424,6 +424,47 @@ describe("native login specs", () => {
     }
   });
 
+  it("pins Grok login to a named profile and disables its updater", () => {
+    expect(() => nativeLoginEnv("grok", { GROK_HOME: "/host/.grok" })).toThrow(
+      /no default credential store/,
+    );
+    const profiles = join(userConfigDir(), "profiles");
+    mkdirSync(profiles, { recursive: true });
+    const profileHome = realpathSync(mkdtempSync(join(profiles, "grok-login-")));
+    try {
+      const env = nativeLoginEnv(
+        "grok",
+        {
+          GROK_HOME: "/host/.grok",
+          GROK_DISABLE_AUTOUPDATER: "0",
+          GROK_CONFIG: '{"cli":{"auto_update":true}}',
+          GROK_CODE_XAI_API_KEY: "must-scrub",
+          GROK_XAI_API_BASE_URL: "https://redirect.invalid",
+          GROK_MODELS_BASE_URL: "https://redirect.invalid",
+          GROK_MODELS_LIST_URL: "https://redirect.invalid/models",
+        },
+        profileHome,
+      );
+      expect(env).toMatchObject({
+        HOME: profileHome,
+        USERPROFILE: profileHome,
+        GROK_HOME: join(profileHome, ".grok"),
+        GROK_DISABLE_AUTOUPDATER: "1",
+      });
+      for (const key of [
+        "GROK_CONFIG",
+        "GROK_CONFIG_PATH",
+        "GROK_CODE_XAI_API_KEY",
+        "GROK_XAI_API_BASE_URL",
+        "GROK_MODELS_BASE_URL",
+        "GROK_MODELS_LIST_URL",
+      ])
+        expect(env[key], key).toBeUndefined();
+    } finally {
+      rmSync(profileHome, { recursive: true, force: true });
+    }
+  });
+
   it("refuses an agy login with no profile HOME instead of targeting the operator's home", () => {
     // Owner decision Л-4: agy has NO default binding store. Falling through
     // would leave the daemon's own HOME in place and put vendor state/login

@@ -3,13 +3,14 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   HarnessUnavailableError,
+  composeSpawnEnv,
   validateTypedStream,
   type CliRunLoopOptions,
 } from "@claudexor/core";
 import { HarnessRunSpec, type CredentialProfile, type HarnessEvent } from "@claudexor/schema";
 import { userConfigDir } from "@claudexor/util";
 import { createGrokAdapter } from "./index.js";
-import { grokProfileEnv, grokLoginPresent } from "./profile.js";
+import { grokProfileEnv, grokLoginPresent, grokRouteEnv } from "./profile.js";
 import { parseGrokModels } from "./models.js";
 import { resolveGrokBin } from "./bin.js";
 
@@ -95,16 +96,68 @@ describe("Grok adapter routes", () => {
   });
 
   it("isolates both home selectors and removes foreign provider credentials", () => {
+    const scrubbed = [
+      "XAI_API_KEY",
+      "XAI_BASE_URL",
+      "XAI_API_BASE_URL",
+      "GROK_API_KEY",
+      "GROK_API_BASE_URL",
+      "GROK_CLI_CHAT_PROXY_BASE_URL",
+      "GROK_CODE_XAI_API_KEY",
+      "GROK_XAI_API_BASE_URL",
+      "GROK_MODELS_BASE_URL",
+      "GROK_MODELS_LIST_URL",
+      "OPENAI_API_KEY",
+    ];
     const env = grokProfileEnv(profile.isolation_locator!, {
       GROK_HOME: "/host",
-      XAI_API_KEY: "forbidden",
-      OPENAI_API_KEY: "forbidden",
+      ...Object.fromEntries(scrubbed.map((key) => [key, "forbidden"])),
+      GROK_DISABLE_AUTOUPDATER: "0",
+      GROK_CONFIG: '{"cli":{"auto_update":true}}',
+      GROK_CONFIG_PATH: "/host/config.toml",
     });
     expect(env.HOME).toBe(env.USERPROFILE);
     expect(env.GROK_HOME).toBe(join(env.HOME!, ".grok"));
-    expect(env.XAI_API_KEY).toBeNull();
-    expect(env.OPENAI_API_KEY).toBeNull();
+    const child = composeSpawnEnv("mirror_native", env);
+    for (const key of scrubbed) {
+      expect(env[key], key).toBeNull();
+      expect(child[key], key).toBeUndefined();
+    }
+    expect(env.GROK_DISABLE_AUTOUPDATER).toBe("1");
+    expect(env.GROK_CONFIG).toBeNull();
+    expect(env.GROK_CONFIG_PATH).toBeNull();
     expect(() => grokProfileEnv("relative")).toThrow();
+  });
+
+  it("refuses missing profiles without probing or spawning, even with an ambient Grok home", async () => {
+    const probeLogin = vi.fn(ready);
+    const runCli = vi.fn();
+    const adapter = createGrokAdapter({
+      detectVersion: async () => "1.0.67",
+      probeLogin,
+      runCli,
+    });
+    for (const value of [undefined, null]) {
+      expect(() => grokRouteEnv(value, { GROK_HOME: "/host/.grok" })).toThrow(
+        /profiles login grok <id>/,
+      );
+      await expect(
+        collect(
+          adapter.run(spec({ credential_profile: value, env: { GROK_HOME: "/host/.grok" } })),
+        ),
+      ).rejects.toThrow(/profiles login grok <id>/);
+    }
+    expect(() => grokProfileEnv("")).toThrow(/no default credential store/);
+    expect((await adapter.discover()).auth_modes).toEqual(["local_session"]);
+    const report = await adapter.doctor({ cwd: process.cwd(), env: { GROK_HOME: "/host/.grok" } });
+    expect(report.status).toBe("unavailable");
+    expect(report.reasons.join(" ")).toContain("profiles login grok <id>");
+    expect(report.auth_sources?.[0]?.verification).toBe("not_run");
+    expect(
+      await adapter.models?.({ cwd: process.cwd(), env: { GROK_HOME: "/host/.grok" } }),
+    ).toEqual([]);
+    expect(probeLogin).not.toHaveBeenCalled();
+    expect(runCli).not.toHaveBeenCalled();
   });
 
   it("treats malformed/oversized auth as unavailable without exporting parse errors", () => {
@@ -180,8 +233,10 @@ describe("Grok adapter routes", () => {
         ),
       );
       expect(invocation?.env?.GROK_HOME).toContain("grok-test");
+      expect(invocation?.env?.GROK_DISABLE_AUTOUPDATER).toBe("1");
       expect(invocation?.args).toEqual(
         expect.arrayContaining([
+          "--no-auto-update",
           "--cwd",
           process.cwd(),
           "-m",

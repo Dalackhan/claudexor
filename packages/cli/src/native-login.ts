@@ -288,7 +288,10 @@ export function nativeLoginEnv(
     // INV-135); ordinary ~/.claude is never created, read, or mutated here.
     ensureDir(env.CLAUDE_CONFIG_DIR);
   } else if (harness === "grok") {
-    if (!configDirOverride) throw new Error("Grok login requires an isolated profile HOME");
+    if (!configDirOverride)
+      throw new Error(
+        "Grok has no default credential store; use claudexor profiles add grok <id> and claudexor profiles login grok <id>",
+      );
     const scoped = grokProfileEnv(configDirOverride);
     for (const [key, value] of Object.entries(scoped)) if (value) env[key] = value;
     ensureDir(env.GROK_HOME!);

@@ -1,14 +1,18 @@
 import { readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { canonicalIsolationLocator, providerScrubEnv } from "@claudexor/core";
 import type { CredentialProfile } from "@claudexor/schema";
 
 type Env = Record<string, string | null | undefined>;
-const MANAGED_CONFIG: Env = {
-  GROK_CONFIG: JSON.stringify({ cli: { auto_update: false } }),
+const MANAGED_ENV: Env = {
+  GROK_DISABLE_AUTOUPDATER: "1",
+  GROK_CONFIG: null,
   GROK_CONFIG_PATH: null,
 };
+
+export const GROK_PROFILE_REQUIRED =
+  "Grok has no default credential store; select a named profile (--profile <id>): " +
+  "claudexor profiles add grok <id> and claudexor profiles login grok <id>";
 
 export function canonicalGrokProfileHome(locator: string): string {
   return canonicalIsolationLocator(locator, "credential profile Grok HOME");
@@ -16,11 +20,12 @@ export function canonicalGrokProfileHome(locator: string): string {
 
 /** HOME and GROK_HOME must agree for login, models, and execution. */
 export function grokProfileEnv(locator: string, env: Env = {}): Env {
+  if (!locator) throw new Error(GROK_PROFILE_REQUIRED);
   const home = canonicalGrokProfileHome(locator);
   return {
     ...env,
     ...providerScrubEnv(),
-    ...MANAGED_CONFIG,
+    ...MANAGED_ENV,
     HOME: home,
     USERPROFILE: home,
     GROK_HOME: join(home, ".grok"),
@@ -33,13 +38,7 @@ export function grokRouteEnv(profile?: CredentialProfile | null, env: Env = {}):
       throw new Error(`credential profile "${profile.profile_id}": Grok requires config_dir_login`);
     return grokProfileEnv(profile.isolation_locator ?? "", env);
   }
-  // Engine lane HOME is for session state, not a new credential identity.
-  return {
-    ...env,
-    ...providerScrubEnv(),
-    ...MANAGED_CONFIG,
-    GROK_HOME: env.GROK_HOME || process.env.GROK_HOME || join(homedir(), ".grok"),
-  };
+  throw new Error(GROK_PROFILE_REQUIRED);
 }
 
 /** File presence is diagnostic only; `grok models` owns authentication proof.

@@ -172,7 +172,7 @@ export function resolveLoginProfileBinding(
 }
 
 /**
- * A harness with no default binding store (agy — owner decision Л-4) can only
+ * A harness with no default binding store (agy, grok) can only
  * start login under a named binding. Refusing at CREATE time keeps the runner
  * from targeting vendor state/login artifacts at the daemon's own HOME; the
  * effective platform policy separately owns credential custody. The caller

@@ -20,7 +20,7 @@ import { CLAUDEXOR_VERSION, nowIso, redactSecrets } from "@claudexor/util";
 import { detectGrokVersion, resolveGrokBin } from "./bin.js";
 import { grokAccessArgs } from "./access.js";
 import { GROK_EFFORTS, probeGrokLogin } from "./models.js";
-import { grokLoginPresent, grokRouteEnv } from "./profile.js";
+import { GROK_PROFILE_REQUIRED, grokRouteEnv } from "./profile.js";
 import { createGrokParser, grokFailure } from "./parse.js";
 import { withGrokPromptFile } from "./prompt.js";
 export { resolveGrokBin } from "./bin.js";
@@ -67,37 +67,34 @@ type Runtime = typeof defaults;
 async function doctor(spec: DoctorSpec, runtime: Runtime) {
   const version = await runtime.detectVersion();
   const supported = spec.authSource === undefined || spec.authSource === "native_session";
-  const probe =
-    version && supported && spec.authPreference !== "api_key"
-      ? await runtime.probeLogin(grokRouteEnv(null, spec.env), spec.abortSignal)
-      : {
-          authenticated: false,
-          detail:
-            !supported || spec.authPreference === "api_key"
-              ? "Grok supports only grok.com subscription login"
-              : "Grok CLI is unavailable",
-        };
-  const ready = version !== null && probe.authenticated;
+  // Harness-level doctor has no account identity. Only a named profile probe
+  // may verify credentials; never probe the operator's ordinary ~/.grok.
+  const detail =
+    !supported || spec.authPreference === "api_key"
+      ? "Grok supports only grok.com subscription login"
+      : version
+        ? GROK_PROFILE_REQUIRED
+        : "Grok CLI is unavailable";
   return ConformanceReport.parse({
     harness_id: "grok",
-    status: ready ? "ok" : "unavailable",
+    status: "unavailable",
     checks: [
       {
         id: "installed",
         status: version ? "pass" : "fail",
         detail: version ?? "grok not found; set CLAUDEXOR_GROK_BIN",
       },
-      { id: "native_auth", status: ready ? "pass" : "fail", detail: probe.detail },
+      { id: "default_credential", status: "fail", detail },
     ],
-    enabled_intents: ready ? INTENTS : [],
-    disabled_intents: ready ? [] : INTENTS,
-    reasons: ready ? [] : [probe.detail],
+    enabled_intents: [],
+    disabled_intents: INTENTS,
+    reasons: [detail],
     auth_sources: [
       {
         source: spec.authSource ?? "native_session",
-        availability: ready ? "available" : "unavailable",
-        verification: ready ? "passed" : "not_run",
-        detail: probe.detail,
+        availability: "unavailable",
+        verification: "not_run",
+        detail,
       },
     ],
   });
@@ -179,7 +176,7 @@ export function createGrokAdapter(deps: Partial<Runtime> = {}): HarnessAdapter {
           work_report_transport: "unsupported",
         },
         capability_profile: GROK_CAPABILITY_PROFILE,
-        auth_modes: grokLoginPresent(grokRouteEnv()) ? ["local_session"] : [],
+        auth_modes: ["local_session"],
         access_profiles_supported: ["readonly", "workspace_write", "full", "inherit_native"],
       });
     },
@@ -215,7 +212,7 @@ async function* runGrok(
     env = grokRouteEnv(spec.credential_profile, spec.env);
   } catch {
     throw new HarnessUnavailableError(
-      "Grok credential profile is invalid; no default credential fallback is allowed",
+      `Grok credential profile is missing or invalid. ${GROK_PROFILE_REQUIRED}`,
     );
   }
   const probe = await runtime.probeLogin(env, abortSignalFromSpec(spec));
@@ -230,6 +227,7 @@ async function* runGrok(
   yield effortResolutionEvent(spec.session_id, effort);
   throwIfEffortRejected(effort);
   const args = [
+    "--no-auto-update",
     "--prompt-file",
     promptPath,
     "--cwd",

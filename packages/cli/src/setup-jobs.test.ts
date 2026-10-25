@@ -2645,6 +2645,24 @@ describe("setup jobs", () => {
 });
 
 describe("setup jobs for credential profiles (INV-135)", () => {
+  it("refuses Grok bootstrap login before registering a default account or starting a job", () => {
+    process.env.CLAUDEXOR_CONFIG_DIR = join(root, "cfg-grok");
+    const manager = createSetupJobManager({
+      store: new SetupJobStore(join(root, "store-grok")),
+      rootDir: join(root, "store-grok"),
+      platform: "darwin",
+      runnerPath: "/tmp/setup-login-runner.js",
+      openTerminal: fakeOpener,
+    });
+    expect(resolveLoginProfileBinding("grok", "login", undefined)).toBeNull();
+    expect(() =>
+      manager.create({ harness: "grok", action: "login", authRequest: "subscription" }),
+    ).toThrow(/no default credential store/);
+    expect(loadConfig(noProjectRepoRoot()).global.credential_profiles).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ harness_id: "grok" })]),
+    );
+  });
+
   it("refuses unknown profiles at create and seals the scoped home into the manifest; dedupe is per-target", () => {
     process.env.CLAUDEXOR_CONFIG_DIR = join(root, "cfg");
     const { profile } = registerConfigDirProfile({ harnessId: "codex", profileId: "work" });

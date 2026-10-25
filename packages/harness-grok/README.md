@@ -6,20 +6,25 @@ API key. Discovery checks `CLAUDEXOR_GROK_BIN`, PATH, then `~/.grok/bin/grok`
 
 ```sh
 claudexor doctor --harness grok
-claudexor ask "Reply with just OK" --harness grok
-claudexor agent "Fix the typo" --harness grok --access workspace_write
-claudexor best-of "Improve the error message" --harness codex,grok --n 2
 claudexor profiles add grok work
 claudexor profiles login grok work
+claudexor ask "Reply with just OK" --harness grok --profile work
+claudexor agent "Fix the typo" --harness grok --profile work --access workspace_write
+claudexor best-of "Improve the error message" --harness codex,grok --n 2
 ```
 
 Named profiles use isolated HOME/USERPROFILE and `GROK_HOME=<profile>/.grok`
 for login, models and execution. An invalid profile never uses host credentials.
-Without a profile, the existing `GROK_HOME` or `~/.grok` login is used.
+Grok has no default credential store or `auth login grok` bootstrap command.
+Runs require a named profile selected explicitly or by the account pool; host
+`GROK_HOME` and `~/.grok` credentials are never used. Harness-level doctor
+reports the absent default store; named profile probes own account readiness.
 `grok models` verifies the subscription without generation; file presence is
 diagnostic only. The official CLI owns OIDC renewal. Provider keys and redirects
-are scrubbed. An engine-owned `GROK_CONFIG` overlay disables vendor auto-update
-without editing user files. Login uses `grok login --device-auth`.
+are scrubbed. `GROK_DISABLE_AUTOUPDATER=1` disables vendor auto-update for login
+and execution; headless runs also pass `--no-auto-update`. Inherited
+`GROK_CONFIG` and `GROK_CONFIG_PATH` overrides are removed.
+Login uses `grok login --device-auth`.
 
 The selected account's native model ids pass through unchanged; inventory
 absence is advisory. Recorded effort levels are `low`, `medium`, `high`,

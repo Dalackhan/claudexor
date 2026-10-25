@@ -456,13 +456,14 @@ frequency and volume are. The contracts:
   metadata, not the loaded `[DiffFile]`; a pre-metadata tab open retriggers when
   metadata lands, while 413/network/non-text failures show the reason, artifact
   path, and Retry instead of a perpetual spinner.
-- **No nested lazy; the per-turn transcript is a PLAIN VStack (D-13 A).** The
-  conversation FEED is the outer `LazyVStack` (one row per turn). The inline
-  activity transcript INSIDE a receipt is a plain `VStack`, NOT a second
-  `LazyVStack`: it is a single turn's transcript and the reducer hard-caps it at
-  200 blocks, so laziness buys nothing — while a `LazyVStack` nested inside the
-  feed's `LazyVStack` was the nested-lazy pattern behind GH #23's runaway layout
-  loop. No materialized reversed copies, no eagerly-built thousand-row stacks.
+- **Bounded eager history; no lazy nesting (D-13 A).** Reopening long selectable
+  chat text can still trigger a SwiftUI lazy-geometry layout/allocation loop on
+  macOS 26 even without expanding a receipt. `ConversationHistoryStack` uses a
+  plain `VStack`, and `ConversationHistoryWindow` mounts at most 20 turns.
+  Older/Newer/Latest navigation keeps the entire stored history reachable;
+  an older page stays anchored while new turns arrive. The inline transcript
+  remains a plain `VStack` with its existing reducer/presentation caps. No
+  cumulative unbounded "load more", reversed copies, or thousand-row eager stacks.
 - **Per-card equatable containment (D-13 E).** `AppModel` is one coarse
   `@Observable`, so a low-frequency write to the `liveTasks` array (a status flip
   on one run, a list refresh) re-runs EVERY mounted `TurnCard.body`. The dominant
@@ -480,7 +481,7 @@ frequency and volume are. The contracts:
   actually select — the receipts, chips, and status containers carry no backing.
 - **Per-row readable measure (D-13 C).** The 680pt conversation measure
   (`conversationMeasure()`) is applied PER ROW (each `TurnCard`), not as a
-  double-frame around the whole feed `LazyVStack`; a sidebar drag / width change
+  double-frame around the whole history page; a sidebar drag / width change
   then no longer relayouts the entire scrolled column as one framed unit. The
   composer keeps its own measure.
 - **Off-screen eviction.** Terminal runs outside the open thread / inspected

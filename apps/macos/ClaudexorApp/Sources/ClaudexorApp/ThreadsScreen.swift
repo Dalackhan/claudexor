@@ -11,6 +11,9 @@ import UniformTypeIdentifiers
 struct ThreadsScreen: View {
     @Environment(AppModel.self) var model
     @State var composerText = ""
+    /// Eager rows avoid the macOS 26 lazy-history layout feedback loop. Keep
+    /// their number bounded; older turns remain available through navigation.
+    @State var historyWindow = ConversationHistoryWindow()
     /// Files/images staged for upload before the next turn. Images are gated by
     /// each selected harness's finite attachment-input declaration.
     @State var composerAttachments: [PendingAttachment] = []
@@ -229,6 +232,8 @@ struct ThreadsScreen: View {
         }
         .navigationTitle(navTitle)
         .navigationSubtitle(navSubtitle)
+        .onChange(of: model.selectedThreadId) { historyWindow.reset() }
+        .onChange(of: model.selectedExecutionLocation) { historyWindow.reset() }
     }
 
     /// Inset of the floating sidebar panel from the window edges (leading + vertical).
@@ -313,12 +318,16 @@ struct ThreadsScreen: View {
     private var conversation: some View {
         VStack(spacing: 0) {
             if let detail = model.selectedThreadDetail {
+                conversationHistoryNavigation(totalCount: detail.turns.count)
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                            ForEach(detail.turns) { turn in
+                        ConversationHistoryStack {
+                            // A bounded eager page avoids re-entering SwiftUI's lazy
+                            // measurement while selectable long text changes height.
+                            // This changes presentation only, never stored history.
+                            ForEach(Array(detail.turns[historyWindow.visibleRange(totalCount: detail.turns.count)])) { turn in
                                 // C (D-13): the readable 680pt measure is applied PER
-                                // ROW, not as a double-frame around the whole LazyVStack
+                                // ROW, not as a double-frame around the whole history
                                 // — a sidebar drag / width change no longer relayouts the
                                 // entire scrolled column as one framed unit; each row
                                 // measures independently (scroll position stays anchored).
@@ -332,23 +341,19 @@ struct ThreadsScreen: View {
                                     .conversationMeasure()
                                     .id(turn.id)
                             }
-                            if !detail.sessions.isEmpty {
+                            if historyWindow.isFollowingLatest, !detail.sessions.isEmpty {
                                 sessionsFooter(detail.sessions)
                                     .conversationMeasure()
                             }
                         }
-                        .padding(Theme.Spacing.lg)
-                        // B (D-13): selection backing is SCOPED to the text nodes users
-                        // actually select (message / answer / transcript Text carry their
-                        // own `.textSelection(.enabled)`). Overriding the window-root
-                        // global (RootView, §2.9) to DISABLED here strips the selectable
-                        // NSText backing from the feed's receipts / chips / status
-                        // containers, which never needed it; a descendant `.enabled` on
-                        // real prose still wins locally.
-                        .textSelection(.disabled)
                     }
                     .onChange(of: detail.turns.count) {
-                        if let last = detail.turns.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                        if historyWindow.isFollowingLatest, let last = detail.turns.last {
+                            proxy.scrollTo(last.id, anchor: .bottom)
+                        }
+                    }
+                    .onChange(of: historyWindow) {
+                        scrollToVisibleHistory(proxy, turns: detail.turns)
                     }
                 }
             } else {

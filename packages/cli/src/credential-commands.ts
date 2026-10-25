@@ -253,9 +253,9 @@ export async function profilesCommandWithDeps(
       print(`codex/${profileId} login was not started: ${job.message}`);
       return 1;
     }
-    // Cursor shares the existing setup owner with its app login. The other
+    // Cursor and Grok share the setup owner and its cache invalidation. Other
     // interactive profile-login paths retain their existing vendor terminal.
-    if (harness === "cursor") {
+    if (harness === "cursor" || harness === "grok") {
       return profileLoginViaSetupJob(
         {
           harness,

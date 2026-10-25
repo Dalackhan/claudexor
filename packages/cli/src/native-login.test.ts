@@ -1,3 +1,4 @@
+import { GROK_MANAGED_LOGIN, createGrokAdapter } from "@claudexor/harness-grok";
 import {
   chmodSync,
   mkdirSync,
@@ -157,12 +158,14 @@ describe("native login specs", () => {
       claude: createClaudeAdapter().capabilityProfile?.auth.managed_login,
       cursor: createCursorAdapter().capabilityProfile?.auth.managed_login,
       agy: createAgyAdapter().capabilityProfile?.auth.managed_login,
+      grok: createGrokAdapter().capabilityProfile?.auth.managed_login,
     } as const;
     const exportedDeclarations = {
       codex: CODEX_MANAGED_LOGIN,
       claude: CLAUDE_MANAGED_LOGIN,
       cursor: CURSOR_MANAGED_LOGIN,
       agy: AGY_MANAGED_LOGIN,
+      grok: GROK_MANAGED_LOGIN,
     } as const;
 
     expect(Object.keys(NATIVE_LOGIN_INPUTS).sort()).toEqual(

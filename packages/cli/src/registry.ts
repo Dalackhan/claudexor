@@ -18,6 +18,7 @@ import { createCodexAdapter } from "@claudexor/harness-codex";
 import { createCursorAdapter } from "@claudexor/harness-cursor";
 import { FAKE_KINDS, createFakeHarness } from "@claudexor/harness-fake";
 import { createOpenCodeAdapter } from "@claudexor/harness-opencode";
+import { createGrokAdapter } from "@claudexor/harness-grok";
 import { createRawApiAdapter } from "@claudexor/harness-raw-api";
 import {
   catalogProfiles,
@@ -47,6 +48,7 @@ export function buildRegistry(opts: RegistryOptions = {}): AdapterRegistry {
     createClaudeAdapter(),
     createCursorAdapter(),
     createOpenCodeAdapter(),
+    createGrokAdapter(),
     createRawApiAdapter(),
     createRawApiAdapter({
       id: "openrouter",

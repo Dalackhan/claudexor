@@ -37,7 +37,8 @@
     "@claudexor/secrets": "workspace:*",
     "@claudexor/util": "workspace:*",
     "@claudexor/workspace": "workspace:*",
-    "@claudexor/harness-acp": "workspace:*"
+    "@claudexor/harness-acp": "workspace:*",
+    "@claudexor/harness-grok": "workspace:*"
   },
   "repository": {
     "type": "git",

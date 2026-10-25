@@ -14,7 +14,7 @@ release gates, and integration notes live in
 ## 1. System Shape
 
 Claudexor is a local-first control plane over external coding harnesses:
-Codex CLI, Claude Code, Cursor CLI, OpenCode, raw APIs, and future adapters.
+Codex CLI, Claude Code, Cursor CLI, OpenCode, Grok Build, raw APIs, and future adapters.
 A harness is not a role. Roles are intents (`explain`, `plan`, `spec`,
 `implement`, `create_from_scratch`, `repair`, `review`, `verify`,
 `synthesize`, `audit`).
@@ -162,7 +162,7 @@ at every wire boundary.
   `RunFacts` projection from canonical run artifacts.
 - `packages/gateway`: harness discovery and capability/intent gating (route
   selection itself lives in the budget router and orchestrator routing).
-- `packages/harness-codex|claude|cursor|opencode|agy|acp|raw-api|fake`: adapters that
+- `packages/harness-codex|claude|cursor|opencode|agy|grok|acp|raw-api|fake`: adapters that
   translate native CLI/API streams into typed `HarnessEvent`s. The `fake-*` kinds
   are deterministic offline test fixtures (incl. `fake-implement`, which writes a
   real worktree file); they are explicit-`--harness` only and never enter
@@ -4006,7 +4006,7 @@ fails. Answer delivery remains the same commit-before-delivery child endpoint ab
 parent-side proxy or app-local interaction state is introduced.
 
 `/v2/setup/jobs` (create / status / snapshot / events / cancel / reconcile / extend)
-is the native-login setup surface for Codex, Claude, Cursor, and Antigravity.
+is the native-login setup surface for Codex, Claude, Cursor, Antigravity, and Grok Build.
 The same effective setup-login projector feeds `/v2/harnesses`,
 `/v2/agent-capabilities`, and create admission. Its current producers always
 emit their own `setupLogin` property; omission remains a legacy-wire fact.

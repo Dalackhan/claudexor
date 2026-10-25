@@ -1,0 +1,214 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import {
+  HarnessUnavailableError,
+  validateTypedStream,
+  type CliRunLoopOptions,
+} from "@claudexor/core";
+import { HarnessRunSpec, type CredentialProfile, type HarnessEvent } from "@claudexor/schema";
+import { userConfigDir } from "@claudexor/util";
+import { createGrokAdapter } from "./index.js";
+import { grokProfileEnv, grokLoginPresent } from "./profile.js";
+import { parseGrokModels } from "./models.js";
+import { resolveGrokBin } from "./bin.js";
+
+const profile: CredentialProfile = {
+  profile_id: "grok-test",
+  harness_id: "grok",
+  display_name: "test",
+  credential_kind: "config_dir_login",
+  isolation_locator: join(userConfigDir(), "profiles", "grok-test"),
+  secret_ref: null,
+  enabled: true,
+  created_at: null,
+};
+const ready = async () => ({ authenticated: true, models: [], detail: "vendor confirmed" });
+const spec = (extra = {}) =>
+  HarnessRunSpec.parse({
+    session_id: "s",
+    intent: "implement",
+    cwd: process.cwd(),
+    prompt: "hello",
+    credential_profile: profile,
+    ...extra,
+  });
+const collect = async (events: AsyncIterable<HarnessEvent>) => {
+  const out = [];
+  for await (const event of events) out.push(event);
+  return out;
+};
+
+describe("Grok adapter routes", () => {
+  it("transports a large prompt exactly and removes its private file after failure", async () => {
+    const prompt = "Unicode: Привет\r\n`$()\n" + "x".repeat(100_000);
+    let path = "";
+    const adapter = createGrokAdapter({
+      probeLogin: ready,
+      runCli: async function* (opts) {
+        path = opts.args[opts.args.indexOf("--prompt-file") + 1]!;
+        expect(readFileSync(path, "utf8")).toBe(prompt);
+        expect(opts.args).not.toContain(prompt);
+        throw new Error("native failure");
+      },
+    });
+    await expect(collect(adapter.run(spec({ prompt })))).rejects.toThrow("native failure");
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("refuses a vendor init that exposes tools outside the scoped allowlist", async () => {
+    const adapter = createGrokAdapter({
+      probeLogin: ready,
+      runCli: async function* (opts) {
+        const events = opts.parseEvent(
+          {
+            type: "system",
+            subtype: "init",
+            tools: ["read_file", "run_terminal_command"],
+            permissionMode: "dontAsk",
+          },
+          opts.spec.session_id,
+        )!;
+        expect(opts.stopAfterEvent?.(events[0]!)).toBe(true);
+        yield* events;
+      },
+    });
+    const events = await collect(adapter.run(spec({ access: "readonly" })));
+    expect(events.find((event) => event.type === "error")?.payload?.code).toBe(
+      "grok_access_policy_unconfirmed",
+    );
+  });
+  it("honors an unavailable override rather than finding a different install", () => {
+    const resolve = vi.fn(() => "/installed/grok");
+    expect(resolveGrokBin({ CLAUDEXOR_GROK_BIN: "/missing/grok" }, resolve)).toBe("/missing/grok");
+    expect(resolve).not.toHaveBeenCalled();
+    expect(resolveGrokBin({}, resolve)).toBe("/installed/grok");
+    expect(resolveGrokBin({}, (bin) => (bin === "grok" ? null : bin))).toContain(".grok");
+  });
+
+  it("lists exact native model ids without duplicates", () => {
+    expect(
+      parseGrokModels(
+        "You are logged in with grok.com.\nDefault model: grok-4.7\n - grok-4.7\n * grok-4.7-build-fast (default)\n - grok-4.7",
+      ).map((m) => m.id),
+    ).toEqual(["grok-4.7", "grok-4.7-build-fast"]);
+  });
+
+  it("isolates both home selectors and removes foreign provider credentials", () => {
+    const env = grokProfileEnv(profile.isolation_locator!, {
+      GROK_HOME: "/host",
+      XAI_API_KEY: "forbidden",
+      OPENAI_API_KEY: "forbidden",
+    });
+    expect(env.HOME).toBe(env.USERPROFILE);
+    expect(env.GROK_HOME).toBe(join(env.HOME!, ".grok"));
+    expect(env.XAI_API_KEY).toBeNull();
+    expect(env.OPENAI_API_KEY).toBeNull();
+    expect(() => grokProfileEnv("relative")).toThrow();
+  });
+
+  it("treats malformed/oversized auth as unavailable without exporting parse errors", () => {
+    const home = join(profile.isolation_locator!, ".grok");
+    mkdirSync(home, { recursive: true });
+    for (const content of ['{"secret":"do-not-show"', "[]", "x".repeat(65537)]) {
+      writeFileSync(join(home, "auth.json"), content);
+      expect(grokLoginPresent({ GROK_HOME: home })).toBe(false);
+    }
+  });
+
+  it("refuses a wrong credential transport before probing or spawning", async () => {
+    const probeLogin = vi.fn(ready);
+    const adapter = createGrokAdapter({ probeLogin });
+    await expect(
+      collect(
+        adapter.run(
+          spec({
+            credential_profile: {
+              ...profile,
+              credential_kind: "api_key",
+              isolation_locator: null,
+              secret_ref: "openai:test",
+            },
+          }),
+        ),
+      ),
+    ).rejects.toBeInstanceOf(HarnessUnavailableError);
+    expect(probeLogin).not.toHaveBeenCalled();
+  });
+
+  it("does not admit an absent login or explicitly requested API key", async () => {
+    const adapter = createGrokAdapter({
+      detectVersion: async () => "1.0.67",
+      probeLogin: async () => ({ authenticated: false, models: [], detail: "logged out" }),
+    });
+    expect((await adapter.doctor({ cwd: process.cwd() })).status).toBe("unavailable");
+    await expect(collect(adapter.run(spec()))).rejects.toBeInstanceOf(HarnessUnavailableError);
+    await expect(collect(adapter.run(spec({ auth_preference: "api_key" })))).rejects.toBeInstanceOf(
+      HarnessUnavailableError,
+    );
+  });
+
+  it.each(["readonly", "workspace_write", "full"])(
+    "drives %s access and stamps quota failures for rotation",
+    async (access) => {
+      let invocation: CliRunLoopOptions | undefined;
+      const adapter = createGrokAdapter({
+        probeLogin: ready,
+        runCli: async function* (opts) {
+          invocation = opts;
+          yield* opts.parseEvent(
+            { type: "error", error: { code: "quota_exceeded", message: "limit reached" } },
+            opts.spec.session_id,
+          )!;
+          yield {
+            type: "completed",
+            session_id: opts.spec.session_id,
+            ts: new Date().toISOString(),
+          };
+        },
+      });
+      const events = await collect(
+        adapter.run(
+          spec({
+            access,
+            effort_hint: "high",
+            max_turns: 3,
+            model_hint: "grok-4.7",
+            resume_session_id: "native-id",
+            instructions: "rules",
+          }),
+        ),
+      );
+      expect(invocation?.env?.GROK_HOME).toContain("grok-test");
+      expect(invocation?.args).toEqual(
+        expect.arrayContaining([
+          "--cwd",
+          process.cwd(),
+          "-m",
+          "grok-4.7",
+          "--reasoning-effort",
+          "high",
+          "--resume",
+          "native-id",
+          "--rules",
+          "rules",
+          "--max-turns",
+          "3",
+        ]),
+      );
+      if (access === "full") expect(invocation?.args).toContain("--always-approve");
+      else {
+        expect(invocation?.args).not.toContain("--always-approve");
+        expect(invocation?.args).toContain("dontAsk");
+        expect(invocation?.args).toContain("search_tool,use_tool");
+        if (access === "workspace_write") expect(invocation?.args.join(" ")).toContain("Edit(");
+      }
+      expect(events.find((event) => event.rate_limit)).toMatchObject({
+        credential_profile_id: "grok-test",
+        credential_route: "vendor_native",
+        status: { error_category: "rate_limit" },
+      });
+      validateTypedStream(events);
+    },
+  );
+});

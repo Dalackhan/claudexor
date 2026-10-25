@@ -614,6 +614,10 @@ transport. Native login stays vendor-owned (official CLI, structured argv,
 scrubbed env; Claudexor never sees or copies vendor tokens). The deep
 semantics live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §5.
 
+Grok Build is available through `--harness grok` or mixed pools such as
+`--harness codex,grok`, using a grok.com subscription without an API key.
+See the [Grok adapter contract](packages/harness-grok/README.md) for access policies.
+
 Codex login defaults to device-auth, driven in-app: the macOS AuthSheet shows
 the one-time code and opens a private sign-in window (no Terminal); the CLI
 prints the same code inline. Complete it in a window signed into no other
@@ -630,6 +634,8 @@ claudexor auth login claude   # claude auth login (claude.ai subscription route)
 claudexor auth login cursor   # cursor-agent login (or Cursor's own `agent`)
 claudexor profiles add agy work    # register a named Antigravity binding
 claudexor profiles login agy work  # login with its scoped HOME and platform credential policy
+claudexor profiles add grok work   # Grok Build: grok.com subscription, no API key
+claudexor profiles login grok work # isolated Grok HOME and device login
 claudexor secrets set openai --from-env OPENAI_API_KEY
 claudexor secrets list
 claudexor settings show

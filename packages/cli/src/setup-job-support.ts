@@ -53,6 +53,10 @@ export type SetupProfile = {
 };
 
 export const SETUP_PROFILES: Record<ControlHarnessSetupHarness, SetupProfile> = {
+  grok: {
+    guideUrl: "https://docs.x.ai/build/overview",
+    note: "Grok Build uses grok.com device authentication inside the selected isolated profile HOME.",
+  },
   codex: {
     guideUrl: "https://developers.openai.com/codex/auth/",
     note: "Codex native login updates the official vendor-owned CLI session. Exact subscription setup never falls back to a managed API key.",

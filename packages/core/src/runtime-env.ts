@@ -196,6 +196,7 @@ export function normalizedHarnessPath(
     // Cursor's vendor installer may choose this legacy vendor-owned prefix
     // instead of ~/.local/bin; discovery and execution must resolve either.
     join(home, ".cursor", "bin"),
+    join(home, ".grok", "bin"),
     join(home, ".npm-global", "bin"),
     join(home, ".bun", "bin"),
     "/opt/homebrew/bin",

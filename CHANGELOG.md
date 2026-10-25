@@ -1,5 +1,8 @@
 # Changelog
 
+- Unreleased: add the `grok` harness for Grok Build subscription login, isolated
+  profiles, native model/effort selection, mixed pools, and reactive quota fallback.
+
 Release and candidate history for Claudexor. The current version is declared
 in the root `package.json` (the version SSOT); published versions are available
 on GitHub Releases.

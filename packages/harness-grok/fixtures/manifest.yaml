@@ -1,0 +1,15 @@
+cli: grok
+fixtures:
+  errors/quota.jsonl:
+    source: synthetic
+    notes: Failure-channel quota contract; not a claim of a live exhausted subscription.
+  ask.jsonl:
+    source: recorded
+    cli_version: "1.0.67"
+    recorded_at: "2026-10-25"
+    notes: Subscription reply; local paths, skill inventories and thinking signatures sanitized.
+  write.jsonl:
+    source: recorded
+    cli_version: "1.0.67"
+    recorded_at: "2026-10-25"
+    notes: Workspace tool-policy write; local paths, skill inventories and thinking signatures sanitized.

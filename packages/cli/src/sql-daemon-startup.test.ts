@@ -67,9 +67,17 @@ class Fixture {
       version: 1,
       credential_profiles: [],
       harnesses: Object.fromEntries(
-        ["claude", "codex", "cursor", "agy", "copilot", "opencode", "raw-api", "openrouter"].map(
-          (id) => [id, { enabled: false, native_credentials_enabled: false }],
-        ),
+        [
+          "claude",
+          "codex",
+          "cursor",
+          "agy",
+          "copilot",
+          "opencode",
+          "grok",
+          "raw-api",
+          "openrouter",
+        ].map((id) => [id, { enabled: false, native_credentials_enabled: false }]),
       ),
     });
     writeFileSync(join(this.config, "config.yaml"), this.settings, { mode: 0o600 });

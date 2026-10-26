@@ -12,7 +12,7 @@ import {
   redactClaudeDoctorDetail,
   type ClaudeAuthStatusProbe,
 } from "./auth-status.js";
-import { claudeNativeLoginRemedy } from "./doctor-remedy.js";
+import { claudeMissingDetail, claudeNativeLoginRemedy } from "./doctor-remedy.js";
 import { BIN, claudeRunPatchPath } from "./effort-probe.js";
 
 /** Installation, native-session and API-key evidence keep independent causes. */
@@ -34,13 +34,15 @@ export async function claudeDoctor(
         {
           id: "installed",
           status: "fail",
-          detail: ["claude not found on PATH", installation.advisory].filter(Boolean).join(" — "),
+          detail: claudeMissingDetail(installation, "claude not found on PATH"),
         },
       ],
-      reasons: [
-        "claude CLI not found (install Claude Code or set CLAUDEXOR_CLAUDE_BIN)",
-        ...(installation.advisory ? [installation.advisory] : []),
-      ],
+      reasons: installation.refusal
+        ? [installation.refusal]
+        : [
+            "claude CLI not found (install Claude Code or set CLAUDEXOR_CLAUDE_BIN)",
+            ...(installation.advisory ? [installation.advisory] : []),
+          ],
     });
   }
   const readonlyProfile = await runtime.probeReadonlyProfile(_spec.abortSignal, patchPath);

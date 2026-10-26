@@ -60,6 +60,11 @@ describe("portable Agent Skill, Copilot plugin, and MCP distribution", () => {
         "claudexor_run_event_read",
         "claudexor_run_message",
         "claudexor_run_continue",
+        "claudexor_upload_create",
+        "claudexor_upload_import_local",
+        "claudexor_upload_status",
+        "claudexor_upload_finalize",
+        "claudexor_upload_cancel",
       ])
         expect(generated, `generated skill omits ${name}`).toContain(`\`${name}\``);
       // Independent API-reference literals shared by the shipped and generated
@@ -83,6 +88,20 @@ describe("portable Agent Skill, Copilot plugin, and MCP distribution", () => {
         "`not_found` against store/receipts/group",
         "`snapshot_unavailable` with bounded backoff",
         "`not_observed` for",
+        "MCP-server host",
+        "`{idempotencyKey,request:{kind,mime,name,sizeBytes}}`",
+        "`{uploadId,path}`",
+        "`{uploadId,idempotencyKey,request:{expectedSha256}}`",
+        "`uploadId`",
+        "`expectedSha256`",
+        "`attachments: [{resourceId}]`",
+        "`claudexor_run_continue`",
+        "Omission adds no new refs; `[]` is explicit empty.",
+        "Never auto-cancel an unknown finalize outcome.",
+        "replay the original finalize key/body even after status 404",
+        "Model-purpose resources are not ordinary attachments.",
+        "plain text, Markdown, JSON, PDF and DOCX",
+        "no built-in PDF/DOCX parsing or OCR promise",
       ]) {
         expect(generated).toContain(reference);
         expect(portable).toContain(reference);

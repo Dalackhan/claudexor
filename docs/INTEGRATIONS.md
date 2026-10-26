@@ -10,7 +10,7 @@ changing Claudexor.
 
 | Surface | Current role | Stability |
 |---|---|---|
-| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, runs-wait, task-group-runs, retry, run-again, apply, decision, review), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). `runs-wait` observes existing handles read-only through `--targets-json` and optional `--wait-ms`, with `--json` or `--json-stream` output. `task-group-runs` reads one bounded retained group page. | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
+| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, runs-wait, task-group-runs, retry, run-again, apply, decision, review), attachment ingress (upload-create, upload-import-local, upload-status, upload-finalize, upload-cancel), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). `runs-wait` observes existing handles read-only through `--targets-json` and optional `--wait-ms`, with `--json` or `--json-stream` output. `task-group-runs` reads one bounded retained group page. | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
 | Daemon and control API | Local durable queue, Agent runs, caller-owned model and image operations, artifacts, SSE events, settings, harness status, secrets metadata, apply, and run control. | Stable contract: endpoints and DTOs per `docs/reference/endpoints.json` + generated schemas (add-only fields). Loopback + bearer token only. |
 | MCP server | Exposes Claudexor tools to MCP clients. `claudexor_runs_wait` projects the same read-only observation with `targets: [{runId, seen?}]` and optional `waitMs`. | Stable contract: the tool set with input/output schemas. Tool list follows the implementation, not old docs. |
 | ACP server | Lets compatible editors or agents talk to Claudexor as a local agent surface. | Experimental (may change in minors, disclosed in the CHANGELOG). |
@@ -807,6 +807,83 @@ a daemon; with no daemon running it fails with retryable `daemon_unavailable`.
 Final output remains on the run result surface. Thread tools do not add a
 separate budget or lifecycle.
 
+### Document ingress and resource references
+
+Every public one-shot run tool (Ask, Plan, Agent, Best-of, Create and Run Continue), the
+Delegate belt's run tools, and `claudexor_thread_turn` accept optional
+`attachments: [{resourceId}]`. Only immutable resource IDs returned by finalize
+are accepted; local paths, base64 and internal resolved Attachment objects are
+invalid run references. Omission keeps the existing run behavior. The ordinary
+daemon admission, sensitive-content policy, model-purpose resource rejection,
+and selected lanes' finite MIME/size/count limits still apply.
+
+Public MCP exposes `claudexor_upload_create`, `claudexor_upload_import_local`,
+`claudexor_upload_status`, `claudexor_upload_finalize` and
+`claudexor_upload_cancel`. The Delegate belt exposes no upload controls. These
+tools require an already-running daemon and perform one finite operation;
+they add no upload store, retry loop or automatic cancellation. The corresponding
+CLI verbs are `upload-create`, `upload-import-local`, `upload-status`,
+`upload-finalize` and `upload-cancel`, with the same request/result schemas.
+
+1. Save a caller-owned create key and exact `request` before calling
+   `claudexor_upload_create({idempotencyKey, request: {kind, mime, name, sizeBytes}})`.
+   This ingress creates ordinary attachments only; it has no `purpose: model`
+   input. Save the returned `uploadId` before sending bytes.
+2. Call `claudexor_upload_import_local({uploadId, path})` with an explicit
+   absolute regular file **on the MCP-server host**. A remote client's path
+   does not identify a file on that host. Import does not expand globs, fetch
+   URLs, traverse directories, follow a final symlink or buffer the whole file.
+   Sensitive source paths, including resolved parent aliases, are rejected.
+   The bounded stream verifies descriptor/path identity, size and timestamps
+   before and after reading. Save the returned `expectedSha256` and status.
+3. Save a separate finalize key and exact request, then call
+   `claudexor_upload_finalize({uploadId, idempotencyKey, request: {expectedSha256}})`.
+   Use its `resourceId` in the run or thread turn's `attachments` array.
+
+After an unknown create or finalize response, replay the same key and body.
+After an uncertain PUT, read status once: `uploaded` means finalize with the
+saved digest; `uploading` means observe again later; `cancelled` requires an
+explicit new upload. An `open` status permits an explicitly requested import.
+Never PUT over `uploaded` bytes. Repeating import on an uploaded part only hashes
+the explicit local file to recover a lost digest; finalize still verifies that
+digest against the daemon's actual bytes. Source errors and uncertain PUT
+failures preserve upload identity and any completed digest in typed error context.
+An early interruption can leave the digest unknown. A finalized upload's status
+can return 404; the original finalize key/body remains the replay authority.
+Never cancel automatically after an uncertain finalize. Cancel is an explicit
+caller decision about an unfinished upload.
+
+The CLI stage spellings use the same caller-owned identities:
+
+```bash
+claudexor upload-create --request-json '{"kind":"file","mime":"text/plain","name":"brief.txt","sizeBytes":8}' --idempotency-key "$CREATE_KEY" --json
+claudexor upload-import-local "$UPLOAD_ID" /absolute/host/brief.txt --json
+claudexor upload-status "$UPLOAD_ID" --json
+claudexor upload-finalize "$UPLOAD_ID" --request-json '{"expectedSha256":"sha256:<saved-digest>"}' --idempotency-key "$FINALIZE_KEY" --json
+```
+
+Ordinary CLI `--attach`/`--image` retain their existing local-file convenience
+flow, including best-effort cancellation on failure. That uploader does not
+provide the explicit stage controls' caller-owned recovery identities.
+
+Codex accepts file references for plain text, Markdown, JSON, PDF and DOCX
+(`text/plain`, `text/markdown`, `application/json`, `application/pdf` and
+`application/vnd.openxmlformats-officedocument.wordprocessingml.document`). Its
+declared document limits are 20 MiB per file and 20 files. The adapter verifies
+the daemon-owned bytes and passes one escaped JSON reference record as untrusted
+user context, alongside the unchanged prompt, on both app-server and legacy exec
+transports. It does not copy documents into the project, convert their contents
+to prompt text, or grant additional sandbox access. Images retain their native
+transport. Every selected lane must still admit the same mandatory resources.
+
+This is byte access, with no built-in PDF/DOCX parsing, extraction or OCR promise.
+Native readability under the selected sandbox and the vendor's document tools
+require separate acceptance; source payload tests and the offline text-fixture
+canary do not certify them. A remote MCP client's source must first exist on the
+MCP-server host; the finalized reference subsequently names that daemon's store,
+not a portable path on the client. See the [feature ledger](FEATURES.md) for
+remaining qualification.
+
 ### Observing and directing an existing run
 
 A controller saves the exact launch arguments and key before calling a run
@@ -1024,6 +1101,13 @@ A second successor of the same predecessor is refused `continuation_superseded`
 with the chain `head` to continue instead; recover an unknown response with the
 original key and arguments. A successor is a new command, not resurrection of a
 terminated process.
+
+Optional `attachments: [{resourceId}]` supplies new immutable resource references
+for that successor through the [document ingress contract](#document-ingress-and-resource-references).
+Omission adds no new refs; `[]` is forwarded as an explicit empty list. These
+controls do not alter retained conversation history. Paths, base64 and internal
+resolved attachment objects are rejected. Save the exact attachment list with
+the original key and body for replay.
 
 These existing-run controls are not exposed by the Delegate belt and cannot
 expand a child's authority. They add no automatic retries, worker restarts,

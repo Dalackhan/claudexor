@@ -237,6 +237,14 @@ at every wire boundary.
   its session IDs are daemon thread IDs and list/load/resume/close/prompt/cancel
   all project the same `/v2` thread authority. ACP images and embedded resources
   are finalized through the daemon attachment pipeline before a turn enqueues.
+  MCP upload controls and CLI stage commands project that same HTTP resource
+  owner. MCP public/belt runs and thread turns forward strict resource refs;
+  local import owns only a bounded host-file descriptor, never durable upload
+  state. The [ingress contract](INTEGRATIONS.md#document-ingress-and-resource-references)
+  defines stage identities, source custody and uncertain-response recovery.
+  Codex's shared attachment translator verifies document bytes and constructs
+  user-context references for app-server and exec; format and native-readability
+  limits are described in that same contract.
 - `packages/canary`: canary golden stories — user-level E2E smokes over the
   BUILT CLI with offline fake harnesses, each pinned to a Bible invariant
   tag (`pnpm canary`; runs in CI on every PR). The shared fixture pins the built

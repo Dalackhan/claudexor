@@ -71,6 +71,7 @@ import { reviewCommand } from "./review-command.js";
 import { controlApiFetch, followRun } from "./live.js";
 import { retryCommand, runAgainCommand } from "./retry-command.js";
 import { runsWaitCommand } from "./runs-wait-command.js";
+import { uploadCommand } from "./upload-command.js";
 import { taskGroupRunsCommand } from "./task-group-runs.js";
 import { assertCliRunParamsHaveNoInlineSecrets } from "./run-secret-scan.js";
 import { resolveLocalAttachment, type LocalAttachment } from "./local-attachment.js";
@@ -960,6 +961,16 @@ async function dispatch(args: ParsedArgs, outputMode: CliOutputMode): Promise<nu
     return runRepl(process.cwd());
   }
   const cwd = process.cwd();
+  if (
+    [
+      "upload-create",
+      "upload-import-local",
+      "upload-status",
+      "upload-finalize",
+      "upload-cancel",
+    ].includes(cmd)
+  )
+    return uploadCommand(args, json);
   const opsCommand = dispatchOpsCommand(cmd, args, json);
   if (opsCommand) return opsCommand;
 

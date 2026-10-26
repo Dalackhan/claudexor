@@ -6,6 +6,7 @@ import {
   effortJsonSchema,
 } from "@claudexor/schema";
 import { mcpToolFailure } from "./tool-failure.js";
+import { attachmentRefsSchema } from "./attachment-ref-schema.js";
 import { auxiliaryWritableRootsSchema } from "./run-execution-schema.js";
 import { formatRunResult } from "./run-result-format.js";
 import { inlineJsonSchemaRefs } from "./inline-json-schema-refs.js";
@@ -60,6 +61,7 @@ export function threadTools(runner: RunnerFn): McpTool[] {
     additionalProperties: false,
     properties: {
       threadId: nonBlankString,
+      attachments: attachmentRefsSchema,
       prompt: {
         type: "string",
         minLength: 1,

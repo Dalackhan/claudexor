@@ -80,6 +80,11 @@ const MCP_TO_CLI = {
       "caller-owned MCP launch identity, carried as the existing HTTP Idempotency-Key rather than an engine run-control flag",
   },
   taskGroupId: { cli: "task-group-id" },
+  attachments: {
+    cli: null,
+    reason:
+      "MCP carries finalized resource refs; CLI --attach/--image stage explicit local files through the same upload owner before enqueue",
+  },
   harness: { cli: "harness" },
   primaryHarness: { cli: "primary-harness" },
   model: { cli: "model" },
@@ -213,6 +218,8 @@ const BOOLEAN_FLAG_MAP = {
 // CLI run-control flags with NO MCP argument: each needs a stated reason.
 // (Non-run-control CLI flags — subcommand plumbing — are structurally exempt.)
 const CLI_ONLY_EXEMPT = {
+  "request-json":
+    "upload-create/upload-finalize request body; separate lifecycle tools, not an inference run argument",
   "host-binding-json":
     "plugin installation/repair binding, not a run control; MCP tools do not rebind their host integration",
   "vendor-version":
@@ -246,9 +253,9 @@ const CLI_ONLY_EXEMPT = {
   portfolio: "removed v2 flag retained only to emit a hard error",
   "routing-goal": "MCP callers currently use the daemon default routing goal",
   attach:
-    "MCP surface does not support attachments yet (native-attachment delivery is CLI/app-only; a prompt cannot carry an image)",
+    "local-file convenience over upload create/import/finalize; MCP uses upload tools then attachments resource refs",
   image:
-    "MCP surface does not support attachments yet (native-attachment delivery is CLI/app-only)",
+    "local-image convenience over the same upload owner; MCP uses upload tools then attachments resource refs",
   "access-default":
     "trust subcommand flag, not a run control (was invisible to the old VALUE_FLAGS source-regex; the registry surfaces it)",
   "grant-test": "trust subcommand flag for an external exact-command grant, not a run control",
@@ -319,6 +326,15 @@ for (const declared of Object.keys(MCP_TO_CLI)) {
     );
   }
 }
+
+// Continuation's optional prompt must not exclude it from resource-ref parity.
+const continuationTool = tools.find((tool) => tool.name === "claudexor_run_continue");
+if (
+  !continuationTool?.inputSchema.properties?.attachments ||
+  JSON.stringify(continuationTool.inputSchema.properties.attachments) !==
+    JSON.stringify(runTools[0].inputSchema.properties?.attachments)
+)
+  failures.push("Run continuation must expose the same strict attachment refs as launch tools");
 
 // Account controls are separate direct tools, not inference run arguments.
 const ACCOUNT_TOOL_FLAGS = {
@@ -436,6 +452,8 @@ for (const declared of Object.keys(BOOLEAN_FLAG_MAP)) {
 // ACP <-> MCP: every MCP run-control argument must be expressible over ACP
 // (same engine contract; repoPath is the ACP session cwd by design).
 const ACP_EQUIVALENT = {
+  attachments:
+    "ACP native image/resource content parts are uploaded/finalized before thread enqueue; refs are not session/prompt metadata",
   repoPath: "session/new cwd anchors the project",
   idempotencyKey: "caller-owned MCP transport identity; ACP does not expose launch replay keys",
   taskGroupId:
@@ -457,6 +475,10 @@ for (const arg of mcpArgs) {
 // 2. Every prompt-taking run tool declares the structured outputSchema.
 // 3. The recovery tool set exists (hosts recover lost run handles).
 const MUTATING_TOOLS = new Set([
+  "claudexor_upload_create",
+  "claudexor_upload_import_local",
+  "claudexor_upload_finalize",
+  "claudexor_upload_cancel",
   "claudexor_run",
   "claudexor_best_of",
   "claudexor_create",

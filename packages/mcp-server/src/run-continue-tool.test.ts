@@ -17,6 +17,7 @@ describe("MCP run continuation", () => {
     ).toEqual([
       "runId",
       "prompt",
+      "attachments",
       "idempotencyKey",
       "web",
       "externalContextPolicy",
@@ -32,6 +33,13 @@ describe("MCP run continuation", () => {
       "continueCarrier",
     ]);
     expect(tool.inputSchema.additionalProperties).toBe(false);
+    expect((tool.inputSchema.properties as Record<string, unknown>)["attachments"]).toEqual(
+      (
+        defaultClaudexorTools(runner).find((candidate) => candidate.name === "claudexor_ask")!
+          .inputSchema.properties as Record<string, unknown>
+      )["attachments"],
+    );
+    expect(tool.inputSchema.required).not.toContain("attachments");
     expect((tool.inputSchema.properties as Record<string, unknown>)["taskGroupId"]).toMatchObject({
       type: "string",
       format: "uuid",
@@ -231,6 +239,21 @@ describe("MCP run continuation", () => {
         mode: "__run_continue",
       });
       expect(runner).toHaveBeenCalledTimes(3);
+      for (const attachments of [undefined, [], [{ resourceId: "res-document" }]]) {
+        const args = {
+          runId: "run-p",
+          idempotencyKey: "document-successor",
+          ...(attachments === undefined ? {} : { attachments }),
+        };
+        const reply = await call("tools/call", {
+          name: "claudexor_run_continue",
+          arguments: args,
+        });
+        expect(reply.error).toBeUndefined();
+        expect(reply.result?.isError).not.toBe(true);
+        expect(runner).toHaveBeenLastCalledWith({ ...args, mode: "__run_continue" });
+      }
+      expect(runner).toHaveBeenCalledTimes(6);
       for (const extra of [
         { taskGroupId: "not-a-uuid" },
         { taskGroupId: null },
@@ -242,6 +265,24 @@ describe("MCP run continuation", () => {
         { web: "on", externalContextPolicy: "off" },
         { prompt: null },
         { idempotencyKey: "" },
+        { attachments: null },
+        { attachments: [{ path: "/host/document.txt" }] },
+        { attachments: [{ base64: "Zml4dHVyZQ==" }] },
+        { attachments: [{ resourceId: "res-document", path: "/host/document.txt" }] },
+        { attachments: [{ resourceId: "" }] },
+        {
+          attachments: [
+            {
+              resource_id: "res-document",
+              kind: "file",
+              mime: "text/plain",
+              name: "document.txt",
+              path: "/store/blob",
+              sha256: `sha256:${"0".repeat(64)}`,
+              size_bytes: 7,
+            },
+          ],
+        },
       ]) {
         const reply = await call("tools/call", {
           name: "claudexor_run_continue",
@@ -249,7 +290,7 @@ describe("MCP run continuation", () => {
         });
         expect(Boolean(reply.error) || reply.result?.isError === true).toBe(true);
       }
-      expect(runner).toHaveBeenCalledTimes(3);
+      expect(runner).toHaveBeenCalledTimes(6);
     } finally {
       await server.close();
       lines.close();

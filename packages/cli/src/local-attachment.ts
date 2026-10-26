@@ -29,6 +29,13 @@ function mimeFor(path: string): { mime: string; image: boolean } {
       return { mime: "text/markdown", image: false };
     case ".json":
       return { mime: "application/json", image: false };
+    case ".pdf":
+      return { mime: "application/pdf", image: false };
+    case ".docx":
+      return {
+        mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        image: false,
+      };
     default:
       return { mime: "application/octet-stream", image: false };
   }

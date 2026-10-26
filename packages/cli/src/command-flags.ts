@@ -118,6 +118,7 @@ const FROZEN_REVIEW_FLAGS: readonly CliFlagSpec[] = [
 export const FROZEN_REVIEW_FLAG_NAMES = FROZEN_REVIEW_FLAGS.map((flag) => flag.name);
 
 export const CLI_FLAGS: readonly CliFlagSpec[] = [
+  valueFlag("request-json", "<object>", "Upload create/finalize: exact schema-owned request body"),
   valueFlag("limit", "<N>", "task-group-runs: page limit 1..200 (default 50)"),
   valueFlag("state", "<state>", "task-group-runs: filter retained members by lifecycle"),
   valueFlag("cursor", "<cursor>", "task-group-runs: opaque cursor from the prior returned page"),

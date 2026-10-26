@@ -142,7 +142,11 @@ function lane(
 
 type Lane = ReturnType<typeof lane>;
 
-function fixture(lanes: Array<Lane | HarnessAdapter>, sticky: string | null = "sticky") {
+function fixture(
+  lanes: Array<Lane | HarnessAdapter>,
+  sticky: string | null = "sticky",
+  resource = attachment,
+) {
   const adapters = lanes.map((entry) => ("adapter" in entry ? entry.adapter : entry));
   const registry: AdapterRegistry = new Map(adapters.map((adapter) => [adapter.id, adapter]));
   const gateway = new HarnessGateway(registry);
@@ -151,7 +155,7 @@ function fixture(lanes: Array<Lane | HarnessAdapter>, sticky: string | null = "s
   );
   const threadProfileId = vi.fn(() => sticky);
   const preflight = createRunRequirementsPreflight(
-    { resolve: (refs) => (refs?.length ? [attachment] : []) },
+    { resolve: (refs) => (refs?.length ? [resource] : []) },
     "/fixture/no-project",
     {
       registry,
@@ -630,9 +634,21 @@ describe("requirements admission resolves static facts; the run checks account r
       code: "browser_unavailable",
     });
     await expect(preflight(request({ harnesses: ["claude"] }))).resolves.toBeUndefined();
-    await expect(preflight(request({ harnesses: ["codex"] }))).rejects.toMatchObject({
-      code: "attachment_pool_unsupported",
+    await expect(preflight(request({ harnesses: ["codex"] }))).resolves.toBeUndefined();
+    await expect(preflight(request({ harnesses: ["codex", "claude"] }))).resolves.toBeUndefined();
+  });
+
+  it("admits PDF on Codex but refuses an explicit pool containing incompatible Claude", async () => {
+    const { preflight } = fixture([realCodex(), realClaude()], null, {
+      ...attachment,
+      mime: "application/pdf",
+      name: "notes.pdf",
     });
+    await expect(preflight(request({ harnesses: ["codex"] }))).resolves.toBeUndefined();
+    for (const harnesses of [["claude"], ["codex", "claude"]])
+      await expect(preflight(request({ harnesses }))).rejects.toMatchObject({
+        code: "attachment_pool_unsupported",
+      });
   });
 
   it("fixture regression: an explicit fake-success + codex Browser pool is judged by manifests", async () => {

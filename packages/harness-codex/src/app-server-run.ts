@@ -1,4 +1,5 @@
 import { spawnProcess, type ChildStdin, type SpawnOptions } from "@claudexor/core";
+import { verifyCodexAttachments } from "./attachments.js";
 import type { HarnessEvent } from "@claudexor/schema";
 import { CLAUDEXOR_VERSION, nowIso, redactSecrets } from "@claudexor/util";
 import {
@@ -39,6 +40,7 @@ export type { CodexAppServerRunInput } from "./app-server-protocol.js";
 export async function* runCodexAppServer(
   input: CodexAppServerRunInput,
 ): AsyncGenerator<HarnessEvent> {
+  verifyCodexAttachments(input.spec.attachments);
   const run = input.spawn ?? spawnProcess;
   const abort = new AbortController();
   const pending = new Map<

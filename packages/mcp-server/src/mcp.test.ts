@@ -98,6 +98,54 @@ async function wireToolCall(tools: McpTool[], name: string, args: Record<string,
 }
 
 describe("Claudexor MCP server (SDK v2)", () => {
+  it("rejects path and inline attachment authority on the wire before calling the runner", async () => {
+    let calls = 0;
+    const tools = defaultClaudexorTools(async () => {
+      calls += 1;
+      return {};
+    });
+    for (const name of [
+      "claudexor_ask",
+      "claudexor_plan",
+      "claudexor_run",
+      "claudexor_best_of",
+      "claudexor_create",
+      "claudexor_thread_turn",
+    ]) {
+      const result = await wireToolCall(tools, name, {
+        prompt: "read document",
+        ...(name === "claudexor_thread_turn" ? { threadId: "t" } : {}),
+        attachments: [{ resourceId: "r", path: "/host/file", base64: "abc" }],
+      });
+      expect(result?.isError).toBe(true);
+    }
+    expect(calls).toBe(0);
+  });
+
+  it("preserves typed upload errors through the MCP wire", async () => {
+    const tools = defaultClaudexorTools(async () => {
+      throw Object.assign(new Error("publication barrier unavailable"), {
+        code: "resource_publish_unavailable",
+        retryable: true,
+        context: { uploadId: "u", expectedSha256: "sha256:saved" },
+      });
+    });
+    const result = await wireToolCall(tools, "claudexor_upload_finalize", {
+      uploadId: "u",
+      request: { expectedSha256: "sha256:saved" },
+      idempotencyKey: "final-key",
+    });
+    expect(result?.isError).toBe(true);
+    expect(result?.structuredContent).toMatchObject({
+      status: "failed",
+      failure: {
+        code: "resource_publish_unavailable",
+        retryable: true,
+        context: { uploadId: "u", expectedSha256: "sha256:saved" },
+      },
+    });
+  });
+
   it("keeps caller idempotency keys outside the Delegate belt before ledger admission", async () => {
     let calls = 0;
     const ledger = { started: 0, committedUsd: 0 };
@@ -174,7 +222,7 @@ describe("Claudexor MCP server (SDK v2)", () => {
     },
   );
 
-  it("negotiates the client's 2025-06-18 era, lists 30 tools, and answers PING during a slow call", async () => {
+  it("negotiates the client's 2025-06-18 era, lists 35 tools, and answers PING during a slow call", async () => {
     const tools = defaultClaudexorTools(async (p) => {
       if (p.mode === "agent") {
         await sleep(500);
@@ -212,9 +260,14 @@ describe("Claudexor MCP server (SDK v2)", () => {
     expect(init?.result?.protocolVersion).toBe("2025-06-18");
     expect(init?.result?.serverInfo?.name).toBe("claudexor");
     const listedTools = w.responses.find((r) => r.id === 2)?.result?.tools;
-    expect(listedTools).toHaveLength(30);
+    expect(listedTools).toHaveLength(35);
     expect(listedTools.map((tool: { name: string }) => tool.name)).toEqual(
       expect.arrayContaining([
+        "claudexor_upload_create",
+        "claudexor_upload_import_local",
+        "claudexor_upload_status",
+        "claudexor_upload_finalize",
+        "claudexor_upload_cancel",
         "claudexor_account_resources",
         "claudexor_account_reset",
         "claudexor_run_time_limit",

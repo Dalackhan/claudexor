@@ -93,6 +93,7 @@ extension AppModel {
         if !keepRemoteSelection {
             selectedThreadId = nil
             selectedThreadDetail = nil
+            selectedHistory = nil
             threadStatus = nil
             threadLoadGeneration += 1
         }

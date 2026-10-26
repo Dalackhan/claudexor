@@ -109,7 +109,7 @@ extension ThreadsScreen {
             )
             defer { composerSubmissions.finish(submission) }
             guard ownsCompletion else { return }
-            if sent, let detail = model.selectedThreadDetail { feedState.latest(detail.turns) }
+
             let current = composerDraftSnapshot
             if sent, materializingFirstTurn {
                 let modelsWereUnchanged = current.composerModels == attemptedDraft.composerModels

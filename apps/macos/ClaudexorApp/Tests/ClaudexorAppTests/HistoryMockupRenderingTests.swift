@@ -47,21 +47,26 @@ struct HistoryMockupRenderingTests {
                     runs[runs.count - 1].answerText = nil
                 }
                 if scene == "14-plan-draft" { HistoryMockupFixtures.plan(&runs[runs.count - 1]) }
-                let model = HistoryMockupFixtures.model(detail: detail, runs: runs)
+                let source = HistoryTestSource(detail: detail, runs: runs)
+                let model = HistoryMockupFixtures.model(detail: detail, runs: runs, source: source)
                 let state = ConversationFeedState()
-                state.install(detail.turns)
+                let history = model.selectedHistory!
+                state.synchronize(history)
                 if scene == "04-older-bottom" {
-                    state.mountedIDs = Array(detail.turns[10..<30].map(\.id))
+                    await history.earlier(retaining: 5)
+                    state.synchronize(history)
                     state.viewport = .reading(anchor: state.mountedIDs.last)
                 }
                 if scene == "06-beginning" {
-                    state.mountedIDs = Array(detail.turns.prefix(20).map(\.id))
+                    await history.earlier(retaining: 1)
+                    await history.earlier(retaining: 1)
+                    state.synchronize(history)
                     state.viewport = .reading(anchor: state.mountedIDs.first)
                 }
-                if scene == "07-loading" || scene == "08-load-failed" { model.selectedThreadDetail = nil }
+                if scene == "07-loading" || scene == "08-load-failed" { model.selectedHistory = nil }
                 if scene == "08-load-failed" { model.threadStatus = "Could not load thread: the saved history is temporarily unavailable." }
-                if scene == "07b-loading-earlier" { state.earlierState = .loading }
-                if scene == "08b-earlier-failed" { state.earlierState = .failed }
+                if scene == "07b-loading-earlier" { history.earlierState = .loading }
+                if scene == "08b-earlier-failed" { history.earlierState = .failed }
                 if scene == "14-plan-draft" {
                     state.presentation.planText["mock-run-44"] = ["code": "Wrap long source lines and keep copying exact."]
                     state.presentation.expanded["prompt:mock-turn-44"] = false
@@ -96,12 +101,22 @@ struct HistoryMockupRenderingTests {
                     await settle(host)
                     let (arrived, arrivedRuns) = try HistoryMockupFixtures.make(count: 46)
                     model.liveTasks = arrivedRuns
-                    model.selectedThreadDetail = arrived
+                    source.detail = arrived; source.runs = arrivedRuns
+                    await history.refresh()
                 }
                 await settle(host)
                 if scene == "02-tail-top" {
                     let scroll = try #require(feedScroll(host))
                     #expect(abs(scroll.contentInsets.bottom - state.floatingControlHeight - 8) <= 1)
+                    let origin = scroll.contentView.bounds.origin
+                    scroll.contentView.scroll(to: CGPoint(x: origin.x, y: origin.y + 1_400))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                    await settle(host)
+                    #expect(history.readingAnchor == state.visibleTurnID)
+                    #expect(history.readingAnchor != history.mountedIDs.first)
+                    scroll.contentView.scroll(to: origin)
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                    await settle(host)
                 }
                 manifest.append(try capture(host, window: window, scene: scene, name: name,
                     directory: directory, claim: claim(scene), state: state))
@@ -110,7 +125,8 @@ struct HistoryMockupRenderingTests {
                     let oldIDs = state.mountedIDs
                     let prefix = String(detail.turns.first(where: { $0.id == anchor })!.prompt.prefix(60))
                     let beforeY = try proseY(host, prefix: prefix)
-                    state.earlier(detail.turns, retaining: short ? 8 : 2)
+                    await history.earlier(retaining: short ? 8 : 2)
+                    state.navigate(history)
                     await settle(host)
                     #expect(state.mountedIDs.count <= 20 && state.mountedIDs.contains(anchor))
                     #expect(state.mountedIDs != oldIDs)
@@ -131,13 +147,14 @@ struct HistoryMockupRenderingTests {
                 window.close()
             }
             let compactState = ConversationFeedState()
-            compactState.install(regularDetail.turns)
-            let compact = HistoryClampSurface(state: compactState, detail: regularDetail)
+            let compactHistory = try HistoryTestSource(detail: regularDetail, runs: regularRuns).store(loaded: true)
+            compactState.synchronize(compactHistory)
+            let compact = HistoryClampSurface(state: compactState, history: compactHistory)
                 .environment(\.colorScheme, scheme).environment(\.locale, Locale(identifier: "en_US_POSIX"))
             let (compactHost, compactWindow) = makeWindow(compact, width: 1100, appearance: appearance)
             await settle(compactHost)
             for after in [false, true] {
-                if after { compactState.earlier(regularDetail.turns, retaining: 20); await settle(compactHost) }
+                if after { await compactHistory.earlier(retaining: 20); await settle(compactHost) }
                 let scroll = try #require(views(compactHost).compactMap { $0 as? NSScrollView }.first)
                 #expect((scroll.documentView?.frame.height ?? 0) <= scroll.contentView.bounds.height)
                 manifest.append(try capture(compactHost, window: compactWindow,

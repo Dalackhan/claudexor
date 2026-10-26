@@ -57,7 +57,7 @@ extension ThreadsScreen {
     /// Absence of selected metadata is different from a known thread with no project.
     var projectChipMetadataKnown: Bool {
         guard let id = model.selectedThreadId else { return true }
-        return model.selectedThreadDetail?.thread.id == id
+        return model.selectedHistory?.header?.thread.id == id
             || model.threadSummary(id, at: model.selectedExecutionLocation) != nil
     }
 

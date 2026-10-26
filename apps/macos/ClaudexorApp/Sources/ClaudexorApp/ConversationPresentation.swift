@@ -1,4 +1,5 @@
 import SwiftUI
+import ClaudexorKit
 
 /// Presentation choices outlive a mounted row. Owned by one thread/location feed.
 @MainActor @Observable final class ConversationPresentation {
@@ -30,6 +31,8 @@ struct PromptBubble: View {
     let prompt: String
     let turnID: String
     var presentation: PromptPresentation? = nil
+    var promptInfo: ThreadHistoryTextFacts? = nil
+    var fullPrompt: (() async throws -> String)? = nil
     @Environment(\.conversationTextOptions) private var options
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(ConversationPresentation.self) private var store: ConversationPresentation?
@@ -62,13 +65,8 @@ struct PromptBubble: View {
                     .help(expansion.wrappedValue ? "Show only the start of this message." : "Show the rest of this message.")
                     .accessibilityLabel(expansion.wrappedValue ? "Show less of user message" : "Show more of user message")
             }
-            if bounded.utf8.count < prompt.utf8.count {
-                Text("Prompt preview — the first 32 KiB are shown.").font(.caption).foregroundStyle(.secondary)
-                Button("Copy full prompt") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(prompt, forType: .string)
-                }.buttonStyle(.borderless).help("Copy the complete original prompt, including text beyond this preview.")
-                    .accessibilityLabel("Copy full prompt")
+            if promptInfo?.truncated == true || bounded.utf8.count < prompt.utf8.count {
+                HistoryPromptActions(read: fullPrompt ?? { prompt })
             }
         }
         .padding(.horizontal, Theme.Spacing.md).padding(.vertical, Theme.Spacing.sm)

@@ -3071,7 +3071,7 @@ struct AppModelRefreshTests {
         await model.openThread("B")
         await first.value
         #expect(model.selectedThreadId == "B")
-        #expect(model.selectedThreadDetail?.thread.id == "B")
+        #expect(model.selectedHistory?.header?.thread.id == "B")
     }
 
     @MainActor
@@ -3092,8 +3092,12 @@ struct AppModelRefreshTests {
             from: Data(#"{"id":"remote-thread","title":"Visible","repoRoot":"/tmp/project","mode":null,"workspaceMode":"in_place","authPreference":null,"primaryHarness":null,"eligibleHarnesses":[],"state":"active","trashedAt":null,"purgeAfter":null,"runIds":[],"headRunId":null,"needsHuman":false,"createdAt":"2026-07-15T00:00:00Z","updatedAt":"2026-07-15T00:00:00Z"}"#.utf8))
         model.selectedExecutionLocation = locationID
         model.selectedThreadId = oldThread.id
-        model.selectedThreadDetail = ThreadDetailResponse(
-            thread: oldThread, sessions: [], turns: [])
+        let oldDetail = ThreadDetailResponse(thread: oldThread, sessions: [], turns: [])
+        let oldPage = try JSONDecoder().decode(ThreadHistoryPage.self,
+            from: LegacyHistoryFixture.response(JSONEncoder().encode(oldDetail), sequence: 1))
+        let history = model.makeHistoryStore(locationID: locationID, id: oldThread.id)
+        model.selectedHistory = history
+        history.install([oldPage], ids: [], reset: true, serial: 0)
 
         AppRequestStubURLProtocol.handler = { request in
             Thread.sleep(forTimeInterval: 0.15)
@@ -3105,9 +3109,9 @@ struct AppModelRefreshTests {
             await model.refreshOpenThread(locationID: locationID, id: oldThread.id)
         }
         try await Task.sleep(for: .milliseconds(20))
-        #expect(model.selectedThreadDetail?.thread.title == "Visible")
+        #expect(model.selectedHistory?.header?.thread.title == "Visible")
         await refresh.value
-        #expect(model.selectedThreadDetail?.thread.title == "Refreshed")
+        #expect(model.selectedHistory?.header?.thread.title == "Refreshed")
     }
 
     @MainActor
@@ -3214,9 +3218,13 @@ struct AppModelRefreshTests {
             }
         }
 
-        // Neither row exists in the bounded global list. The embedded Delegate
-        // receipt authorizes exactly one targeted parent detail hydration.
+        // Feed paging does not hydrate historical families. Opening the workspace
+        // and explicitly inspecting the parent restores its full child snapshot.
         await model.openThread("thread-old")
+        #expect(detailCalls == 0)
+        model.workspaceHistoryVisible = true
+        await model.loadWorkspaceHistory()
+        await model.ensureRunDetail("run-parent", insertingIfMissing: true)
 
         #expect(model.liveTasks.map(\.id) == ["run-parent", "run-historical-child"])
         #expect(model.delegatedChildren(of: "run-parent").map(\.id) == ["run-historical-child"])
@@ -3246,6 +3254,9 @@ struct AppModelRefreshTests {
         }
 
         await model.openThread("thread-wrong")
+        model.workspaceHistoryVisible = true
+        await model.loadWorkspaceHistory()
+        await model.ensureRunDetail("run-parent", insertingIfMissing: true)
 
         #expect(model.liveTasks.isEmpty)
         #expect(!model.hydratedRunDetails.contains("run-parent"))
@@ -3271,6 +3282,7 @@ struct AppModelRefreshTests {
         model.selectedThreadId = thread.id
         model.selectedThreadDetail = ThreadDetailResponse(
             thread: thread, sessions: [], turns: [turn])
+        model.workspaceHistoryVisible = true
         AppRequestStubURLProtocol.handler = { request in
             guard request.url?.path == "/v2/runs/run-child-projected" else {
                 throw AppRefreshTestError.badRequest
@@ -3369,6 +3381,10 @@ struct AppModelRefreshTests {
         }
 
         await model.openThread("A")
+        #expect(model.liveTasks.isEmpty)
+        model.workspaceHistoryVisible = true
+        await model.loadWorkspaceHistory()
+        await model.ensureRunDetail("run-parent", insertingIfMissing: true)
         #expect(model.liveTasks.map(\.id) == ["run-parent", "run-child"])
         await model.openThread("B")
         #expect(model.liveTasks.map(\.id) == ["run-parent", "run-child"])
@@ -3381,6 +3397,10 @@ struct AppModelRefreshTests {
         #expect(!model.runListReconciliationNeeded)
 
         await model.openThread("A")
+        #expect(model.liveTasks.isEmpty)
+        model.workspaceHistoryVisible = true
+        await model.loadWorkspaceHistory()
+        await model.ensureRunDetail("run-parent", insertingIfMissing: true)
         #expect(model.liveTasks.map(\.id) == ["run-parent", "run-child"])
         #expect(parentDetailCalls == 2)
     }
@@ -4995,7 +5015,11 @@ private final class AppRequestStubURLProtocol: URLProtocol {
         DispatchQueue.global().async { [self] in
             do {
                 guard let handler = Self.handler else { throw AppRefreshTestError.badRequest }
-                let (response, data) = try handler(request)
+                var fixtureRequest = request
+                let history = request.url?.path.hasSuffix("/history") == true
+                if history { fixtureRequest.url = request.url?.deletingLastPathComponent() }
+                let (response, raw) = try handler(fixtureRequest)
+                let data = history ? try LegacyHistoryFixture.response(raw) : raw
                 client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
                 client?.urlProtocol(self, didLoad: data)
                 client?.urlProtocolDidFinishLoading(self)

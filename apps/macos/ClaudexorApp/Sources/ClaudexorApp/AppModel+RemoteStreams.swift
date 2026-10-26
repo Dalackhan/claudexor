@@ -109,9 +109,10 @@ extension AppModel {
                            Date().timeIntervalSince(lastDetailRefresh) >= 0.25
                         {
                             lastDetailRefresh = .now
-                            await self.refreshOpenThread(
-                                locationID: locationID, id: threadID,
-                                mayReconnect: false)
+                            Task {
+                                await self.refreshOpenThread(locationID: locationID, id: threadID)
+                            }
+                            await self.loadRunDetail(runID, locationID: locationID)
                         }
                     }
                     break
@@ -126,16 +127,12 @@ extension AppModel {
                   self.isCurrentGateway(requestClient, at: locationID),
                   self.remoteRunStreamTokens[key] == token
             else { return }
+            Task { await self.refreshOpenThread(locationID: locationID, id: threadID) }
+            await self.loadRunDetail(runID, locationID: locationID)
             await self.refreshRemoteThreads(locationID)
             guard self.isCurrentGateway(requestClient, at: locationID),
                   self.remoteRunStreamTokens[key] == token
             else { return }
-            if self.selectedExecutionLocation == locationID,
-               self.selectedThreadId == threadID
-            {
-                await self.refreshOpenThread(
-                    locationID: locationID, id: threadID, mayReconnect: false)
-            }
             guard self.remoteRunStreamTokens[key] == token else { return }
             self.remoteRunStreamTokens.removeValue(forKey: key)
             self.remoteRunStreamTasks.removeValue(forKey: key)
@@ -153,7 +150,9 @@ extension AppModel {
                 at: locationID, invalidateNextUp: false, cursor: event.cursor)
             return
         }
-        guard event.type == "thread.head.updated" else { return }
+        let type = event.payload["type"]?.stringValue ?? event.type
+        let lifecycle = type == "run.created" || type == "run.completed" || type == "run.failed" || type == "run.blocked"
+        guard event.type == "thread.head.updated" || lifecycle else { return }
         await refreshRemoteThreads(locationID)
         guard isCurrentGateway(requestClient, at: locationID),
               remoteGlobalStreamTokens[locationID] == streamToken,
@@ -161,8 +160,7 @@ extension AppModel {
               let selectedThreadId,
               event.payload["thread_id"]?.stringValue == selectedThreadId
         else { return }
-        await refreshOpenThread(
-            locationID: locationID, id: selectedThreadId, mayReconnect: false)
+        Task { await refreshOpenThread(locationID: locationID, id: selectedThreadId) }
     }
 
     func cancelRemoteStreams(_ locationID: ExecutionLocationID) {

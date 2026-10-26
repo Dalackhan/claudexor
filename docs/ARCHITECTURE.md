@@ -3193,6 +3193,27 @@ applies through the remote gateway. The app owns viewport retention, and this
 engine read does not authorize background eviction or automatically fetch the
 legacy workspace roster.
 
+The macOS app consumes this contract through one `ThreadHistoryStore` per selected
+`ExecutionLocationID` and thread ID. Both local and remote requests use
+`gateway(for:)`. Open/Jump use no selector; Earlier/Later use the current mounted
+edges, never an evicted page's outer cursor. The DTO cache retains at most two
+transport pages, 40 rows and 4 MiB; the eager mounted island has at most 20 turns.
+Presentation drafts/expansions are separate and do not retain historical DTOs.
+Replay coverage follows the mounted IDs and consumes every continuation before
+settling. Same-thread refresh never clears the painted feed. Cursor/owner resets
+read around the anchor and follow newer coverage to refill beneath it. An empty
+boundary page updates coverage without replacing the painted island.
+
+The app renders settled prompt, answer, receipt, plan relation and retention
+facts from each history row. Its live-run overlay records which history reads
+were already in flight when a run detail published; those responses cannot erase
+that answer. Composer/Stop use the page header, not the mounted slice. The old
+last-five hydration and per-card eligibility/delegation hydrators are removed.
+The workspace panel separately reads the legacy full roster only when shown;
+feed pings never re-fetch that aggregate. Full prompt parts are fetched only by
+explicit Copy/Show actions. Initial loading, loaded-empty and failed history
+remain distinct from a new draft conversation.
+
 ### Plan lifecycle (typed open questions → readiness → Implement freezes the plan)
 
 Ambiguity is plan-owned: a read-only `plan` run ends its report with a

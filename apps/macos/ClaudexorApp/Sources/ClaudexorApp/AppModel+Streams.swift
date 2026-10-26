@@ -309,14 +309,17 @@ extension AppModel {
                 threadHeadRevisions[threadId] = revision
             }
             scheduleThreadsRefresh()
+            if selectedExecutionLocation == .local, selectedThreadId == threadId {
+                Task { await refreshOpenThread(locationID: .local, id: threadId) }
+            }
             return
         }
         guard let runId = event.payload["run_id"]?.stringValue, !runId.isEmpty else { return }
         let type = event.payload["type"]?.stringValue ?? ""
         let isTerminalEvent = type == "run.completed" || type == "run.failed" || type == "run.blocked"
         if let threadId = event.payload["thread_id"]?.stringValue, !threadId.isEmpty {
-            if threadId == selectedThreadId, (type == "run.created" || isTerminalEvent) {
-                await openThread(threadId)
+            if selectedExecutionLocation == .local, threadId == selectedThreadId, (type == "run.created" || isTerminalEvent) {
+                Task { await refreshOpenThread(locationID: .local, id: threadId) }
                 if type == "run.created", streamTasks[runId] == nil { stream(runId: runId) }
             }
             if isTerminalEvent { await refreshThreads() }

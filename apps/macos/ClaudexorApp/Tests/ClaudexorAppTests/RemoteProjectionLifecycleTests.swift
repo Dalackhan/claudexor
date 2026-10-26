@@ -56,6 +56,8 @@ import Testing
         let connection = RemoteConnection(id: UUID(), sshAlias: "host-a")
         model.remoteConnections = [connection]
         model.remoteConnectionGenerations[connection.id] = 7
+        model.selectedExecutionLocation = connection.locationID
+        model.selectedThreadId = "thread-a"
 
         await model.refreshOpenThread(
             locationID: connection.locationID, id: "thread-a")

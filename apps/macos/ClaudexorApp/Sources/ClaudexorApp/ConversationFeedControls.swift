@@ -42,6 +42,7 @@ struct LaterTurnsControl: View {
     var state: HistoryControlState = .ready
     var showJump = true
     var newCount = 0
+    var jumpState: HistoryControlState = .ready
     var later: () -> Void
     var latest: () -> Void
     var body: some View {
@@ -56,7 +57,7 @@ struct LaterTurnsControl: View {
             .help(state == .loading ? "Loading the following turns." : state == .failed
                   ? "Later turns could not be loaded. Try again." : "Show the following saved turns.")
             .accessibilityLabel(state == .loading ? "Loading later turns" : state == .failed ? "Retry loading later turns" : "Show later turns")
-        if showJump { JumpToLatestControl(newCount: newCount, floating: false, action: latest) }
+        if showJump { JumpToLatestControl(newCount: newCount, floating: false, state: jumpState, action: latest) }
     }
 }
 
@@ -70,7 +71,7 @@ struct JumpToLatestControl: View {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: "arrow.down")
                 Text(state == .failed ? "Retry jumping to latest" : "Jump to latest")
-                Text(newCount > 0 ? "\(newCount) new" : "")
+                Text(state == .loading ? "Loading" : newCount > 99 ? "99+" : newCount > 0 ? "\(newCount) new" : "")
                     .monospacedDigit().frame(width: 64, alignment: .trailing)
                     .accessibilityHidden(newCount == 0)
             }.font(.callout).fixedSize()
@@ -106,6 +107,7 @@ struct SavedHistoryControl: View {
 struct ConversationJumpInset: ViewModifier {
     var isPresented: Bool
     var newCount: Int
+    var state: HistoryControlState = .ready
     var measuredHeight: (CGFloat) -> Void
     var latest: () -> Void
 
@@ -113,7 +115,7 @@ struct ConversationJumpInset: ViewModifier {
         content.safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 if isPresented {
-                    JumpToLatestControl(newCount: newCount, action: latest)
+                    JumpToLatestControl(newCount: newCount, state: state, action: latest)
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measuredHeight($0) }
                         .padding(.bottom, Theme.Spacing.sm)
                 }

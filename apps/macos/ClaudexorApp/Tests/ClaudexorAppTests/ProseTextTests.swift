@@ -140,24 +140,25 @@ struct ProseTextTests {
         #expect(bounded.utf8.count <= 32 * 1024 && large.hasPrefix(bounded))
     }
 
-    @Test func historyWindowIsAnchoredBoundedAndIgnoresArrivalsWhileReading() throws {
-        let (detail, _) = try HistoryMockupFixtures.make(count: 45, short: true)
+    @Test func historyWindowIsAnchoredBoundedAndIgnoresArrivalsWhileReading() async throws {
+        let source = try HistoryTestSource(count: 45)
+        let history = try source.store()
+        await history.open()
+        let anchor = try #require(history.mountedIDs.first)
+        await history.earlier(retaining: 8)
+        #expect(history.mountedIDs.count == 20 && history.mountedIDs.contains(anchor))
+        let ids = history.mountedIDs
+        (source.detail, source.runs) = try HistoryMockupFixtures.make(count: 46, short: true)
+        await history.refresh()
+        #expect(history.mountedIDs == ids && history.newCount == 1)
+        #expect(history.presentation.expanded["prompt:mock-turn-44"] == true)
+        #expect(history.presentation.expanded["answer:mock-turn-44"] == true)
+        history.presentation.planText["plan"] = ["question": "Keep this draft"]
+        await history.jump()
+        #expect(history.mountedIDs.count == 20 && history.mountedIDs.last == "mock-turn-45")
+        #expect(history.following && history.newCount == 0)
+        #expect(history.presentation.planText["plan"]?["question"] == "Keep this draft")
         let state = ConversationFeedState()
-        state.install(detail.turns)
-        let anchor = try #require(state.mountedIDs.first)
-        state.earlier(detail.turns, retaining: 8)
-        #expect(state.mountedIDs.count == 20 && state.mountedIDs.contains(anchor))
-        let ids = state.mountedIDs
-        let (appended, _) = try HistoryMockupFixtures.make(count: 46, short: true)
-        state.receive(appended.turns)
-        #expect(state.mountedIDs == ids && state.newCount == 1)
-        #expect(state.presentation.expanded["prompt:mock-turn-44"] == true)
-        #expect(state.presentation.expanded["answer:mock-turn-44"] == true)
-        state.presentation.planText["plan"] = ["question": "Keep this draft"]
-        state.latest(appended.turns)
-        #expect(state.mountedIDs.count == 20 && state.mountedIDs.last == "mock-turn-45")
-        #expect(state.follows && state.newCount == 0)
-        #expect(state.presentation.planText["plan"]?["question"] == "Keep this draft")
         state.geometry(bottom: false, tailMounted: true)
         #expect(!state.follows)
         state.geometry(bottom: true, tailMounted: true)

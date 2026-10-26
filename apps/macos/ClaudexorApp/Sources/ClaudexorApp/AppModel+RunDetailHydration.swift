@@ -72,9 +72,7 @@ extension AppModel {
             let queuedAlias = detail.summary.jobId == id && existingBaseIdx != nil
             guard exactIdentity || queuedAlias else { return }
             if existingBaseIdx == nil {
-                let belongsToSelectedThread = selectedThreadDetail?.turns.contains {
-                    $0.runId == id || ($0.run?.delegatedChildRunIds ?? []).contains(id)
-                } == true
+                let belongsToSelectedThread = selectedThreadAuthorizesColdRun(id)
                 guard exactIdentity, insertingIfMissing, belongsToSelectedThread else { return }
                 liveTasks.append(Self.liveTask(from: detail.summary))
             }
@@ -248,6 +246,7 @@ extension AppModel {
             if let writeIdx = liveTasks.firstIndex(where: { $0.id == id }) {
                 liveTasks[writeIdx] = task
                 hydratedRunDetails.insert(id)
+                publishHistoryLive(task, locationID: .local)
             }
         } catch {
             guard !Task.isCancelled,

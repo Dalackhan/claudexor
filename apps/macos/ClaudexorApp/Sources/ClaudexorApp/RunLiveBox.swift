@@ -152,7 +152,7 @@ extension AppModel {
     func evictBackgroundRunData() {
         var keep = Set<String>()
         if case .task(let id) = route { keep.insert(id) }
-        for turn in selectedThreadDetail?.turns ?? [] {
+        for turn in selectedHistory?.rows ?? [] {
             if let runId = turn.runId { keep.insert(runId) }
         }
         // Streaming runs keep everything (their box IS the live state).

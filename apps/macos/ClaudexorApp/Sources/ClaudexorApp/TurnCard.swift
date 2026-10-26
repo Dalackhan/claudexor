@@ -25,6 +25,7 @@ struct TurnCard: View {
     /// and transcript file links resolve there, never in a delegated thread's
     /// project; nil leaves only the run's own directory in scope.
     let executionRoot: String?
+    var historyRow: ThreadHistoryTurn? = nil
 
     /// Roots whose files this turn's answer and transcript may open or render.
     static func fileScopeRoots(executionRoot: String?, runDir: String?) -> [String] {
@@ -66,7 +67,9 @@ struct TurnCard: View {
     }
 
     private var run: TaskRun? {
-        turn.runId.flatMap { model.task($0, at: target.locationID) }
+        let live = turn.runId.flatMap { model.task($0, at: target.locationID) }
+        if let historyRow { return model.selectedHistory?.renderedRun(for: historyRow, live: live) }
+        return live
     }
 
     private var planImplementAccessSelection: ComposerThreadAccessSelection {
@@ -106,7 +109,9 @@ struct TurnCard: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             // W-C5: the user's message is a right-aligned BUBBLE above the
             // assistant card — the feed reads as a conversation.
-            PromptBubble(prompt: turn.prompt, turnID: turn.id)
+            PromptBubble(prompt: turn.prompt, turnID: turn.id, promptInfo: historyRow?.promptInfo,
+                fullPrompt: { try await model.fullHistoryPrompt(turnID: turn.id,
+                    locationID: target.locationID, threadID: turn.threadId) })
             assistantSection
         }
         .environment(\.proseMessageID, turn.id)
@@ -149,7 +154,7 @@ struct TurnCard: View {
                         if model.transcriptBlocks(runId).isEmpty { model.openRun(run.id) }
                         else { transcriptExpanded = !(transcriptExpanded ?? run.phase.isActive) }
                     },
-                    onOpenWorkspace: { model.openRun(run.id) })
+                    onOpenWorkspace: { model.openRun(run.id) }, historyRun: historyRow?.run)
                 if let warning = DelegationPresentation.warning(run.delegation, phase: run.phase) {
                     DelegationWarningRow(warning: warning)
                 }
@@ -183,14 +188,14 @@ struct TurnCard: View {
                 // D17: a plan that came back needs_answers surfaces its open
                 // questions inline; answering submits a follow-up plan turn.
                 if run.mode == .plan, run.planReadiness?.state == "needs_answers", !run.planQuestions.isEmpty {
-                    let submitted = PlanAnswerSubmission.acceptedTurn(
-                        sourcePlanRunId: runId,
-                        turns: model.selectedThreadDetail?.turns ?? [])
-                    if submitted != nil || model.selectedThreadDetail?.thread.headRunId == runId {
+                    let submitted = historyRow?.answeredByTurnId
+                    if historyRow?.planAnswerComplete == false {
+                        Text("Plan answer status is unavailable.").font(.caption).foregroundStyle(.secondary)
+                    } else if submitted != nil || model.selectedHistory?.header?.headRun?.runId == runId {
                         PlanQuestionCard(
                             questions: run.planQuestions,
                             sourcePlanRunId: runId,
-                            submittedPrompt: submitted?.prompt,
+                            submittedPrompt: submitted == nil ? nil : historyRow?.answeredByPrompt?.prompt ?? "",
                             target: target,
                             routingOptions: routingOptions)
                     } else {
@@ -207,6 +212,7 @@ struct TurnCard: View {
                 if let result = turn.run?.result, result.kind == "plan" {
                     planImplementRow(result)
                 }
+                if let historyRow { HistoryEvidenceNotice(row: historyRow, locationID: target.locationID) }
                 decisionAndApply(run)
                 // A4: the honest DELIVERY-state line — a terminal run whose patch
                 // was applied under a BLOCKED review ("Applied · review blocked"),
@@ -219,8 +225,9 @@ struct TurnCard: View {
                 if isSilentFailure(run) { failureCard(run) }
             } else if let refusal = turn.enqueueError {
                 TurnRefusalCard(turn: turn, refusal: refusal, target: target)
-            } else if let state = turn.run?.state {
-                Text(state).font(.caption).foregroundStyle(.secondary)
+            } else if historyRow?.runStatus == "not_retained" {
+                Text("Run details are no longer kept.").font(.caption).foregroundStyle(.secondary)
+                    .help("Saved prompts outlive run retention. This run’s receipt and output can no longer be read from its run record.")
             }
             if let actionError {
                 Text(actionError).font(.caption).foregroundStyle(.red).textSelection(.enabled)
@@ -231,41 +238,6 @@ struct TurnCard: View {
         // The assistant remains a neutral content card with one quiet accent
         // hairline — same design family as the user bubble, distinct hierarchy.
         .cardSurface(strokeColor: Theme.accent.opacity(0.22), hover: run != nil)
-        // A decision-flow run needs its detail loaded so the receipt can gate apply
-        // on the server eligibility (item f) — the DecisionBar path also loads it,
-        // this covers an already-decided run reopened cold.
-        .task(id: applyLoadKey) {
-            if let run, isDecisionFlow(run), run.applyEligibility == nil, model.task(run.id) != nil {
-                await model.ensureRunDetail(run.id)
-            }
-        }
-        // A cold reload may no longer include an older child in the bounded
-        // global runs page. Hydrate Delegate parents once so their direct-child
-        // snapshot can restore the same flat rows without an unbounded list.
-        .task(id: delegationChildLoadKey) {
-            if let runId = turn.runId,
-               (run?.delegation ?? turn.run?.delegation)?.requested == true {
-                await model.ensureRunDetail(
-                    runId, insertingIfMissing: model.task(runId) == nil)
-            }
-        }
-    }
-
-    /// Re-key the eligibility load on the run's decision-flow signals AND on the
-    /// local risk-accept (B6): accepting risk makes the run eligible server-side,
-    /// so the reload must re-fire to pull the fresh eligibility — the stale
-    /// `run.applyEligibility` (blocked) would otherwise hide Apply until an
-    /// unrelated refresh.
-    private var applyLoadKey: String {
-        DecisionApplyPresentation.applyLoadKey(run, riskAccepted: riskAccepted)
-    }
-
-    private var delegationChildLoadKey: String {
-        guard let runId = turn.runId,
-              (run?.delegation ?? turn.run?.delegation)?.requested == true else {
-            return "delegate-children:none"
-        }
-        return "delegate-children:\(runId):\(run?.phase.rawValue ?? turn.run?.state ?? "unknown")"
     }
 
     // MARK: Answer bubble
@@ -400,12 +372,19 @@ struct TurnCard: View {
         if DecisionApplyPresentation.showsDecisionBar(run, riskAccepted: riskAccepted) {
             DecisionBar(runId: run.id) {
                 riskAccepted = true
+                Task { await model.selectedHistory?.refresh() }
                 // DecisionBar owns the one post-mutation detail refresh before
                 // invoking this callback. The receipt is therefore current; a
                 // second GET here would only duplicate the same snapshot.
             }
         }
-        if applied {
+        if historyRow?.run?.applyEligibilityCoverage == "unavailable" {
+            HStack {
+                Button("Apply patch") {}
+                Button("Apply as branch") {}
+            }.buttonStyle(.bordered).disabled(true)
+                .help("Apply eligibility is unavailable because the retained evidence could not be verified. Open the workspace for details.")
+        } else if applied {
             Label("Applied to project", systemImage: "checkmark.seal.fill")
                 .font(.caption).foregroundStyle(Theme.status(.positive))
         } else if DecisionApplyPresentation.showsApply(run) {

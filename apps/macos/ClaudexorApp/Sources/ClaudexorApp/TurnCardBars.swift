@@ -20,6 +20,7 @@ struct TurnReceiptRow: View {
     let expanded: Bool
     let onToggle: () -> Void
     let onOpenWorkspace: () -> Void
+    var historyRun: ThreadHistoryRun? = nil
 
     private var line: TurnPresentation.StatusLine {
         TurnPresentation.statusLine(
@@ -29,6 +30,11 @@ struct TurnReceiptRow: View {
             retryLabel: run.phase.isActive ? run.retryStatus?.label : nil,
             reviewNeedsDecision: run.reviewNeedsDecision,
             waitingOnUser: run.waitingOnUser)
+    }
+
+    private var countSummary: String? {
+        if let historyRun { return HistoryRunPresentation.counts(historyRun) }
+        return TurnPresentation.activitySummary(blocks: model.transcriptBlocks(runId))
     }
 
     private var hasActivity: Bool { !model.transcriptBlocks(runId).isEmpty }
@@ -116,7 +122,7 @@ struct TurnReceiptRow: View {
                     .help("Subscription valuation — the token-valued cost of this run's native-subscription work, separate from billed cash.")
             }
             // Tool / file counts from the transcript — "9 tools · 3 files".
-            if let summary = TurnPresentation.activitySummary(blocks: model.transcriptBlocks(runId)) {
+            if let summary = countSummary {
                 Text(summary).font(.caption).foregroundStyle(.secondary)
             }
             if hasActivity {
@@ -136,7 +142,9 @@ struct TurnReceiptRow: View {
     }
 
     @ViewBuilder private var elapsed: some View {
-        if run.phase.isActive {
+        if let historyRun, historyRun.startedAt == nil && historyRun.createdAt == nil {
+            EmptyView()
+        } else if run.phase.isActive {
             Text(run.createdAt, style: .relative).font(.caption).foregroundStyle(.secondary)
                 .help("Time since the run started")
         } else {

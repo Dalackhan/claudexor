@@ -406,10 +406,12 @@ deferred; they are recorded here now.
   a second continuation) stay deferred.
 - D-13 step D: native prose and bounded eager history verification —
   PR #504 mockups use TextKit 1 prose and an eager window of at most 20 turns.
-  Engine paging, owner variant decisions and macOS 26.5 stress verification
-  remain. List and LazyVStack are not the history strategy.
+  Engine paging is implemented. Owner variant decisions and macOS 26.5 stress
+  verification remain. List is reserved for a separately measured future experiment;
+  neither List nor LazyVStack is the current history strategy.
 - Conversation Find: a future feed-level NSTextFinderClient can search mounted
-  prose runs; searching unmounted history requires an engine history contract.
+  prose runs; searching unmounted history needs a dedicated engine search contract.
+  The bounded paging API does not implement Find. Find remains deferred.
   Table selection remains a configurable per-cell residual in the mockups.
 
 ## v3.1.0 dogfood finding (2026-07-23)

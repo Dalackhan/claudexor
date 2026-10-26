@@ -83,12 +83,12 @@ import SwiftUI
         return (ThreadDetailResponse(thread: thread, sessions: [], turns: turns), runs)
     }
 
-    static func model(detail: ThreadDetailResponse, runs: [TaskRun]) -> AppModel {
+    static func model(detail: ThreadDetailResponse, runs: [TaskRun], source: HistoryTestSource? = nil) -> AppModel {
         let model = AppModel(client: nil, requestNotificationAuthorization: false, loadPersistedState: false)
         model.liveTasks = runs
         model.threads = [detail.thread]
         model.selectedThreadId = detail.thread.id
-        model.selectedThreadDetail = detail
+        model.selectedHistory = try! (source ?? HistoryTestSource(detail: detail, runs: runs)).store(loaded: true)
         return model
     }
 
@@ -136,18 +136,18 @@ struct HistoryComparisonSurface: View {
 /// The other 05b pair uses full production TurnCards with 21 short turns.
 struct HistoryClampSurface: View {
     @Bindable var state: ConversationFeedState
-    let detail: ThreadDetailResponse
+    let history: ThreadHistoryStore
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                EarlierTurnsControl(hasEarlier: true) { state.earlier(detail.turns, retaining: 20) }
+                EarlierTurnsControl(hasEarlier: true) { Task { await history.earlier(retaining: 20) } }
                     .frame(maxWidth: .infinity)
-                ForEach(state.visible(detail.turns)) { turn in
+                ForEach(history.rows) { turn in
                     ProseText(document: ProseBuilder.plain("\(turn.id): Keep this checkpoint available."))
                         .id(state.markerID(for: turn.id))
                 }
-                if state.mountedIDs.last != detail.turns.last?.id {
-                    LaterTurnsControl(later: { state.later(detail.turns) }, latest: { state.latest(detail.turns) })
+                if !history.tailMounted {
+                    LaterTurnsControl(later: { Task { await history.later() } }, latest: { Task { await history.jump() } })
                 }
             }.scrollTargetLayout().frame(width: 680).padding(Theme.Spacing.lg)
                 .frame(maxWidth: .infinity)
@@ -157,6 +157,7 @@ struct HistoryClampSurface: View {
         .defaultScrollAnchor(.top, for: .alignment)
         .scrollPosition($state.position)
         .onChange(of: state.navigationRevision) { state.commitNavigation() }
+        .onChange(of: history.navigationRevision) { state.navigate(history) }
         .background(Theme.surfaceBase)
     }
 }

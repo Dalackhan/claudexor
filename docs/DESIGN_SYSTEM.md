@@ -432,7 +432,7 @@ frequency and volume are. The contracts:
 - **Per-run detail single-flight.** Gate/reviewer/finding/output/terminal event
   bursts share one in-flight detail GET and request at most one trailing
   refresh. Run-list refresh never N+1-fetches details merely because a row has
-  zero findings; selected thread/inspector hydration owns detail loading.
+  zero findings; the live head and an explicit workspace inspection own detail loading.
 - **Bounded feeds with honest truncation.** The live activity feed is a ring
   of the newest 1000 events with a visible "N older events collapsed" note
   (mirroring the server's capped timeline); transcripts cap at 200 blocks with
@@ -459,16 +459,42 @@ frequency and volume are. The contracts:
 - **Bounded eager history; no lazy nesting (D-13 A).** Reopening long selectable
   chat text can still trigger a SwiftUI lazy-geometry layout/allocation loop on
   macOS 26 even without expanding a receipt. `ConversationHistoryStack` uses a
-  plain `VStack`, and `ConversationFeedState` mounts at most 20 turn IDs.
+  plain `VStack`, and `ThreadHistoryStore` mounts at most 20 turn IDs.
   In-feed “Show earlier turns” and “Show later turns” move the window. One
   “Jump to latest” sits beside the later control at its bottom edge, otherwise
   in a solid raised capsule above the composer while reading. Its 64pt count
   slot reports delivered arrivals only; it never shifts the label. Opens use
   the bottom initial anchor; explicit moves use `ScrollPosition` by ID.
-  A reading window stays fixed when new turns arrive. The current adapter
-  slices in-memory detail; engine paging is separate work. The inline transcript
+  A reading window stays fixed when new turns arrive. Local and remote feeds
+  use the addressed engine history read; a selected thread retains at most two
+  pages of DTOs (40 rows / 4 MiB). The inline transcript
   remains a plain `VStack` with its existing reducer/presentation caps. No
   cumulative unbounded "load more", reversed copies, or thousand-row eager stacks.
+- **History observation and recovery.** Open and Jump request the newest page.
+  Earlier/later address the first/last mounted turn, including after partial
+  eviction. Refresh replays the mounted ranges through every continuation,
+  coalescing one in-flight read and at most one trailing read. Only newer row
+  revisions replace painted facts. Stale cursors or a new serving incarnation
+  re-snapshot around the visible reading turn, then refill below it. Card
+  geometry identifies that turn after manual scrolling; a prior programmatic
+  scroll target is not treated as the reader's current place. Painted content
+  remains during loading and errors; a background replay never evicts rows.
+  The live head retains its per-run stream and terminal read. A terminal answer
+  published during the trailing replay wins without a third chained history GET.
+- **History evidence and actions.** Prompt previews disclose `promptInfo`; full
+  prompts load in UTF-8 parts only on Copy full prompt / Show full prompt. Answers
+  use the page's bounded primary output and its existing artifact address.
+  Pruned runs retain their prompt and a quiet retention explanation, without a
+  fabricated receipt. Unretained answers say so. Unavailable apply evidence
+  disables Apply with a reason; an unverified recorded decision never waives
+  required actions. Truncated failure messages link their full recorded detail.
+  Composer and Stop read the compact header, independent of the mounted range.
+  Plan-answer relations come from the engine even when the answer is off page.
+- **Presentation and workspace ownership.** Drafts, expansions and transcript
+  pins outlive rows in the selected located thread's presentation store. They do
+  not pin DTOs. The workspace's legacy full-detail roster is fetched only while
+  the panel is shown, independently of feed refresh. Initial loading, loaded
+  empty history, and a failed read remain distinct from the new-thread illustration.
 - **Per-card equatable containment (D-13 E).** `AppModel` is one coarse
   `@Observable`, so a low-frequency write to the `liveTasks` array (a status flip
   on one run, a list refresh) re-runs EVERY mounted `TurnCard.body`. The dominant
@@ -493,7 +519,8 @@ frequency and volume are. The contracts:
   composer keeps its own measure.
 - **Off-screen eviction.** Terminal runs outside the open thread / inspected
   run release their heavy feed and transcript arrays on route/thread change;
-  reopening reloads the feed from the server timeline (`loadRunDetail`).
+  the history page restores settled receipts and answers; explicit workspace
+  inspection can read the run timeline (`loadRunDetail`).
   Live/streaming runs are never evicted.
 
 ---

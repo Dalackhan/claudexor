@@ -317,13 +317,13 @@ struct ThreadsScreen: View {
 
     private var conversation: some View {
         VStack(spacing: 0) {
-            if let detail = model.selectedThreadDetail {
-                ConversationFeed(state: feedState, detail: detail,
+            if let history = model.selectedHistory, history.header != nil {
+                ConversationFeed(state: feedState, history: history,
                     routingOptions: resolvedComposerOptions.routingOverridesOnly,
-                    sessions: AnyView(sessionsFooter(detail.sessions).conversationMeasure()))
+                    sessions: AnyView(sessionsFooter(history.header?.sessions ?? []).conversationMeasure()))
             } else if model.selectedThreadId != nil {
                 SavedHistoryControl(state: model.threadStatus == nil ? .loading : .failed) {
-                    if let id = model.selectedThreadId { Task { await model.openThread(id) } }
+                    if let id = model.selectedThreadId { Task { await model.openThread(locationID: model.selectedExecutionLocation, id: id) } }
                 }
             } else {
                 emptyConversation

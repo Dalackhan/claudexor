@@ -38,7 +38,7 @@ import {
   CLAUDE_KNOWN_MODELS_VERIFIED_AGAINST,
 } from "./capability-profile.js";
 export { CLAUDE_MANAGED_LOGIN, claudeQuotaModelAliases } from "./capability-profile.js";
-import { claudeInstallation } from "./doctor-remedy.js";
+import { claudeInstallation, claudeMissingDetail } from "./doctor-remedy.js";
 import { claudeDoctor } from "./doctor.js";
 import { claudeNativeEnv, defaultNativeClaudeConfigDir } from "./native-home.js";
 export {
@@ -283,12 +283,10 @@ export function createClaudeAdapter(deps: Partial<ClaudeRuntimeDeps> = {}): Harn
       const version = await runtime.detectVersion();
       if (version === null) {
         throw new HarnessUnavailableError(
-          [
+          claudeMissingDetail(
+            runtime.installation(BIN),
             "claude CLI not found on PATH (set CLAUDEXOR_CLAUDE_BIN to override)",
-            runtime.installation(BIN).advisory,
-          ]
-            .filter(Boolean)
-            .join(" — "),
+          ),
         );
       }
       const apiKey = runtime.anthropicApiKey() !== null;

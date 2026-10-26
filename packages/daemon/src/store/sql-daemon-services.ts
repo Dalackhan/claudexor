@@ -43,7 +43,14 @@ export function createSqlDaemonServices(store: EngineStore, options: SqlDaemonSe
   const terminalFiles = new SqlTerminalFiles(store, obligations);
   const pruner = new SqlCommandPruner(store, blobs, { log: options.log });
   const projects = new SqlProjectStore(store, blobs, obligations);
-  const threads = new SqlCommandRouter(projects, { obligations, terminalFiles, pruner });
+  const threads = new SqlCommandRouter(projects, {
+    obligations,
+    terminalFiles,
+    pruner,
+    validateRefs: (refs) => {
+      resources.resolve(refs);
+    },
+  });
   let globalEvents: SqlEventLedger | null = null;
   resources = new SqlResourceStore(store, blobs, obligations, options.log);
   const purgeFiles = new SqlPurgeFiles(store, obligations);
@@ -121,6 +128,14 @@ export function createSqlDaemonServices(store: EngineStore, options: SqlDaemonSe
         new SqlInteractionStore(store, threads.ledger(generation)).recoverAfterStartup();
       }
       threads.recoverRunlessTurns();
+      const drafts = store
+        .prepare(
+          "SELECT DISTINCT pid FROM deferred_message WHERE state IN ('waiting','held') AND state='waiting'",
+        )
+        .all() as Array<{ pid: number }>;
+      for (const { pid } of drafts)
+        if (isServedPid(store, pid))
+          threads.deferredStore(partitionById(store, pid)!).recoverAfterStartup();
       rebindGlobal();
       quota!.recoverAfterStartup();
       return effects;

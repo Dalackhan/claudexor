@@ -119,6 +119,7 @@ export async function main(): Promise<void> {
         socketPath,
         token,
         commands: sqlReads.deferredCommands(() => graph().commands),
+        deferredStart: () => executors?.deferredStart,
         runtimeConcurrencyCaps: caps,
         servingMode: admission.snapshot,
         storeFacts: () => storage!.facts(),
@@ -418,7 +419,5 @@ export async function main(): Promise<void> {
   }
 }
 
-export function runClaudexordEntry(): void {
-  dispatchClaudexordEntry(main);
-}
+export const runClaudexordEntry = () => void dispatchClaudexordEntry(main);
 runIfDirectEntry(import.meta.url, runClaudexordEntry);

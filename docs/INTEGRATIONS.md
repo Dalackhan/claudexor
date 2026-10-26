@@ -10,7 +10,7 @@ changing Claudexor.
 
 | Surface | Current role | Stability |
 |---|---|---|
-| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, runs-wait, task-group-runs, retry, run-again, apply, decision, review), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). `runs-wait` observes existing handles read-only through `--targets-json` and optional `--wait-ms`, with `--json` or `--json-stream` output. `task-group-runs` reads one bounded retained group page. | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
+| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, runs-wait, task-group-runs, next-message, next-message-read, retry, run-again, apply, decision, review), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). `runs-wait` observes existing handles read-only through `--targets-json` and optional `--wait-ms`, with `--json` or `--json-stream` output. `task-group-runs` reads one bounded retained group page. `next-message` creates, replaces or clears an authorized one-shot draft; `next-message-read` reads its bounded content and editing handles. | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
 | Daemon and control API | Local durable queue, Agent runs, caller-owned model and image operations, artifacts, SSE events, settings, harness status, secrets metadata, apply, and run control. | Stable contract: endpoints and DTOs per `docs/reference/endpoints.json` + generated schemas (add-only fields). Loopback + bearer token only. |
 | MCP server | Exposes Claudexor tools to MCP clients. `claudexor_runs_wait` projects the same read-only observation with `targets: [{runId, seen?}]` and optional `waitMs`. | Stable contract: the tool set with input/output schemas. Tool list follows the implementation, not old docs. |
 | ACP server | Lets compatible editors or agents talk to Claudexor as a local agent surface. | Experimental (may change in minors, disclosed in the CHANGELOG). |
@@ -1028,6 +1028,54 @@ terminated process.
 These existing-run controls are not exposed by the Delegate belt and cannot
 expand a child's authority. They add no automatic retries, worker restarts,
 approval decisions or separate lifecycle.
+
+Operator-only `claudexor_next_message` and `claudexor_next_message_read`
+provide editable deferred one-shot follow-ups. The built stdio/HTTP/SQLite MCP
+controller story passed with fake harnesses; native vendor, GUI and
+cross-platform acceptance remain manual. See [the feature ledger](FEATURES.md)
+for qualification limits. The mutation envelope is `{request, idempotencyKey}`.
+For example:
+
+```json
+{"request":{"action":"create","predecessorId":"job-…","prompt":"Verify the previous work","attachments":[],"controls":{"continueCarrier":"packet"}},"idempotencyKey":"verify-next-1"}
+```
+
+`replace` supplies `draftId`, exact `expectedRevision`, and the complete
+`prompt`/`attachments` list; `[]` clears refs. `clear` supplies only `draftId`
+and exact `expectedRevision`. Controls are captured at creation and cannot be
+edited. A waiting or held draft reserves the predecessor's single continuation
+claim. Exact accepted replays keep their original applied revision and current
+handles. Failure, cancellation, interruption, incompatible typed outcome,
+unknown process custody, Stop, restart or admission refusal holds without retry;
+editing a held draft never rearms it. Native transient HTTP429/`willRetry`
+progress does not settle the predecessor.
+
+Promotion resolves the captured request through current canonical project
+routing in the same transaction as acceptance. A relinked root or a different
+project generation holds the draft without changing its captured scope.
+Execution-default snapshots are internal accepted-command data; public inputs
+cannot supply them. Native tool allow/deny lists always use current operator
+settings, including when an older accepted snapshot retained tool lists. Exact Retry recovers
+execution preferences from the accepted source and
+still applies ordinary fresh admission, including `continuation_superseded`.
+Run Again and decision rerun omit these private preferences and disclose that
+current settings apply to the editable follow-up.
+
+HTTP uses `POST /v2/runs/next-message` with the mutation body and required
+`Idempotency-Key`, plus addressed `GET /v2/runs/next-message/:id` for full editing
+content. CLI uses `claudexor next-message '<envelope JSON>' --json` and
+`claudexor next-message-read <draft-id> --json`. MCP reads bound the prompt to
+4096 UTF-8 bytes and refs to 32, with explicit omission counts and a full detail
+path. The compact state supplies the exact existing predecessor result path
+and predecessor/successor job/run handles; use `claudexor_run_result` for output.
+No second output store is created. Detail/status/result/wait include
+`deferredMessage`; a terminal `run_wait` wake describes only the predecessor,
+so inspect the draft separately for dispatch resolution. Reads never send work.
+
+The tools are absent from the Delegate belt. Raw/HTTP/MCP belt callers and engine
+Delegate child targets receive typed `delegation_forbidden`; ordinary external
+controller-owned one-shot workers remain supported. Thread targets return
+`use_thread_turn`. No persistent thread, FIFO, fork or rate-limit policy is added.
 
 ### Controller-independent approval handback
 

@@ -4,6 +4,10 @@ import type {
   CommandListQuery,
   RunTimeLimitRequest,
   RunTimeLimitSnapshot,
+  DeferredMessageCall,
+  DeferredMessageReceipt,
+  DeferredMessageDetail,
+  DeferredMessageProjection,
 } from "@claudexor/schema";
 import { type Socket, connect } from "node:net";
 import { randomUUID } from "node:crypto";
@@ -41,6 +45,17 @@ export abstract class DaemonRpcMethods {
 
   health() {
     return this.call("claudexor.health");
+  }
+  deferredMessage(input: DeferredMessageCall) {
+    return this.call<DeferredMessageReceipt>("claudexor.deferredMessage", input);
+  }
+  deferredMessageRead(draftId: string) {
+    return this.call<DeferredMessageDetail | null>("claudexor.deferredMessageRead", { draftId });
+  }
+  deferredMessageProjection(predecessorId: string) {
+    return this.call<DeferredMessageProjection | null>("claudexor.deferredMessageProjection", {
+      predecessorId,
+    });
   }
   enqueue(
     request: unknown,

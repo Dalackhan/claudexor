@@ -12,6 +12,7 @@ import type { ProjectThreadPort } from "../store-contracts.js";
 import { SqlCommandQueries } from "./command-queries.js";
 import { SqlCommandPruner } from "./command-prune.js";
 import { SqlCommandStore } from "./commands.js";
+import { SqlDeferredMessages, deferredConflict } from "./deferred-messages.js";
 import { SqlEventLedger } from "./event-store.js";
 import { isServedPid } from "./generations.js";
 import { SqlInteractionStore } from "./interactions.js";
@@ -36,6 +37,7 @@ export class SqlCommandRouter
       obligations: Obligations;
       terminalFiles: SqlTerminalFiles;
       pruner: SqlCommandPruner;
+      validateRefs?: ConstructorParameters<typeof SqlDeferredMessages>[4];
     },
   ) {
     super(projects);
@@ -57,6 +59,38 @@ export class SqlCommandRouter
   findById(id: string): SqlCommandStore | undefined {
     const generation = this.generationForCommand(id);
     return generation ? this.commandStore(generation) : undefined;
+  }
+  deferredFor(id: string): SqlDeferredMessages | undefined {
+    const row = this.store
+      .prepare(
+        `SELECT pid FROM deferred_message WHERE id=?
+      UNION ALL SELECT pid FROM command WHERE id=? OR run_id=? LIMIT 1`,
+      )
+      .get(id, id, id) as { pid: number } | undefined;
+    const generation =
+      row && isServedPid(this.store, row.pid) ? partitionById(this.store, row.pid) : null;
+    return generation ? this.deferredStore(generation) : undefined;
+  }
+  deferredStore(generation: PartitionGeneration): SqlDeferredMessages {
+    return new SqlDeferredMessages(
+      this.store,
+      this.projects.blobs,
+      generation,
+      this.commandStore(generation),
+      this.persistence.validateRefs,
+      (request) => {
+        const current = this.generationForRequest(request);
+        if (
+          current.pid !== generation.pid ||
+          current.epoch !== generation.epoch ||
+          current.name !== generation.name
+        )
+          throw deferredConflict(
+            "deferred_generation_changed",
+            "captured request no longer routes to its reserved generation",
+          );
+      },
+    );
   }
   pruneHistory(cap: number, retentionMs: number, now: number): string[] {
     return this.persistence.pruner.pruneHistory(cap, retentionMs, now);

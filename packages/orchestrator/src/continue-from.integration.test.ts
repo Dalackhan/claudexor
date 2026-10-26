@@ -5,13 +5,15 @@
  * it. Asserts the first try's carrier, the spec the successor process
  * receives, the receipt, the chain's work order and the kept/adopted tree.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+vi.mock("@claudexor/schema", () => import("../../schema/src/index.js"));
 import { execFileSync } from "node:child_process";
 import {
   appendFileSync,
   existsSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   rmSync,
   writeFileSync,
@@ -23,6 +25,7 @@ import { ArtifactStore } from "@claudexor/artifact-store";
 import {
   ConformanceReport,
   ControlRunStartRequest,
+  CapturedRunStart,
   HarnessManifest,
   RunTelemetry,
   type HarnessEvent,
@@ -36,6 +39,12 @@ import { readSessionCapsule } from "./session-capsule.js";
 import { continuationForRun } from "../../cli/src/continue-from-run.js";
 import { summaryFingerprint } from "../../control-api/src/run-list-fingerprint.js";
 import { continuationSummary } from "../../control-api/src/run-continuation-projection.js";
+import { inheritContinuationBody } from "../../control-api/src/run-continuation-start.js";
+import { prepareRunStart } from "../../control-api/src/run-start-preparation.js";
+import { sourceSqlFixture } from "../../daemon/src/store/test-support/source-sql-fixture.js";
+import { DaemonServer } from "../../daemon/src/server.js";
+import { oneShotRunInput } from "../../cli/src/one-shot-run-input.js";
+import { createInProcessRunScopeCustodian, failedScopeOutcome } from "./runScope.js";
 
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
@@ -312,6 +321,171 @@ function attemptDirOf(runDir: string): string {
 }
 
 describe("continueFrom successor: first try", () => {
+  it.each(
+    (["agent", "ask"] as const).flatMap((mode) =>
+      (["auto", "packet"] as const).map((carrier) => ({ mode, carrier })),
+    ),
+  )(
+    "promotes a deferred $mode through real SQL/queue/continuity using $carrier",
+    async ({ mode, carrier }) => {
+      let release!: () => void;
+      const parked = new Promise<void>((r) => {
+        release = r;
+      });
+      let f!: Fixture;
+      f = fixture(["a"], function* (ctx) {
+        if (ctx.phase === "predecessor") seedSession(f.stores[ctx.profile]!, "sid-A");
+        if (mode === "agent")
+          yield* finishing(
+            ctx.emit,
+            ctx.cwd,
+            ctx.phase === "predecessor" || carrier === "auto" ? "sid-A" : "sid-new",
+          );
+        else {
+          yield ctx.emit({
+            type: "started",
+            observed_model: "m1",
+            payload: {
+              native_session_id:
+                ctx.phase === "predecessor" || carrier === "auto" ? "sid-A" : "sid-new",
+            },
+          });
+          yield ctx.emit({ type: "message", text: "Useful answer", final: true });
+          yield ctx.emit({ type: "completed" });
+        }
+      });
+      f.root = realpathSync(f.root);
+      const sql = await sourceSqlFixture(join(f.root, "queue-store"));
+      sql.graph.projects.register({ root: f.root, idempotencyKey: "project", clientId: "fixture" });
+      const accepted: Array<{
+        jobId: string;
+        input: CapturedRunStart;
+        result?: Awaited<ReturnType<Orchestrator["run"]>>;
+      }> = [];
+      const registry = new Map([["fake", f.adapter]]);
+      // The scripted adapter starts no native process. Inject its clean
+      // custody result; the real whole-run barrier still writes the artifact.
+      const runScopes = createInProcessRunScopeCustodian(async () => ({
+        ...failedScopeOutcome("scripted fixture"),
+        census: "ok",
+        censusFailure: null,
+        settled: true,
+      }));
+      const daemon = new DaemonServer({
+        socketPath: join(f.root, "unused.sock"),
+        token: "fixture",
+        commands: sql.graph.commands,
+        deferredStart: () => ({
+          capture: async (predecessor, input) =>
+            CapturedRunStart.parse(
+              await prepareRunStart(
+                inheritContinuationBody(predecessor, {
+                  ...input.controls,
+                  prompt: input.prompt,
+                  attachments: input.attachments,
+                }),
+                {},
+              ),
+            ),
+          validate: async (start) => {
+            const orchestrator = new Orchestrator({ registry, reviewers: [] });
+            await orchestrator.preflightOneShot({
+              ...oneShotRunInput(start),
+              continuation: continuationForRun(start, sql.graph.commands.queries),
+            });
+          },
+        }),
+        runner: async (raw, ctx) => {
+          const input = CapturedRunStart.parse(raw);
+          const row = {
+            jobId: ctx.jobId,
+            input,
+            result: undefined as Awaited<ReturnType<Orchestrator["run"]>> | undefined,
+          };
+          accepted.push(row);
+          if (accepted.length === 1) await parked;
+          else f.phase.current = "successor";
+          row.result = await new Orchestrator({ registry, reviewers: [], runScopes }).run({
+            ...oneShotRunInput(input),
+            signal: ctx.signal,
+            continuation: continuationForRun(input, sql.graph.commands.queries),
+            onRunStart: ctx.onRunStart,
+            onEventPersist: (event) => {
+              sql.graph.commands.recordRunEvent(input, event);
+            },
+            onTerminalPersist: (event, telemetry) =>
+              sql.graph.commands.persistTerminal(ctx.jobId, event, telemetry),
+          });
+          return row.result;
+        },
+      });
+      try {
+        const request = ControlRunStartRequest.parse({
+          mode,
+          prompt: WORK_ORDER,
+          scope: { kind: "project", root: f.root },
+          execution: { isolation: "envelope" },
+          harnesses: ["fake"],
+          primaryHarness: "fake",
+          models: { fake: "m1" },
+          credentialProfileId: "a",
+          authPreference: "subscription",
+          web: "off",
+          ...(mode === "agent" ? { review: false } : {}),
+        });
+        const pred = (await daemon.dispatch("claudexor.enqueue", {
+          request,
+          idempotencyKey: "predecessor",
+          clientId: "fixture",
+        })) as { id: string };
+        const draft = (await daemon.dispatch("claudexor.deferredMessage", {
+          request: {
+            action: "create",
+            predecessorId: pred.id,
+            prompt: "Also verify the previous work",
+            attachments: [],
+            controls: {
+              continueCarrier: carrier,
+              credentialProfileId: "a",
+              web: "off",
+              ...(mode === "agent" ? { review: false } : {}),
+            },
+          },
+          idempotencyKey: "draft",
+        })) as { draft: { draftId: string; state: string } };
+        expect(draft.draft.state).toBe("waiting");
+        expect(accepted).toHaveLength(1);
+        release();
+        await vi.waitFor(
+          () => {
+            const projection = sql.graph.commands
+              .deferredFor(draft.draft.draftId)!
+              .get(draft.draft.draftId)!;
+            expect(projection.state, JSON.stringify(projection)).toBe("dispatched");
+            expect(accepted[1]?.result?.lifecycle, accepted[1]?.result?.summary).toBe("succeeded");
+          },
+          { timeout: 15_000 },
+        );
+        const projection = sql.graph.commands
+          .deferredFor(draft.draft.draftId)!
+          .get(draft.draft.draftId)!;
+        expect(accepted[1]!.jobId).toBe(projection.successorJobId);
+        expect(accepted[1]!.input.continueFrom).toBe(accepted[0]!.result!.runId);
+        const spawn = f.spawns.find((s) => s.phase === "successor")!;
+        expect(spawn.resume).toBe(carrier === "auto" ? "sid-A" : null);
+        if (mode === "agent") {
+          expect(spawn.prompt).toContain("different working tree");
+          expect(spawn.prompt).toContain(join(accepted[0]!.result!.runDir, "final/patch.diff"));
+        }
+        expect(accepted).toHaveLength(2);
+      } finally {
+        release();
+        await daemon.stop();
+        await sql.close();
+      }
+    },
+    25_000,
+  );
   it.each(
     (["agent", "ask"] as const).flatMap((mode) =>
       ["a", "b"].flatMap((target) =>

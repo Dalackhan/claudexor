@@ -30,6 +30,7 @@ import { runsWaitQuery } from "./mcp-runs-wait.js";
 import { taskGroupRunsQuery } from "./task-group-runs.js";
 import { runEventReadQuery } from "./mcp-run-event-read.js";
 import { journalRecoveryQuery } from "./mcp-journal-recovery.js";
+import { deferredMessageQuery } from "./mcp-deferred-message.js";
 
 export interface SurfaceRunnerHooks {
   onEvent?: (event: any) => void;
@@ -67,6 +68,8 @@ export interface McpSurfaceRunnerOptions {
 export function mcpSurfaceRunner(options: McpSurfaceRunnerOptions = {}) {
   return async (p: any, hooks?: SurfaceRunnerHooks) => {
     const beltContext = Boolean(options.delegationParentRunId);
+    if (p?.mode === "__next_message" || p?.mode === "__next_message_read")
+      return deferredMessageQuery(p, beltContext, hooks?.signal);
     if (p?.mode === "__task_group_runs") {
       const { mode: _mode, ...input } = p;
       return taskGroupRunsQuery(input, beltContext, hooks?.signal);

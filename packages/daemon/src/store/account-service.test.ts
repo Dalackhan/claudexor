@@ -182,7 +182,7 @@ function dump(db: { prepare(sql: string): { all(): unknown[] } }, tables: readon
 }
 
 describeStore("durable last-served facts (engine store schema v2)", () => {
-  it("upgrades a real v1 store in place: every existing row kept, only the new table added", async () => {
+  it("upgrades a real v1 store to v4: keeps every row and adds only expected schema objects", async () => {
     const root = tempRoot();
     mkdirSync(join(root, "daemon"), { recursive: true });
     const { DatabaseSync } = await import("node:sqlite");
@@ -211,21 +211,42 @@ describeStore("durable last-served facts (engine store schema v2)", () => {
     `);
     const before = dump(v1, V1_TABLES);
     v1.close();
-    // Version 2 adds this table; version 3 adds only task-group indexes.
-    expect([...ENGINE_TABLES].sort()).toEqual([...V1_TABLES, "account_last_service"].sort());
+    // Version 2 adds account_last_service; version 3 adds task-group indexes.
+    // Version 4 adds deferred_message and its four indexes.
+    expect([...ENGINE_TABLES].sort()).toEqual(
+      [...V1_TABLES, "account_last_service", "deferred_message"].sort(),
+    );
 
     const upgraded = await openGraph(root);
     expect(readSchemaIdentity(upgraded.store.db)).toMatchObject({
       applicationId: ENGINE_APPLICATION_ID,
-      userVersion: ENGINE_SCHEMA_VERSION,
+      userVersion: 4,
     });
-    expect(ENGINE_SCHEMA_VERSION).toBe(3);
+    expect(ENGINE_SCHEMA_VERSION).toBe(4);
+    expect(
+      upgraded.store
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL ORDER BY name",
+        )
+        .all()
+        .map((row) => (row as { name: string }).name),
+    ).toEqual(
+      [
+        ...[...V1_DDL.matchAll(/CREATE (?:UNIQUE )?INDEX (\w+)/g)].map((match) => match[1]!),
+        "command_task_group",
+        "command_task_group_state",
+        "deferred_message_slot",
+        "deferred_message_predecessor",
+        "deferred_message_successor",
+        "deferred_message_body",
+      ].sort(),
+    );
     const after = dump(upgraded.store.db, V1_TABLES);
     const metaAfter = Object.fromEntries(
       (after["meta"] as Array<{ key: string; value: string }>).map((row) => [row.key, row.value]),
     );
     expect(metaAfter).toEqual({
-      schema_version: "3",
+      schema_version: "4",
       store_id: "11111111-1111-4111-8111-111111111111",
       created_at: "2026-10-01T00:00:00.000Z",
       global_pid: "1",
@@ -236,9 +257,9 @@ describeStore("durable last-served facts (engine store schema v2)", () => {
     expect(order(services, "M", [profile("a")])).toEqual({ a: 1 });
     await upgraded.close();
 
-    // A newer file is still refused before any write.
+    // Version 5 is newer than this engine and is refused before any write.
     const newer = new DatabaseSync(join(root, "daemon", "engine.sqlite"));
-    newer.exec("PRAGMA user_version=4");
+    newer.exec("PRAGMA user_version=5");
     const rows = () =>
       (newer.prepare("SELECT count(*) AS n FROM account_last_service").get() as { n: number }).n;
     expect(rows()).toBe(1);

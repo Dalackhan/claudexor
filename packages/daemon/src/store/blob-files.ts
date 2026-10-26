@@ -28,6 +28,7 @@ export interface BodyRef {
  */
 export const BLOB_OWNER_PREDICATE = `EXISTS(SELECT 1 FROM command WHERE params_sha = ?1)
   OR EXISTS(SELECT 1 FROM command WHERE result_sha = ?1)
+  OR EXISTS(SELECT 1 FROM deferred_message WHERE body_sha = ?1)
   OR EXISTS(SELECT 1 FROM turn WHERE prompt_sha = ?1)
   OR EXISTS(SELECT 1 FROM event WHERE payload_sha = ?1)
   OR EXISTS(SELECT 1 FROM resource WHERE sha256 = ?1 AND state IN ('publishing', 'ready'))

@@ -10,6 +10,7 @@ import {
   continuationRefusal,
   continuationRefusalError,
   continuedRunOf,
+  assertDeferredReservation,
 } from "@claudexor/schema";
 import { paramsRecord, type DaemonFacadeClient } from "./run-record.js";
 
@@ -45,9 +46,20 @@ export async function resolveContinuationBody(
   if (from === null || !body || typeof body !== "object" || Array.isArray(body)) return body;
   const predecessor = continuationPredecessor(from, await daemon.list({ id: from }));
   if (!predecessor?.runId) return body;
-  const raw = body as Record<string, unknown>;
+  return inheritContinuationBody(predecessor, body as Record<string, unknown>);
+}
+
+/** Internal capture can inherit a queued handle without granting public
+ * admission. The ordinary continuation refusal still rejects live work. */
+export function inheritContinuationBody(
+  predecessor: { id: string; runId?: string; params?: unknown },
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
   const inherited = paramsRecord(predecessor);
-  const resolved: Record<string, unknown> = { ...raw, continueFrom: predecessor.runId };
+  const resolved: Record<string, unknown> = {
+    ...raw,
+    continueFrom: predecessor.runId ?? predecessor.id,
+  };
   for (const group of INHERITED_GROUPS) {
     if (group.some((key) => key in raw)) continue;
     for (const key of group) {
@@ -62,11 +74,12 @@ export async function resolveContinuationBody(
 /** Throw the typed admission refusal (with its context) for a continuation
  * that may not start now; ordinary requests pass untouched. */
 export async function assertContinuationAdmissible(
-  daemon: Pick<DaemonFacadeClient, "list">,
+  daemon: Pick<DaemonFacadeClient, "list" | "deferredMessageProjection">,
   request: unknown,
 ): Promise<void> {
   const from = continuedRunOf(request);
   if (from === null) return;
+  assertDeferredReservation(await daemon.deferredMessageProjection?.(from));
   const refusal = continuationRefusal(request, await daemon.list({ continuationChainOf: from }));
   if (refusal) throw continuationRefusalError(refusal);
 }

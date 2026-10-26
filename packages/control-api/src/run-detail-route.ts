@@ -1,13 +1,18 @@
 import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { lastRunEventSeq } from "@claudexor/event-log";
-import { directDelegatedChildrenFromRecords, type ControlRunSummary } from "@claudexor/schema";
+import {
+  directDelegatedChildrenFromRecords,
+  type ControlRunSummary,
+  type DeferredMessageProjection,
+} from "@claudexor/schema";
 import { measureSync } from "@claudexor/util";
 import type { DaemonRunRecord } from "./run-record.js";
 import { requestGone } from "./request-liveness.js";
 
 interface RunDetailContext {
   findRun(id: string): Promise<DaemonRunRecord | null>;
+  deferred?(id: string): Promise<DeferredMessageProjection | null>;
   children(parent: string): Promise<DaemonRunRecord[]>;
   summarize(record: DaemonRunRecord): ControlRunSummary;
   project(record: DaemonRunRecord, cursor: number, children: ControlRunSummary[]): unknown;
@@ -31,9 +36,13 @@ export async function serveRunDetail(
   const records = await ctx.children(parent);
   if (requestGone(req, res)) return;
   const children = directDelegatedChildrenFromRecords(parent, records).map(ctx.summarize);
+  const deferred = ctx.deferred ? { deferredMessage: await ctx.deferred(rec.id) } : {};
   ctx.json(
     res,
     200,
-    measureSync("control.run_detail", () => ctx.project(rec, cursor, children)),
+    measureSync("control.run_detail", () => ({
+      ...(ctx.project(rec, cursor, children) as object),
+      ...deferred,
+    })),
   );
 }

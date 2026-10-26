@@ -24,7 +24,12 @@ import {
 import { SqlCommandPruner } from "./command-prune.js";
 import { collectReleasedBodies, SqlEventLedger } from "./event-store.js";
 import { bindIdempotencyInTx, lookupIdempotency } from "./idempotency.js";
-import { MutationPostCommitError, runMutation } from "./mutation.js";
+import {
+  MutationPostCommitError,
+  requireTransaction,
+  runMutation,
+  type MutationContext,
+} from "./mutation.js";
 import type { Obligations } from "./obligations.js";
 import type { PartitionGeneration } from "./partitions.js";
 import type { EngineStore } from "./store.js";
@@ -52,6 +57,12 @@ export class SqlCommandStore implements CommandStorePort {
   accept(input: AcceptCommand): { record: JobRecord; reused: boolean } {
     const prior = this.find(input);
     if (prior) return { record: prior, reused: true };
+    const prepared = this.prepareAcceptance(input);
+    return runMutation(this.store, (tx) => this.acceptInTx(tx, prepared));
+  }
+
+  /** All body preparation precedes the synchronous acceptance transaction. */
+  prepareAcceptance(input: AcceptCommand) {
     const digests = commandDigests(this.generation.name, input);
     const record: JobRecord = {
       id: input.id,
@@ -66,19 +77,27 @@ export class SqlCommandStore implements CommandStorePort {
       input.clientId,
     );
     const event = this.events.prepare("command.accepted", { record, ...digests });
-    runMutation(this.store, (tx) => {
-      applyCommandInTx(tx, prepared, "accept");
-      bindIdempotencyInTx(tx, {
-        owner: "command",
-        pid: this.generation.pid,
-        ...digests,
-        operation: input.operation ?? "run.create",
-        targetId: record.id,
-        createdAt: record.createdAt,
-      });
-      this.events.appendInTx(tx, event);
-      tx.changes.blobChanged(prepared.row.params_sha, prepared.row.result_sha);
+    return { input: structuredClone(input), digests, record, prepared, event };
+  }
+
+  /** Compose acceptance with its owner's other row reducers; never starts a
+   * transaction or publishes a queue entry. Replay remains first. */
+  acceptInTx(tx: MutationContext, acceptance: ReturnType<SqlCommandStore["prepareAcceptance"]>) {
+    requireTransaction(tx);
+    const { input, digests, record, prepared, event } = acceptance;
+    const prior = this.find(input);
+    if (prior) return { record: prior, reused: true };
+    applyCommandInTx(tx, prepared, "accept");
+    bindIdempotencyInTx(tx, {
+      owner: "command",
+      pid: this.generation.pid,
+      ...digests,
+      operation: input.operation ?? "run.create",
+      targetId: record.id,
+      createdAt: record.createdAt,
     });
+    this.events.appendInTx(tx, event);
+    tx.changes.blobChanged(prepared.row.params_sha, prepared.row.result_sha);
     return { record, reused: false };
   }
 

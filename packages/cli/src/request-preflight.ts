@@ -42,6 +42,7 @@ type HarnessStatusProjection = Pick<HarnessStatus, "id" | "status" | "enabledInt
   Partial<Pick<HarnessStatus, "manifest">>;
 
 interface RunRequirementsPreflightDependencies {
+  config?: typeof loadConfig;
   statusAll?: (cwd: string, harnessIds?: string[]) => Promise<HarnessStatusProjection[]>;
   registry?: AdapterRegistry;
   accessDefault?: (cwd: string) => AccessProfile;
@@ -135,7 +136,7 @@ export function createRunRequirementsPreflight(
       request,
       dependencies.accessDefault
         ? dependencies.accessDefault(cwd)
-        : loadConfig(cwd).trust.access_default,
+        : (dependencies.config ?? loadConfig)(cwd).trust.access_default,
     ).effective;
     const accessStrategyViolation = runAccessStrategyViolation(request, access);
     if (accessStrategyViolation) {
@@ -167,7 +168,7 @@ export function createRunRequirementsPreflight(
     const hasAuxiliaryRoots = (request.execution.auxiliaryWritableRoots?.length ?? 0) > 0;
     const needsManifests = (request.attachments?.length ?? 0) > 0 || request.browser === true;
     if (!hasAuxiliaryRoots && !needsManifests) return;
-    const config = loadConfig(cwd).global;
+    const config = (dependencies.config ?? loadConfig)(cwd).global;
     // Execution's pool: the request's (a thread turn carries its sticky pool),
     // else Settings; either is strict. Only Auto membership reads host status.
     const pool = effectiveHarnessPool(request.harnesses, config.routing.eligible_harnesses);

@@ -12,6 +12,7 @@ import { Id } from "./primitives.js";
 import { RunContinuityReceipt, RunResumable } from "./run-continuity.js";
 import { ControlRetainedEnvelope } from "./run-continuation.js";
 import { TaskGroupReceipt } from "./task-group.js";
+import { DeferredMessageProjection } from "./deferred-message.js";
 
 export const RunDetailProblem = z
   .object({
@@ -74,6 +75,7 @@ export type SecretLikeDisclosure = z.infer<typeof SecretLikeDisclosure>;
 export const McpRunToolResult = z
   .object({
     ...TaskGroupReceipt.partial().shape,
+    deferredMessage: DeferredMessageProjection.nullable().optional(),
     attemptExecution: z.array(AttemptExecutionEvidence).optional(),
     summary: z
       .string()
@@ -159,6 +161,7 @@ export type McpRunToolResult = z.infer<typeof McpRunToolResult>;
  */
 export const McpRunHandleResult = z
   .object({
+    deferredMessage: DeferredMessageProjection.nullable().optional(),
     attemptExecution: z.array(AttemptExecutionEvidence).optional(),
     summary: z
       .string()

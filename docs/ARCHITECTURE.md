@@ -2670,6 +2670,8 @@ visibility, not a permanent roster. Reads add no execution or approval authority
 - `GET /v2/runs/:id/run-again`
 - `GET /v2/runs/:id/time-limit`
 - `PATCH /v2/runs/:id/time-limit`
+- `POST /v2/runs/next-message`
+- `GET /v2/runs/next-message/:id`
 - `POST /v2/runs/wait-many`
 - `GET /v2/secrets`
 - `POST /v2/secrets`
@@ -3758,6 +3760,30 @@ kept only for cold import and an independent frozen copy kept for tests.
   No automatic rebuild is added. Earlier experimental binaries whose forced-index
   queries lack the tagged predicate cannot query the narrower indexes. Do not swap
   experimental binaries against the same store; the complete-backup rule applies.
+- Schema version 4 adds the command-adjacent `deferred_message` table and its
+  active-slot, predecessor, successor and blob-reference indexes through an
+  atomic 3→4 migration. Older readers refuse the upgraded file. A waiting or
+  held draft reserves its canonical predecessor job's successor claim; accepted
+  command parameters stay immutable. Draft mutations use the existing
+  idempotency and event owners. `prepareAcceptance`/`acceptInTx` lets acceptance
+  and a dispatched receipt commit together without nested transactions. Pending
+  drafts retain predecessor evidence; command pruning removes cleared or
+  dispatched receipts with their bindings. Restart holds waiting drafts;
+  archive/quarantine holds prevent restoration from rearming them. Delegate
+  child targets and belt callers are refused with `delegation_forbidden`.
+  Canonical start preparation captures execution defaults once, including
+  explicit versus Auto/unpinned routing intent; enabled accounts, trust,
+  capabilities and quotas remain current admission gates. Mutation and runner
+  settlement events evaluate the exact revision after active-slot release and
+  process-custody proof, then publish only the committed ordinary successor to
+  the existing queue. Late Stop/shutdown and generation/revision/reservation
+  fences are rechecked inside promotion. Notification ambiguity recovers the
+  same committed handle. There is no timer or retry scheduler. Failed or
+  incompatible typed terminals hold; native `willRetry` progress stays waiting.
+  HTTP/CLI/MCP controls and addressed projections are wired. The built
+  stdio/HTTP/SQLite controller story passed through dispatch, result and held/clear
+  with fake harnesses. All five focused tool-policy regressions passed. Native
+  vendor, GUI and cross-platform acceptance remain manual.
 - The flusher worker owns the power-loss barrier. Every 200 ms it fsyncs each
   directory registered since the previous pass, reads `data_version`, runs a
   PASSIVE checkpoint for space, and — whenever anything was committed since

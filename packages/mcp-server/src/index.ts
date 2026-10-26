@@ -28,9 +28,7 @@ import { formatRunResult, structuredRunResult } from "./run-result-format.js";
 import { assertNoPluginArtifactSkew } from "./plugin-skew.js";
 import { accountsTool } from "./accounts-tool.js";
 import { threadTools } from "./thread-tools.js";
-import { runTimeLimitTool } from "./run-time-limit-tool.js";
-import { runMessageTool } from "./run-message-tool.js";
-import { runContinueTool } from "./run-continue-tool.js";
+import { runControlTools } from "./run-control-tools.js";
 import { runObservationTools } from "./run-observation-tools.js";
 import { runStatusTool } from "./run-status-tool.js";
 import { inlineJsonSchemaRefs } from "./inline-json-schema-refs.js";
@@ -401,9 +399,7 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
       },
     ),
     ...threadTools(runner),
-    runTimeLimitTool(runner),
-    runMessageTool(runner),
-    runContinueTool(runner),
+    ...runControlTools(runner),
     ...runObservationTools(runner),
     {
       name: "claudexor_status",

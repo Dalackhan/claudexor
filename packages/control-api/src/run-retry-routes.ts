@@ -10,6 +10,7 @@ import {
   RETIRED_EXTERNAL_SANDBOX_FULL,
   TaskContract,
   restoreRecordedRunReviewRequest,
+  decodeAcceptedRunStart,
 } from "@claudexor/schema";
 import type { EffortHint, ProcessingPreference, PromptCacheTtl } from "@claudexor/schema";
 import type {
@@ -90,9 +91,7 @@ async function exactRetry(
     idempotencyKey = runStart.requiredIdempotencyKey(req);
     const replay = await sourceReplayInput(ctx, source);
     sourceTurnProvenance = replay.turn;
-    const recorded = restoreRecordedRunReviewRequest(
-      RecordedControlRunStartRequest.parse(replay.params),
-    );
+    const recorded = restoreRecordedRunReviewRequest(decodeAcceptedRunStart(replay.params).request);
     const { turnId: _turnId, retryOf: _retryOf, ...original } = recorded;
     // QA-035: Exact Retry replays the IMMUTABLE original request. The stored
     // params omit any model/effort the caller left to settings, so re-reading
@@ -307,9 +306,8 @@ async function runAgain(ctx: RunRetryRouteContext, id: string, res: ServerRespon
   const source = await ctx.findRun(id);
   if (!source) return ctx.json(res, 404, { error: "no such run" });
   try {
-    const recorded = restoreRecordedRunReviewRequest(
-      RecordedControlRunStartRequest.parse((await sourceReplayInput(ctx, source)).params),
-    );
+    const accepted = decodeAcceptedRunStart((await sourceReplayInput(ctx, source)).params);
+    const recorded = restoreRecordedRunReviewRequest(accepted.request);
     const retiredAccess = recorded.access === RETIRED_EXTERNAL_SANDBOX_FULL;
     const { access: recordedAccess, ...withoutRecordedAccess } = recorded;
     const parsed = ControlRunStartRequest.parse(
@@ -332,6 +330,15 @@ async function runAgain(ctx: RunRetryRouteContext, id: string, res: ServerRespon
       ...request
     } = parsed;
     const differences = [
+      ...(accepted.deferredDefaults
+        ? [
+            {
+              field: "deferredDefaults",
+              change: "omitted" as const,
+              reason: "new editable run resolves execution preferences from current settings",
+            },
+          ]
+        : []),
       ...(continueModelInherited !== undefined
         ? [
             {

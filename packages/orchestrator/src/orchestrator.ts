@@ -174,7 +174,9 @@ import {
   strictifyOutputSchema,
   estimateEffectiveAuthRoute,
 } from "@claudexor/schema";
-import { globalConfigDir, loadConfig } from "@claudexor/config";
+import { globalConfigDir } from "@claudexor/config";
+import { executionRunConfig } from "./run-defaults.js";
+import { preflightOneShot } from "./one-shot-preflight.js";
 import type {
   AdapterRegistry,
   CredentialExecutionObserverFactory,
@@ -369,6 +371,7 @@ import {
 } from "@claudexor/util";
 
 export interface OrchestratorDeps {
+  executionDefaults?: import("@claudexor/schema").RunDefaultsSnapshot;
   registry: AdapterRegistry;
   /** Daemon-lifetime Delegate family budget authority. */
   delegationBudgetAuthority?: DelegationBudgetAuthority;
@@ -1950,19 +1953,16 @@ export class Orchestrator {
     return new Set(reviewers.map((r) => r.providerFamily)).size >= 2;
   }
 
-  private config(repoRoot: string): ReturnType<typeof loadConfig> {
-    return loadConfig(repoRoot);
-  }
+  private readonly config = (root: string) => executionRunConfig(root, this.deps.executionDefaults);
+  readonly preflightOneShot = (input: RunInput) =>
+    preflightOneShot(input, this.deps, this.resolveCandidateAdapters.bind(this));
 
   private projectConfig(repoRoot: string): ProjectConfig {
     return this.config(repoRoot).project;
   }
 
   private buildContract(input: RunInput, taskId: string, mode: ModeKind): ActiveTaskContract {
-    return buildTaskContract(input, taskId, mode, {
-      paidBudget: this.deps.paidBudget,
-      routingGoal: this.deps.routingGoal,
-    });
+    return buildTaskContract(input, taskId, mode, this.deps);
   }
 
   /**

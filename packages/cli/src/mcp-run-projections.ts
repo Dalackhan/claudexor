@@ -1,5 +1,6 @@
 import {
   ControlRetainedEnvelope,
+  DeferredMessageProjection,
   Id,
   isTerminalLifecycle,
   RunContinuityReceipt,
@@ -30,6 +31,9 @@ export function projectImmediateRunDetail(
 ) {
   return {
     attemptExecution: detail?.["attemptExecution"],
+    deferredMessage: DeferredMessageProjection.nullable().parse(
+      detail?.["deferredMessage"] ?? null,
+    ),
     runFacts: projectRunFacts(detail, expected),
     outcomeFacts: projectRunOutcomeFacts(detail),
     applyEligibility: projectApplyEligibility(detail),
@@ -164,6 +168,7 @@ export function projectRecoveryRunDetail(
         : null,
     ...projectContinuationFacts(summary),
     secretLike: projectSecretLikeDisclosure(detail),
+    deferredMessage: DeferredMessageProjection.nullable().parse(detail["deferredMessage"] ?? null),
   };
   if (mode !== "__run_result") {
     return {

@@ -19,18 +19,15 @@ import {
 } from "@claudexor/schema";
 import { daemonHealth, daemonConcurrencyCaps } from "./daemon-health.js";
 import { RpcFollowers } from "./rpc-followers.js";
-import { assertNoInlineSecretValues, newId, nowIso, pathExists } from "@claudexor/util";
+import { newId, nowIso, pathExists } from "@claudexor/util";
+import { DeferredMessages, type DeferredStartPreparation } from "./deferred-messages.js";
+import { enqueueCommand } from "./enqueue-command.js";
 import {
   commandStoreForId,
   commandStoreForRequest,
   type CommandBackend,
 } from "./command-authority.js";
-import {
-  commandAcceptanceReceipt,
-  admitCommandRequest,
-  findAcceptedCommand,
-  publicAcceptedCommand,
-} from "./command-rpc.js";
+import { publicAcceptedCommand } from "./command-rpc.js";
 import { parseCommandListQuery } from "./command-list-select.js";
 import { clearStaleUnixSocketPath, listenOnDaemonEndpoint } from "./daemon-listen.js";
 import { type DelegationAdmissionAuthority } from "./delegation-admission.js";
@@ -78,6 +75,7 @@ export interface DaemonOptions extends RuntimeReplacementAuthority {
   runtimeConcurrencyCaps?: RuntimeConcurrencyCaps;
   storeFacts?: () => DaemonStoreFacts;
   commands: CommandBackend;
+  deferredStart?: () => DeferredStartPreparation | undefined;
   delegationAuthority?: DelegationAdmissionAuthority;
   maxHistory?: number;
   idempotencyRetentionMs?: number;
@@ -117,6 +115,7 @@ export class DaemonServer {
   private readonly activeTasks = new Set<Promise<void>>();
   private readonly taskFailures: unknown[] = [];
   private readonly commands: CommandBackend;
+  private readonly deferred: DeferredMessages;
   private get active(): number {
     return this.activeJobs.size;
   }
@@ -132,6 +131,13 @@ export class DaemonServer {
   constructor(private readonly opts: DaemonOptions) {
     this.concurrency = daemonConcurrencyCaps(opts);
     this.commands = opts.commands;
+    this.deferred = new DeferredMessages({
+      commands: this.commands,
+      preparation: () => this.opts.deferredStart?.(),
+      active: (id) => this.activeJobs.has(id),
+      stopped: (id) => this.cancelled.has(id),
+      publish: (record) => this.publishQueued(record),
+    });
   }
 
   async start(): Promise<void> {
@@ -192,6 +198,7 @@ export class DaemonServer {
   }
 
   private async stopOnce(recoverStore = false): Promise<void> {
+    this.deferred.shutdown();
     for (const controller of this.controllers.values()) {
       try {
         controller.abort("host_cancelled" satisfies CancelReasonCode);
@@ -200,7 +207,7 @@ export class DaemonServer {
       }
     }
 
-    const settled = await Promise.allSettled([...this.activeTasks]);
+    const settled = await Promise.allSettled([...this.activeTasks, this.deferred.drained()]);
     const rejected = settled.filter(
       (entry): entry is PromiseRejectedResult => entry.status === "rejected",
     );
@@ -318,54 +325,20 @@ export class DaemonServer {
     // one typed refusal; health above and the shutdown RPCs stay reachable.
     if (servingMode !== "normal") throw recoveryOnlyRefusal(method);
     switch (method) {
-      case "claudexor.enqueue": {
-        if (this.stopping) {
-          throw Object.assign(new Error("daemon is stopping; retry after reconnect"), {
-            code: "daemon_stopping",
-            status: 503,
-          });
-        }
-        const envelope = params as {
-          request?: unknown;
-          idempotencyKey?: unknown;
-          clientId?: unknown;
-          idempotencyRequest?: unknown;
-          operation?: unknown;
-        };
-        const rawRequest = envelope?.request;
-        const operation = typeof envelope.operation === "string" ? envelope.operation : undefined;
-        const idempotencyKey = String(envelope?.idempotencyKey ?? "");
-        const clientId = String(envelope?.clientId ?? "daemon-client");
-        assertNoInlineSecretValues(rawRequest, "$", "daemon job params");
-        // Idempotency precedes Delegate admission: replaying the exact command
-        // must keep returning its durable job even after the parent is fenced
-        // or its monotonic eight-child allowance is full. A different request
-        // under the same key still conflicts inside find().
-        const replay = findAcceptedCommand(this.commands, envelope);
-        if (replay) return commandAcceptanceReceipt(replay, true);
-        // Journal-owned belt admission spans retries/processes; ordinary
-        // parentRunId alone never establishes delegated lineage.
-        const request = admitCommandRequest(
-          this.commands,
-          rawRequest,
-          operation,
-          this.opts.delegationAuthority,
-        );
-        const delegatedFrom = delegatedParentOf(request);
-        const accepted = this.acceptCommand(
-          request,
-          idempotencyKey,
-          clientId,
-          envelope.idempotencyRequest,
-          operation,
-        );
-        if (!accepted.reused && delegatedFrom) {
-          this.opts.delegationAuthority!.noteChildAccepted(delegatedFrom, accepted.record.id);
-        }
-        if (!accepted.reused) this.queue.push(admissionJob(accepted.record));
-        void this.drain();
-        return commandAcceptanceReceipt(accepted.record, accepted.reused);
-      }
+      case "claudexor.enqueue":
+        return enqueueCommand(params, {
+          commands: this.commands,
+          stopping: this.stopping,
+          delegation: this.opts.delegationAuthority,
+          accept: this.acceptCommand.bind(this),
+          publish: (record) => this.publishQueued(record),
+        });
+      case "claudexor.deferredMessage":
+        return this.deferred.mutate(params);
+      case "claudexor.deferredMessageRead":
+        return this.deferred.read(String(params?.draftId), params);
+      case "claudexor.deferredMessageProjection":
+        return this.deferred.projection(String(params?.predecessorId), params);
       case "claudexor.status": {
         const rec = this.getRecord(String(params?.id));
         if (!rec) throw new Error(`no such job: ${params?.id}`);
@@ -423,6 +396,7 @@ export class DaemonServer {
     const rec = this.getRecord(jid);
     if (!rec) throw new Error(`no such job: ${jid}`);
     this.cancelled.add(jid);
+    this.deferred.stop(rec.id);
     if (rec.state === "queued") {
       this.updateRecord(rec, { state: "cancelled", finishedAt: nowIso() });
       const index = this.queue.findIndex((job) => job.id === jid);
@@ -440,6 +414,17 @@ export class DaemonServer {
 
   private stoppingError(message: string): Error & { code: string; status: number } {
     return Object.assign(new Error(message), { code: "daemon_stopping", status: 503 });
+  }
+
+  private publishQueued(record: JobRecord): void {
+    if (
+      record.state !== "queued" ||
+      this.activeJobs.has(record.id) ||
+      this.queue.some((job) => job.id === record.id)
+    )
+      return;
+    this.queue.push(admissionJob(record));
+    if (!this.stopping) void this.drain();
   }
 
   /** Age/cap and params-byte command retention: at normal admission and after every terminal. */
@@ -599,8 +584,12 @@ export class DaemonServer {
           }
         }
       }
-      this.pruneHistory();
-      if (!this.stopping) this.drain();
+      try {
+        await this.deferred.settled(id);
+      } finally {
+        this.pruneHistory();
+        if (!this.stopping) this.drain();
+      }
     }
   }
 }

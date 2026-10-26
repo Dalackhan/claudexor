@@ -21,6 +21,7 @@ export * from "./command-store.js";
 export * from "./command-scope-roots.js";
 export * from "./runless-turn-recovery.js";
 export * from "./command-authority.js";
+export type { DeferredStartPreparation } from "./deferred-messages.js";
 export * from "./store-contracts.js";
 export type { DiskRetentionReferences } from "./store/retention-references.js";
 export { loadEngineRuntime } from "./store/runtime.js";

@@ -29,6 +29,10 @@ export interface AppendedEvent {
  * entity snapshots consume sequence but have no stream row; setup saves have a
  * stable address without replacing earlier saves or sharing the log's lifetime. */
 export function sqlEventVerdict(record: FoldRecord): FoldVerdict {
+  if (record.type === "deferred_message.changed") {
+    const id = (record.payload as { draftId?: unknown } | null)?.draftId;
+    if (typeof id === "string") return { slot: `draft:${id}` };
+  }
   if (record.type === "thread.entities_upserted") return { drop: true };
   const verdict = journalFoldPolicy.verdict(record) ?? {};
   if (record.type === "operator.decision_recorded") {

@@ -81,6 +81,7 @@ export function deferredCommands(current: () => CommandBackend): CommandBackend 
     current: () => current().current!(),
     forRequest: (params) => current().forRequest!(params),
     findById: (id) => current().findById!(id),
+    deferredFor: (id) => current().deferredFor?.(id),
     pruneHistory: (...args) => current().pruneHistory(...args),
     queries: {
       observationRecords: (ids) => current().queries.observationRecords!(ids),

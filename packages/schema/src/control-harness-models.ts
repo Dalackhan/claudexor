@@ -1,6 +1,6 @@
 import { z } from "zod/v3";
 import { Id, IsoTimestamp, NonBlankString } from "./primitives.js";
-import { HarnessModel } from "./harness.js";
+import { HarnessModel } from "./harness-model.js";
 import { AccountCatalogAvailability } from "./model-operation.js";
 
 /**

@@ -1,5 +1,12 @@
 # claudexor
 
+## 4.7.1
+
+### Patch Changes
+
+- Updated dependencies [30f8195]
+  - @claudexor/cli@4.7.1
+
 ## 4.7.0
 
 ### Patch Changes

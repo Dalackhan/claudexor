@@ -151,7 +151,13 @@ export async function* spawnProcess(
   args: string[],
   opts: SpawnOptions = {},
 ): AsyncGenerator<ProcEvent> {
-  const invocation = prepareHarnessCommand(cmd, args, composeSpawnEnv(opts.inheritEnv, opts.env));
+  const invocation = prepareHarnessCommand(
+    cmd,
+    args,
+    composeSpawnEnv(opts.inheritEnv, opts.env),
+    process.platform,
+    opts.cwd,
+  );
   const env = invocation.env;
   const child = spawn(invocation.binary, invocation.args, {
     cwd: opts.cwd,

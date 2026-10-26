@@ -26,6 +26,7 @@ import {
   RawPatchRefusalCode,
 } from "./raw.js";
 import { HarnessAccountUsageFields } from "./harness-quota.js";
+import { ObservedModelEventFields } from "./harness-model.js";
 import { RateLimitSignal } from "./rate-limit.js";
 import { EffortHint, ModelEffortCapability } from "./effort.js";
 import {
@@ -398,8 +399,6 @@ export const HarnessCapabilityProfile = z
     "Structured per-harness facts the engine consumes: auth routing, isolation containment, readonly mechanism, finite attachment inputs, MCP injection, live input into a running session, and translated prompt-cache lifetimes.",
   );
 export type HarnessCapabilityProfile = z.infer<typeof HarnessCapabilityProfile>;
-
-export { HarnessModel } from "./harness-model.js";
 
 export const HarnessManifest = z
   .object({
@@ -788,7 +787,7 @@ export const HarnessEvent = z
       })
       .optional()
       .describe("Token/cost usage reported by the harness."),
-    observed_model: z.string().optional().describe("Model the harness actually reported using."),
+    ...ObservedModelEventFields,
     credential_route: CredentialRoute.optional().describe(
       "Concrete credential route selected before spawn; first-class route evidence, never inferred from free-form payload text.",
     ),

@@ -1,4 +1,5 @@
-import type { HarnessCapabilities, ModelInventoryAbsence } from "@claudexor/schema";
+import type { HarnessCapabilities, HarnessModel, ModelInventoryAbsence } from "@claudexor/schema";
+import { ObservedModelCatalogMatch } from "@claudexor/schema";
 import type { HarnessAdapter } from "./adapter.js";
 
 /** A route-scoped producer is queried only for a known supported route.
@@ -101,4 +102,29 @@ export function validateModel(
     status: "rejected",
     message: `model "${model}" is not in the harness's ${source === "api" ? "live model inventory" : "manifest known-model list"} (${shown}${suffix})`,
   };
+}
+
+/**
+ * Catalog proof for a stream-observed model string, or null. A stream may
+ * report the vendor's display label instead of the listed id. The proof names
+ * that id only when exactly one live row of THIS spawn's catalog carries a
+ * label byte-identical to `observed` and no other row uses `observed` as its
+ * id. Nothing is trimmed, case-folded or taken from the requested model, and a
+ * result the schema would reject is no proof either.
+ */
+export function observedModelCatalogMatch(
+  observed: string,
+  catalog: readonly HarnessModel[],
+  profileId: string | null,
+): ObservedModelCatalogMatch | null {
+  const labelled = catalog.filter((row) => row.origin !== "hint" && row.label === observed);
+  const entry = labelled.length === 1 ? labelled[0] : undefined;
+  if (!entry || catalog.some((row) => row.id === observed && row.id !== entry.id)) return null;
+  const match = ObservedModelCatalogMatch.safeParse({
+    label: observed,
+    id: entry.id,
+    source: "account_catalog",
+    profile_id: profileId,
+  });
+  return match.success ? match.data : null;
 }

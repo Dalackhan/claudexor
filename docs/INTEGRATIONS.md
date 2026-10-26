@@ -686,7 +686,7 @@ engine older than 3.16.0 omits both the field and the route): Codex declares
 `next_tool_boundary` (the message is queued on the live stream-json stdin and
 picked up right after the current tool batch, or as the next native turn of
 the same run when it arrives during the final text; recorded on Claude Code
-2.1.283); Cursor, Antigravity, OpenCode, GitHub Copilot and raw-api declare `none` and answer
+2.1.283); Cursor, Antigravity, Grok Build, OpenCode, GitHub Copilot and raw-api declare `none` and answer
 `unsupported` without any native write. The message is admitted journal-first
 (`message.accepted`) and closed with `message.delivered` or `message.refused`
 on the run's event stream and timeline, where the text shows as the row detail;
@@ -1812,6 +1812,27 @@ immediately. These checks cannot enter interactive sign-in; explicit managed
 login retains its terminal input. Ambiguous authentication timeouts are probe
 failures, not credential revocation. Local token-file presence is not readiness.
 
+**Grok Build (`grok`)** — wire: `grok --no-auto-update --prompt-file <file>
+--cwd <cwd> --output-format streaming-messages-json` plus the access flags in
+the [adapter README](../packages/harness-grok/README.md) (`--resume <id>`
+resumes on the same named account). Events: the `system/init` frame → `started`
+(native session id, model); it is also the only confirmation of the scoped tool
+policy and of the credential source (`apiKeySource`). A contradicting frame ends
+the try; a source other than `oauth` is the typed `credential_source_unconfirmed`
+request refusal, which also stops retries and account rotation, whatever else
+the frame reports. A tool-policy contradiction alone is an ordinary failure, so
+the engine's bounded retry and rotation apply. Error text is never read as an
+authentication verdict. Assistant
+`tool_use` / user `tool_result` pairs map to tool
+events, with `file_change` only for a successful `search_replace`/`write`; a
+statusless result is a diagnostic `status`. The terminal `result` emits the
+final (`final_source: result`, or its `structured_output`) and one aggregate
+`usage` with cache reads and writes; `total_cost_usd` is not read. A top-level
+`error` frame fails the turn, and a later `result` adds only its usage. Quota
+and rate failures from the stream or stderr become typed `rate_limit` signals.
+Fixtures were recorded with CLI 1.0.67 on Windows; the quota stream is
+synthetic.
+
 **OpenCode** — markerless: no typed final message; the engine's
 AnswerAssembly falls back to joining narration (the documented degradation
 for adapters without a finality marker).
@@ -1968,7 +1989,7 @@ subscription sessions are always preferred.
 | `CLAUDEXOR_HOST_BINDING_VERSION` | plugins / mcp-server | Declared dynamic binding format, independently of the manifest's generator version; see [external host integrations](#externally-owned-host-integrations). |
 | `CLAUDEXOR_BUILD_SHA` | util | Build-time stamp of the engine's git commit SHA (packaging sets it); without it a dev checkout reads `git rev-parse HEAD` and packaged builds report `unknown`. Reported in the handshake build identity. |
 | `CLAUDEXOR_DISABLE_STORED_SECRETS` | secrets | Ignore v2 file-stored secret refs entirely (hermetic runs; native sessions still work). |
-| `CLAUDEXOR_CODEX_BIN` / `CLAUDEXOR_CLAUDE_BIN` / `CLAUDEXOR_CURSOR_BIN` / `CLAUDEXOR_OPENCODE_BIN` / `CLAUDEXOR_AGY_BIN` / `CLAUDEXOR_COPILOT_BIN` | adapters | Explicit vendor CLI binary when PATH discovery is not enough. |
+| `CLAUDEXOR_CODEX_BIN` / `CLAUDEXOR_CLAUDE_BIN` / `CLAUDEXOR_CURSOR_BIN` / `CLAUDEXOR_OPENCODE_BIN` / `CLAUDEXOR_AGY_BIN` / `CLAUDEXOR_COPILOT_BIN` / `CLAUDEXOR_GROK_BIN` | adapters | Explicit vendor CLI binary when PATH discovery is not enough. |
 | `CLAUDEXOR_CODEX_API_KEY` / `CLAUDEXOR_ANTHROPIC_API_KEY` / `CLAUDEXOR_CURSOR_API_KEY` | adapters | Claudexor-scoped API-key overrides (take precedence over provider env names). |
 | `CLAUDEXOR_CODEX_MODEL` | codex adapter | Default model override for the codex route. |
 | `CLAUDEXOR_CODEX_NATIVE_HOME` / `CLAUDEXOR_CLAUDE_NATIVE_DIR` | adapters | Explicit Claudexor-owned Codex profile or Claude native config directory overrides. |

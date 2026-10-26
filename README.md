@@ -12,7 +12,7 @@
 
 Claudexor is a local-first control plane for the AI coding agents you already
 pay for. It runs Codex CLI, Claude Code, Cursor CLI, OpenCode, Antigravity
-CLI, and raw API
+CLI, Grok Build, and raw API
 adapters behind one typed interface: a chat of turns where read-only questions
 resume the vendor's own native session, write turns land as inspectable
 patches or complete file manifests, races pit harnesses against each other with
@@ -23,8 +23,8 @@ Compared to driving a bare Codex or Claude Code session, Claudexor adds the
 layer the vendors do not ship: best-of-N races with independent reviewers and
 arbitration; honest budget/quota accounting (unknown cost is never `$0`);
 deterministic gates and protected paths; and — since 2.1 — **credential
-profiles**: named Antigravity/Claude/Codex/Cursor subscription bindings side
-by side, each with Claudexor-scoped state and platform-declared credential
+profiles**: named Antigravity/Claude/Codex/Cursor/Grok Build subscription
+bindings side by side, each with Claudexor-scoped state and platform-declared credential
 custody. Live subscription-quota tracking — and the opt-in policy that rotates
 a spent account out of the way on typed vendor limits — covers the harnesses
 with a vendor quota source (Antigravity, Claude, and Codex). Cursor's internal
@@ -94,7 +94,8 @@ composer](docs/assets/app-agent-run.jpg)
   without Git; Doctor reports Git availability, and
   the app's Workspace Git check explains whether a Git-backed shape is admitted.
 - At least one logged-in vendor CLI — `codex`, `claude`, `cursor-agent` (or Cursor’s `agent`),
-  `opencode`, or `agy` (Antigravity, for a Gemini subscription) — OR a
+  `opencode`, `agy` (Antigravity, for a Gemini subscription), or `grok` (Grok
+  Build, for a grok.com subscription) — OR a
   provider API key (adapters accept `OPENAI_API_KEY`,
   `ANTHROPIC_API_KEY`, ... as fallbacks; the raw-API route needs only a key).
   Log in through Claudexor, not the bare vendor CLI — see
@@ -304,7 +305,11 @@ claudexor agent "Update report.md" --workspace-kind directory --in-place --scope
 ```
 
 Repeat `--scope-path` for a narrower copied footprint; omission selects no
-existing input files. Directory execution never initializes Git. Copied results
+existing input files. A selected credential or vendor-state path (`.env`, a
+private key, `.claude/`, `.grok/` and similar) is never copied or published: a
+copied scope that contains one is refused before the run, and in-place work
+over one publishes no result, so leave it out of the selection. Directory
+execution never initializes Git. Copied results
 retain complete file bytes for later application; direct changes are already in
 place and carry no promise of full rollback. Preview limits do not truncate
 delivery files. See [directory execution](docs/ARCHITECTURE.md#directory-execution)
@@ -499,7 +504,7 @@ claudexor agent --delegate "ship the v2 parser refactor across this repo"
 
 Every account is a **named registry row** — one unified kind (INV-135), no
 separate "default" or "CLI login" account type. Register named Antigravity,
-Claude, Codex, or Cursor subscription bindings side by side, each with its own
+Claude, Codex, Cursor, or Grok Build subscription bindings side by side, each with its own
 Claudexor-owned scoped state and subject to the effective platform cardinality
 policy. Windows Antigravity permits one enabled OS-user binding. An existing
 legacy default-store login auto-registers at the first start of this engine as
@@ -614,6 +619,11 @@ transport. Native login stays vendor-owned (official CLI, structured argv,
 scrubbed env; Claudexor never sees or copies vendor tokens). The deep
 semantics live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §5.
 
+Grok Build is available through `--harness grok` or mixed pools such as
+`--harness codex,grok`, using a grok.com subscription without an API key.
+See the [Grok adapter contract](packages/harness-grok/README.md) for access policies
+and the limits of its credential-source check.
+
 Codex login defaults to device-auth, driven in-app: the macOS AuthSheet shows
 the one-time code and opens a private sign-in window (no Terminal); the CLI
 prints the same code inline. Complete it in a window signed into no other
@@ -630,6 +640,8 @@ claudexor auth login claude   # claude auth login (claude.ai subscription route)
 claudexor auth login cursor   # cursor-agent login (or Cursor's own `agent`)
 claudexor profiles add agy work    # register a named Antigravity binding
 claudexor profiles login agy work  # login with its scoped HOME and platform credential policy
+claudexor profiles add grok work   # Grok Build: grok.com subscription, no API key
+claudexor profiles login grok work # isolated Grok HOME and device login
 claudexor secrets set openai --from-env OPENAI_API_KEY
 claudexor secrets list
 claudexor settings show

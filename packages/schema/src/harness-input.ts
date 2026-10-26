@@ -35,9 +35,18 @@ export const HarnessRequestRefusal = z
       binary_path: z.string().min(1).nullable(),
       installed_version: z.string().min(1).nullable(),
     }),
+    z.object({
+      kind: z.literal("credential_source_unconfirmed"),
+      native_code: z.literal("grok_credential_source_unconfirmed"),
+      source: z.literal("grok_init"),
+      reported_source: z
+        .string()
+        .max(80)
+        .describe("Redacted credential source the vendor's startup frame reported."),
+    }),
   ])
   .describe(
-    "Vendor-attested request refusal that another account cannot repair; input and executable causes carry their own evidence.",
+    "Vendor-attested request refusal that stops retries and account rotation on its harness; input, executable and credential-source causes carry their own evidence.",
   );
 export type HarnessRequestRefusal = z.infer<typeof HarnessRequestRefusal>;
 

@@ -14,6 +14,7 @@ import {
   HarnessManifest,
   type RunEvent,
 } from "@claudexor/schema";
+import { ArtifactStore } from "@claudexor/artifact-store";
 import { createAgyAdapter } from "../../harness-agy/src/index.js";
 import { Orchestrator } from "./orchestrator.js";
 
@@ -264,6 +265,16 @@ describe("AGY native permission at the actual consumer boundary", () => {
     expect(JSON.stringify(out.events)).not.toContain('"permission_denial"');
     expect(out.resumable).not.toMatchObject({ cause: "permission_denied" });
     expect(out.result.lifecycle).toBe("failed");
+  });
+  it("records the profile HOME the agy child actually received, not the engine HOME", async () => {
+    const out = await run("agent", "answer", false);
+    expect(out.result.lifecycle).toBe("succeeded");
+    const childHome = fixture.spawns[0]!.env?.["HOME"];
+    expect(childHome).toContain(join("profiles", "agy-"));
+    const attempt = new ArtifactStore(out.result.runDir).readYaml<Record<string, unknown>>(
+      join(out.result.runDir, "attempts", "a01", "attempt.yaml"),
+    );
+    expect(attempt).toMatchObject({ harness_home_isolated: true, harness_home_dir: childHome });
   });
   it("does not broaden the pre-existing no-result/no-denial narration fallback", async () => {
     const out = await run("ask", "absent", false);

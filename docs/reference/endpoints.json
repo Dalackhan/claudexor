@@ -1302,7 +1302,8 @@
             "codex",
             "claude",
             "cursor",
-            "agy"
+            "agy",
+            "grok"
           ],
           "schema_ref": "ControlSetupJobListFilter#/properties/harness",
           "description": "Filter setup jobs to one harness."

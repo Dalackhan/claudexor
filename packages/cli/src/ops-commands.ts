@@ -40,6 +40,7 @@ import { daemonLoopLine, daemonStoreLine } from "./daemon-status-report.js";
 import {
   authSourceAvailability,
   checksSummary,
+  noModelListLine,
   print,
   printJson,
   printUsageError,
@@ -377,7 +378,7 @@ export async function modelsCommand(args: ParsedArgs, json: boolean): Promise<nu
   }
   for (const r of results) {
     if (r.source === "none") {
-      print(`${r.harnessId}: no model enumeration (adapter cannot list models)`);
+      print(noModelListLine(r.harnessId, statuses.harnesses, route));
       continue;
     }
     print(`${r.harnessId}: ${r.models.length} model(s) [source=${r.source}]`);

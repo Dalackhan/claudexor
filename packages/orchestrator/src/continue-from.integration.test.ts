@@ -355,7 +355,12 @@ describe("continueFrom successor: first try", () => {
         }
       });
       f.root = realpathSync(f.root);
-      const sql = await sourceSqlFixture(join(f.root, "queue-store"));
+      // The engine store lives outside the project, as in production. Inside it,
+      // an Agent snapshot's `git add -A` could hash the store mid-write ("unstable
+      // object source data").
+      const queueStore = mkdtempSync(join(tmpdir(), "cx-continue-from-queue-"));
+      roots.push(queueStore);
+      const sql = await sourceSqlFixture(queueStore);
       sql.graph.projects.register({ root: f.root, idempotencyKey: "project", clientId: "fixture" });
       const accepted: Array<{
         jobId: string;

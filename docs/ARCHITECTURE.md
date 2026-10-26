@@ -3063,8 +3063,11 @@ opens the newest page or jumps to latest. Before/after use the client's actual
 mounted edge after eviction, exclusively. Around includes the addressed anchor
 and proceeds backward, then returns rows in ascending ordinal. A foreign edge is
 404, not a neighboring thread's page. Empty threads have an empty array and both
-coverage flags false; validation (400), absence (404), stale scope (409), purged
-thread (410), and unavailable evidence (503) are failures, never empty successes.
+coverage flags false. A before-oldest empty page has `hasNewer` and an inclusive
+reverse cursor back through the oldest turn; after-newest symmetrically has
+`hasOlder`. No replay cursor is minted for empty membership. Validation (400),
+absence (404), stale scope (409), purged thread (410), and read failures (503)
+are failures, never empty successes.
 
 The SQLite owner selects scalar keys through the unique `turn_thread(thread_id,
 ordinal)` index with `LIMIT limit+1`. Only emitted turn bodies and bounded prompt
@@ -3086,10 +3089,32 @@ or repetition on one loaded machine, not a performance gate or an asymptotic
 guarantee. No duplicate-header expression index is maintained.
 
 History metadata and exact-apply evidence reads enforce their 1 MiB cap on the
-opened file descriptor before allocating or parsing. A limit or a file changing
-during the bounded read fails with 503; it never becomes missing evidence. The
-canonical metadata owners accept this optional bound; legacy detail keeps its
-existing read behavior.
+opened file descriptor before allocating or parsing. A limit in exact-apply or
+decision-verification evidence degrades that row's eligibility coverage to
+`unavailable`, with null eligibility. If a recorded operator decision cannot be
+verified within the cap, `operatorDecision` stays null;
+`unverifiedOperatorDecision` discloses its action/time with
+`operatorDecisionCoverage: "unavailable"`. It cannot waive required actions or
+authorize apply. Complete coverage preserves the existing digest-validation
+owner, including rejecting a stale decision. Other metadata read failures and
+files changing during a read retain their typed errors; per-run owners retain
+their original refusals. Failure messages are bounded to 8 KiB after redaction,
+with `failureMessageInfo` recording delivered/known-total bytes and truncation,
+and the original `rawDetailRef` available for inspection.
+
+Command retention (default cap 500, age 30 days) removes command/run-terminal,
+interaction and operator-decision records while leaving thread turns and prompt
+blobs. History emits that turn with `runStatus: "not_retained"`, null `run`, and
+`primaryOutputStatus: "not_retained"`, rather than failing the page or inventing
+receipt counts. Available receipts use `runStatus: "available"`; unbound turns
+use `unbound`. The header's `headRunStatus` uses the same enum; a pruned head has
+null `headRun` while `thread.headRunId` keeps its address. The existing addressed
+artifact owner resolves run directories through the command record, which the
+pruner deletes. No retained bounded locator exists after that deletion: history
+does not guess a directory or claim that still-present artifact bytes have been
+physically reclaimed. With a retained command, canonical answer/tombstone reads
+remain unchanged. Indexed plan-answer relations and full prompt parts remain
+readable independently of command retention. Store read errors still propagate.
 
 The row contract includes `answeredByTurnId`, a bounded `answeredByPrompt` and
 `planAnswerComplete`. Schema v4's `turn_plan_answer` expression index addresses
@@ -3120,10 +3145,15 @@ complete. No history stream or durable projection table is introduced.
 Shared byte bounds are 32 KiB per prompt preview, 64 KiB per answer, 32 KiB for the
 header, 832 KiB per serialized row and 2 MiB for the complete minified JSON page,
 including escaping, redaction and cursor envelope. Packing reserves a maximum row
-before decoding it and emits a contiguous traversal prefix. The reserve is
+before decoding it and emits a contiguous traversal prefix. It measures the empty
+envelope once, then adds each serialized row's bytes and its array comma; the
+8 KiB cursor reserve covers later envelope changes. Final schema validation
+measures the complete page once, rather than reserializing a growing page per row.
+The reserve is
 conservative; `limitedBy` is `turns`, `bytes`, or null. One maximum row always fits.
 Run metadata and exact apply evidence have a 1 MiB per-artifact read bound; an
-oversized receipt is a typed failure, not fabricated negative apply eligibility.
+oversized exact-apply evidence has unavailable coverage, never fabricated negative
+eligibility. Other oversized canonical metadata retains its typed read error.
 Receipt counts and budget evidence use a 256 KiB event tail. Counts disclose
 complete/partial/unavailable coverage; an absent log is unknown rather than zero.
 The file count is the number of file-kind tool calls, not a diffstat or a number
@@ -3137,7 +3167,8 @@ null when the full redacted length is unknown. Do not derive a remainder from ra
 artifact bytes. `GET /v2/threads/:id/turns/:turnId/prompt` supplies explicit full
 prompt parts for bound and runless refused turns: `offset` defaults to 0,
 `maxBytes` defaults to 32 KiB (4–64 KiB), UTF-8 boundaries are preserved, and
-`totalBytes`/`sha256` identify the immutable stored redacted prompt. Concatenate
+`totalBytes`/`sha256` identify the immutable stored redacted prompt. U+FEFF remains
+part of those bytes at offset zero and at a later part boundary. Concatenate
 through `nextOffset == totalBytes` and verify the SHA-256. Full answers retain the
 existing addressed artifact read.
 

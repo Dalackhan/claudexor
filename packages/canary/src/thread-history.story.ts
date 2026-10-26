@@ -36,6 +36,9 @@ it("[INV-142:thread-history] built CLI/MCP reads bounded answers, explicit promp
     expect(newest.turns[0]?.prompt).toBe("second question");
     expect(newest.turns[0]?.primaryOutput?.text).toBeTruthy();
     expect(newest.turns[0]?.run?.state).toBe("succeeded");
+    expect(newest.turns[0]?.runStatus).toBe("available");
+    expect(newest.turns[0]?.primaryOutputStatus).toBe("available");
+    expect(newest.header.headRunStatus).toBe("available");
     const oldest = ThreadHistoryPage.parse(
       await ok(mcp, "claudexor_thread_history", {
         threadId: thread.id,
@@ -44,6 +47,27 @@ it("[INV-142:thread-history] built CLI/MCP reads bounded answers, explicit promp
       }),
     );
     expect(oldest.turns[0]?.prompt).toBe("first question");
+    const before = ThreadHistoryPage.parse(
+      await ok(mcp, "claudexor_thread_history", {
+        threadId: thread.id,
+        limit: 1,
+        beforeTurnId: oldest.turns[0]!.id,
+      }),
+    );
+    expect(before.turns).toEqual([]);
+    expect(before.hasNewer).toBe(true);
+    const reverse = cli(sb, [
+      "thread",
+      "history",
+      thread.id,
+      "--limit",
+      "1",
+      "--cursor",
+      before.newerCursor!,
+      "--json",
+    ]);
+    expect(reverse.code, reverse.stdout + reverse.stderr).toBe(0);
+    expect(ThreadHistoryPage.parse(reverse.json()).turns[0]?.id).toBe(oldest.turns[0]!.id);
     const part = ThreadPromptPart.parse(
       await ok(mcp, "claudexor_thread_prompt", {
         threadId: thread.id,

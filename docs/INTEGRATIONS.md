@@ -814,11 +814,14 @@ add a separate budget or lifecycle.
 [--json]` and MCP `claudexor_thread_history` share the same existing-daemon read.
 MCP uses `threadId`, `limit`, `cursor`, `beforeTurnId`, `afterTurnId`,
 `aroundTurnId`, `expectedStoreId`. Limits are 1–20 (default 20); no selector reads
-the newest turns. Rows ascend by ordinal. Follow the opaque emitted-edge cursors
+the newest turns. `aroundTurnId` / `--around` returns the anchor and earlier turns;
+follow `newerCursor` for later turns. Rows ascend by ordinal. Follow the opaque emitted-edge cursors
 with the same limit, or use the actual mounted edge after eviction. Cursor walks
 freeze their tail; a fresh read includes later arrivals. Refresh fixed membership
 with `replayCursor`, consuming `replayNextCursor` when larger current facts need
 multiple bounded segments. Stale cursors require a resnapshot, not an empty feed.
+An empty page before the oldest turn still has `hasNewer`; an empty page after
+the newest still has `hasOlder`. The reverse cursor includes that boundary turn.
 
 Prompt previews are at most 32 KiB, answers 64 KiB, and the complete page 2 MiB of
 minified JSON. Byte truncation is explicit; full redacted text lengths are only
@@ -826,8 +829,19 @@ reported when known. `claudexor thread prompt <id> <turn-id> [--offset N]
 [--max-bytes N] [--expected-store-id ID] --json` and MCP
 `claudexor_thread_prompt` (`threadId`, `turnId`, `offset`, `maxBytes`,
 `expectedStoreId`) read a full prompt in UTF-8 parts, including runless refusals.
-Follow `nextOffset` through `totalBytes`, then verify `sha256`. Unknown or unavailable
-facts never become an empty successful page or a zero receipt count. These reads
+Follow `nextOffset` through `totalBytes`, then verify `sha256`; leading U+FEFF is
+preserved, including at a part offset. A pruned command leaves its turn visible
+with `runStatus: "not_retained"`, `run: null`, and
+`primaryOutputStatus: "not_retained"`; an unbound turn has `runStatus: "unbound"`.
+The header's `headRunStatus` discloses the same distinction. Retention can remove
+the addressed artifact locator before file GC, so null output does not prove
+that bytes no longer exist on disk. Oversized apply evidence sets
+`applyEligibilityCoverage: "unavailable"` and null eligibility. An unverifiable
+recorded decision is disclosed in `unverifiedOperatorDecision` with
+`operatorDecisionCoverage: "unavailable"`; it never grants authority. Failure
+messages have an 8 KiB preview, honest `failureMessageInfo`, and their original
+`rawDetailRef`. Read errors still fail typed; unavailable facts never become a
+zero receipt count. These reads
 never start a daemon or submit model work. The full cursor, revision and client
 reconciliation contract is in [Architecture](ARCHITECTURE.md#bounded-thread-history).
 

@@ -6,9 +6,11 @@ import {
   ThreadHistoryRun,
   ThreadHistoryOutput,
   THREAD_HISTORY_ANSWER_BYTES,
+  THREAD_HISTORY_FAILURE_BYTES,
   THREAD_HISTORY_FACT_BYTES,
   THREAD_HISTORY_EVENT_BYTES,
   outcomeBanner,
+  requiredActionsFor,
 } from "@claudexor/schema";
 import {
   paramsRecord,
@@ -25,7 +27,7 @@ import {
 import { budgetSnapshot } from "./run-budget-snapshot.js";
 import { readRunEventsWithIntegrity, eventPayload } from "./run-timeline.js";
 import { projectRunFactsForDetail, expectedRunFacts } from "./run-facts-projection.js";
-import { primaryOutput, outputReadyStateForPrimary } from "./primary-output.js";
+import { primaryOutput, outputReadyStateForPrimary, truncateUtf8 } from "./primary-output.js";
 import { controlRunResult } from "./run-delivery-state.js";
 import { applyEligibilityFor, validRunOperatorDecision } from "./run-apply-projection.js";
 
@@ -39,7 +41,24 @@ export function projectHistoryRun(
     childRunIds: string[];
   },
 ) {
-  const operator = validRunOperatorDecision(record, input.operator, THREAD_HISTORY_FACT_BYTES);
+  const coverageState = { apply: "complete" as "complete" | "unavailable" };
+  let operatorDecisionCoverage: "complete" | "unavailable" = "complete";
+  // A bounded history preview cannot verify unlimited exact patch bytes. Keep
+  // the per-run owner's typed refusal intact; only this row loses coverage.
+  const boundedApply = <T>(read: () => T): T | null => {
+    try {
+      return read();
+    } catch (error) {
+      if ((error as { code?: string }).code !== "artifact_read_limit") throw error;
+      coverageState.apply = "unavailable";
+      return null;
+    }
+  };
+  const operator = boundedApply(() =>
+    validRunOperatorDecision(record, input.operator, THREAD_HISTORY_FACT_BYTES),
+  );
+  if (input.operator && !operator && coverageState.apply === "unavailable")
+    operatorDecisionCoverage = "unavailable";
   const p = paramsRecord(record);
   const mode = ModeKind.safeParse(p.mode).data;
   const decision = safeReadStructuredArtifact(
@@ -75,12 +94,16 @@ export function projectHistoryRun(
           targetRepoRoot: "",
         });
       // Mutable decisions and legacy receipts use the SAME exact-patch gate.
-      // Oversized evidence is a typed refusal, never invented ineligibility.
-      return applyEligibilityFor(record, operator, THREAD_HISTORY_FACT_BYTES);
+      // Unknown eligibility is not negative eligibility or permission to apply.
+      return boundedApply(() => applyEligibilityFor(record, operator, THREAD_HISTORY_FACT_BYTES));
     },
     expectedRunFacts(record),
     THREAD_HISTORY_FACT_BYTES,
   );
+  if (operatorDecisionCoverage === "unavailable") {
+    facts.applyEligibility = null;
+    facts.requiredActions = requiredActionsFor(facts.outcomeFacts, false);
+  }
   const output = primaryOutput(record, mode, failure, facts.runFacts, {
     maxBytes: THREAD_HISTORY_ANSWER_BYTES,
     patchReferenceOnly: true,
@@ -112,6 +135,11 @@ export function projectHistoryRun(
   }
   const plan = planProjectionFor(record, mode, THREAD_HISTORY_FACT_BYTES);
   const finalAttempt = telemetry?.attempts.find((a) => a.attempt_id === telemetry.final_attempt_id);
+  const failureMessage = failure
+    ? truncateUtf8(failure.safeMessage, THREAD_HISTORY_FAILURE_BYTES)
+    : null;
+  const summarizeOperator = (decision: ControlOperatorDecisionRecord | null) =>
+    decision ? { action: decision.action, decidedAt: decision.decidedAt } : null;
   const run = ThreadHistoryRun.parse({
     state: record.state,
     mode,
@@ -124,7 +152,14 @@ export function projectHistoryRun(
     finishedAt: record.finishedAt ?? null,
     result,
     ...facts,
-    failure,
+    failure: failure ? { ...failure, safeMessage: failureMessage } : null,
+    failureMessageInfo: failure
+      ? {
+          textBytes: Buffer.byteLength(failureMessage!),
+          totalTextBytes: Buffer.byteLength(failure.safeMessage),
+          truncated: failureMessage !== failure.safeMessage,
+        }
+      : null,
     budget,
     spendUsd: budget.spendUsd,
     spendEstimated: budget.estimated,
@@ -138,7 +173,10 @@ export function projectHistoryRun(
       applyState: result.applyState,
       hasApplyableChange: facts.applyEligibility !== null,
     }),
-    operatorDecision: operator ? { action: operator.action, decidedAt: operator.decidedAt } : null,
+    operatorDecision: summarizeOperator(operator),
+    operatorDecisionCoverage,
+    unverifiedOperatorDecision:
+      operatorDecisionCoverage === "unavailable" ? summarizeOperator(input.operator) : null,
     route: finalAttempt
       ? {
           harnessId: finalAttempt.harness_id,
@@ -149,7 +187,7 @@ export function projectHistoryRun(
       : null,
     toolCount: { value: coverage === "unavailable" ? null : tools, coverage },
     fileCount: { value: coverage === "unavailable" ? null : files, coverage },
-    applyEligibilityCoverage: "complete",
+    applyEligibilityCoverage: coverageState.apply,
   });
   return {
     run,

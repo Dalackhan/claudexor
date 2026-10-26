@@ -13,7 +13,7 @@ const REDACTION_OVERLAP_BYTES = 1024;
 function decodeValidUtf8(data: Buffer): string {
   for (let trim = 0; trim <= 3 && trim <= data.length; trim += 1) {
     try {
-      return new TextDecoder("utf-8", { fatal: true }).decode(
+      return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
         trim === 0 ? data : data.subarray(0, data.length - trim),
       );
     } catch {
@@ -23,7 +23,7 @@ function decodeValidUtf8(data: Buffer): string {
   return data.toString("utf8");
 }
 
-function truncateUtf8(text: string, maxBytes: number): string {
+export function truncateUtf8(text: string, maxBytes: number): string {
   const encoded = Buffer.from(text, "utf8");
   return encoded.length <= maxBytes ? text : decodeValidUtf8(encoded.subarray(0, maxBytes));
 }

@@ -42,7 +42,13 @@ export interface ThreadHistorySource {
   select(
     input: ThreadHistoryInput,
     cursor: ThreadHistoryCursor | null,
-  ): { keys: Key[]; probedMore: boolean; direction: "older" | "newer"; ceiling: number };
+  ): {
+    keys: Key[];
+    probedMore: boolean;
+    direction: "older" | "newer";
+    ceiling: number;
+    edge: number | null;
+  };
   turn(
     threadId: string,
     key: Key,
@@ -138,12 +144,9 @@ export function createThreadHistoryRead(source: () => ThreadHistorySource) {
       const run = (id: string | null) => {
         if (!id) return null;
         const record = records.get(id);
-        if (!record)
-          throw threadHistoryProblem(
-            "thread_history_unavailable",
-            503,
-            "bound run facts are unavailable",
-          );
+        // Command retention removes the addressed run directory as well as its
+        // receipt. The turn/prompt survive; absence is not a failed store read.
+        if (!record) return null;
         if (!runCache.has(id)) runCache.set(id, projectHistoryRun(record, host.runInput(record)));
         return runCache.get(id)!;
       };
@@ -179,6 +182,7 @@ export function createThreadHistoryRead(source: () => ThreadHistorySource) {
             }
           : null,
         headRun: headId && head ? { runId: headId, run: ControlTurnRunCard.parse(head.run) } : null,
+        headRunStatus: !headId ? "unbound" : head ? "available" : "not_retained",
         sessions: [],
         sessionsComplete: false,
       });
@@ -212,10 +216,11 @@ export function createThreadHistoryRead(source: () => ThreadHistorySource) {
         replayNextCursor: null,
         limitedBy: null,
       };
+      let pageBytes = bytes(result);
       for (const key of selected.keys) {
         // Reserve a worst-case next row BEFORE reading its prompt/body/output.
         // This keeps decode work limited to emitted rows, including byte pages.
-        if (bytes(result) + THREAD_HISTORY_ROW_BYTES + 8192 > THREAD_HISTORY_PAGE_BYTES) {
+        if (pageBytes + THREAD_HISTORY_ROW_BYTES + 8192 > THREAD_HISTORY_PAGE_BYTES) {
           result.limitedBy = "bytes";
           break;
         }
@@ -223,7 +228,7 @@ export function createThreadHistoryRead(source: () => ThreadHistorySource) {
         const projection = run(key.runId);
         const base = projectTurn(item.raw, new Map());
         const relation =
-          projection?.run.mode === "plan" && key.runId
+          key.runId && (!projection || projection.run.mode === "plan")
             ? host.planAnswer(input.threadId, key.runId)
             : { answeredByTurnId: null, answeredByPrompt: null, planAnswerComplete: true };
         const row = ThreadHistoryTurn.parse({
@@ -232,15 +237,24 @@ export function createThreadHistoryRead(source: () => ThreadHistorySource) {
           revision,
           promptInfo: item.promptInfo,
           run: projection?.run ?? null,
+          runStatus: !key.runId ? "unbound" : projection ? "available" : "not_retained",
           primaryOutput: projection?.primaryOutput ?? null,
+          primaryOutputStatus:
+            key.runId && !projection
+              ? "not_retained"
+              : projection?.primaryOutput
+                ? "available"
+                : "none",
           ...relation,
         });
-        if (bytes(row) > THREAD_HISTORY_ROW_BYTES)
+        const rowBytes = bytes(row);
+        if (rowBytes > THREAD_HISTORY_ROW_BYTES)
           throw threadHistoryProblem(
             "thread_history_metadata_too_large",
             503,
             "history row exceeds its byte limit",
           );
+        pageBytes += rowBytes + (result.turns.length ? 1 : 0);
         result.turns.push(row);
       }
       result.turns.sort((a, b) => a.ordinal - b.ordinal);
@@ -269,6 +283,29 @@ export function createThreadHistoryRead(source: () => ThreadHistorySource) {
         if (cursor?.direction === "replay" && high < cursor.high)
           result.replayNextCursor = encodeThreadHistoryCursor({ ...cursor, after: high });
         if (!result.limitedBy && selected.probedMore) result.limitedBy = "turns";
+      } else if (selected.edge !== null) {
+        // No emitted row to advance past: reverse from the addressed boundary,
+        // INCLUDING that edge. Empty threads (no edge) still have no coverage.
+        const direction = selected.direction === "older" ? "newer" : "older";
+        const reverse = encodeThreadHistoryCursor({
+          version: 1,
+          storeId,
+          epoch: identity.epoch,
+          threadId: input.threadId,
+          limit: input.limit,
+          low: selected.edge,
+          high: selected.edge,
+          ceiling: selected.ceiling,
+          direction,
+          inclusive: true,
+        });
+        if (direction === "newer") {
+          result.hasNewer = true;
+          result.newerCursor = reverse;
+        } else {
+          result.hasOlder = true;
+          result.olderCursor = reverse;
+        }
       }
       return ThreadHistoryPage.parse(result);
     },

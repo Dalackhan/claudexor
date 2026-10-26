@@ -70,7 +70,8 @@ Start read-only unless the user explicitly asked to change or create files.
 Read retained answers with `claudexor_thread_history`:
 `{threadId, limit?, cursor?, beforeTurnId?, afterTurnId?, aroundTurnId?, expectedStoreId?}`.
 Limit is 1..20 (default 20). Omit selectors for the newest page, or supply exactly
-one selector. Rows are ordered oldest first; opaque cursors are bound to store,
+one selector. `aroundTurnId` returns the anchor and earlier turns; follow
+`newerCursor` for later turns. Rows are ordered oldest first; opaque cursors are bound to store,
 epoch, thread and limit. Follow `olderCursor`/`newerCursor` explicitly.
 `replayCursor` refreshes the same membership; consume `replayNextCursor` segments
 when answers grow. Previews are bounded; missing evidence and incomplete

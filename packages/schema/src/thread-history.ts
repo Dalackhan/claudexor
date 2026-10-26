@@ -14,6 +14,7 @@ import { ControlHandshakeResponse } from "./operation.js";
 export const THREAD_HISTORY_MAX_TURNS = 20;
 export const THREAD_HISTORY_PROMPT_BYTES = 32_768;
 export const THREAD_HISTORY_ANSWER_BYTES = 65_536;
+export const THREAD_HISTORY_FAILURE_BYTES = 8_192;
 export const THREAD_HISTORY_PAGE_BYTES = 2_097_152;
 export const THREAD_HISTORY_ROW_BYTES = 851_968;
 export const THREAD_HISTORY_HEADER_BYTES = 32_768;
@@ -77,6 +78,7 @@ const count = z
     coverage: z.enum(["complete", "partial", "unavailable"]),
   })
   .strict();
+const runStatus = z.enum(["available", "unbound", "not_retained"]);
 export const ThreadHistoryRun = ControlTurnRunCard.extend({
   ...ControlRunSummary.pick({
     harnesses: true,
@@ -98,6 +100,11 @@ export const ThreadHistoryRun = ControlTurnRunCard.extend({
     runFacts: true,
   }).shape,
   applyEligibilityCoverage: z.enum(["complete", "unavailable"]),
+  operatorDecisionCoverage: z.enum(["complete", "unavailable"]),
+  unverifiedOperatorDecision: ControlRunDetail.shape.operatorDecision.describe(
+    "Recorded decision whose exact evidence exceeds the history read bound. Never grants authority.",
+  ),
+  failureMessageInfo: ThreadHistoryTextFacts.nullable(),
   toolCount: count,
   fileCount: count.describe(
     "File-kind tool calls, not distinct paths or the WorkProduct diffstat.",
@@ -115,7 +122,9 @@ export const ThreadHistoryTurn = ControlThreadTurn.omit({ run: true })
     revision: ThreadHistoryRevision,
     promptInfo: ThreadHistoryTextFacts,
     run: ThreadHistoryRun.nullable(),
+    runStatus,
     primaryOutput: ThreadHistoryOutput.nullable(),
+    primaryOutputStatus: z.enum(["available", "none", "not_retained"]),
     answeredByTurnId: id.nullable(),
     answeredByPrompt: ThreadHistoryPlanAnswer.nullable(),
     planAnswerComplete: z.boolean(),
@@ -132,6 +141,7 @@ export const ThreadHistoryHeader = z
       .strict()
       .nullable(),
     headRun: z.object({ runId: id, run: ControlTurnRunCard }).strict().nullable(),
+    headRunStatus: runStatus,
     sessions: z.array(ControlSession).max(THREAD_HISTORY_SESSION_LIMIT),
     sessionsComplete: z.boolean(),
   })
@@ -166,7 +176,21 @@ export const ThreadHistoryPage = z
       issue("history header exceeds byte limit");
     if (v.hasOlder !== (v.olderCursor !== null) || v.hasNewer !== (v.newerCursor !== null))
       issue("history edge cursor disagrees with coverage");
+    const statusFor = (id: string | null, facts: unknown) =>
+      !id ? "unbound" : facts ? "available" : "not_retained";
+    if (v.header.headRunStatus !== statusFor(v.header.thread.headRunId, v.header.headRun))
+      issue("head run status disagrees with retained facts");
     for (const [i, row] of v.turns.entries()) {
+      if (
+        row.runStatus !== statusFor(row.runId, row.run) ||
+        row.primaryOutputStatus !==
+          (row.runStatus === "not_retained"
+            ? "not_retained"
+            : row.primaryOutput
+              ? "available"
+              : "none")
+      )
+        issue("row status disagrees with retained facts");
       if (
         row.threadId !== v.threadId ||
         row.revision.epoch !== v.revision.epoch ||
@@ -186,6 +210,23 @@ export const ThreadHistoryPage = z
       )
         issue("invalid answer byte count");
       if (
+        row.run?.failure &&
+        (!row.run.failureMessageInfo ||
+          row.run.failureMessageInfo.textBytes !== Buffer.byteLength(row.run.failure.safeMessage) ||
+          row.run.failureMessageInfo.textBytes > THREAD_HISTORY_FAILURE_BYTES)
+      )
+        issue("invalid failure preview byte count");
+      if (
+        row.run &&
+        ((row.run.applyEligibilityCoverage === "unavailable" &&
+          row.run.applyEligibility !== null) ||
+          (row.run.operatorDecisionCoverage === "unavailable" &&
+            (row.run.operatorDecision !== null || !row.run.unverifiedOperatorDecision)) ||
+          (row.run.operatorDecisionCoverage === "complete" &&
+            row.run.unverifiedOperatorDecision !== null))
+      )
+        issue("unavailable apply evidence must not grant authority");
+      if (
         row.answeredByPrompt &&
         (row.answeredByPrompt.id !== row.answeredByTurnId ||
           Buffer.byteLength(row.answeredByPrompt.prompt) > THREAD_HISTORY_PROMPT_BYTES ||
@@ -193,7 +234,12 @@ export const ThreadHistoryPage = z
             Buffer.byteLength(row.answeredByPrompt.prompt))
       )
         issue("invalid plan answer preview");
-      for (const facts of [row.promptInfo, row.primaryOutput, row.answeredByPrompt?.promptInfo]) {
+      for (const facts of [
+        row.promptInfo,
+        row.primaryOutput,
+        row.answeredByPrompt?.promptInfo,
+        row.run?.failureMessageInfo,
+      ]) {
         if (
           facts &&
           facts.totalTextBytes !== null &&
@@ -253,12 +299,19 @@ export const ThreadHistoryCursor = z
     high: ordinal,
     ceiling: ordinal,
     after: ordinal.optional(),
+    inclusive: z
+      .literal(true)
+      .optional()
+      .describe(
+        "Reverse navigation from an empty boundary includes the selector edge; no emitted row is skipped.",
+      ),
   })
   .strict()
   .refine(
     (v) =>
       v.low <= v.high &&
       v.high <= v.ceiling &&
+      (v.inclusive === undefined || (v.direction !== "replay" && v.low === v.high)) &&
       (v.after === undefined || (v.direction === "replay" && v.after >= v.low && v.after < v.high)),
     "invalid cursor interval",
   );

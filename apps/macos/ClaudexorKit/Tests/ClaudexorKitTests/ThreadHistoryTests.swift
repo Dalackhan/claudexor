@@ -59,6 +59,24 @@ struct ThreadHistoryTests {
         #expect(!older.isNewer(than: page.revision))
         #expect(!page.revision.isNewer(than: ThreadHistoryRevision(epoch: "another-owner", sequence: 0)))
     }
+
+    @Test func decodesRetentionAndUnverifiableEvidenceWithoutInventingReceipts() throws {
+        let retained = try JSONDecoder().decode(ThreadHistoryPage.self, from: fixture("thread-history-not-retained"))
+        #expect(retained.header.headRunStatus == "not_retained")
+        #expect(retained.header.headRun == nil)
+        #expect(retained.turns[0].runStatus == "unbound")
+        #expect(retained.turns[1].runStatus == "not_retained")
+        #expect(retained.turns[1].run == nil)
+        #expect(retained.turns[1].primaryOutputStatus == "not_retained")
+        let unavailable = try JSONDecoder().decode(ThreadHistoryPage.self, from: fixture("thread-history-unavailable-evidence"))
+        let run = try #require(unavailable.turns[1].run)
+        #expect(run.applyEligibilityCoverage == "unavailable")
+        #expect(run.operatorDecisionCoverage == "unavailable")
+        #expect(run.operatorDecision == nil)
+        #expect(run.unverifiedOperatorDecision?.action == "accept_risk")
+        #expect(run.failureMessageInfo?.truncated == true)
+        #expect(run.failure?.rawDetailRef == "final/failure.yaml")
+    }
 }
 
 private final class HistoryURLProtocol: URLProtocol {

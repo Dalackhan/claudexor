@@ -21,7 +21,9 @@ export function readFileUtf8BoundedSync(path: string, maxBytes: number): string 
         status: 503,
         retryable: true,
       });
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length));
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      bytes.subarray(0, length),
+    );
   } finally {
     closeSync(fd);
   }

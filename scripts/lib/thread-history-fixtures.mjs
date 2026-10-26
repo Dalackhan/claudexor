@@ -15,6 +15,7 @@ export function threadHistoryFixtures(schema) {
       latestTurnId: null,
       latestAdmission: null,
       headRun: null,
+      headRunStatus: "unbound",
       sessions: [],
       sessionsComplete: true,
     },
@@ -36,7 +37,9 @@ export function threadHistoryFixtures(schema) {
     prompt: "Question 😀",
     promptInfo: { textBytes: 13, totalTextBytes: 13, truncated: false },
     run: null,
+    runStatus: "unbound",
     primaryOutput: null,
+    primaryOutputStatus: "none",
     answeredByTurnId: null,
     answeredByPrompt: null,
     planAnswerComplete: true,
@@ -52,6 +55,8 @@ export function threadHistoryFixtures(schema) {
     ordinal: 1,
     runId: "run-history",
     enqueueError: null,
+    runStatus: "available",
+    primaryOutputStatus: "available",
     run: schema.ThreadHistoryRun.parse({
       state: "succeeded",
       mode: "plan",
@@ -63,6 +68,9 @@ export function threadHistoryFixtures(schema) {
       toolCount: { value: 2, coverage: "partial" },
       fileCount: { value: null, coverage: "unavailable" },
       applyEligibilityCoverage: "complete",
+      operatorDecisionCoverage: "complete",
+      unverifiedOperatorDecision: null,
+      failureMessageInfo: null,
       outputReadyState: "ready",
       planReadiness: { state: "needs_answers", questionCount: 1 },
       planQuestions: [{ id: "q", kind: "text", prompt: "Which direction?" }],
@@ -88,6 +96,7 @@ export function threadHistoryFixtures(schema) {
     ...empty,
     header: {
       ...empty.header,
+      thread: { ...empty.header.thread, headRunId: settled.runId },
       latestTurnId: settled.id,
       latestAdmission: {
         id: settled.id,
@@ -97,6 +106,7 @@ export function threadHistoryFixtures(schema) {
         state: "succeeded",
       },
       headRun: { runId: settled.runId, run: schema.ControlTurnRunCard.parse(settled.run) },
+      headRunStatus: "available",
     },
     turns: [refusal, settled],
     replayCursor: "opaque-replay",
@@ -113,9 +123,58 @@ export function threadHistoryFixtures(schema) {
     nextOffset: 13,
     text: refusal.prompt,
   });
+  const retained = schema.ThreadHistoryPage.parse({
+    ...withRows,
+    header: {
+      ...withRows.header,
+      thread: { ...withRows.header.thread, headRunId: settled.runId },
+      headRun: null,
+      headRunStatus: "not_retained",
+    },
+    turns: [
+      refusal,
+      {
+        ...settled,
+        run: null,
+        runStatus: "not_retained",
+        primaryOutput: null,
+        primaryOutputStatus: "not_retained",
+        planAnswerComplete: true,
+        answeredByTurnId: null,
+        answeredByPrompt: null,
+      },
+    ],
+  });
+  const unavailable = schema.ThreadHistoryPage.parse({
+    ...withRows,
+    turns: [
+      refusal,
+      {
+        ...settled,
+        run: {
+          ...settled.run,
+          applyEligibility: null,
+          applyEligibilityCoverage: "unavailable",
+          operatorDecisionCoverage: "unavailable",
+          unverifiedOperatorDecision: { action: "accept_risk", decidedAt: thread.updatedAt },
+          failure: schema.RunFailure.parse({
+            safeMessage: "bounded",
+            rawDetailRef: "final/failure.yaml",
+          }),
+          failureMessageInfo: { textBytes: 7, totalTextBytes: 900000, truncated: true },
+        },
+      },
+    ],
+  });
   return [
     { name: "thread-history-empty", schema: "ThreadHistoryPage", value: empty },
     { name: "thread-history-receipts", schema: "ThreadHistoryPage", value: withRows },
+    { name: "thread-history-not-retained", schema: "ThreadHistoryPage", value: retained },
+    {
+      name: "thread-history-unavailable-evidence",
+      schema: "ThreadHistoryPage",
+      value: unavailable,
+    },
     { name: "thread-prompt-part", schema: "ThreadPromptPart", value: part },
   ];
 }

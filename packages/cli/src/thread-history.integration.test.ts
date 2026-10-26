@@ -505,9 +505,10 @@ describe("bounded SQL thread history", () => {
     const f = await fixture(1);
     const run = f.bind(0, "succeeded", "agent");
     writeFileSync(join(run.runDir, "final/patch.diff"), "x".repeat(1_048_577));
-    expect(() => f.read()).toThrow(
-      expect.objectContaining({ code: "artifact_read_limit", status: 503 }),
-    );
+    expect(f.read().turns[0]?.run).toMatchObject({
+      applyEligibility: null,
+      applyEligibilityCoverage: "unavailable",
+    });
     writeFileSync(join(run.runDir, "final/patch.diff"), "diff --git a/a b/a\n");
     expect(f.read().turns[0]?.primaryOutput).toMatchObject({ kind: "patch", text: null });
     const prior = f.read();

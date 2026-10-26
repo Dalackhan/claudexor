@@ -62,7 +62,9 @@ export function readThreadPromptPart(
   while (end > 0 && end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--;
   let text: string;
   try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, end));
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      bytes.subarray(0, end),
+    );
   } catch {
     throw threadHistoryProblem("thread_history_unavailable", 503, "stored prompt is not UTF-8");
   }

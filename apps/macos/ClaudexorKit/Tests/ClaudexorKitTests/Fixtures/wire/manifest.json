@@ -1,6 +1,8 @@
 {
   "thread-history-empty": "ThreadHistoryPage",
   "thread-history-receipts": "ThreadHistoryPage",
+  "thread-history-not-retained": "ThreadHistoryPage",
+  "thread-history-unavailable-evidence": "ThreadHistoryPage",
   "thread-prompt-part": "ThreadPromptPart",
   "effort-resolution-downward": "EffortResolution",
   "handshake-response": "ControlHandshakeResponse",

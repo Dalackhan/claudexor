@@ -66,6 +66,9 @@ public struct ThreadHistoryRun: Codable, Sendable, Equatable {
     public let failure: RunFailureInfo?
     public let applyEligibility: ApplyEligibility?
     public let applyEligibilityCoverage: String
+    public let operatorDecisionCoverage: String
+    public let unverifiedOperatorDecision: ThreadHistoryOperatorDecision?
+    public let failureMessageInfo: ThreadHistoryTextFacts?
     public let requiredActions: [ThreadHistoryRequiredAction]
     public let planReadiness: PlanReadiness?
     public let planQuestions: [PlanQuestion]
@@ -99,7 +102,11 @@ public struct ThreadHistoryTurn: Codable, Sendable, Equatable, Identifiable {
     public let revision: ThreadHistoryRevision
     public let promptInfo: ThreadHistoryTextFacts
     public let run: ThreadHistoryRun?
+    /// available | unbound | not_retained; absent receipts never imply zero counts.
+    public let runStatus: String
     public let primaryOutput: ThreadHistoryOutput?
+    /// available | none | not_retained; retention may remove the artifact address.
+    public let primaryOutputStatus: String
     public let answeredByTurnId: String?
     public let answeredByPrompt: PlanAnswer?
     public let planAnswerComplete: Bool
@@ -144,6 +151,7 @@ public struct ThreadHistoryHeader: Codable, Sendable, Equatable {
     public let latestTurnId: String?
     public let latestAdmission: Admission?
     public let headRun: Head?
+    public let headRunStatus: String
     public let sessions: [ThreadSessionInfo]
     public let sessionsComplete: Bool
 }

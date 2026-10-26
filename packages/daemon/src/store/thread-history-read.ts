@@ -155,6 +155,7 @@ export class SqlThreadHistoryRead {
   select(input: ThreadHistoryInput, cursor: ThreadHistoryCursor | null) {
     let direction: "older" | "newer" = cursor?.direction === "newer" ? "newer" : "older";
     let where = "";
+    let edge: number | null = null;
     const args: (number | string)[] = [input.threadId];
     const ceiling =
       cursor?.ceiling ??
@@ -171,12 +172,14 @@ export class SqlThreadHistoryRead {
       args.push(cursor.after === undefined ? cursor.low : cursor.after + 1, cursor.high);
       direction = "newer";
     } else if (cursor) {
-      where = direction === "older" ? " AND ordinal<?" : " AND ordinal>?";
-      args.push(direction === "older" ? cursor.low : cursor.high);
+      edge = direction === "older" ? cursor.low : cursor.high;
+      where = ` AND ordinal${direction === "older" ? "<" : ">"}${cursor.inclusive ? "=" : ""}?`;
+      args.push(edge);
     } else if (input.beforeTurnId || input.afterTurnId) {
       direction = input.afterTurnId ? "newer" : "older";
       where = direction === "older" ? " AND ordinal<?" : " AND ordinal>?";
-      args.push(this.edge(input.threadId, (input.afterTurnId ?? input.beforeTurnId)!).ordinal);
+      edge = this.edge(input.threadId, (input.afterTurnId ?? input.beforeTurnId)!).ordinal;
+      args.push(edge);
     } else if (input.aroundTurnId) {
       // Anchor-first traversal guarantees a byte-limited around read includes it.
       // Adjacent earlier rows follow; clients may then request the newer edge.
@@ -197,6 +200,7 @@ export class SqlThreadHistoryRead {
       probedMore: keys.length > input.limit,
       direction,
       ceiling,
+      edge,
     };
   }
 

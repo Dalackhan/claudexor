@@ -24,7 +24,7 @@
         "state": "active",
         "trashedAt": null,
         "purgeAfter": null,
-        "headRunId": null,
+        "headRunId": "run-history",
         "needsHuman": false,
         "createdAt": "2026-10-26T10:00:00Z",
         "updatedAt": "2026-10-26T10:00:00Z"
@@ -62,6 +62,7 @@
           "delegatedChildRunIds": []
         }
       },
+      "headRunStatus": "available",
       "sessions": [],
       "sessionsComplete": true
     },
@@ -98,7 +99,9 @@
           "truncated": false
         },
         "run": null,
+        "runStatus": "unbound",
         "primaryOutput": null,
+        "primaryOutputStatus": "none",
         "answeredByTurnId": null,
         "answeredByPrompt": null,
         "planAnswerComplete": true
@@ -192,6 +195,9 @@
           "operatorDecision": null,
           "runFacts": null,
           "applyEligibilityCoverage": "complete",
+          "operatorDecisionCoverage": "complete",
+          "unverifiedOperatorDecision": null,
+          "failureMessageInfo": null,
           "toolCount": {
             "value": 2,
             "coverage": "partial"
@@ -201,6 +207,7 @@
             "coverage": "unavailable"
           }
         },
+        "runStatus": "available",
         "primaryOutput": {
           "kind": "plan",
           "path": "final/plan.md",
@@ -210,6 +217,7 @@
           "textBytes": 9,
           "totalTextBytes": 9
         },
+        "primaryOutputStatus": "available",
         "answeredByTurnId": "off-page-answer",
         "answeredByPrompt": {
           "id": "off-page-answer",

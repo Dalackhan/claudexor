@@ -32,6 +32,7 @@
       "latestTurnId": null,
       "latestAdmission": null,
       "headRun": null,
+      "headRunStatus": "unbound",
       "sessions": [],
       "sessionsComplete": true
     },

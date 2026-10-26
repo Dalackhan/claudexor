@@ -815,6 +815,14 @@
                 }
               ]
             },
+            "headRunStatus": {
+              "type": "string",
+              "enum": [
+                "available",
+                "unbound",
+                "not_retained"
+              ]
+            },
             "sessions": {
               "type": "array",
               "items": {
@@ -893,6 +901,7 @@
             "latestTurnId",
             "latestAdmission",
             "headRun",
+            "headRunStatus",
             "sessions",
             "sessionsComplete"
           ],
@@ -2377,6 +2386,28 @@
                           "unavailable"
                         ]
                       },
+                      "operatorDecisionCoverage": {
+                        "type": "string",
+                        "enum": [
+                          "complete",
+                          "unavailable"
+                        ]
+                      },
+                      "unverifiedOperatorDecision": {
+                        "$ref": "#/definitions/ThreadHistoryPage/properties/turns/items/properties/run/anyOf/0/properties/operatorDecision",
+                        "default": null,
+                        "description": "Recorded decision whose exact evidence exceeds the history read bound. Never grants authority."
+                      },
+                      "failureMessageInfo": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/definitions/ThreadHistoryPage/properties/turns/items/properties/promptInfo"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "toolCount": {
                         "type": "object",
                         "properties": {
@@ -2426,6 +2457,8 @@
                     "required": [
                       "state",
                       "applyEligibilityCoverage",
+                      "operatorDecisionCoverage",
+                      "failureMessageInfo",
                       "toolCount",
                       "fileCount"
                     ],
@@ -2437,6 +2470,9 @@
                   }
                 ],
                 "description": "Compact run state embedded on a turn so a chat surface renders the whole conversation from one thread fetch."
+              },
+              "runStatus": {
+                "$ref": "#/definitions/ThreadHistoryPage/properties/header/properties/headRunStatus"
               },
               "primaryOutput": {
                 "anyOf": [
@@ -2500,6 +2536,14 @@
                 ],
                 "description": "The run's primary user-facing output artifact."
               },
+              "primaryOutputStatus": {
+                "type": "string",
+                "enum": [
+                  "available",
+                  "none",
+                  "not_retained"
+                ]
+              },
               "answeredByTurnId": {
                 "anyOf": [
                   {
@@ -2551,7 +2595,9 @@
               "revision",
               "promptInfo",
               "run",
+              "runStatus",
               "primaryOutput",
+              "primaryOutputStatus",
               "answeredByTurnId",
               "answeredByPrompt",
               "planAnswerComplete"

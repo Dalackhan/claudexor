@@ -17,7 +17,7 @@ export function threadHistoryTools(runner: RunnerFn): McpTool[] {
     name: prompt ? "claudexor_thread_prompt" : "claudexor_thread_history",
     description: prompt
       ? "Read a bounded UTF-8 part of any turn's complete stored prompt, including refused turns. Continue at nextOffset; totalBytes and sha256 identify the full prompt. Requires an existing daemon."
-      : "Read one bounded page of thread turns with answer previews and receipt facts. limit 1..20; choose at most one cursor, beforeTurnId, afterTurnId or aroundTurnId. No selector reads the newest turns. Ascending ordinals; cursors bind store, epoch, thread and limit. Replay refreshes current facts. Requires an existing daemon; never starts work.",
+      : "Read one bounded page of thread turns with answer previews and receipt facts. limit 1..20; choose at most one cursor, beforeTurnId, afterTurnId or aroundTurnId. No selector reads the newest turns. aroundTurnId returns the anchor and earlier turns; follow newerCursor for later turns. Ascending ordinals; cursors bind store, epoch, thread and limit. Replay refreshes current facts. Requires an existing daemon; never starts work.",
     inputSchema: inlineJsonSchemaRefs(prompt ? promptInput : historyInput),
     outputSchema: inlineJsonSchemaRefs(prompt ? promptOutput : historyOutput),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },

@@ -848,6 +848,50 @@
           "type": "string",
           "description": "Model the harness actually reported using."
         },
+        "observed_model_catalog_match": {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S",
+              "description": "The observed model string, byte-identical to observed_model on the same event and to the matched entry's catalog label."
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S",
+              "description": "Id of the only catalog entry whose label is exactly `label`; no other entry has `label` as its id."
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "account_catalog"
+              ],
+              "description": "The model list the spawn's own account answered before the vendor process ran."
+            },
+            "profile_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Credential profile whose catalog answered (the spawn's profile); null = engine-default credentials."
+            }
+          },
+          "required": [
+            "label",
+            "id",
+            "source",
+            "profile_id"
+          ],
+          "additionalProperties": false,
+          "description": "Stamped by the per-spawn model gate from that spawn's own account catalog; adapters never set it, and the gate strips any value it did not compute."
+        },
         "credential_route": {
           "type": "string",
           "enum": [

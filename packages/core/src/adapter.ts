@@ -77,6 +77,10 @@ export interface PreparedHarnessProcessing {
    * disclosure cannot disagree. Absent when the level is a separate flag the
    * adapter resolves at spawn, or when the harness has no effort control. */
   effort?: EffortResolution;
+  /** The account inventory this preparation read for the spec's own profile,
+   * env and cwd. The per-spawn gate resolves that spawn's observed model label
+   * against it and nothing else. Absent = no catalog proof. */
+  catalog?: HarnessModel[];
 }
 
 /**

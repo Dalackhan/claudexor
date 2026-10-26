@@ -22,6 +22,7 @@ import { redactSecrets } from "@claudexor/util";
 import * as belt from "./delegationToolEvidence.js";
 import * as marks from "./attemptOutputMarkers.js";
 import { observeProcessing, type ProcessingTelemetry } from "./processing-telemetry.js";
+import { observeObservedModel, type ObservedModelTelemetry } from "./observed-model-telemetry.js";
 import { observePromptCacheTtl, type PromptCacheTelemetry } from "./prompt-cache-telemetry.js";
 import {
   type TransientFailureObservation,
@@ -91,7 +92,8 @@ export interface DelegationBeltState {
   toolEvidence: boolean;
 }
 
-export interface AttemptTelemetry extends ProcessingTelemetry, PromptCacheTelemetry {
+export interface AttemptTelemetry
+  extends ProcessingTelemetry, PromptCacheTelemetry, ObservedModelTelemetry {
   requestRefusal?: HarnessRequestRefusal;
   effortResolution?: EffortResolution;
   requestRequirements: RequestRequirementResolution[];
@@ -101,8 +103,6 @@ export interface AttemptTelemetry extends ProcessingTelemetry, PromptCacheTeleme
   /** Native lines/events the adapter reported as dropped/unrecognized. */
   droppedEvents: number;
   web: WebEvidenceState;
-  /** Model identity the harness stream actually reported (route evidence). */
-  observedModel: string | null;
   /** Auth route the adapter disclosed for this attempt (route evidence; null = undisclosed). */
   authMode: "local_session" | "api_key" | null;
   /** Last typed route in the stream, used only for per-usage cost allocation. */
@@ -302,8 +302,8 @@ export function observeAttemptTelemetry(t: AttemptTelemetry, ev: HarnessEvent): 
   if (beltToolEvent) {
     t.delegationBelt.toolEvidence = true;
   }
-  // Route evidence: remember the model identity the stream itself disclosed.
-  if (ev.observed_model && !t.observedModel) t.observedModel = ev.observed_model;
+  // Route evidence: the model identity the stream itself disclosed, with its proof.
+  observeObservedModel(t, ev);
   // Route evidence: the adapter's first-class credential-route disclosure
   // (first-wins; the route is decided once before spawn).
   if (!t.authMode) {
@@ -679,6 +679,7 @@ export function attemptTelemetryRecord(
     attempt_id: attemptId,
     harness_id: harnessId,
     observed_model: t.observedModel,
+    observed_model_catalog_match: t.observedModelCatalogMatch ?? null,
     auth_mode: t.authMode,
     auth_source: t.authSource,
     profile_id: t.profileId,

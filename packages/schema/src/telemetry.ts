@@ -21,6 +21,7 @@ import { ProcessingReceipt, ProcessingCostBasis } from "./processing.js";
 import { RunDelegationInfo } from "./delegation.js";
 import { RunFacts } from "./run-facts.js";
 import { InputTokenUsage, HarnessRequestRefusal } from "./harness.js";
+import { AttemptObservedModelFields } from "./harness-model.js";
 import { PromptCacheTtlReceipt } from "./prompt-cache.js";
 
 /** Engine-owned final/telemetry.yaml: surfaces project, never re-derive evidence.
@@ -389,13 +390,7 @@ export const AttemptTelemetryRecord = z
     usage_cost: UsageCostSummary.optional(),
     attempt_id: Id.describe("Attempt id."),
     harness_id: Id.describe("Harness that ran the attempt."),
-    observed_model: z
-      .string()
-      .nullable()
-      .default(null)
-      .describe(
-        "Model the harness stream actually reported; null when never disclosed (rendered as unverified, never guessed).",
-      ),
+    ...AttemptObservedModelFields,
     /**
      * Auth route the attempt ACTUALLY ran under (route evidence, like
      * observed_model): adapters disclose their chosen route as a typed

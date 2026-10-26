@@ -380,7 +380,7 @@ describe("deferred promotion in the existing daemon queue", () => {
   });
   it("rejects inline secret text before create and replace persistence", async () => {
     const f = await fixture();
-    const prompt = "api_key=sk-abcdefghijklmnopqrstuvwxyz0123456789";
+    const prompt = "api_key=sk-" + "abcdefghijklmnopqrstuvwxyz0123456789";
     await expect(
       f.mutate({ ...f.input, request: { ...f.input.request, prompt } }),
     ).rejects.toThrow();

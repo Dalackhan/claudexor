@@ -37,6 +37,7 @@ export * from "./effort.js";
 export * from "./processing.js";
 export * from "./prompt-cache.js";
 export * from "./harness.js";
+export * from "./harness-model.js";
 export * from "./interaction.js";
 export * from "./review.js";
 export * from "./workproduct.js";

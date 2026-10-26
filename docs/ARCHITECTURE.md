@@ -651,6 +651,42 @@ retry, account-selection or budget authority. A rejected final-route preference
 ends that attempt without account rotation, model/harness fallback or repair retry;
 ordinary availability failover retains its existing policy.
 
+Cursor's stream names its model by the vendor's display label (`init.model`,
+for example `GPT-5.5 High`), while runs request and send the listed id
+(`gpt-5.5-high`). `attempts[].observed_model` keeps the raw string. Beside it,
+`attempts[].observed_model_catalog_match` records
+`{label, id, source: account_catalog, profile_id}` when the account catalog
+that the same spawn's processing preparation already read lists exactly one
+live row whose label is byte-identical to that string and no other row uses the
+string as its id; `profile_id` names the account whose catalog answered (null
+for engine-default credentials). The per-spawn model gate is the only author:
+it stamps `HarnessEvent.observed_model_catalog_match` on that spawn's events of
+the same profile and strips any value it did not compute. The attempt takes the
+proof only from the event that set its first-wins `observed_model`, so a later
+try, another account or the requested model never supplies it, and the label
+is never trimmed, case-folded or fuzzy-matched. The proof then lasts only while
+that event's native try is the attempt's latest and no later event names
+another model: when the Agent or Ask/report loop starts another try of the
+same attempt (an in-run continuation, a transient retry or a rotation to
+another account), the proof is dropped, because the later try may run another
+model or report none. A retried attempt therefore stays unverified even when
+every try reported the same label; only when no earlier try reported any model
+does the first try that reports one supply both the string and its proof. The
+`run.continuity` receipt still names each continued try's own model.
+`observed_model` itself stays first-wins and can name an earlier try's model,
+a pre-existing limit shared by harnesses whose streams report listed ids. A
+reader verifying the attempt's model still requires `label` to equal
+`observed_model` and `profile_id` to equal the attempt's last-wins
+`profile_id`. Every other case leaves the field null and the model unverified: an
+empty or failed catalog read, an unmatched or duplicated label, a label that is
+another row's id, and a harness whose preparation supplies no catalog. Internal
+reviewer and continuity-summary spawns run outside the per-spawn gate, so their
+observed models carry no proof. A null field only means no proof exists, and
+readers do not treat it as a mismatch. Reusing the preparation's read adds no
+vendor call; admission, routing, inventory-absence policy and
+`auth_route.model_mismatch`, which still compares the raw string with the sent
+id, are unchanged.
+
 Codex raw model calls expose ordinary inference efforts, while the native CLI's
 `ultra` selector also owns automatic task delegation. The raw adapter excludes
 that agent-mode selector from `reasoningEfforts` and retains the vendor's original

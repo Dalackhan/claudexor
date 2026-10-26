@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { hasModelInventoryForRoute, validateModel } from "./model.js";
+import { HarnessModel } from "@claudexor/schema";
+import { hasModelInventoryForRoute, observedModelCatalogMatch, validateModel } from "./model.js";
 
 describe("validateModel under an AUTHORITATIVE declaration (strict model truth)", () => {
   const known = ["sonnet", "opus", "claude-opus-4-8"];
@@ -151,5 +152,71 @@ describe("model inventory credential routes", () => {
     expect(hasModelInventoryForRoute(adapter, ["local_session"], "local_session")).toBe(true);
     expect(hasModelInventoryForRoute(adapter, ["local_session"], "api_key")).toBe(false);
     expect(hasModelInventoryForRoute({}, ["local_session"], "local_session")).toBe(false);
+  });
+});
+
+// Synthetic Cursor-style `--list-models` rows: no recorded real catalog/init pair exists.
+describe("observedModelCatalogMatch (synthetic catalogs)", () => {
+  const row = (id: string, label: string | null, origin?: "hint") =>
+    HarnessModel.parse({ id, label, ...(origin ? { origin } : {}) });
+  const catalog = [
+    row("gpt-5.5-high", "GPT-5.5 High"),
+    row("gpt-5.5-high-fast", "GPT-5.5 High Fast"),
+    row("gpt-5.5", "GPT-5.5"),
+    row("auto", "auto"),
+    row("unlabelled-model", null),
+  ];
+
+  it("names the only row whose label is byte-identical, keeping full speed/effort variants", () => {
+    expect(observedModelCatalogMatch("GPT-5.5 High", catalog, null)).toEqual({
+      label: "GPT-5.5 High",
+      id: "gpt-5.5-high",
+      source: "account_catalog",
+      profile_id: null,
+    });
+    expect(observedModelCatalogMatch("GPT-5.5 High Fast", catalog, "cursor-work")).toEqual({
+      label: "GPT-5.5 High Fast",
+      id: "gpt-5.5-high-fast",
+      source: "account_catalog",
+      profile_id: "cursor-work",
+    });
+    // A row may legitimately carry its own id as its label.
+    expect(observedModelCatalogMatch("auto", catalog, null)?.id).toBe("auto");
+  });
+
+  it("is no proof without exact equality: no trim, case-fold, spacing or id-as-label reading", () => {
+    for (const observed of [
+      "gpt-5.5 high",
+      "GPT-5.5 HIGH",
+      " GPT-5.5 High",
+      "GPT-5.5 High ",
+      "GPT-5.5  High",
+      "GPT-5.5-High",
+      "GPT-5.5 Hi",
+      // A listed id is not a label: the raw observed string already names it.
+      "gpt-5.5-high",
+      "unlabelled-model",
+    ])
+      expect(observedModelCatalogMatch(observed, catalog, null)).toBeNull();
+  });
+
+  it("is no proof when the label is ambiguous or collides with another row's id", () => {
+    const duplicated = [...catalog, row("gpt-5.5-high-legacy", "GPT-5.5 High")];
+    expect(observedModelCatalogMatch("GPT-5.5 High", duplicated, null)).toBeNull();
+    const colliding = [row("composer-2", "Composer"), row("Composer", "Composer Legacy")];
+    expect(observedModelCatalogMatch("Composer", colliding, null)).toBeNull();
+  });
+
+  it("is no proof from a hint row, an empty catalog, a blank string or an invalid profile id", () => {
+    const hinted = [row("gpt-5.5-high", "GPT-5.5 High", "hint")];
+    expect(observedModelCatalogMatch("GPT-5.5 High", hinted, null)).toBeNull();
+    // A hint row still counts as an id collision: never weaker than the live rows.
+    const shadowed = [row("Composer", null, "hint"), row("composer-2", "Composer")];
+    expect(observedModelCatalogMatch("Composer", shadowed, null)).toBeNull();
+    expect(observedModelCatalogMatch("GPT-5.5 High", [], null)).toBeNull();
+    const blank = [row("blank-label", " "), row("empty-label", "")];
+    expect(observedModelCatalogMatch(" ", blank, null)).toBeNull();
+    expect(observedModelCatalogMatch("", blank, null)).toBeNull();
+    expect(observedModelCatalogMatch("GPT-5.5 High", catalog, "")).toBeNull();
   });
 });

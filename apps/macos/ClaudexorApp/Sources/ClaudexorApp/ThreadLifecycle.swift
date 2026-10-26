@@ -52,6 +52,7 @@ extension AppModel {
         guard selectedHistory === history else { return }
         await history.open()
         guard selectedHistory === history else { return }
+        await loadHistoryDelegates(history)
         if let reason = history.errorMessage { threadStatus = "Could not load thread: \(reason)" }
         evictBackgroundRunData()
     }

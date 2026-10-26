@@ -7,7 +7,7 @@ import Observation
 @MainActor @Observable final class ThreadHistoryStore {
     typealias Read = @MainActor (ThreadHistorySelector?, Int, String?) async throws -> ThreadHistoryPage
     enum State: Equatable { case loading, ready, failed(String) }
-    struct Replay { var cursor: String; var ids: Set<String> }
+    struct Replay { var cursor: String; var ids: Set<String>; var limit: Int }
     struct LiveFact { var task: TaskRun; var throughRead: Int }
     let locationID: ExecutionLocationID
     let threadID: String
@@ -23,12 +23,21 @@ import Observation
     var mountedIDs: [String] = []
     var hasOlder = false
     var hasNewer = false
-    var newCount = 0
-    var following = true
+    var newCount: Int? = 0
+    var following = true { didSet { if following { readingAnchor = nil; newCount = 0 } } }
     var readingAnchor: String?
     var navigationRevision = 0
     var navigationTarget: String?
     var navigationFollows = true
+    var navigationBottom = false
+    struct RowSizeKey: Hashable {
+        let id: String
+        let epoch: String
+        let sequence: Int
+        init(_ row: ThreadHistoryTurn) { id = row.id; epoch = row.revision.epoch; sequence = row.revision.sequence }
+    }
+    @ObservationIgnored var rowSizes: [RowSizeKey: Int] = [:]
+    @ObservationIgnored var measureRow: (ThreadHistoryTurn) -> Int = { (try? JSONEncoder().encode($0).count) ?? 0 }
     var prepare: (([ThreadHistoryTurn]) -> Void)?
     var didReadHeader: ((ThreadHistoryHeader) -> Void)?
     var records: [String: ThreadHistoryTurn] = [:]
@@ -36,6 +45,10 @@ import Observation
     var replays: [Replay] = []
     var liveFacts: [String: LiveFact] = [:]
     var liveRunIDs: Set<String> = []
+    var metadataAck: (summary: ThreadSummary, throughRead: Int)?
+    var delegateReads: Set<String> = []
+    @ObservationIgnored var delegateTask: Task<Void, Never>?
+    var resolvedInteractions: [String: Set<String>] = [:]
     var oldestID: String?
     var readSerial = 0
     var intent = 0
@@ -49,11 +62,17 @@ import Observation
     }
 
     var rows: [ThreadHistoryTurn] { mountedIDs.compactMap { records[$0] } }
-    var cacheBytes: Int { records.values.reduce(0) { $0 + ((try? JSONEncoder().encode($1).count) ?? 0) } }
+    var cacheBytes: Int { records.values.reduce(0) { $0 + encodedSize($1) } }
     var tailMounted: Bool { mountedIDs.last == header?.latestTurnId }
 
     func cancelNavigation() { intent += 1 }
     func newCountReset() { newCount = 0 }
+
+    func acknowledgeMetadata(_ summary: ThreadSummary) {
+        guard summary.id == threadID else { return }
+        metadataAck = (summary, readSerial)
+        if let updated = header?.thread.applying(summary) { header?.thread = updated }
+    }
 
     func open() async {
         if header == nil { state = .loading; errorMessage = nil }
@@ -65,9 +84,14 @@ import Observation
         let ticket = intent
         jumpState = .loading
         do {
-            let (page, serial) = try await fetch(nil)
+            var result = try await fetch(nil)
             guard ticket == intent else { jumpState = .ready; return }
-            guard install([page], ids: page.turns.map(\.id), reset: true, serial: serial) else {
+            if let revision, result.0.revision.epoch == revision.epoch,
+               result.0.revision.sequence < revision.sequence {
+                result = try await fetch(nil)
+            }
+            guard ticket == intent else { jumpState = .ready; return }
+            guard install([result.0], ids: result.0.turns.map(\.id), reset: true, serial: result.1) else {
                 jumpState = .failed; return
             }
             following = true; readingAnchor = nil; newCount = 0
@@ -94,22 +118,20 @@ import Observation
         do {
             let (page, serial) = try await fetch(selector, limit: limit)
             guard ticket == intent else { finishTravel(); return }
-            if changedEpoch(page) { try await resnapshot(anchor: anchor); finishTravel(); return }
+            if changedEpoch(page) { try await resnapshot(anchor: anchor, follows: false); finishTravel(); return }
             let combined = unique(rows + page.turns)
             let window = earlier ? Array(combined.prefix(20)) : Array(combined.suffix(20))
             let chosen = fitting(window, anchor: anchor, earlier: earlier)
             // A boundary page is coverage, never a replacement empty feed.
-            guard install([page], ids: chosen.map(\.id), reset: false, serial: serial) else {
+            guard install([page], ids: chosen.map(\.id), reset: false, serial: serial, limit: limit) else {
                 if earlier { earlierState = .failed } else { laterState = .failed }; return
             }
-            following = !earlier && tailMounted
-            readingAnchor = following ? nil : anchor
-            if following { newCount = 0 }
-            navigate(following ? nil : anchor, follows: following)
+            following = false; readingAnchor = anchor
+            navigate(anchor, follows: false, bottom: !earlier)
             finishTravel()
         } catch {
             if isStale(error) {
-                do { try await resnapshot(anchor: anchor); finishTravel() }
+                do { try await resnapshot(anchor: anchor, follows: false); finishTravel() }
                 catch { fail(error, control: earlier ? .earlier : .later) }
             } else { fail(error, control: earlier ? .earlier : .later) }
         }
@@ -139,16 +161,18 @@ import Observation
     }
 
     private func refreshOnce() async {
-        let ticket = intent
-        let anchor = readingAnchor ?? mountedIDs.first
         do {
             if replays.isEmpty {
                 let (page, serial) = try await fetch(nil)
-                guard ticket == intent else { return }
-                install([page], ids: page.turns.map(\.id), reset: header == nil, serial: serial)
+                if changedEpoch(page) {
+                    try await resnapshot(anchor: readingAnchor); return
+                }
+                install([page], ids: following ? page.turns.map(\.id) : mountedIDs,
+                    reset: header == nil, serial: serial)
                 return
             }
             var pages: [ThreadHistoryPage] = []
+            var replayLimits: [String: Int] = [:]
             var serial = readSerial
             for range in replays {
                 var cursor: String? = range.cursor
@@ -157,34 +181,40 @@ import Observation
                     guard let next = cursor, seen.insert(next).inserted else {
                         throw GatewayError.decoding("History replay repeated a cursor.")
                     }
-                    let result = try await fetch(.cursor(next))
-                    guard ticket == intent else { return }
-                    if changedEpoch(result.0) { try await resnapshot(anchor: anchor); return }
+                    let result = try await fetch(.cursor(next), limit: range.limit)
+                    if changedEpoch(result.0) {
+                        try await resnapshot(anchor: readingAnchor ?? mountedIDs.first); return
+                    }
                     pages.append(result.0); serial = result.1
+                    if let replay = result.0.replayCursor { replayLimits[replay] = range.limit }
                     cursor = result.0.replayNextCursor
                 } while cursor != nil
             }
-            // Frozen replay membership deliberately excludes arrivals. Only a
-            // following viewport reads a new tail; readers keep every mounted ID.
+            // Gestures cancel navigation, never background facts. Re-check the
+            // viewport after the tail await: an explicit travel may have landed.
             if following, let latest = pages.last?.header.latestTurnId, latest != mountedIDs.last {
                 let (page, next) = try await fetch(nil)
-                guard ticket == intent else { return }
-                install([page], ids: page.turns.map(\.id), reset: false, serial: next)
+                if changedEpoch(page) {
+                    try await resnapshot(anchor: readingAnchor ?? mountedIDs.first); return
+                }
+                install([page], ids: following ? page.turns.map(\.id) : mountedIDs,
+                    reset: false, serial: next)
             } else {
-                install(pages, ids: mountedIDs, reset: false, serial: serial)
+                install(pages, ids: mountedIDs, reset: false, serial: serial, replayLimits: replayLimits)
             }
         } catch {
-            guard ticket == intent else { return }
             if isStale(error) {
-                do { try await resnapshot(anchor: anchor) }
+                do { try await resnapshot(anchor: readingAnchor ?? mountedIDs.first) }
                 catch { fail(error, control: .refresh) }
             } else { fail(error, control: .refresh) }
         }
     }
 
-    private func resnapshot(anchor: String?) async throws {
-        let ticket = intent
-        let (first, serial) = try await fetch(anchor.map(ThreadHistorySelector.aroundTurnId), expected: false)
+    private func resnapshot(anchor: String?, follows: Bool? = nil) async throws {
+        let ticket = intent, navigation = navigationRevision
+        let recoveringFollower = follows ?? following
+        let anchor = recoveringFollower ? nil : anchor
+        let (first, serial) = try await fetch(anchor.map(ThreadHistorySelector.aroundTurnId))
         var pages = [first]
         var chosen = first.turns
         var lastSerial = serial
@@ -194,7 +224,7 @@ import Observation
             chosen = Array(first.turns.suffix(preceding + 1))
             var cursor = first.newerCursor
             while chosen.count < 20, let next = cursor {
-                let result = try await fetch(.cursor(next), expected: false)
+                let result = try await fetch(.cursor(next))
                 guard result.0.epoch == first.epoch, result.0.revision.epoch == first.revision.epoch else { throw GatewayError.decoding("History changed during recovery. Retry loading messages.") }
                 pages.append(result.0); lastSerial = result.1
                 chosen = Array(unique(chosen + result.0.turns).prefix(20))
@@ -202,15 +232,26 @@ import Observation
                 if result.0.turns.isEmpty { break }
             }
         }
-        guard ticket == intent else { return }
-        install(pages, ids: chosen.map(\.id), reset: true, serial: lastSerial)
-        if let anchor, mountedIDs.contains(anchor) { navigate(anchor, follows: false) }
+        guard ticket == intent, navigation == navigationRevision else { return }
+        guard install(pages, ids: chosen.map(\.id), reset: true, serial: lastSerial) else { return }
+        following = recoveringFollower
+        readingAnchor = anchor
+        if recoveringFollower { navigate(nil, follows: true) }
+        else if let anchor, mountedIDs.contains(anchor) { navigate(anchor, follows: false) }
     }
 
     func fetch(_ selector: ThreadHistorySelector?, limit: Int = 20, expected: Bool = true) async throws -> (ThreadHistoryPage, Int) {
         readSerial += 1
         let serial = readSerial
         return (try await read(selector, limit, expected ? storeID : nil), serial)
+    }
+
+    func encodedSize(_ row: ThreadHistoryTurn) -> Int {
+        let key = RowSizeKey(row)
+        if let size = rowSizes[key] { return size }
+        let bytes = measureRow(row)
+        rowSizes[key] = bytes
+        return bytes
     }
 
     func changedEpoch(_ page: ThreadHistoryPage) -> Bool {
@@ -223,7 +264,7 @@ import Observation
     func fitting(_ rows: [ThreadHistoryTurn], anchor: String, earlier: Bool) -> [ThreadHistoryTurn] {
         var result = rows
         let sizes = Dictionary(uniqueKeysWithValues: rows.map {
-            ($0.id, (try? JSONEncoder().encode($0).count) ?? 0)
+            ($0.id, encodedSize($0))
         })
         var bytes = sizes.values.reduce(0, +)
         while bytes > 4 * 1024 * 1024, result.count > 1 {
@@ -240,8 +281,8 @@ import Observation
         return body.contains("thread_history_cursor_stale")
     }
 
-    private func navigate(_ anchor: String?, follows: Bool) {
-        navigationTarget = anchor; navigationFollows = follows; navigationRevision += 1
+    private func navigate(_ anchor: String?, follows: Bool, bottom: Bool = false) {
+        navigationTarget = anchor; navigationFollows = follows; navigationBottom = bottom; navigationRevision += 1
     }
 
     private func finishTravel() { earlierState = .ready; laterState = .ready }

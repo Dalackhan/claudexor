@@ -41,7 +41,7 @@ struct EarlierTurnsControl: View {
 struct LaterTurnsControl: View {
     var state: HistoryControlState = .ready
     var showJump = true
-    var newCount = 0
+    var newCount: Int? = 0
     var jumpState: HistoryControlState = .ready
     var later: () -> Void
     var latest: () -> Void
@@ -62,16 +62,20 @@ struct LaterTurnsControl: View {
 }
 
 struct JumpToLatestControl: View {
-    var newCount = 0
+    var newCount: Int? = 0
     var floating = true
     var state: HistoryControlState = .ready
     var action: () -> Void
+    static func arrivalLabel(_ count: Int?) -> String {
+        guard let count else { return "new" }
+        return count > 99 ? "99+" : count > 0 ? "\(count) new" : ""
+    }
     var body: some View {
         Button(action: action) {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: "arrow.down")
                 Text(state == .failed ? "Retry jumping to latest" : "Jump to latest")
-                Text(state == .loading ? "Loading" : newCount > 99 ? "99+" : newCount > 0 ? "\(newCount) new" : "")
+                Text(state == .loading ? "Loading" : Self.arrivalLabel(newCount))
                     .monospacedDigit().frame(width: 64, alignment: .trailing)
                     .accessibilityHidden(newCount == 0)
             }.font(.callout).fixedSize()
@@ -86,7 +90,7 @@ struct JumpToLatestControl: View {
         }.buttonStyle(.plain).disabled(state == .loading)
             .help(state == .loading ? "Loading the newest turns." : "Return to the newest turn and follow new activity.")
             .accessibilityLabel(state == .failed ? "Retry jumping to latest" : "Jump to latest")
-            .accessibilityValue(state == .loading ? "Loading" : newCount > 0 ? "\(newCount) new" : "")
+            .accessibilityValue(state == .loading ? "Loading" : Self.arrivalLabel(newCount))
     }
 }
 
@@ -106,9 +110,9 @@ struct SavedHistoryControl: View {
 /// the scroll content. A zero-height container explicitly removes the inset.
 struct ConversationJumpInset: ViewModifier {
     var isPresented: Bool
-    var newCount: Int
+    var newCount: Int?
     var state: HistoryControlState = .ready
-    var measuredHeight: (CGFloat) -> Void
+    var measuredHeight: (CGFloat) -> Void = { _ in }
     var latest: () -> Void
 
     func body(content: Content) -> some View {

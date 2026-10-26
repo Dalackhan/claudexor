@@ -7,6 +7,7 @@ import ClaudexorKit
     var transcripts: [String: Bool] = [:]
     var planText: [String: [String: String]] = [:]
     var planSelections: [String: [String: Set<String>]] = [:]
+    var interactionDrafts: [String: [String: InteractionDraft]] = [:]
     var selectedMessages: Set<String> = []
     var focusedMessages: Set<String> = []
     var latestTurnID: String?

@@ -16,6 +16,35 @@ private final class HistoryCaptureWindow: NSWindow {
 @MainActor @Suite(.serialized)
 struct HistoryMockupRenderingTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["CX_HISTORY_MOCKUP"] == "1"))
+    func tailTextFocusKeepsJumpHiddenAndClearingResumesFollowing() async throws {
+        let app = NSApplication.shared
+        let policy = app.activationPolicy()
+        app.setActivationPolicy(.prohibited)
+        defer { app.setActivationPolicy(policy) }
+        let source = try HistoryTestSource(count: 1)
+        let model = HistoryMockupFixtures.model(detail: source.detail, runs: source.runs, source: source)
+        let state = ConversationFeedState()
+        let history = try #require(model.selectedHistory)
+        let (host, window) = makeWindow(ThreadsScreen(feedState: state).environment(model), width: 1100, appearance: .aqua)
+        defer { window.close() }
+        await settle(host)
+        let scroll = try #require(feedScroll(host))
+        #expect(state.atBottom && history.following)
+        let promptY = try proseY(host, prefix: "Checkpoint 1:")
+        let viewportY = scroll.contentView.convert(scroll.contentView.bounds, to: host).minY
+        #expect(abs(promptY - viewportY - Theme.Spacing.lg - 8) <= 1)
+        print("WHOLE THREAD: prompt=\(promptY) viewport=\(viewportY)")
+        history.presentation.focusedMessages.insert("mock-turn-0")
+        history.presentation.selectedMessages.insert("mock-turn-0")
+        await settle(host)
+        #expect(scroll.contentInsets.bottom == 0)
+        history.presentation.focusedMessages.removeAll()
+        history.presentation.selectedMessages.removeAll()
+        await settle(host)
+        #expect(history.following && history.readingAnchor == nil)
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CX_HISTORY_MOCKUP"] == "1"))
     func renderHistoryMockups() async throws {
         let app = NSApplication.shared
         let oldPolicy = app.activationPolicy()
@@ -267,7 +296,7 @@ struct HistoryMockupRenderingTests {
                                     history: ThreadHistoryStore) async throws {
         let scroll = try #require(feedScroll(host))
         let document = try #require(scroll.documentView)
-        #expect(abs(scroll.contentInsets.bottom - state.floatingControlHeight - 8) <= 1)
+        #expect(abs(scroll.contentInsets.bottom - 39) <= 1)
         let origin = scroll.contentView.bounds.origin
         let row = history.rows[3]
         let next = history.rows[4]
@@ -370,7 +399,7 @@ struct HistoryMockupRenderingTests {
             "pixel_size": ["width": bitmap.pixelsWide, "height": bitmap.pixelsHigh], "claim": claim,
             "mounted_turn_ids": state?.mountedIDs ?? [], "new_count": state?.newCount ?? 0,
             "bottom_content_inset": state == nil ? 0 : feedScroll(host)?.contentInsets.bottom ?? 0,
-            "floating_control_height": state?.floatingControlHeight ?? 0,
+            "floating_control_height": max(0, (feedScroll(host)?.contentInsets.bottom ?? 0) - 8),
             "native_prose_views": prose.count, "visible_prose": visibleProse,
             "residual_selection_fields": residuals,
             "selected_ranges": selected.map { ["location": $0.selectedRange().location, "length": $0.selectedRange().length] },

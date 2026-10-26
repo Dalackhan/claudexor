@@ -3,16 +3,15 @@ import ClaudexorKit
 
 /// Viewport state only. The located history store owns all mounted DTOs.
 @MainActor @Observable final class ConversationFeedState {
-    struct NavigationAnchor: Hashable, Sendable { let turnID: String; let request: Int }
+    struct NavigationAnchor: Hashable, Sendable { let turnID: String; let request: Int; var bottom = false }
     enum Viewport: Equatable { case followingTail, reading(anchor: String?) }
     var viewport: Viewport = .followingTail
     var mountedIDs: [String] = []
     var position = ScrollPosition(idType: NavigationAnchor.self)
-    var newCount = 0
+    var newCount: Int? = 0
     var atBottom = true
     var viewportHeight: CGFloat = 600
     var width: CGFloat = 680
-    var floatingControlHeight: CGFloat = 0
     var earlierState: HistoryControlState = .ready
     var laterState: HistoryControlState = .ready
     var presentation = ConversationPresentation()
@@ -27,8 +26,8 @@ import ClaudexorKit
     var follows: Bool { if case .followingTail = viewport { true } else { false } }
     var positionedTurnID: String? { position.viewID(type: NavigationAnchor.self)?.turnID }
 
-    func markerID(for turnID: String) -> NavigationAnchor {
-        NavigationAnchor(turnID: turnID, request: navigationRevision)
+    func markerID(for turnID: String, bottom: Bool = false) -> NavigationAnchor {
+        NavigationAnchor(turnID: turnID, request: navigationRevision, bottom: bottom)
     }
 
     func synchronize(_ history: ThreadHistoryStore) {
@@ -42,7 +41,7 @@ import ClaudexorKit
         synchronize(history)
         viewport = history.navigationFollows ? .followingTail : .reading(anchor: history.navigationTarget)
         navigate(to: history.navigationTarget ?? Self.bottomID,
-            anchor: history.navigationFollows ? .bottom : .top)
+            anchor: history.navigationFollows || history.navigationBottom ? .bottom : .top)
     }
 
     func navigate(to id: String, anchor: UnitPoint) {
@@ -56,7 +55,8 @@ import ClaudexorKit
         // ScrollPosition coalesces repeated requests for the same target. Only
         // the zero-height marker changes identity; retained TurnCards and their
         // native selections keep their stable turn IDs through the reveal.
-        position.scrollTo(id: markerID(for: navigationTarget), anchor: navigationAnchor)
+        let endOfCard = navigationAnchor == .bottom && mountedIDs.contains(navigationTarget)
+        position.scrollTo(id: markerID(for: navigationTarget, bottom: endOfCard), anchor: navigationAnchor)
     }
 
     func geometry(bottom: Bool, tailMounted: Bool) {
@@ -84,7 +84,7 @@ struct ConversationFeed: View {
     var body: some View {
         ScrollView {
             ConversationHistoryStack(spacing: 0) {
-                if !turns.isEmpty {
+                if !turns.isEmpty && (history.hasOlder || !tailMounted) {
                     EarlierTurnsControl(hasEarlier: history.hasOlder,
                         state: history.earlierState, action: showEarlier)
                         .frame(maxWidth: .infinity).padding(.bottom, Theme.Spacing.md)
@@ -99,6 +99,7 @@ struct ConversationFeed: View {
                             executionRoot: ThreadWorkspacePanel.executionRoot(for: thread), historyRow: turn)
                             .conversationMeasure().padding(.bottom, Theme.Spacing.md).id(turn.id)
                     }
+                    Color.clear.frame(height: 0).id(state.markerID(for: turn.id, bottom: true))
                 }
                 if !tailMounted {
                     LaterTurnsControl(state: history.laterState, showJump: state.atBottom,
@@ -139,21 +140,24 @@ struct ConversationFeed: View {
             state.viewportHeight = size.height
             state.width = min(680, max(1, size.width - 2 * Theme.Spacing.lg))
         }
-        .modifier(ConversationJumpInset(isPresented: !state.follows && !(state.atBottom && !tailMounted),
+        .modifier(ConversationJumpInset(isPresented: !state.follows && !state.atBottom,
             newCount: history.newCount, state: history.jumpState,
-            measuredHeight: { state.floatingControlHeight = $0 }, latest: jump))
+            latest: jump))
         .environment(history.presentation)
         .onAppear {
             state.synchronize(history)
             history.prepare = { rows in for row in rows { _ = prepare(row) } }
         }
         .onDisappear { history.prepare = nil }
-        .onChange(of: history.presentation.selectedMessages) { _, selected in
-            if !selected.isEmpty { state.viewport = .reading(anchor: state.positionedTurnID) }
-        }
-        .onChange(of: history.presentation.focusedMessages) { _, focused in
-            if !focused.isEmpty { state.viewport = .reading(anchor: state.positionedTurnID) }
-        }
+        .onChange(of: history.presentation.selectedMessages) { textFocusChanged() }
+        .onChange(of: history.presentation.focusedMessages) { textFocusChanged() }
+    }
+
+    private func textFocusChanged() {
+        if !history.presentation.selectedMessages.isEmpty || !history.presentation.focusedMessages.isEmpty {
+            state.viewport = .reading(anchor: state.visibleTurnID ?? state.positionedTurnID)
+        } else if state.atBottom && tailMounted { state.viewport = .followingTail }
+        synchronizeReading()
     }
 
     private func synchronizeReading() {

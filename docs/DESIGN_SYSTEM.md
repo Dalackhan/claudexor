@@ -463,7 +463,11 @@ frequency and volume are. The contracts:
   In-feed “Show earlier turns” and “Show later turns” move the window. One
   “Jump to latest” sits beside the later control at its bottom edge, otherwise
   in a solid raised capsule above the composer while reading. Its 64pt count
-  slot reports delivered arrivals only; it never shifts the label. Opens use
+  slot reports the header ordinal difference, or unnumbered “new” when ordinal
+  evidence is unavailable; it never shifts the label. A click or selection at the
+  real tail bottom shows no floating Jump; clearing text focus/selection there
+  resumes following. The whole-thread tail hides “Beginning of saved history”.
+  Show later keeps the former last turn at the bottom edge. Opens use
   the bottom initial anchor; explicit moves use `ScrollPosition` by ID.
   A reading window stays fixed when new turns arrive. Local and remote feeds
   use the addressed engine history read; a selected thread retains at most two
@@ -472,10 +476,14 @@ frequency and volume are. The contracts:
   cumulative unbounded "load more", reversed copies, or thousand-row eager stacks.
 - **History observation and recovery.** Open and Jump request the newest page.
   Earlier/later address the first/last mounted turn, including after partial
-  eviction. Refresh replays the mounted ranges through every continuation,
-  coalescing one in-flight read and at most one trailing read. Only newer row
+  eviction. Refresh replays the mounted ranges with each cursor’s original request limit
+  through every continuation, coalescing one in-flight read and at most one trailing read. Only newer row
   revisions replace painted facts. Stale cursors or a new serving incarnation
-  re-snapshot around the visible reading turn, then refill below it. One
+  re-snapshot around the visible reading turn, then refill below it; followers
+  recover from the newest page and clear their reading anchor. Gestures cancel
+  explicit navigation while background facts still land. A tail refresh must
+  recheck following after the read; a Jump overtaken by a newer revision retries
+  its newest read once. One
   scroll-level target-visibility callback identifies the first visible card in
   mounted order, including partially visible and taller-than-viewport cards.
   Navigation markers have separate typed IDs; there are no row geometry observers.
@@ -493,9 +501,17 @@ frequency and volume are. The contracts:
   Composer and Stop read the compact header, independent of the mounted range.
   Plan-answer relations come from the engine even when the answer is off page.
 - **Presentation and workspace ownership.** Drafts, expansions and transcript
-  pins outlive rows in the selected located thread's presentation store. They do
-  not pin DTOs. The workspace's legacy full-detail roster is fetched only while
-  the panel is shown, independently of feed refresh. Initial loading, loaded
+  pins outlive rows in the selected located thread's presentation store. Interaction
+  choices and free text are keyed by run/interaction/question and clear only on
+  acknowledged resolution, including withdrawal/timeout. They do not pin DTOs.
+  The workspace's legacy full-detail roster is fetched only while the panel is
+  shown, with independent coalesced invalidation on accepted turns and header
+  membership changes. Routine feed replay does not re-fetch it; a freshly selected
+  receipt remains addressable before its roster catches up. A mounted parent with
+  projected missing Delegate children gets one bounded addressed parent read.
+  Stream updates publish live card fields; older detail reads preserve pending
+  questions and cannot resurrect resolved ones. PATCH metadata wins over older
+  in-flight reads; a replacement remote store retires the old history pin. Initial loading, loaded
   empty history, and a failed read remain distinct from the new-thread illustration.
 - **Per-card equatable containment (D-13 E).** `AppModel` is one coarse
   `@Observable`, so a low-frequency write to the `liveTasks` array (a status flip

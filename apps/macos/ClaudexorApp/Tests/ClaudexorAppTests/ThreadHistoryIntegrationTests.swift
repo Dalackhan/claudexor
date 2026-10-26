@@ -4,10 +4,14 @@ import CryptoKit
 import Testing
 @testable import ClaudexorApp
 
+@Suite(.serialized) struct HistoryGatewayTests {}
+typealias ThreadHistoryIntegrationTests = HistoryGatewayTests.ThreadHistoryIntegrationTests
+
+extension HistoryGatewayTests {
 @MainActor @Suite(.serialized)
 struct ThreadHistoryIntegrationTests {
-    @Test(arguments: [ExecutionLocationID.local, ExecutionLocationID.remote(UUID(uuidString: "12345678-1234-1234-1234-123456789ABC")!)])
-    func terminalPublicationDuringTrailingReplayWinsWithoutThirdGET(location: ExecutionLocationID) async throws {
+    @Test(arguments: [ExecutionLocationID.local, ExecutionLocationID.remote(UUID(uuidString: "12345678-1234-1234-1234-123456789ABC")!)], ["running", "terminal-empty", "terminal-older"])
+    func terminalPublicationDuringTrailingReplayWinsWithoutThirdGET(location: ExecutionLocationID, stale: String) async throws {
         defer { HistoryURLProtocol.handler = nil }
         let source = try HistoryTestSource(count: 1)
         source.runs[0].phase = .running
@@ -29,6 +33,10 @@ struct ThreadHistoryIntegrationTests {
         HistoryURLProtocol.handler = { request in
             if request.url?.path.hasSuffix("/history") == true {
                 gets += 1
+                if gets == 2 && stale != "running" {
+                    source.runs[0].phase = .succeeded
+                    source.runs[0].answerText = stale == "terminal-older" ? "older terminal output" : nil
+                }
                 let snapshot = try source.page(.cursor("replay:0:1"))
                 if gets == 1 { await lead.wait() } else { await tail.wait() }
                 return (200, try JSONEncoder().encode(snapshot))
@@ -129,7 +137,7 @@ struct ThreadHistoryIntegrationTests {
         #expect(model.composerTurnState == .idle)
     }
 
-    private func makeModel(_ location: ExecutionLocationID) -> (AppModel, GatewayClient) {
+    func makeModel(_ location: ExecutionLocationID) -> (AppModel, GatewayClient) {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [HistoryURLProtocol.self]
         let client = GatewayClient(baseURL: URL(string: "http://history.invalid")!, token: "fixture", session: URLSession(configuration: config))
@@ -140,7 +148,7 @@ struct ThreadHistoryIntegrationTests {
         return (model, client)
     }
 
-    private func until(_ predicate: () -> Bool) async throws {
+    func until(_ predicate: () -> Bool) async throws {
         for _ in 0..<2_000 {
             if predicate() { return }
             try await Task.sleep(for: .milliseconds(1))
@@ -149,13 +157,15 @@ struct ThreadHistoryIntegrationTests {
     }
 }
 
+}
+
 @MainActor private final class HistoryReadGate {
     private var continuation: CheckedContinuation<Void, Never>?
     func wait() async { await withCheckedContinuation { continuation = $0 } }
     func release() { continuation?.resume(); continuation = nil }
 }
 
-private final class HistoryURLProtocol: URLProtocol {
+final class HistoryURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: (@MainActor (URLRequest) async throws -> (Int, Data))?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }

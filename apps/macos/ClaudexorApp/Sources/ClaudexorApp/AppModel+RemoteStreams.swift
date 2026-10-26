@@ -103,6 +103,7 @@ extension AppModel {
                               self.remoteRunStreamTokens[key] == token
                         else { return }
                         if envelope.seq > 0 { lastEventID = envelope.seq }
+                        self.applyRemoteHistoryCardEvent(envelope, runID: runID, at: locationID)
                         attempt = 0
                         if self.selectedExecutionLocation == locationID,
                            self.selectedThreadId == threadID,

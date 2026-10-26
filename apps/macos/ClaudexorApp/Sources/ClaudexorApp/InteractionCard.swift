@@ -6,10 +6,13 @@ import SwiftUI
 /// may be disabled. One answer card is shown on every tab of the run.
 struct InteractionCard: View {
     @Environment(AppModel.self) private var model
+    @Environment(ConversationPresentation.self) private var presentation: ConversationPresentation?
     let interaction: PendingInteraction
 
-    @State private var selections: [String: Set<String>] = [:]
-    @State private var freeText: [String: String] = [:]
+    @State private var standaloneDraft = InteractionDraft()
+    private var draft: Binding<InteractionDraft> {
+        presentation?.interactionDraft(runID: interaction.runId, interactionID: interaction.interactionId) ?? $standaloneDraft
+    }
     @State private var sending = false
     @State private var errorMessage: String?
 
@@ -57,7 +60,7 @@ struct InteractionCard: View {
                                     .padding(.vertical, Theme.Spacing.xs)
                             }
                             .buttonStyle(.plain)
-                            .selectedChip(active: selections[question.id, default: []].contains(option.label))
+                            .selectedChip(active: draft.wrappedValue.selections[question.id, default: []].contains(option.label))
                             .help(option.description ?? option.label)
                         }
                     }
@@ -91,26 +94,26 @@ struct InteractionCard: View {
     }
 
     private var hasAnyAnswer: Bool {
-        InteractionAnswerComposer.hasAnyAnswer(interaction, selections: selections, freeText: freeText)
+        InteractionAnswerComposer.hasAnyAnswer(interaction, selections: draft.wrappedValue.selections, freeText: draft.wrappedValue.freeText)
     }
 
     private func binding(for questionId: String) -> Binding<String> {
-        Binding(get: { freeText[questionId] ?? "" }, set: { freeText[questionId] = $0 })
+        Binding(get: { draft.wrappedValue.freeText[questionId] ?? "" }, set: { draft.wrappedValue.freeText[questionId] = $0 })
     }
 
     private func toggle(question: InteractionQuestion, label: String) {
-        var set = selections[question.id, default: []]
+        var set = draft.wrappedValue.selections[question.id, default: []]
         if set.contains(label) {
             set.remove(label)
         } else {
             if !question.multiSelect { set.removeAll() }
             set.insert(label)
         }
-        selections[question.id] = set
+        draft.wrappedValue.selections[question.id] = set
     }
 
     private func submit() {
-        let answers = InteractionAnswerComposer.payloads(interaction, selections: selections, freeText: freeText)
+        let answers = InteractionAnswerComposer.payloads(interaction, selections: draft.wrappedValue.selections, freeText: draft.wrappedValue.freeText)
         guard !answers.isEmpty else { return }
         sending = true
         errorMessage = nil

@@ -38,7 +38,7 @@ enum LegacyHistoryFixture {
         old = ["storeId": "fixture-store", "threadId": thread["id"]!, "epoch": "partition", "revision": revision,
             "header": ["thread": thread, "headRun": head,
                 "headRunStatus": last?["run"] == nil ? "unbound" : "available",
-                "latestTurnId": last?["id"] ?? NSNull(), "sessions": old["sessions"] ?? [], "sessionsComplete": true],
+                "latestTurnId": last?["id"] ?? NSNull(), "latestOrdinal": last?["ordinal"] ?? NSNull(), "sessions": old["sessions"] ?? [], "sessionsComplete": true],
             "turns": turns, "hasOlder": false, "hasNewer": false,
             "replayCursor": turns.isEmpty ? NSNull() : "fixture-replay" as Any]
         return try JSONSerialization.data(withJSONObject: old)

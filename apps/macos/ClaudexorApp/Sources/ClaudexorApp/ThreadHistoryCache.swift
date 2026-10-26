@@ -5,7 +5,12 @@ extension ThreadHistoryStore {
     /// Merge before mounting, then reclaim DTOs outside the two-page (40 row /
     /// 4 MiB) cache. Mounted rows have priority; drafts are never consulted.
     @discardableResult
-    func install(_ pages: [ThreadHistoryPage], ids: [String], reset: Bool, serial: Int) -> Bool {
+    func install(_ pages: [ThreadHistoryPage], ids: [String], reset: Bool, serial: Int,
+                 limit: Int = 20, replayLimits: [String: Int] = [:]) -> Bool {
+        defer {
+            let kept = Set(records.values.map(RowSizeKey.init))
+            rowSizes = rowSizes.filter { kept.contains($0.key) }
+        }
         guard let last = pages.last else { return false }
         if reset, let revision, last.revision.epoch == revision.epoch,
            last.revision.sequence < revision.sequence { return false }
@@ -21,7 +26,7 @@ extension ThreadHistoryStore {
         let pageIDs = Array((retainedPages + pages.map { $0.turns.map(\.id) }).suffix(2))
         let allowed = protected.union(pageIDs.flatMap { $0 })
         next = next.filter { allowed.contains($0.key) }
-        let sizes = next.mapValues { (try? JSONEncoder().encode($0).count) ?? 0 }
+        let sizes = next.mapValues { encodedSize($0) }
         var bytes = sizes.values.reduce(0, +)
         for id in next.values.sorted(by: { $0.revision.sequence < $1.revision.sequence }).map(\.id)
             where !protected.contains(id) && (next.count > 40 || bytes > 4 * 1024 * 1024) {
@@ -48,17 +53,24 @@ extension ThreadHistoryStore {
                 for index in replays.indices { replays[index].ids.subtract(members) }
                 if let index = replays.firstIndex(where: { $0.cursor == cursor }) {
                     replays[index].ids.formUnion(members)
-                } else { replays.append(Replay(cursor: cursor, ids: members)) }
+                } else { replays.append(Replay(cursor: cursor, ids: members, limit: replayLimits[cursor] ?? limit)) }
             }
         }
         replays = replays.compactMap {
             let ids = $0.ids.intersection(protected)
-            return ids.isEmpty ? nil : Replay(cursor: $0.cursor, ids: ids)
+            return ids.isEmpty ? nil : Replay(cursor: $0.cursor, ids: ids, limit: $0.limit)
         }
         if reset || revision == nil || last.revision.isNewer(than: revision!) {
-            if !following, let previous = header?.latestTurnId,
-               let latest = last.header.latestTurnId, previous != latest { newCount += 1 }
+            if !following, header?.latestTurnId != last.header.latestTurnId {
+                if let old = header?.latestOrdinal, let new = last.header.latestOrdinal, new >= old {
+                    newCount = newCount.map { $0 + new - old }
+                } else { newCount = nil }
+            }
             header = last.header; revision = last.revision; storeID = last.storeId
+            if let ack = metadataAck {
+                if serial <= ack.throughRead { header?.thread = last.header.thread.applying(ack.summary) }
+                else { metadataAck = nil }
+            }
             presentation.receiveLatest(last.header.latestTurnId)
             if let head = last.header.headRun, RunPhase(api: head.run.state).isActive {
                 liveRunIDs.insert(head.runId)
@@ -73,6 +85,7 @@ extension ThreadHistoryStore {
             if !last.hasNewer { hasNewer = false }
         }
         let runIDs = Set(rows.compactMap(\.runId)).union(header?.headRun.map { [$0.runId] } ?? [])
+        delegateReads.formIntersection(runIDs)
         liveRunIDs.formIntersection(runIDs)
         liveFacts = liveFacts.filter { id, fact in
             guard runIDs.contains(id) else { return false }

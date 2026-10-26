@@ -95,8 +95,7 @@ struct ThreadWorkspacePanel: View {
     }
 
     private var runIds: [String] {
-        let parents = detail.map(Self.threadRunIds) ?? []
-        return Self.workspaceRunIds(parentRunIds: parents, tasks: model.tasks)
+        model.workspaceRunIDs
     }
 
     /// The receipt filter: the run the panel is scoped/highlighted to, or nil for

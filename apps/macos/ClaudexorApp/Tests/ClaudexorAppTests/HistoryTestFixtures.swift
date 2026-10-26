@@ -68,6 +68,7 @@ import Foundation
             "storeId": "history-test-store", "threadId": detail.thread.id, "epoch": "partition",
             "revision": revision,
             "header": ["thread": thread, "latestTurnId": last?.id as Any? ?? NSNull(),
+                "latestOrdinal": last == nil ? NSNull() : count - 1 as Any,
                 "latestAdmission": admission, "headRun": headRun,
                 "headRunStatus": head == nil ? "unbound" : "available", "sessions": [], "sessionsComplete": true],
             "turns": try (start..<end).map { try rowJSON($0, revision: revision) },

@@ -10,9 +10,15 @@ extension AppModel {
             guard self.isCurrentGateway(client, at: locationID) else { throw CancellationError() }
             return page
         }
+        var latestTurnID: String?
         history.didReadHeader = { [weak self, weak history] header in
             guard let self, let history, self.selectedHistory === history else { return }
+            if latestTurnID != header.latestTurnId {
+                latestTurnID = header.latestTurnId
+                self.invalidateWorkspaceHistory()
+            }
             self.followHistoryHead(header, at: locationID)
+            Task { await self.loadHistoryDelegates(history) }
         }
         return history
     }
@@ -70,6 +76,13 @@ extension AppModel {
     /// The full legacy aggregate belongs exclusively to the visible workspace.
     /// A feed replay never invalidates or reissues this request.
     func loadWorkspaceHistory() async {
+        guard workspaceHistoryVisible, let id = selectedThreadId,
+              let client = gateway(for: selectedExecutionLocation) else { return }
+        let key = "\(selectedExecutionLocation.rawValue)|\(id)|\(ObjectIdentifier(client))"
+        await workspaceHistoryLoader.load(key: key) { [weak self] in await self?.readWorkspaceHistory() }
+    }
+
+    private func readWorkspaceHistory() async {
         guard workspaceHistoryVisible, let id = selectedThreadId,
               let client = gateway(for: selectedExecutionLocation) else { return }
         let location = selectedExecutionLocation

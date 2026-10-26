@@ -39,6 +39,9 @@ extension AppModel {
             // projection or an in-flight load from the retired daemon epoch.
             threadLoadGeneration &+= 1
             selectedThreadDetail = nil
+            selectedHistory?.cancelNavigation()
+            selectedHistory?.refreshTask?.cancel()
+            selectedHistory = nil
             if pendingRemoteThreadSelection?.locationID == locationID {
                 pendingRemoteThreadSelection = nil
             }

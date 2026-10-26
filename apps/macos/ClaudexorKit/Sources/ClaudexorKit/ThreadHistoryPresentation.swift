@@ -1,6 +1,17 @@
 import Foundation
 
 extension ThreadHistoryThread {
+    /// PATCH owns editable metadata; a concurrent history read still owns head facts.
+    public func applying(_ value: ThreadSummary) -> Self {
+        Self(id: id, title: value.title, folder: value.folder, repoRoot: value.repoRoot,
+            mode: value.mode, workspaceMode: value.workspaceMode ?? workspaceMode,
+            workspaceRoot: value.workspaceRoot, authPreference: value.authPreference ?? authPreference,
+            primaryHarness: value.primaryHarness, eligibleHarnesses: value.eligibleHarnesses ?? [],
+            credentialProfileId: value.credentialProfileId, access: value.access,
+            state: value.state ?? state, trashedAt: value.trashedAt, purgeAfter: value.purgeAfter,
+            headRunId: headRunId, needsHuman: needsHuman, createdAt: createdAt, updatedAt: value.updatedAt)
+    }
+
     /// Metadata adapter for existing composer/workspace-scope controls. This is
     /// not an archive run inventory; only the workspace detail read owns that.
     public var summary: ThreadSummary {

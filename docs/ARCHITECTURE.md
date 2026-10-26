@@ -3243,20 +3243,42 @@ The macOS app consumes this contract through one `ThreadHistoryStore` per select
 edges, never an evicted page's outer cursor. The DTO cache retains at most two
 transport pages, 40 rows and 4 MiB; the eager mounted island has at most 20 turns.
 Presentation drafts/expansions are separate and do not retain historical DTOs.
-Replay coverage follows the mounted IDs and consumes every continuation before
-settling. Same-thread refresh never clears the painted feed. Cursor/owner resets
-read around the anchor and follow newer coverage to refill beneath it. An empty
-boundary page updates coverage without replacing the painted island.
+Replay coverage follows the mounted IDs and consumes every continuation with the
+limit that minted its cursor, including reissued tokens and partially evicted
+ranges. Encoded row sizes are cached by ID/revision and reclaimed with DTOs.
+Same-thread refresh never clears the painted feed. Cursor/owner resets read around
+the reading anchor and follow newer coverage to refill beneath it; a follower
+instead requests the newest page and keeps following with no reading anchor.
+An empty boundary page updates coverage without replacing the painted island.
+Gestures cancel travel, Jump and recovery navigation, not background facts. A tail
+refresh rechecks following after its awaited fetch before changing mounted IDs;
+a Jump overtaken by a newer revision retries its newest read once. Arrivals use
+`latestOrdinal` differences, never refresh counts; missing ordinal evidence is
+shown as unnumbered “new”.
 
 The app renders settled prompt, answer, receipt, plan relation and retention
 facts from each history row. Its live-run overlay records which history reads
 were already in flight when a run detail published; those responses cannot erase
-that answer. Composer/Stop use the page header, not the mounted slice. The old
-last-five hydration and per-card eligibility/delegation hydrators are removed.
-The workspace panel separately reads the legacy full roster only when shown;
-feed pings never re-fetch that aggregate. Full prompt parts are fetched only by
-explicit Copy/Show actions. Initial loading, loaded-empty and failed history
-remain distinct from a new draft conversation.
+that answer, even when they report terminal state with older output. Stream
+changes publish card-visible live facts immediately. Detail snapshots preserve
+pending questions already displayed and cannot resurrect acknowledged resolutions.
+Interaction selections/free text live in the located presentation store keyed by
+run, interaction and question, survive eviction, and clear on acknowledged answer,
+withdrawal, timeout or terminal resolution. Composer/Stop use the page header, not
+the mounted slice. Acknowledged PATCH metadata updates that header immediately and
+survives reads already in flight. A remote authority replacement retires the old
+history projection/store pin before validating the new projection.
+
+The old last-five hydration and per-card eligibility hydrators are removed. A
+mounted parent whose page projects missing Delegate children authorizes one
+addressed parent-detail load per mounted residence (at most eight child IDs);
+ordinary settled cards never cause hydration. The workspace panel separately
+reads the legacy full roster only when shown. Accepted turns and changes to the
+header's latest-turn membership invalidate it through its own coalescer; routine
+replays do not. A new mounted receipt remains selectable while that roster is
+catching up. Full prompt parts are fetched only by explicit Copy/Show actions.
+Initial loading, loaded-empty and failed history remain distinct from a new draft
+conversation.
 
 ### Plan lifecycle (typed open questions → readiness → Implement freezes the plan)
 

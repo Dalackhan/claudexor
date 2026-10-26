@@ -146,11 +146,13 @@ extension AppModel {
             guard response.accepted else {
                 return response.message ?? "Answer was not accepted (\(response.status))."
             }
+            resolveHistoryInteraction(runID: runId, interactionID: interactionId, at: locationID)
             mutateTask(runId, at: locationID) {
                 $0.pendingInteractions.removeAll { $0.interactionId == interactionId }
                 $0.waitingOnUser = !$0.pendingInteractions.isEmpty
                 $0.updatedAt = .now
             }
+            if let task = task(runId, at: locationID) { publishHistoryLive(task, locationID: locationID) }
             if locationID != .local, let threadId = selectedThreadId {
                 await refreshOpenThread(locationID: locationID, id: threadId)
             }

@@ -115,6 +115,7 @@ final class AppModel {
     var selectedHistory: ThreadHistoryStore?
     var workspaceHistoryVisible = false
     var workspaceHistoryError: String?
+    @ObservationIgnored let workspaceHistoryLoader = WorkspaceHistoryLoader()
     var threadStatus: String?
     /// What a failed Delete Now said, and what each engine's last thread list
     /// could not show; later lists retire the banner (AppModel+ThreadTrash.swift).
@@ -1003,6 +1004,7 @@ final class AppModel {
         if selectedExecutionLocation == locationID,
            selectedThreadId == updated.id
         {
+            selectedHistory?.acknowledgeMetadata(updated)
             threadStatus = nil
             if let detail = selectedThreadDetail {
                 selectedThreadDetail = ThreadDetailResponse(
@@ -1412,6 +1414,7 @@ final class AppModel {
         if selectedExecutionLocation == locationID, selectedThreadId == threadId {
             if selectedHistory == nil { await openThread(locationID: locationID, id: threadId) }
             await selectedHistory?.jump()
+            invalidateWorkspaceHistory()
         }
         guard isCurrentGateway(requestClient, at: locationID) else { return true }
         if case .started(let info) = result {

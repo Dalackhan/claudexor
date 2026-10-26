@@ -3207,7 +3207,7 @@ struct AppModelRefreshTests {
         AppRequestStubURLProtocol.handler = { request in
             switch request.url?.path {
             case "/v2/threads/thread-old":
-                let json = #"{"thread":{"id":"thread-old","title":"Old","repoRoot":null,"mode":null,"workspaceMode":"in_place","authPreference":null,"primaryHarness":null,"eligibleHarnesses":[],"state":"active","trashedAt":null,"purgeAfter":null,"runIds":["run-parent"],"headRunId":"run-parent","needsHuman":false,"createdAt":"2026-07-15T00:00:00Z","updatedAt":"2026-07-15T00:00:00Z"},"sessions":[],"turns":[{"id":"turn-old","threadId":"thread-old","runId":"run-parent","parentRunId":null,"kind":"agent","prompt":"Old Delegate turn","run":{"state":"succeeded","mode":"agent","delegation":{"requested":true,"effective":true,"used":true,"reason":"used"}},"createdAt":"2026-07-15T00:00:00Z"}]}"#
+                let json = #"{"thread":{"id":"thread-old","title":"Old","repoRoot":null,"mode":null,"workspaceMode":"in_place","authPreference":null,"primaryHarness":null,"eligibleHarnesses":[],"state":"active","trashedAt":null,"purgeAfter":null,"runIds":["run-parent"],"headRunId":"run-parent","needsHuman":false,"createdAt":"2026-07-15T00:00:00Z","updatedAt":"2026-07-15T00:00:00Z"},"sessions":[],"turns":[{"id":"turn-old","threadId":"thread-old","runId":"run-parent","parentRunId":null,"kind":"agent","prompt":"Old Delegate turn","run":{"state":"succeeded","mode":"agent","delegation":{"requested":true,"effective":true,"used":true,"reason":"used"},"delegatedChildRunIds":["run-historical-child"]},"createdAt":"2026-07-15T00:00:00Z"}]}"#
                 return (appResponse(for: request), Data(json.utf8))
             case "/v2/runs/run-parent":
                 detailCalls += 1
@@ -3218,13 +3218,7 @@ struct AppModelRefreshTests {
             }
         }
 
-        // Feed paging does not hydrate historical families. Opening the workspace
-        // and explicitly inspecting the parent restores its full child snapshot.
         await model.openThread("thread-old")
-        #expect(detailCalls == 0)
-        model.workspaceHistoryVisible = true
-        await model.loadWorkspaceHistory()
-        await model.ensureRunDetail("run-parent", insertingIfMissing: true)
 
         #expect(model.liveTasks.map(\.id) == ["run-parent", "run-historical-child"])
         #expect(model.delegatedChildren(of: "run-parent").map(\.id) == ["run-historical-child"])
@@ -3362,7 +3356,7 @@ struct AppModelRefreshTests {
         AppRequestStubURLProtocol.handler = { request in
             switch request.url?.path {
             case "/v2/threads/A":
-                let json = #"{"thread":{"id":"A","title":"A","repoRoot":null,"mode":null,"workspaceMode":"in_place","authPreference":null,"primaryHarness":null,"eligibleHarnesses":[],"state":"active","trashedAt":null,"purgeAfter":null,"runIds":["run-parent"],"headRunId":"run-parent","needsHuman":false,"createdAt":"2026-07-15T00:00:00Z","updatedAt":"2026-07-15T00:00:00Z"},"sessions":[],"turns":[{"id":"turn-A","threadId":"A","runId":"run-parent","parentRunId":null,"kind":"agent","prompt":"Delegate","run":{"state":"succeeded","mode":"agent","delegation":{"requested":true,"effective":true,"used":true,"reason":"used"}},"createdAt":"2026-07-15T00:00:00Z"}]}"#
+                let json = #"{"thread":{"id":"A","title":"A","repoRoot":null,"mode":null,"workspaceMode":"in_place","authPreference":null,"primaryHarness":null,"eligibleHarnesses":[],"state":"active","trashedAt":null,"purgeAfter":null,"runIds":["run-parent"],"headRunId":"run-parent","needsHuman":false,"createdAt":"2026-07-15T00:00:00Z","updatedAt":"2026-07-15T00:00:00Z"},"sessions":[],"turns":[{"id":"turn-A","threadId":"A","runId":"run-parent","parentRunId":null,"kind":"agent","prompt":"Delegate","run":{"state":"succeeded","mode":"agent","delegation":{"requested":true,"effective":true,"used":true,"reason":"used"},"delegatedChildRunIds":["run-child"]},"createdAt":"2026-07-15T00:00:00Z"}]}"#
                 return (appResponse(for: request), Data(json.utf8))
             case "/v2/threads/B":
                 let json = #"{"thread":{"id":"B","title":"B","repoRoot":null,"mode":null,"workspaceMode":"in_place","authPreference":null,"primaryHarness":null,"eligibleHarnesses":[],"state":"active","trashedAt":null,"purgeAfter":null,"runIds":[],"headRunId":null,"needsHuman":false,"createdAt":"2026-07-15T00:00:00Z","updatedAt":"2026-07-15T00:00:00Z"},"sessions":[],"turns":[]}"#
@@ -3381,10 +3375,6 @@ struct AppModelRefreshTests {
         }
 
         await model.openThread("A")
-        #expect(model.liveTasks.isEmpty)
-        model.workspaceHistoryVisible = true
-        await model.loadWorkspaceHistory()
-        await model.ensureRunDetail("run-parent", insertingIfMissing: true)
         #expect(model.liveTasks.map(\.id) == ["run-parent", "run-child"])
         await model.openThread("B")
         #expect(model.liveTasks.map(\.id) == ["run-parent", "run-child"])
@@ -3397,10 +3387,6 @@ struct AppModelRefreshTests {
         #expect(!model.runListReconciliationNeeded)
 
         await model.openThread("A")
-        #expect(model.liveTasks.isEmpty)
-        model.workspaceHistoryVisible = true
-        await model.loadWorkspaceHistory()
-        await model.ensureRunDetail("run-parent", insertingIfMissing: true)
         #expect(model.liveTasks.map(\.id) == ["run-parent", "run-child"])
         #expect(parentDetailCalls == 2)
     }

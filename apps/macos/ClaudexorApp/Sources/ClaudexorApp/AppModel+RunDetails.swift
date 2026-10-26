@@ -97,7 +97,10 @@ extension AppModel {
                 outcomeFacts: task.outcomeFacts)
             task.diagnosticText = RunDiagnosticsPresentation.summary(
                 detail: detail, error: task.engineError)
+            reconcileHistoryInteractions(&task, at: locationID)
             remoteTasks[locationID]?[index] = task
+            remoteTasks[locationID] = Self.mergingDelegatedChildren(
+                detail.children, parentRunId: detail.summary.runId, into: remoteTasks[locationID] ?? [])
             publishHistoryLive(task, locationID: locationID)
             return true
         } catch {

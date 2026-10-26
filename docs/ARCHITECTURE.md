@@ -931,7 +931,10 @@ and does not alter profile selection or paid-route policy: an already explicit
 pin or durable thread binding may keep its exact config-dir route alive for
 this bounded grace, while unpinned pool/rotation selection never consumes it.
 This absorbs a probe failure only; it does not claim to serialize the vendor's
-OAuth refresh or to repair a revoked credential.
+OAuth refresh or to repair a revoked credential. A spawn that fails for the
+file's format (`EFTYPE`/`ENOEXEC`, including a launch refused before spawning)
+is not a transport failure: it is reported once as a probe failure, with no
+retry and no stale observation.
 Cursor's row status probe (`cursor-agent status` in a row's file-store HOME)
 is coordinated the same way: concurrent reads of one row store — keyed by the
 auth-selecting `HOME`/`USERPROFILE`/`XDG_CONFIG_HOME`/`APPDATA`, so admission
@@ -5770,7 +5773,22 @@ manifest and permit. Ordinary missing PATH candidates are silent; a present
 broken preferred entry remains diagnostic even when a usable fallback is found.
 Explicit executable overrides never select a different installation implicitly.
 Installer success still requires the declared version to execute, so a placeholder
-file left by an incomplete package install cannot certify success. The Windows
+file left by an incomplete package install cannot certify success.
+A `.exe`/`.com` the resolver would start (a PATH candidate, a standard launcher's
+declared native target, or a Node interpreter) must have the PE minimum shape: `MZ`,
+then `PE\0\0` at the header's offset, read through the descriptor that supplied
+the identity facts. A readable file without it, such as the npm placeholder left
+when the package's postinstall did not run or a zero-filled download, is skipped
+with its path named, and a later healthy candidate is used. When nothing is
+selected, spawning the bare name would let libuv search again, the cwd first and
+then PATH; if that search would reach a proven non-image, or would find nothing
+while the resolver proved one, the launch is refused before any process starts.
+The refusal carries the spawn error the OS reports for that file (`EFTYPE`) and
+names it, so doctor and discovery report the unlaunchable file instead of a missing
+CLI. Relative names and relative PATH entries resolve from the child's cwd. The
+shape is not loader validity: an image for another architecture or with damaged
+headers still reaches the OS, an unreadable file or failed read is not proof, and
+POSIX launch rules are unchanged. The Windows
 smoke is `scripts/windows-local-install-smoke.mjs`; native Windows login and Agent
 execution are separate acceptance claims, not consequences of package resolution.
 The omitted target remains `remote`; the SSH installer's destination and PATH

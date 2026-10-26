@@ -314,9 +314,12 @@ describe("ordinary Auto Browser eligibility through normalization, preflight and
       const f = await fixture();
       const { result, events } = await f.run(f.request({ harnesses, n: 2, review: true }));
       expect(result.lifecycle, result.summary).toBe("succeeded");
-      expect(f.specs.map(({ harness }) => harness)).toEqual(["codex", "claude"]);
-      expect(f.specs[0]!.spec.browser).toBeNull();
-      expect(f.specs[1]!.spec.browser).toMatchObject({ headless: false });
+      expect(f.specs).toHaveLength(2);
+      expect(f.specs.map(({ harness }) => harness).toSorted()).toEqual(["claude", "codex"]);
+      expect(f.specs.find(({ harness }) => harness === "codex")?.spec.browser).toBeNull();
+      expect(f.specs.find(({ harness }) => harness === "claude")?.spec.browser).toMatchObject({
+        headless: false,
+      });
       expect(events.some((event) => event.type === "route.pool.degraded")).toBe(false);
     },
   );

@@ -1,0 +1,44 @@
+name: D2213 scoped Windows qualification
+on:
+  push:
+    branches: [qualification/windows-2213-f0eacb19]
+permissions:
+  contents: read
+jobs:
+  baseline:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.16.0
+          architecture: x64
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Negative control on the unchanged production baseline
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git rev-parse HEAD).Trim() -ne $env:GITHUB_SHA) { throw 'checkout SHA mismatch' }
+          if (git status --porcelain --untracked-files=no) { throw 'tracked source is dirty' }
+          try { ./.review-evidence/windows-qualification/run.ps1 -Cases npm-placeholder }
+          catch { $_ | Out-String | Set-Content .review-evidence/windows-qualification/out/expected-negative.txt }
+          $s = Get-Content .review-evidence/windows-qualification/out/summary.json -Raw | ConvertFrom-Json
+          $r = Get-Content .review-evidence/windows-qualification/out/npm-placeholder/result.json -Raw | ConvertFrom-Json
+          if ($s.pass -or $s.rows.Count -ne 1 -or $s.rows[0].timedOut -or $s.rows[0].code -ne 1) { throw 'baseline sensitivity not established' }
+          if (-not ($r.calls | Where-Object { $_.blocked }) -or $r.failed -notmatch 'bad installation reached child_process') { throw 'wrong baseline failure' }
+          Write-Output 'EXPECTED_BASELINE_RED: malformed payload reached spawn observer; not executed'
+      - name: Save evidence regardless of result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d2213-baseline-${{ github.sha }}-${{ github.run_attempt }}
+          path: .review-evidence/windows-qualification/out
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

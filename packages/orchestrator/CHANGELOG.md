@@ -1,5 +1,29 @@
 # @claudexor/orchestrator
 
+## 4.7.1
+
+### Patch Changes
+
+- 880081d: Record exact catalog proof for Cursor's display-label model. Attempts keep the raw `init.model` string in `observed_model` and, in `final/telemetry.yaml`, add `observed_model_catalog_match` (`label`, `id`, `source: account_catalog`, `profile_id`) when the account catalog that the same spawn's processing preparation read lists exactly one live row with that exact label, with no collision against a different row ID. The per-spawn model gate is the only author and strips any value it did not compute; the attempt keeps the proof of the event that set `observed_model`, never a later try's, the requested model's or a normalized match, and drops it when the Agent or Ask/report loop starts another native try or a later event reports another model, so proof from an earlier try cannot verify a later answer. A missing, empty, unmatched or ambiguous catalog leaves the field null. No vendor call is added, and admission, routing and `auth_route.model_mismatch` are unchanged. The `HarnessEvent` and `RunTelemetry` JSON Schemas gain the optional field.
+- Updated dependencies [880081d]
+- Updated dependencies [30f8195]
+- Updated dependencies [8a9c2f6]
+  - @claudexor/schema@4.7.1
+  - @claudexor/core@4.7.1
+  - @claudexor/arbitration@4.7.1
+  - @claudexor/budget@4.7.1
+  - @claudexor/config@4.7.1
+  - @claudexor/context@4.7.1
+  - @claudexor/delivery@4.7.1
+  - @claudexor/event-log@4.7.1
+  - @claudexor/gateway@4.7.1
+  - @claudexor/policy@4.7.1
+  - @claudexor/review@4.7.1
+  - @claudexor/workspace@4.7.1
+  - @claudexor/synthesis@4.7.1
+  - @claudexor/artifact-store@4.7.1
+  - @claudexor/util@4.7.1
+
 ## 4.7.0
 
 ### Minor Changes

@@ -1,5 +1,17 @@
 # @claudexor/workspace
 
+## 4.7.1
+
+### Patch Changes
+
+- Updated dependencies [880081d]
+- Updated dependencies [30f8195]
+- Updated dependencies [8a9c2f6]
+  - @claudexor/schema@4.7.1
+  - @claudexor/core@4.7.1
+  - @claudexor/event-log@4.7.1
+  - @claudexor/util@4.7.1
+
 ## 4.7.0
 
 ### Minor Changes

@@ -25,6 +25,15 @@ import {
   windowsNativeImageSegments,
 } from "./runtime-env.js";
 
+/** Windows starts a `.exe`/`.com` only with the PE shape: `MZ`, then `PE\0\0` at e_lfanew. */
+function windowsImage(): Buffer {
+  const bytes = Buffer.alloc(512);
+  bytes.write("MZ", 0, "latin1");
+  bytes.writeUInt32LE(0x80, 0x3c);
+  bytes.write("PE\0\0", 0x80, "latin1");
+  return bytes;
+}
+
 describe("resolveHarnessBinary", () => {
   let root: string;
 
@@ -39,7 +48,7 @@ describe("resolveHarnessBinary", () => {
   function fakeBin(dir: string, name: string): string {
     mkdirSync(dir, { recursive: true });
     const p = join(dir, name);
-    writeFileSync(p, "#!/bin/sh\nexit 0\n");
+    writeFileSync(p, /\.(?:exe|com)$/i.test(name) ? windowsImage() : "#!/bin/sh\nexit 0\n");
     chmodSync(p, 0o755);
     return p;
   }
@@ -557,7 +566,7 @@ describe("Windows npm layout and the package-native image (issue #191)", () => {
   function fakeBin(dir: string, name: string): string {
     mkdirSync(dir, { recursive: true });
     const p = join(dir, name);
-    writeFileSync(p, "#!/bin/sh\nexit 0\n");
+    writeFileSync(p, /\.(?:exe|com)$/i.test(name) ? windowsImage() : "#!/bin/sh\nexit 0\n");
     chmodSync(p, 0o755);
     return p;
   }

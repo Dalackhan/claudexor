@@ -33,6 +33,7 @@ import {
   type RunRetryRouteContext,
 } from "../../control-api/src/run-retry-routes.js";
 import { resolveContinuationBody } from "../../control-api/src/run-continuation-start.js";
+import { timelineEvents } from "../../control-api/src/run-timeline.js";
 
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
@@ -216,18 +217,24 @@ describe("ordinary Auto Browser eligibility through normalization, preflight and
   it("projects before the incompatible lane's account/quota and processing preparation", async () => {
     const f = await fixture();
     const codex = f.registry.get("codex")!;
+    // Record rather than throw: a throwing probe would only drop Codex as an
+    // unavailable Auto lane at quota preflight, with or without projection.
+    const reached: string[] = [];
     f.registry.set("codex", {
       ...codex,
-      probeCredentialProfile: async () => {
-        throw new Error("incompatible Codex reached account preparation");
+      probeCredentialProfile: async (...args) => {
+        reached.push("account");
+        return codex.probeCredentialProfile!(...args);
       },
       prepareProcessing: async () => {
+        reached.push("processing");
         throw new Error("incompatible Codex reached processing preparation");
       },
     });
     const { result } = await f.run();
     expect(result.lifecycle, result.summary).toBe("succeeded");
     expect(f.specs.map(({ harness }) => harness)).toEqual(["claude"]);
+    expect(reached).toEqual([]);
   });
 
   it.each(["auto", "cached", "live"] as const)(
@@ -295,6 +302,42 @@ describe("ordinary Auto Browser eligibility through normalization, preflight and
       reason: "capability_incompatible",
       detail: "codex (browser: access_profile_incompatible)",
     });
+  });
+
+  it("keeps a configured primary's per-harness web off as its exact cause", async () => {
+    const f = await fixture();
+    f.config.routing.primary_harness = "codex";
+    f.config.harnesses.codex = GlobalConfig.parse({
+      harnesses: { codex: { web: "off" } },
+    }).harnesses.codex!;
+    f.saveConfig();
+    const request = f.request();
+    await f.preflight(request);
+    const { result, events } = await f.run(request);
+    expect(result.lifecycle, result.summary).toBe("succeeded");
+    expect(f.specs).toHaveLength(1);
+    expect(f.specs[0]).toMatchObject({
+      harness: "claude",
+      spec: {
+        access: "workspace_write",
+        external_context_policy: "auto",
+        browser: { headless: false },
+      },
+    });
+    const detail = "codex (browser: web_policy_off)";
+    expect(events.find((event) => event.type === "route.primary.diverged")?.payload).toMatchObject({
+      requested: "codex",
+      effective: "claude",
+      reason: "capability_incompatible",
+      detail,
+    });
+    expect(events.find((event) => event.type === "route.pool.degraded")?.payload).toMatchObject({
+      dropped_lanes: [{ harness_id: "codex", stage: "web", detail }],
+    });
+    // The run-detail timeline keeps the new reason's event visible with its cause.
+    expect(
+      timelineEvents({}, events).find((row) => row.type === "route.primary.diverged"),
+    ).toMatchObject({ severity: "warning", detail });
   });
 
   it("treats [] and a null profile as Auto overrides of Settings", async () => {

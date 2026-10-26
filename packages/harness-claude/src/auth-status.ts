@@ -1,6 +1,11 @@
 import type { CaptureResult } from "@claudexor/core";
 import type { AuthSourceReadiness, HarnessEvent } from "@claudexor/schema";
-import { credentialMutationWindowOpen, labelStreams, runCapture } from "@claudexor/core";
+import {
+  credentialMutationWindowOpen,
+  isExecutableFormatError,
+  labelStreams,
+  runCapture,
+} from "@claudexor/core";
 import { nowIso, redactSecrets } from "@claudexor/util";
 
 /**
@@ -223,7 +228,10 @@ async function attempt(
       detail: probeErrorDetail(result),
     };
   } catch (err) {
-    return { transportFailure: true, detail: thrownErrorDetail(err) };
+    // A file the OS cannot execute in its format (or a launch refused for that
+    // reason) is structural: the retry would hit the same bytes, and the LKG
+    // would hide a broken install behind an old verdict.
+    return { transportFailure: !isExecutableFormatError(err), detail: thrownErrorDetail(err) };
   }
 }
 

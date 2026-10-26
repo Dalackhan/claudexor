@@ -491,6 +491,167 @@ describe("deferred promotion in the existing daemon queue", () => {
   });
 });
 
+describe("public Stop of a predecessor with a next message", () => {
+  type Fixture = Awaited<ReturnType<typeof fixture>>;
+  // The real HTTP control route, not the raw daemon cancel RPC.
+  async function publicStop(f: Fixture) {
+    const control = new DaemonControlApiServer({
+      token: "fixture",
+      daemon: new DaemonLocalClient(() => f.daemon),
+    });
+    const { host, port } = await control.start();
+    cleanups.push(() => control.stop());
+    return async (id: string) => {
+      const response = await fetch(`http://${host}:${port}/v2/runs/${id}/control`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer fixture",
+          "x-claudexor-protocol-major": "3",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ control: { kind: "cancel" } }),
+      });
+      return { status: response.status, body: (await response.json()) as any };
+    };
+  }
+  const state = (f: Fixture, id: string) =>
+    f.sql.graph.commands.queries.select({ ids: [id] })[0]?.state;
+  const commands = (f: Fixture) =>
+    (f.sql.store.prepare("SELECT count(*) n FROM command").get() as { n: number }).n;
+
+  it("holds a live predecessor's waiting draft before any dispatch validation", async () => {
+    const f = await fixture();
+    const stop = await publicStop(f);
+    const draft = (await f.create()).draft;
+    expect(state(f, f.initial.id)).toBe("running");
+    expect(await stop(f.initial.id)).toMatchObject({
+      status: 200,
+      body: {
+        accepted: true,
+        status: "applied",
+        deferredMessage: {
+          draftId: draft.draftId,
+          state: "held",
+          hold: { code: "stop_requested" },
+          successorJobId: null,
+        },
+      },
+    });
+    await vi.waitFor(() => expect(state(f, f.initial.id)).not.toBe("running"));
+    await f.daemon.stop();
+    expect(f.read(draft.draftId)).toMatchObject({
+      state: "held",
+      hold: { code: "stop_requested" },
+    });
+    expect(f.validate).not.toHaveBeenCalled();
+    expect(f.started).toHaveLength(1);
+    expect(commands(f)).toBe(1);
+  });
+
+  it("holds a terminal predecessor's draft while dispatch validation is still running", async () => {
+    const f = await fixture();
+    const stop = await publicStop(f);
+    const draft = (await f.create()).draft;
+    const preflight = barrier();
+    f.validate.mockImplementation(async () => preflight.promise);
+    f.done.release();
+    await vi.waitFor(() => expect(f.validate).toHaveBeenCalled());
+    expect(state(f, f.initial.id)).toBe("succeeded");
+    const stopped = await stop(f.initial.id);
+    preflight.release();
+    await vi.waitFor(() => expect(f.validate).toHaveResolved());
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(f.read(draft.draftId)).toMatchObject({ state: "held", successorJobId: null });
+    expect(f.started).toHaveLength(1);
+    expect(commands(f)).toBe(1);
+    expect(stopped).toMatchObject({
+      status: 200,
+      body: {
+        accepted: true,
+        status: "applied",
+        cascadeRunIds: [],
+        deferredMessage: {
+          draftId: draft.draftId,
+          state: "held",
+          hold: { code: "stop_requested" },
+        },
+      },
+    });
+  });
+
+  it("returns the already accepted successor without cancelling it", async () => {
+    const f = await fixture();
+    const stop = await publicStop(f);
+    const draft = (await f.create()).draft;
+    f.done.release();
+    await vi.waitFor(() => expect(f.started).toHaveLength(2));
+    const successor = f.read(draft.draftId).successorJobId!;
+    expect(f.started[1]!.ctx.jobId).toBe(successor);
+    const stopped = await stop(f.initial.id);
+    expect(stopped).toMatchObject({
+      status: 409,
+      body: {
+        code: "next_message_dispatched",
+        retryable: false,
+        context: {
+          deferredMessage: {
+            draftId: draft.draftId,
+            state: "dispatched",
+            successorJobId: successor,
+            successorRunId: `run-${successor}`,
+          },
+        },
+      },
+    });
+    expect(stopped.body.message).toContain(successor);
+    expect(f.started[1]!.ctx.signal.aborted).toBe(false);
+    expect(state(f, successor)).toBe("running");
+  });
+
+  it.each(["absent", "cleared"] as const)(
+    "keeps the terminal refusal when the predecessor's draft is %s",
+    async (slot) => {
+      const f = await fixture();
+      const stop = await publicStop(f);
+      if (slot === "cleared") {
+        const draft = (await f.create()).draft;
+        await f.mutate({
+          request: { action: "clear", draftId: draft.draftId, expectedRevision: 1 },
+          idempotencyKey: "clear",
+        });
+      }
+      f.done.release();
+      await vi.waitFor(() => expect(state(f, f.initial.id)).toBe("succeeded"));
+      expect(await stop(f.initial.id)).toEqual({
+        status: 409,
+        body: expect.objectContaining({
+          code: "http_409",
+          message: "run is succeeded; cancel has nothing to stop",
+          context: {},
+        }),
+      });
+      expect(f.started).toHaveLength(1);
+    },
+  );
+
+  it("discloses an already held draft without claiming a new stop", async () => {
+    const f = await fixture("ask", { failure: true });
+    const stop = await publicStop(f);
+    const draft = (await f.create()).draft;
+    f.done.release();
+    await vi.waitFor(() => expect(f.read(draft.draftId).hold?.code).toBe("predecessor_failed"));
+    expect(await stop(f.initial.id)).toMatchObject({
+      status: 409,
+      body: {
+        code: "http_409",
+        message: "run is failed; cancel has nothing to stop",
+        context: { deferredMessage: { state: "held", hold: { code: "predecessor_failed" } } },
+      },
+    });
+    expect(f.read(draft.draftId).hold?.code).toBe("predecessor_failed");
+  });
+});
+
 function sqlRetryEvent(f: Awaited<ReturnType<typeof fixture>>) {
   f.sql.graph.commands.recordRunEvent(f.started[0]!.params, {
     run_id: `run-${f.initial.id}`,

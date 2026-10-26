@@ -8,6 +8,7 @@ import type {
   DeferredMessageReceipt,
   DeferredMessageDetail,
   DeferredMessageProjection,
+  DeferredMessageStopReport,
 } from "@claudexor/schema";
 import { type Socket, connect } from "node:net";
 import { randomUUID } from "node:crypto";
@@ -56,6 +57,9 @@ export abstract class DaemonRpcMethods {
     return this.call<DeferredMessageProjection | null>("claudexor.deferredMessageProjection", {
       predecessorId,
     });
+  }
+  deferredMessageStop(predecessorId: string) {
+    return this.call<DeferredMessageStopReport>("claudexor.deferredMessageStop", { predecessorId });
   }
   enqueue(
     request: unknown,

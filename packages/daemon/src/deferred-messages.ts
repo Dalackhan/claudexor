@@ -10,6 +10,7 @@ import {
   type CapturedRunStart,
   type DeferredMessageHold,
   type DeferredMessageReceipt,
+  type DeferredMessageStopReport,
 } from "@claudexor/schema";
 import {
   assertNoInlineSecretValues,
@@ -112,10 +113,16 @@ export class DeferredMessages {
       await this.evaluate(reservation.draftId);
     }
   }
-  stop(predecessor: string): void {
+  /** Stop holds a waiting draft whatever the predecessor's lifecycle. Hold and
+   * report are one synchronous step, and promotion rechecks the row inside its
+   * acceptance mutation: the draft is held here or was already dispatched. */
+  stop(predecessor: string, caller?: unknown): DeferredMessageStopReport {
+    assertOperatorCaller(caller);
     const owner = this.deps.commands.deferredFor?.(predecessor);
     const draft = owner?.reservation(predecessor);
     if (draft?.state === "waiting") owner!.hold(draft.draftId, { code: "stop_requested" });
+    const latest = owner?.latest(predecessor) ?? null;
+    return { held: draft?.state === "waiting" && latest?.state === "held", draft: latest };
   }
   shutdown(): void {
     this.closing = true;

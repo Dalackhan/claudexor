@@ -53,7 +53,12 @@ export function deferredMessageDetail(
   const content = row.body_sha
     ? JSON.parse(blobs.read(row.body_sha).toString("utf8"))
     : { prompt: "", attachments: [], capturedStart: null };
-  return DeferredMessageDetail.parse({ ...deferredMessageProjection(store, row), ...content });
+  // Controls are captured once by create; replace keeps them and the row's time.
+  return DeferredMessageDetail.parse({
+    ...deferredMessageProjection(store, row),
+    ...content,
+    capturedAt: row.body_sha ? row.created_at : null,
+  });
 }
 
 /** Cold recovery validates the same decoder and linked identities, never

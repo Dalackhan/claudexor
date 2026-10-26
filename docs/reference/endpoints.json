@@ -1035,7 +1035,7 @@
       "path": "/v2/runs/:id/control",
       "mutating": true,
       "applicability": "run",
-      "summary": "Cancel a queued or running run.",
+      "summary": "Cancel a queued or running run and hold its pending next message, also after the run ended.",
       "auth": "loopback_bearer",
       "request_schema": "ControlRunControlRequest",
       "parameters": [],

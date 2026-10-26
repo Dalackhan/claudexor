@@ -339,6 +339,8 @@ export class DaemonServer {
         return this.deferred.read(String(params?.draftId), params);
       case "claudexor.deferredMessageProjection":
         return this.deferred.projection(String(params?.predecessorId), params);
+      case "claudexor.deferredMessageStop":
+        return this.deferred.stop(String(params?.predecessorId), params);
       case "claudexor.status": {
         const rec = this.getRecord(String(params?.id));
         if (!rec) throw new Error(`no such job: ${params?.id}`);

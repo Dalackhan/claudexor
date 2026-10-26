@@ -1,8 +1,8 @@
 import { z } from "zod/v3";
 import { ResourceAttachmentRef } from "./attachment.js";
 import { ControlRunStartRequest } from "./control.js";
-import { CapturedRunStart } from "./captured-run-start.js";
-import { Id } from "./primitives.js";
+import { CapturedRunStart, RunDefaultsSnapshot } from "./captured-run-start.js";
+import { Id, IsoTimestamp } from "./primitives.js";
 import { validateRunFactsReceipt, type ExpectedRunFactsIdentity } from "./run-facts.js";
 import { reviewAllowsApply } from "./decision.js";
 import { TurnEnqueueProblem } from "./thread.js";
@@ -25,6 +25,8 @@ const DeferredMessageControls = ControlRunStartRequest.pick({
   efforts: true,
   taskGroupId: true,
 }).strict();
+/** Create-time control keys; the bounded read reports their captured values. */
+export const DEFERRED_MESSAGE_CONTROL_KEYS = Object.keys(DeferredMessageControls.shape);
 
 const content = { prompt: z.string(), attachments: z.array(ResourceAttachmentRef) };
 const revision = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
@@ -104,6 +106,17 @@ export const DeferredMessageProjection = z
   );
 export type DeferredMessageProjection = z.infer<typeof DeferredMessageProjection>;
 
+/** Daemon answer to a public Stop of the predecessor, whatever its lifecycle. */
+export const DeferredMessageStopReport = z
+  .object({
+    held: z.boolean().describe("This Stop moved the predecessor's waiting draft to held."),
+    draft: DeferredMessageProjection.nullable().describe(
+      "The predecessor's latest draft after the Stop; a dispatched draft names the successor, which the Stop does not cancel.",
+    ),
+  })
+  .strict();
+export type DeferredMessageStopReport = z.infer<typeof DeferredMessageStopReport>;
+
 /** Same typed claim refusal at ordinary HTTP preflight and raw acceptance. */
 export function assertDeferredReservation(
   reservation: DeferredMessageProjection | null | undefined,
@@ -134,6 +147,9 @@ export const DeferredMessageDetail = DeferredMessageProjection.extend({
   capturedStart: CapturedRunStart.nullable().describe(
     "Immutable execution controls captured once; null after clear. Completed envelopes may continue in a different_root under ordinary continueFrom custody.",
   ),
+  capturedAt: IsoTimestamp.nullable().describe(
+    "When capturedStart was frozen: draft creation. Edits never recapture; null after clear.",
+  ),
 }).strict();
 export type DeferredMessageDetail = z.infer<typeof DeferredMessageDetail>;
 
@@ -147,6 +163,30 @@ export const DeferredMessageReceipt = z
   .strict();
 export type DeferredMessageReceipt = z.infer<typeof DeferredMessageReceipt>;
 
+/** Captured values only: nothing here is re-resolved against current settings. */
+export const DeferredMessageCapturedControls = z
+  .object({
+    capturedAt: IsoTimestamp.describe("Draft creation; edits never recapture controls."),
+    inherited: z
+      .record(z.unknown())
+      .describe(
+        "Continuation-inherited groups from the predecessor's accepted request (mode, scope, execution, harness and model groups, promptCacheTtl); omitted per-harness models were completed from Settings at creation.",
+      ),
+    resolved: z
+      .record(z.unknown())
+      .describe(
+        "Create-time controls as captured: explicit draft controls, otherwise ordinary new-run defaults at creation, never the predecessor's value. An omitted access is the project's default access at creation, not the predecessor's.",
+      ),
+    settings: RunDefaultsSnapshot.nullable().describe(
+      "Settings execution preferences captured at creation (per-harness defaults, eligible and primary harness, auth preference), used at dispatch instead of current values.",
+    ),
+  })
+  .strict()
+  .describe(
+    "Frozen effective controls. Dispatch reads tool permissions, account and harness enablement, trust, quota, capabilities, paid-fallback policy and other settings afresh; a refusal holds the draft.",
+  );
+export type DeferredMessageCapturedControls = z.infer<typeof DeferredMessageCapturedControls>;
+
 export const DeferredMessageReadInput = z.object({ draftId: Id }).strict();
 export const DeferredMessageReadResult = z
   .object({
@@ -156,6 +196,7 @@ export const DeferredMessageReadResult = z
     omittedPromptBytes: z.number().int().nonnegative(),
     attachments: z.array(ResourceAttachmentRef).max(32),
     omittedAttachments: z.number().int().nonnegative(),
+    controls: DeferredMessageCapturedControls.nullable().describe("Null after clear."),
     detailPath: z.string(),
   })
   .strict()

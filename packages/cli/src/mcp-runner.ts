@@ -1,6 +1,7 @@
 import { accountResourceQuery } from "./account-resource-query.js";
 import {
   ControlProblem,
+  ControlRunControlResponse,
   ModeKind,
   RunExecution,
   type ProcessingPreference,
@@ -349,14 +350,19 @@ async function recoveryQuery(
       }),
     });
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    if (!res.ok) {
-      throw new Error(
-        typeof body["message"] === "string"
-          ? (body["message"] as string)
-          : `run cancel failed (HTTP ${res.status})`,
-      );
-    }
-    return { summary: `cancellation acknowledged for run ${runId}`, runId, acknowledged: true };
+    // Typed refusal: an already accepted next message names its successor job.
+    if (!res.ok)
+      throw controlProblemError(res.status, body, `run cancel failed (HTTP ${res.status})`);
+    const control = ControlRunControlResponse.safeParse(body).data;
+    const deferred = control?.deferredMessage;
+    return {
+      summary: deferred
+        ? `${control?.message ?? "cancel applied"} (run ${runId})`
+        : `cancellation acknowledged for run ${runId}`,
+      runId,
+      acknowledged: true,
+      ...(deferred ? { deferredMessage: deferred } : {}),
+    };
   }
   if (mode === "__run_interactions") {
     return projectRunInteractions(runId, await get(`/runs/${encodeURIComponent(runId)}`));

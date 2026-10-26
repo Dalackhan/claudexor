@@ -1,10 +1,13 @@
+import { CONTINUATION_INHERITED_KEYS } from "@claudexor/control-api";
 import {
+  DEFERRED_MESSAGE_CONTROL_KEYS,
   DeferredMessageCall,
   DeferredMessageDetail,
   DeferredMessageProjection,
   DeferredMessageReceipt,
   DeferredMessageReadInput,
   DeferredMessageReadResult,
+  type DeferredMessageCapturedControls,
 } from "@claudexor/schema";
 import { connectDaemonIfRunning } from "./daemon-run.js";
 import { controlApiFetch } from "./live.js";
@@ -68,6 +71,23 @@ export function boundedDeferredMessage(detail: DeferredMessageDetail): DeferredM
     omittedPromptBytes: bytes.length - end,
     attachments: detail.attachments.slice(0, 32),
     omittedAttachments: Math.max(0, detail.attachments.length - 32),
+    controls: capturedControls(detail),
     detailPath: `/v2/runs/next-message/${encodeURIComponent(detail.draftId)}`,
   });
+}
+
+/** The frozen values by origin, from fixed key lists: bounded, never re-resolved. */
+function capturedControls(detail: DeferredMessageDetail): DeferredMessageCapturedControls | null {
+  const captured = detail.capturedStart as Record<string, unknown> | null;
+  if (!captured || !detail.capturedAt) return null;
+  const pick = (keys: readonly string[]) =>
+    Object.fromEntries(
+      keys.filter((key) => captured[key] !== undefined).map((key) => [key, captured[key]]),
+    );
+  return {
+    capturedAt: detail.capturedAt,
+    inherited: pick(CONTINUATION_INHERITED_KEYS),
+    resolved: pick([...DEFERRED_MESSAGE_CONTROL_KEYS, "routingGoal"]),
+    settings: detail.capturedStart?.deferredDefaults ?? null,
+  };
 }

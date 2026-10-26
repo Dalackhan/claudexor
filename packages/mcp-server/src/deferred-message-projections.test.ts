@@ -10,6 +10,8 @@ import {
   projectDegradedRecoveryRunDetail,
 } from "../../cli/src/mcp-run-projections.js";
 import { runWaitQuery } from "../../cli/src/mcp-run-wait.js";
+import { boundedDeferredMessage } from "../../cli/src/mcp-deferred-message.js";
+import { CapturedRunStart } from "@claudexor/schema";
 import { connectDaemonIfRunning } from "../../cli/src/daemon-run.js";
 import { controlApiFetch } from "../../cli/src/live.js";
 import { observeRunEvents } from "../../cli/src/run-wait-events.js";
@@ -128,6 +130,37 @@ it("validates a wait whose final snapshot is unavailable, retaining its fenced d
     snapshotProblem: "snapshot_unavailable",
     deferredMessage: draft,
   });
+});
+
+it("validates the bounded draft read with its frozen controls through the SDK", async () => {
+  const tool = defaultClaudexorTools(vi.fn()).find(
+    (t) => t.name === "claudexor_next_message_read",
+  )!;
+  const schema = fromJsonSchema(tool.outputSchema as Parameters<typeof fromJsonSchema>[0]);
+  const read = boundedDeferredMessage({
+    ...draft,
+    state: "waiting",
+    prompt: "verify",
+    attachments: [],
+    capturedStart: CapturedRunStart.parse({
+      mode: "ask",
+      access: "readonly",
+      deferredDefaults: {
+        harnesses: { codex: { max_turns: 5 } },
+        eligibleHarnesses: [],
+        primaryHarness: null,
+        authPreference: "auto",
+      },
+    }),
+    capturedAt: "2026-10-26T12:00:00.000Z",
+  });
+  expect(read.controls).toMatchObject({
+    inherited: { mode: "ask" },
+    resolved: { access: "readonly" },
+  });
+  expect((await schema["~standard"].validate(read)).issues).toBeUndefined();
+  const extra = { ...read, controls: { ...read.controls, current: [] } };
+  expect((await schema["~standard"].validate(extra)).issues).toBeDefined();
 });
 
 it("keeps private captured preferences out of every public launch input", async () => {

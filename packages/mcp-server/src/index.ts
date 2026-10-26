@@ -495,7 +495,7 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
     {
       name: "claudexor_run_cancel",
       description:
-        "Request cancellation of a daemon-owned run; success is returned only after the control API acknowledges the durable command.",
+        "Request cancellation of a daemon-owned run; success is returned only after the control API acknowledges the durable command. The same call holds the run's next message (claudexor_next_message) that is not accepted yet, also after the run ended; an already accepted successor fails next_message_dispatched with its job handle and keeps running.",
       inputSchema: runIdSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
       handler: async (args) => {

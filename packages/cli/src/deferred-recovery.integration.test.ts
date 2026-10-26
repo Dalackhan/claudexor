@@ -38,6 +38,7 @@ import {
 import { rerunWithFeedback } from "../../control-api/src/decision-rerun.js";
 import { handleRunCreate } from "../../control-api/src/run-start.js";
 import { createDeferredStartPreparation } from "./deferred-start-preparation.js";
+import { boundedDeferredMessage } from "./mcp-deferred-message.js";
 import { executionRunConfig } from "../../orchestrator/src/run-defaults.js";
 
 const cleanup: Array<() => void | Promise<void>> = [];
@@ -139,6 +140,34 @@ it.each(["1h", undefined] as const)(
     expect(decodeAcceptedRunStart(successor.params).request.promptCacheTtl).toBe(ttl);
   },
 );
+
+it("shows the production capture on the bounded read by origin, unchanged by later settings", async () => {
+  const f = await fixture("1h");
+  vi.mocked(loadConfig).mockReturnValue(config(99));
+  const detail = f.owner.get(f.created.draft.draftId)!;
+  const { controls } = boundedDeferredMessage(detail);
+  expect(controls?.capturedAt).toBe(detail.capturedAt);
+  expect(Date.parse(controls!.capturedAt)).not.toBeNaN();
+  expect(controls?.inherited).toMatchObject({ mode: "ask", promptCacheTtl: "1h" });
+  expect(controls?.inherited).not.toHaveProperty("access");
+  expect(controls?.resolved).toMatchObject({
+    access: detail.capturedStart!.access,
+    web: detail.capturedStart!.web,
+    credentialProfileId: null,
+    timeLimitMode: "soft",
+  });
+  expect(controls?.resolved).not.toHaveProperty("mode");
+  expect(controls?.settings?.harnesses.codex).toMatchObject({
+    default_model: "original-model",
+    max_turns: 5,
+  });
+  const cleared = await f.coordinator.mutate({
+    request: { action: "clear", draftId: f.created.draft.draftId, expectedRevision: 1 },
+    idempotencyKey: "clear",
+  });
+  expect(cleared.draft.state).toBe("cleared");
+  expect(boundedDeferredMessage(f.owner.get(f.created.draft.draftId)!).controls).toBeNull();
+});
 
 function responseContext(
   source: Awaited<ReturnType<Awaited<ReturnType<typeof fixture>>["promote"]>>,

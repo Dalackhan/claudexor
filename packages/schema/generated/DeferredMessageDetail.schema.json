@@ -878,6 +878,19 @@
             }
           ],
           "description": "Immutable execution controls captured once; null after clear. Completed envelopes may continue in a different_root under ordinary continueFrom custody."
+        },
+        "capturedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "description": "ISO-8601 timestamp string."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When capturedStart was frozen: draft creation. Edits never recapture; null after clear."
         }
       },
       "required": [
@@ -893,7 +906,8 @@
         "successorRunId",
         "prompt",
         "attachments",
-        "capturedStart"
+        "capturedStart",
+        "capturedAt"
       ],
       "additionalProperties": false,
       "description": "Compact addressed draft state, with exact predecessor result and successor handles. A terminal predecessor does not imply the draft has resolved."

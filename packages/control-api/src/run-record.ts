@@ -7,6 +7,7 @@ import type {
   DeferredMessageReceipt,
   DeferredMessageDetail,
   DeferredMessageProjection,
+  DeferredMessageStopReport,
 } from "@claudexor/schema";
 import { delegatedParentOf } from "@claudexor/schema";
 
@@ -58,6 +59,8 @@ export interface DaemonFacadeClient {
   deferredMessage?(input: DeferredMessageCall): Promise<DeferredMessageReceipt>;
   deferredMessageRead?(draftId: string): Promise<DeferredMessageDetail | null>;
   deferredMessageProjection?(predecessorId: string): Promise<DeferredMessageProjection | null>;
+  /** Hold the predecessor's waiting draft for a public Stop and report the slot. */
+  deferredMessageStop?(predecessorId: string): Promise<DeferredMessageStopReport>;
 }
 
 export interface ControlOperatorDecisionRecord {

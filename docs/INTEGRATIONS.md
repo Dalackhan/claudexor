@@ -656,7 +656,9 @@ Terminal state may include diagnostic non-success states such as
 Telemetry attempts can include adapter-declared transient failures; integrations
 should render those as infrastructure/retry evidence, not as model findings.
 
-`POST /v2/runs/:id/control` supports cancel for active daemon jobs.
+`POST /v2/runs/:id/control` supports cancel for active daemon jobs. The same
+call holds the run's pending next message, also for a run that already ended
+(see the next-message rules under MCP below).
 Interactive runs use the typed interaction surface instead of raw input
 forwarding: `interaction.requested` events carry the questions, the macOS app
 and `claudexor follow` answer via `POST /v2/runs/:id/interactions/:id/answer`,
@@ -811,9 +813,11 @@ separate budget or lifecycle.
 
 A controller saves the exact launch arguments and key before calling a run
 tool, keeps the returned handle, observes it, answers questions or sends
-independent messages, reads the terminal result, and only then starts an
-explicit successor. Each step projects the daemon's existing authority: MCP adds
-no scheduler, handle registry, automatic retry or reconnect.
+independent messages, and reads the terminal result. A successor is then
+started explicitly, or it was reserved earlier as an editable next message
+(below) that the daemon sends as one ordinary continuation only after an
+eligible settled success. Each step projects the daemon's existing authority:
+MCP adds no scheduler, handle registry, automatic retry or reconnect.
 
 **Launch handles.** Run tools return the accepted `jobId` beside `runId`. A job
 still queued after the daemon's binding wait (about 30 seconds) returns
@@ -1050,6 +1054,31 @@ unknown process custody, Stop, restart or admission refusal holds without retry;
 editing a held draft never rearms it. Native transient HTTP429/`willRetry`
 progress does not settle the predecessor.
 
+Stop is `claudexor_run_cancel` (HTTP `POST /v2/runs/:id/control`) on the
+predecessor. Before acceptance it holds the waiting draft (`stop_requested`)
+whatever the predecessor's lifecycle, including while dispatch validation runs
+after the predecessor ended, and returns the held draft as `deferredMessage`;
+promotion rechecks the draft inside its acceptance transaction, so the draft is
+either held or already dispatched. Stop never cancels an accepted successor: a
+terminal predecessor whose draft was dispatched answers 409
+`next_message_dispatched`, whose problem context carries the draft as
+`deferredMessage`, including the successor job and run; stop the successor by
+its own handle. A terminal run without a pending draft keeps the plain 409
+(nothing to stop).
+
+A held draft is not rearmed. After reading the predecessor result, clear the
+draft and, if a successor is still wanted, start it deliberately with
+`claudexor_run_continue`, which applies ordinary admission and new-run defaults.
+A new draft on the same predecessor meets the same outcome gate.
+
+The successor is an ordinary continuation with the predecessor's execution.
+A successful isolated (`envelope`) Agent run keeps no envelope, so its
+successor starts from the project base and receives only the path of the
+unapplied saved patch (`final/patch.diff`). The patch is not the successor's
+tree, and nothing is applied automatically, so such a step can review the diff
+but not test the changed files. To test them, run the predecessor in a live
+caller-owned workspace, or Apply its result and continue explicitly.
+
 Promotion resolves the captured request through current canonical project
 routing in the same transaction as acceptance. A relinked root or a different
 project generation holds the draft without changing its captured scope.
@@ -1066,7 +1095,14 @@ HTTP uses `POST /v2/runs/next-message` with the mutation body and required
 content. CLI uses `claudexor next-message '<envelope JSON>' --json` and
 `claudexor next-message-read <draft-id> --json`. MCP reads bound the prompt to
 4096 UTF-8 bytes and refs to 32, with explicit omission counts and a full detail
-path. The compact state supplies the exact existing predecessor result path
+path. Their `controls` show the frozen values by origin: `capturedAt`;
+`inherited`, the continuation groups taken from the predecessor; `resolved`, the
+create-time controls (explicit, otherwise ordinary new-run defaults at creation,
+so an omitted `access` is the project default even after a readonly
+predecessor); and `settings`, the captured Settings execution preferences.
+Tool permissions, account and harness enablement, trust, quota, capabilities
+and paid-fallback policy are not frozen and are checked at dispatch. The
+compact state supplies the exact existing predecessor result path
 and predecessor/successor job/run handles; use `claudexor_run_result` for output.
 No second output store is created. Detail/status/result/wait include
 `deferredMessage`; a terminal `run_wait` wake describes only the predecessor,

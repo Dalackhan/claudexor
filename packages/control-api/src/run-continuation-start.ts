@@ -27,6 +27,8 @@ const INHERITED_GROUPS = [
   ["model", "models"],
   ["promptCacheTtl"],
 ] as const;
+/** The same groups as one key list, for reads that disclose inherited values. */
+export const CONTINUATION_INHERITED_KEYS: readonly string[] = INHERITED_GROUPS.flat();
 
 /**
  * Fill the omitted inheritable keys of a raw `continueFrom` body from the

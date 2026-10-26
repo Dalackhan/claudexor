@@ -209,6 +209,174 @@
           "type": "integer",
           "minimum": 0
         },
+        "controls": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "capturedAt": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Draft creation; edits never recapture controls."
+                },
+                "inherited": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "description": "Continuation-inherited groups from the predecessor's accepted request (mode, scope, execution, harness and model groups, promptCacheTtl); omitted per-harness models were completed from Settings at creation."
+                },
+                "resolved": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "description": "Create-time controls as captured: explicit draft controls, otherwise ordinary new-run defaults at creation, never the predecessor's value. An omitted access is the project's default access at creation, not the predecessor's."
+                },
+                "settings": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "harnesses": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                              "default_model": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "default": null,
+                                "description": "Per-harness default model; null = the harness's own default."
+                              },
+                              "effort": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 32,
+                                    "pattern": "^[a-z0-9]+(?:[_-][a-z0-9]+)*$",
+                                    "description": "Cross-harness reasoning-effort level as a lowercase slug (open vocabulary, mirroring the vendor contract); adapters advertise the levels they accept per model, ordered weakest to strongest by the vendor itself, and a shared normalizer passes advertised levels through, clamps inside the vendor order, places a word the vendor order lacks by the shared preference order (none < minimal < low < medium < high < xhigh < max < ultra) onto an advertised level, and refuses words neither order places."
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Default reasoning effort for the harness; null = harness default.",
+                                "default": null
+                              },
+                              "max_turns": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "default": null,
+                                "description": "Default max agent turns; null = no limit."
+                              },
+                              "max_rounds": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "default": null,
+                                "description": "Default max convergence rounds; null = engine default."
+                              },
+                              "fallback_model": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "default": null,
+                                "description": "Model to fall back to on typed fallback signals; null = none."
+                              },
+                              "web": {
+                                "type": "string",
+                                "enum": [
+                                  "off",
+                                  "auto",
+                                  "cached",
+                                  "live"
+                                ],
+                                "description": "Default web policy for this harness.",
+                                "default": "auto"
+                              },
+                              "auth_preference": {
+                                "type": "string",
+                                "enum": [
+                                  "subscription",
+                                  "api_key",
+                                  "auto"
+                                ],
+                                "description": "Preferred auth route: subscription (native/OAuth session), api_key (a stored API key), or auto (engine picks subscription-first with policy fallback). A preference, not a secret.",
+                                "default": "auto"
+                              }
+                            },
+                            "additionalProperties": false,
+                            "description": "Per-harness settings."
+                          }
+                        },
+                        "eligibleHarnesses": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "\\S",
+                            "description": "User-supplied string that must contain visible content, not just whitespace."
+                          }
+                        },
+                        "primaryHarness": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/definitions/DeferredMessageReadResult/properties/controls/anyOf/0/properties/settings/anyOf/0/properties/eligibleHarnesses/items"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "User-supplied string that must contain visible content, not just whitespace."
+                        },
+                        "authPreference": {
+                          "$ref": "#/definitions/DeferredMessageReadResult/properties/controls/anyOf/0/properties/settings/anyOf/0/properties/harnesses/additionalProperties/properties/auth_preference"
+                        }
+                      },
+                      "required": [
+                        "harnesses",
+                        "eligibleHarnesses",
+                        "primaryHarness",
+                        "authPreference"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Settings execution preferences captured at creation (per-harness defaults, eligible and primary harness, auth preference), used at dispatch instead of current values."
+                }
+              },
+              "required": [
+                "capturedAt",
+                "inherited",
+                "resolved",
+                "settings"
+              ],
+              "additionalProperties": false,
+              "description": "Frozen effective controls. Dispatch reads tool permissions, account and harness enablement, trust, quota, capabilities, paid-fallback policy and other settings afresh; a refusal holds the draft."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Null after clear."
+        },
         "detailPath": {
           "type": "string"
         }
@@ -220,6 +388,7 @@
         "omittedPromptBytes",
         "attachments",
         "omittedAttachments",
+        "controls",
         "detailPath"
       ],
       "additionalProperties": false,

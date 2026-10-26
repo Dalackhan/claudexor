@@ -82,10 +82,19 @@ const vendorRoot = (home: string, target: "local" | "remote"): string =>
     ? join(home, ".claudexor", "node")
     : join(home, ".claudexor", "remote", "vendor");
 
-const writeExecutable = (path: string, body = "#!/bin/sh\nexit 0\n"): void => {
+const writeExecutable = (path: string, body: string | Buffer = "#!/bin/sh\nexit 0\n"): void => {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, body, { mode: 0o755 });
   chmodSync(path, 0o755);
+};
+
+/** Windows starts a `.exe` only with the PE shape: `MZ`, then `PE\0\0` at e_lfanew. */
+const windowsImage = (): Buffer => {
+  const bytes = Buffer.alloc(512);
+  bytes.write("MZ", 0, "latin1");
+  bytes.writeUInt32LE(0x80, 0x3c);
+  bytes.write("PE\0\0", 0x80, "latin1");
+  return bytes;
 };
 
 /** npm global layout observed for the exact Codex pin: the main package under
@@ -147,7 +156,7 @@ const installNpmFixture = (
       join(root, `${fixture.binary}.cmd`),
       `@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n"%dp0%\\${targetPath}"   %*\r\n`,
     );
-    if (options.image !== false) writeExecutable(binary, options.binaryBody ?? "MZ-fixture");
+    if (options.image !== false) writeExecutable(binary, options.binaryBody ?? windowsImage());
     return { binary, packageRoot };
   }
   const binary = join(root, "bin", fixture.binary);

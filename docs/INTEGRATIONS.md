@@ -17,6 +17,14 @@ changing Claudexor.
 | Host plugins | User-global Claude Code, Codex, Cursor, and OpenCode integrations managed by `claudexor plugin`. | Experimental file layout (regenerate with `claudexor plugin repair all`). Installs owned local files/config only; host enablement can still require reload/manual action. |
 | Engine runtime closure | Node-free release artifact containing reviewed daemon and CLI entrypoints for a host that owns its daemon lifecycle, such as [Ouroboros](https://github.com/razzant/ouroboros). | Exact-pin contract: one link-free archive and the existing signed runtime manifest; the host supplies the tested full Node toolchain and verifies archive plus `--probe` identity. |
 
+Browser requests on ordinary single-candidate Auto Agent runs use the engine's
+[Browser eligibility projection](ARCHITECTURE.md#4-routing). Explicit route
+controls retain their existing meaning, including inherited thread selections
+and the route group inherited by HTTP `continueFrom`. Browser itself is not an
+inherited continuation group; MCP run continuation has no Browser override.
+Deterministic source tests cover routing and adapter spec wiring, not native
+Browser navigation or rendered app behavior.
+
 ## Caller-Owned Model Operations
 
 The model capability uses the same negotiated, authenticated control API and

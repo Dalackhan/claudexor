@@ -413,6 +413,19 @@ width 4, capped by `runtime.max_deep_scan_width`, default 8; see
 [Main Execution Paths](#6-main-execution-paths)). Best-of-N expands the eligible pool over N candidates. Convergence rotates compatible
 harnesses when a stall signature persists.
 
+Ordinary single-candidate Auto Agent runs requesting Browser project the
+already-resolved Browser receipts onto effective lanes before account quota
+preflight, processing preparation, ranking and width selection. This uses
+`RequestRequirementsResolver`; it never widens access or web policy. Request,
+Settings and inherited thread pools, credential pins, explicitly supplied or
+inherited primaries, multi-candidate runs and convergence keep their existing
+selection semantics. A configured default primary remains a bias among eligible
+lanes; if Browser compatibility excludes it, `route.primary.diverged` reports
+`capability_incompatible`, and `route.pool.degraded` records the actual access,
+web or capability cause. Surviving lanes still face ordinary readiness, quota
+and billing admission; a later refusal never restores an incompatible lane.
+The selected-pool Browser assertion remains the final backstop.
+
 Route resolution is honest about membership. An EXPLICITLY selected lane that
 becomes ineligible (unavailable, no manifest, wrong access profile, incompatible
 web policy, unsupported attachment, or unable to perform the intent) is a loud

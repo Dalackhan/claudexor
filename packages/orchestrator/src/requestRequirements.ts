@@ -226,6 +226,25 @@ export class RequestRequirementsResolver {
     return resolution.effective ? { output_dir: outputDir, headless: false } : null;
   }
 
+  /** Project only ordinary single-candidate Auto selection. Explicit and mixed
+   * strategies keep their per-lane receipts and the final existential check. */
+  resolveBrowserPool(
+    requested: boolean,
+    singleAuto: boolean,
+    resolutions: RequestRequirementResolution[],
+  ): { admittedHarnessIds: string[]; rejected: RequestRequirementResolution[] } {
+    if (!requested || !singleAuto) {
+      return { admittedHarnessIds: resolutions.map((lane) => lane.harness_id), rejected: [] };
+    }
+    this.requireEffectiveBrowser(true, resolutions);
+    return {
+      admittedHarnessIds: resolutions
+        .filter((lane) => lane.effective)
+        .map((lane) => lane.harness_id),
+      rejected: resolutions.filter((lane) => !lane.effective),
+    };
+  }
+
   resolveBrowser(input: BrowserLaneRequirementInput): RequestRequirementResolution {
     const eligible = input.manifestCapable;
     if (!input.requested) {

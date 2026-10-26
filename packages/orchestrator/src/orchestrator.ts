@@ -1,4 +1,6 @@
-import { resolveCandidateHarnessIds } from "./route-admission.js";
+import { assertCandidatePoolAvailable, resolveCandidateHarnessIds } from "./route-admission.js";
+import { projectCandidateBrowserPool } from "./candidate-browser.js";
+import { emitPrimaryDivergence } from "./primary-divergence.js";
 import {
   applyWorkEnvelope,
   promptWithPointers as renderPromptWithPointers,
@@ -249,7 +251,6 @@ import {
   reviewerTimeoutMs,
   harnessInactivityTimeoutMs,
   observeAuthSwitch,
-  emitPrimaryDivergence,
   emitPoolDegraded,
   deliveryRefusalFailure,
   winnerNeedsHuman,
@@ -1200,7 +1201,7 @@ export class Orchestrator {
       ) ?? [],
     );
     const policy = input.web ?? input.externalContextPolicy ?? "auto";
-    const pool: RoutedAdapter[] = [];
+    let pool: RoutedAdapter[] = [];
     const dropped: string[] = [];
     // Every auto-pool drop is recorded with its typed STAGE so the disclosure preserves the
     // real cause instead of collapsing to one reason.
@@ -1484,23 +1485,17 @@ export class Orchestrator {
         );
       }
     }
-    if (pool.length === 0) {
-      if (
-        droppedLanes.length > 0 &&
-        droppedLanes.every((l) => auxiliaryUnsupported.has(l.harnessId))
-      )
-        throw new AuxiliaryWritableRootsUnsupportedError(
-          `no harness can apply the requested auxiliary writable roots (${dropped.join(", ")})`,
-        );
-      if (droppedLanes.length > 0 && droppedLanes.every((lane) => lane.stage === "access")) {
-        throw new AccessProfileIncompatibleError(
-          `no harness can enforce the requested access profile (${droppedLanes.map((lane) => lane.detail).join(", ")})`,
-        );
-      }
-      throw new HarnessUnavailableError(
-        `no harness can perform '${intent}' for this mode${dropped.length ? ` (skipped: ${dropped.join(", ")})` : ""}`,
-      );
-    }
+    assertCandidatePoolAvailable(pool, intent, droppedLanes, auxiliaryUnsupported);
+    const browserOmissions: string[] = [];
+    pool = projectCandidateBrowserPool(
+      input,
+      pool,
+      this.requestRequirements,
+      (id, stage, detail) => {
+        browserOmissions.push(id);
+        dropLane(id, stage, detail);
+      },
+    );
     // Quota admission resolves the spawning account before budget routing;
     // the first spec build reuses that exact profile.
     const quotaPrepared = await Promise.all(
@@ -1585,7 +1580,7 @@ export class Orchestrator {
         `no harness remains eligible for '${intent}' after budget and quota routing`,
       );
     }
-    emitPrimaryDivergence(log, input.primaryHarness, ordered, pool, dropped);
+    emitPrimaryDivergence(log, input.primaryHarness, ordered, pool, dropped, browserOmissions);
     const n = input.n ?? ordered.length;
     const selectionOrder = ordered;
     const out: RoutedAdapter[] = [];

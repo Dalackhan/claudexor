@@ -193,6 +193,9 @@ function hostFallbackCommands(runtime: RuntimePaths): string[] {
 /** Exact Claude plugin skill invocation; plain `/claudexor` is not an alias (QA-029A). */
 const CLAUDE_SLASH_COMMAND = "/claudexor:claudexor";
 
+const MCP_THREAD_HISTORY_GUIDANCE =
+  "Read retained thread answers with `claudexor_thread_history`: `{threadId, limit?, cursor?, beforeTurnId?, afterTurnId?, aroundTurnId?, expectedStoreId?}`. Limit is 1..20 (default 20); omit selectors for the newest page, or supply exactly one selector. Rows are ordered oldest first; opaque cursors are bound to store, epoch, thread and limit. Follow olderCursor/newerCursor explicitly; replayCursor refreshes the same membership, with replayNextCursor for additional segments if answers grow. Prompt/answer previews are bounded; missing evidence and incomplete plan-answer relations are not proof of absence. `claudexor_thread_prompt` reads full prompts, including runless refusals, in UTF-8 parts with `{threadId, turnId, offset?, maxBytes?, expectedStoreId?}`; continue at nextOffset while it is below totalBytes. Full answers use the existing artifact read. These reads never start a daemon, enqueue work or authorize a retry; legacy `claudexor_thread_read` remains available for complete inspection.";
+
 const MCP_RUN_HANDLE_GUIDANCE =
   "Optional retained task groups on a supporting daemon: public one-shot launches accept an explicit UUID `taskGroupId` (CLI `--task-group-id`). Save the UUID, distinct member request keys and exact bodies before launch; persist accepted receipts and `storeId` outside the ephemeral controller. `claudexor_task_group_runs` takes `{taskGroupId, expectedStoreId?, limit?, state?, cursor?}` and returns one page of original job handles with actual nullable run IDs. Supply the saved `expectedStoreId` when recovering. With only group/store saved, recover retained handles without request keys or the original project directory. Limit is 1..200 (default 50), cursor at most 2048 characters, logical result JSON at most 131072 UTF-8 bytes; resume explicitly with `nextCursor`, never auto-follow. `current_served_generations` and `retained_only` mean an empty page after pruning/archive is not a permanent roster or proof of never-accepted work. Store mismatch and stale cursors fail typed. Missing membership grants no resubmission authority. Group reads never launch, retry, resume, answer or cancel; interrupted jobs remain interrupted. Exact key/body replay preserves the group; Exact Retry keeps it, and a new continuation may explicitly supply a group with no inheritance on omission. Thread turns, Delegate tools and ACP session settings do not take group input. Use only advertised tools on a supporting engine; this reference adds no rights, budget inheritance or app UI handoff.\n\n" +
   'MCP run tools enqueue work and return a durable handle (`jobId`, and `runId` once bound), not terminal output or a live thread. Follow the handle with `claudexor_run_status`/`claudexor_run_result` (or the CLI) before claiming the answer, completion, or applyability. Public one-shot launches accept an optional caller `idempotencyKey` with an explicit `repoPath`; recover an unknown response with the same key and arguments. `claudexor_runs_wait` observes 1..1000 `targets` entries shaped `{runId, seen?}` with compact positional summaries and attention indexes; for example, `{"targets":[{"runId":"job-a"},{"runId":"job-b"}],"waitMs":0}`. Echo each summary token as `seen` to suppress unchanged terminal or question attention; a token is neither an event cursor nor an answer. Read output and question bodies separately with `claudexor_run_result` and `claudexor_run_interactions`; read abort or timeout never cancels the worker. A `problems` response keeps healthy summaries: retain their handles/tokens, reconcile `not_found` against store/receipts/group and remove only obsolete watch targets, retry `snapshot_unavailable` with bounded backoff, and keep `not_observed` for a later read. Never busy-loop unchanged problems or infer permission to relaunch. `claudexor_run_wait` returns already written events first, even beside a pending question, then a batch (or the first event with `wake: "event"`); resume with `nextSeq` as `afterSeq`, read an `oversizedEvent` in parts with `claudexor_run_event_read`, and never treat timeout or cancelled observation as a stopped worker. `claudexor_run_message` sends an authorized correction with an explicit message key; accepted is not observed delivery, a pending question refuses it, and an unknown outcome needs the same key/body. `claudexor_run_continue` submits an authorized terminal-run successor with optional empty prompt; only mode, scope, execution, harness, model and prompt-cache lifetime carry over (another lifetime, Default included, needs a new run), so restate the access, web, account, budget, time and review controls it must keep. None of these controls expands Delegate authority.';
@@ -235,6 +238,7 @@ function skillText(host: PluginHost, runtime: RuntimePaths): string {
     "",
     MCP_RUN_HANDLE_GUIDANCE,
     MCP_WORKER_CONTROL_GUIDANCE,
+    MCP_THREAD_HISTORY_GUIDANCE,
     "Use an explicit `repoPath` when the host cwd may not be the target project. Use `credentialProfileId` for a strict account pin. For multi-turn supervision, create the thread once, enqueue each follow-up with `claudexor_thread_turn` (pass an `idempotencyKey` and retry an unknown outcome with the same key and body), then follow its returned `runId` with the ordinary status/result tools. If the turn returns only a queued `jobId`, use `claudexor_runs` to recover its `runId` after binding; `claudexor_thread_read` lists earlier turns without starting work.",
     "",
     READINESS_GUIDANCE,
@@ -285,6 +289,7 @@ function commandText(host: PluginHost, runtime: RuntimePaths): string {
     "",
     MCP_RUN_HANDLE_GUIDANCE,
     READINESS_GUIDANCE,
+    MCP_THREAD_HISTORY_GUIDANCE,
     "",
     "For durable MCP conversations, create once with `claudexor_thread_create`, continue with `claudexor_thread_turn`, and inspect with `claudexor_thread_read`. These tools do not expose portable native vendor sessions or a live vendor conversation. Ask for an explicit repo path if the target project is ambiguous.",
     "",
@@ -318,6 +323,7 @@ function readmeText(host: PluginHost, runtime: RuntimePaths): string {
         ]
       : []),
     MCP_RUN_HANDLE_GUIDANCE,
+    MCP_THREAD_HISTORY_GUIDANCE,
     "Long-running MCP tools (claudexor_run, claudexor_best_of, claudexor_create) are daemon-tracked: every result carries a `runId:` trailer, so a call abandoned by a host timeout stays recoverable via `claudexor inspect <runId>` / `claudexor follow <runId>`.",
     "",
   ].join("\n");

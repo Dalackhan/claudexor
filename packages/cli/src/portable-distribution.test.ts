@@ -60,6 +60,8 @@ describe("portable Agent Skill, Copilot plugin, and MCP distribution", () => {
         "claudexor_run_event_read",
         "claudexor_run_message",
         "claudexor_run_continue",
+        "claudexor_thread_history",
+        "claudexor_thread_prompt",
       ])
         expect(generated, `generated skill omits ${name}`).toContain(`\`${name}\``);
       // Independent API-reference literals shared by the shipped and generated

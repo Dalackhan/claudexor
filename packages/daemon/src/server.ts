@@ -12,6 +12,7 @@ import {
   normalizeCancelReasonCode,
   isTerminalLifecycle,
   type CancelReasonCode,
+  type DeferredMessageStopReport,
   type RuntimeConcurrencyCaps,
   type DaemonStoreFacts,
   type ConcurrencyLimit,
@@ -198,7 +199,8 @@ export class DaemonServer {
   }
 
   private async stopOnce(recoverStore = false): Promise<void> {
-    this.deferred.shutdown();
+    // Unsaved next-message holds join the drain report; they never block the abort.
+    const unsaved = this.deferred.shutdown();
     for (const controller of this.controllers.values()) {
       try {
         controller.abort("host_cancelled" satisfies CancelReasonCode);
@@ -211,7 +213,7 @@ export class DaemonServer {
     const rejected = settled.filter(
       (entry): entry is PromiseRejectedResult => entry.status === "rejected",
     );
-    const failures = [...rejected.map((entry) => entry.reason), ...this.taskFailures];
+    const failures = [...rejected.map((entry) => entry.reason), ...this.taskFailures, ...unsaved];
     if (
       this.active !== 0 ||
       failures.some((error) => !recoverStore || !storageOnlyFailure(error))
@@ -219,6 +221,7 @@ export class DaemonServer {
       const first =
         rejected[0]?.reason ??
         this.taskFailures[0] ??
+        unsaved[0] ??
         new Error(`daemon still owns ${this.active} active runner(s)`);
       throw Object.assign(
         new Error(
@@ -394,11 +397,13 @@ export class DaemonServer {
 
   /** Daemon-owned cancellation primitive used by RPC and the Delegate drain
    * barrier. It is safe to repeat and preserves queued-admission cleanup. */
-  cancelJob(jid: string, reasonCode?: CancelReasonCode): { id: string; cancelled: true } {
+  cancelJob(
+    jid: string,
+    reasonCode?: CancelReasonCode,
+  ): { id: string; cancelled: true; deferredMessageStop: DeferredMessageStopReport } {
     const rec = this.getRecord(jid);
     if (!rec) throw new Error(`no such job: ${jid}`);
     this.cancelled.add(jid);
-    this.deferred.stop(rec.id);
     if (rec.state === "queued") {
       this.updateRecord(rec, { state: "cancelled", finishedAt: nowIso() });
       const index = this.queue.findIndex((job) => job.id === jid);
@@ -411,7 +416,10 @@ export class DaemonServer {
     // the terminal writers. Only enum members reach this parameter: RunControl
     // validates the HTTP boundary, normalizeCancelReasonCode the raw RPC.
     this.controllers.get(jid)?.abort(reasonCode || undefined);
-    return { id: jid, cancelled: true };
+    // The ordinary stop above never waits on this write. If the hold cannot be
+    // saved, its typed failure follows the stop and the fences keep the next
+    // message unsent.
+    return { id: jid, cancelled: true, deferredMessageStop: this.deferred.stop(rec.id) };
   }
 
   private stoppingError(message: string): Error & { code: string; status: number } {
@@ -587,10 +595,12 @@ export class DaemonServer {
         }
       }
       try {
-        await this.deferred.settled(id);
-      } finally {
         this.pruneHistory();
         if (!this.stopping) this.drain();
+      } finally {
+        // The freed slot is reused before the next message's asynchronous
+        // dispatch validation; an accepted successor joins the same queue.
+        await this.deferred.settled(id);
       }
     }
   }

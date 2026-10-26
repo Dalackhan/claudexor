@@ -145,6 +145,28 @@ describe("SQL reserved deferred message", () => {
     ).toThrow(/reserved/);
     expect(f.drafts.reservation("run-1")?.predecessorJobId).toBe("job-1");
   });
+  it("reads slots through a job or run alias without hydrating the predecessor command", async () => {
+    const f = await fixture();
+    f.commands.update("job-1", { runId: "run-1" });
+    const hydrated = vi.spyOn(f.commands, "get");
+    const bodies = vi.spyOn(f.blobs, "read");
+    expect(f.drafts.reservation("run-1")).toBeNull();
+    expect(f.drafts.latest("job-1")).toBeNull();
+    expect(f.drafts.latest("unknown")).toBeNull();
+    expect(hydrated).not.toHaveBeenCalled();
+    expect(bodies).not.toHaveBeenCalled();
+    const draft = f.create().draft;
+    hydrated.mockClear();
+    bodies.mockClear();
+    expect(f.drafts.reservation("run-1")).toMatchObject({
+      draftId: draft.draftId,
+      predecessorJobId: "job-1",
+      predecessorRunId: "run-1",
+    });
+    expect(f.drafts.latest("job-1")?.draftId).toBe(draft.draftId);
+    expect(hydrated).not.toHaveBeenCalled();
+    expect(bodies).not.toHaveBeenCalled();
+  });
   it("clear targets draft identity, permits a new draft and cannot cancel its replacement", async () => {
     const f = await fixture();
     const first = f.create().draft;

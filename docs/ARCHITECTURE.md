@@ -3786,10 +3786,7 @@ kept only for cold import and an independent frozen copy kept for tests.
   HTTP/CLI/MCP controls and addressed projections are wired; public Stop holds
   a waiting draft whatever the predecessor's lifecycle (`POST /v2/runs/:id/control`), and
   bounded reads add `controls`, the captured values by origin with
-  `capturedAt`. The built
-  stdio/HTTP/SQLite controller story passed through dispatch, result and held/clear
-  with fake harnesses. All five focused tool-policy regressions passed. Native
-  vendor, GUI and cross-platform acceptance remain manual.
+  `capturedAt`.
 - The flusher worker owns the power-loss barrier. Every 200 ms it fsyncs each
   directory registered since the previous pass, reads `data_version`, runs a
   PASSIVE checkpoint for space, and — whenever anything was committed since
@@ -4239,10 +4236,18 @@ of local fake apply state.
 `POST /v2/runs/:id/control` is capability-based. The implemented verb is `cancel`:
 daemon abort closes the active harness stream and the process helper sends a
 cooperative interrupt with hard-kill fallback. (The former `interrupt` control
-kind was deleted as a fake knob — it mapped to the same daemon cancel.) Before
-signalling a process, and also for a run that already ended, the route asks the
-daemon (`deferredMessageStop`) to hold the run's waiting next message in one
-synchronous step that promotion rechecks inside its acceptance transaction. A
+kind was deleted as a fake knob — it mapped to the same daemon cancel.) For a
+run that already ended, the route asks the daemon (`deferredMessageStop`) to
+hold the run's waiting next message; for a live run the daemon cancel does it
+right after the ordinary stop and returns the same report. The hold is one
+synchronous step that promotion rechecks inside its acceptance transaction. The
+daemon fences the draft in memory before it writes the hold, so a hold that
+cannot be saved never sends the draft: a live run is still signalled, a restart
+holds the draft, and the route answers 503 `next_message_hold_failed` instead
+of reporting it held. Every Stop or cancel retries a hold that is not saved
+yet. Daemon shutdown sets its closing fence first, aborts and drains runners
+even when its own holds cannot be saved, and reports such a hold as an
+unconfirmed drain. A
 held draft is reported as `deferredMessage`; a dispatched one makes a terminal
 run answer 409 `next_message_dispatched` with the successor handles, and that
 successor is not cancelled. Without a pending draft a terminal run keeps the

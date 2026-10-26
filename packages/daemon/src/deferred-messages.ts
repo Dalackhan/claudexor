@@ -38,6 +38,8 @@ export class DeferredMessages {
   private readonly flights = new Map<string, Promise<void>>();
   private readonly changed = new Set<string>();
   private readonly waiting = new Set<string>();
+  /** Drafts a Stop fenced in this daemon, also when their hold was not saved. */
+  private readonly stopped = new Set<string>();
   private closing = false;
   constructor(
     private readonly deps: {
@@ -91,7 +93,10 @@ export class DeferredMessages {
     if (receipt.draft.state === "waiting") {
       this.waiting.add(receipt.draft.draftId);
       await this.evaluate(receipt.draft.draftId);
-    } else this.waiting.delete(receipt.draft.draftId);
+    } else {
+      this.waiting.delete(receipt.draft.draftId);
+      this.stopped.delete(receipt.draft.draftId);
+    }
     return {
       appliedRevision: receipt.appliedRevision,
       draft: DeferredMessageProjection.strip().parse(this.read(receipt.draft.draftId)),
@@ -113,21 +118,43 @@ export class DeferredMessages {
       await this.evaluate(reservation.draftId);
     }
   }
-  /** Stop holds a waiting draft whatever the predecessor's lifecycle. Hold and
-   * report are one synchronous step, and promotion rechecks the row inside its
-   * acceptance mutation: the draft is held here or was already dispatched. */
+  /** Stop holds a waiting draft whatever the predecessor's lifecycle. Fence,
+   * hold and report are one synchronous step, and promotion rechecks the fence
+   * and the row inside its acceptance mutation: the draft is held here, was
+   * already dispatched, or stays fenced when its hold cannot be saved. Every
+   * Stop, the daemon cancel included, retries a hold that is not saved yet. */
   stop(predecessor: string, caller?: unknown): DeferredMessageStopReport {
     assertOperatorCaller(caller);
     const owner = this.deps.commands.deferredFor?.(predecessor);
     const draft = owner?.reservation(predecessor);
-    if (draft?.state === "waiting") owner!.hold(draft.draftId, { code: "stop_requested" });
+    if (draft?.state === "waiting") {
+      this.stopped.add(draft.draftId);
+      try {
+        owner!.hold(draft.draftId, { code: "stop_requested" });
+      } catch (error) {
+        // A post-commit notification failure leaves the hold saved.
+        if (!(error as { committed?: boolean })?.committed) throw holdNotSaved(draft, error);
+      }
+    }
     const latest = owner?.latest(predecessor) ?? null;
+    if (draft && latest?.draftId === draft.draftId && latest.state !== "waiting")
+      this.stopped.delete(draft.draftId);
     return { held: draft?.state === "waiting" && latest?.state === "held", draft: latest };
   }
-  shutdown(): void {
+  /** The closing fence is set first. Holds that cannot be saved are returned
+   * for the shutdown report and never stop the remaining holds or the abort. */
+  shutdown(): unknown[] {
     this.closing = true;
+    const unsaved: unknown[] = [];
     for (const id of this.waiting)
-      this.deps.commands.deferredFor?.(id)?.hold(id, { code: "shutdown" });
+      try {
+        this.deps.commands.deferredFor?.(id)?.hold(id, { code: "shutdown" });
+      } catch (error) {
+        // The store failure stays inspectable for a store-recovery shutdown.
+        if (!(error as { committed?: boolean })?.committed)
+          unsaved.push(new AggregateError([error], holdNotSavedMessage("Shutdown", id, error)));
+      }
+    return unsaved;
   }
   async drained(): Promise<void> {
     await Promise.all([...this.flights.values()]);
@@ -146,8 +173,10 @@ export class DeferredMessages {
       } while (this.changed.delete(id));
     })().finally(() => {
       this.flights.delete(id);
-      if (this.deps.commands.deferredFor?.(id)?.get(id)?.state !== "waiting")
+      if (this.deps.commands.deferredFor?.(id)?.get(id)?.state !== "waiting") {
         this.waiting.delete(id);
+        this.stopped.delete(id);
+      }
     });
     this.flights.set(id, work);
     return work;
@@ -158,7 +187,7 @@ export class DeferredMessages {
     if (!owner || draft?.state !== "waiting") return;
     const predecessor = this.record(draft.predecessorJobId);
     if (this.deps.active(predecessor.id) || !isTerminalLifecycle(predecessor.state)) return;
-    const hold = owner.outcomeHold(id) ?? this.fence(predecessor);
+    const hold = owner.outcomeHold(id) ?? this.fence(predecessor, id);
     if (hold) {
       owner.hold(id, hold);
       return;
@@ -177,7 +206,7 @@ export class DeferredMessages {
         id,
         draft.revision,
         request,
-        () => this.fence(this.record(predecessor.id)),
+        () => this.fence(this.record(predecessor.id), id),
         (start, draftId) => {
           admitCommandRequest(this.deps.commands, start, undefined, undefined, draftId);
         },
@@ -196,9 +225,10 @@ export class DeferredMessages {
       else throw error;
     }
   }
-  private fence(record: JobRecord): DeferredMessageHold | null {
+  private fence(record: JobRecord, draftId: string): DeferredMessageHold | null {
     if (this.closing) return { code: "shutdown" };
-    if (this.deps.stopped(record.id)) return { code: "stop_requested" };
+    if (this.deps.stopped(record.id) || this.stopped.has(draftId))
+      return { code: "stop_requested" };
     if (this.deps.active(record.id)) return { code: "settlement_unknown" };
     return (this.deps.custody ?? processCustodyHold)(record);
   }
@@ -245,6 +275,18 @@ function processCustodyHold(record: JobRecord): DeferredMessageHold | null {
 }
 function problem(code: string, message: string, status: number) {
   return Object.assign(new Error(message), { code, status, retryable: false });
+}
+function holdNotSavedMessage(by: "Stop" | "Shutdown", draftId: string, error: unknown) {
+  return `${by} could not save the hold of next message ${draftId} (${safeProblemMessage(error)}). It is not sent: this daemon keeps it fenced, and a restart holds it.`;
+}
+function holdNotSaved(draft: DeferredMessageProjection, error: unknown) {
+  return Object.assign(new Error(holdNotSavedMessage("Stop", draft.draftId, error)), {
+    code: "next_message_hold_failed",
+    status: 503,
+    retryable: true,
+    context: { deferredMessage: draft },
+    requiredActions: ["Retry the Stop to record the hold."],
+  });
 }
 function assertOperatorCaller(raw: unknown): void {
   const caller = raw as Record<string, unknown> | null;

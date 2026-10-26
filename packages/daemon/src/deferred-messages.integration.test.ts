@@ -15,13 +15,17 @@ import {
   needsOperatorAttention,
   type DeferredMessageReceipt,
 } from "@claudexor/schema";
+import { reapScopeMembers } from "@claudexor/core";
 import { sqlFixture } from "./store/test-support/sql-fixture.js";
 import { DaemonServer, type RunContext } from "./server.js";
 import { DeferredMessages } from "./deferred-messages.js";
 import { SqlCommandStore } from "./store/commands.js";
+import { SqlDeferredMessages } from "./store/deferred-messages.js";
+import { StoreCorruptError, StoreFullError } from "./store/errors.js";
 import { DaemonLocalClient } from "./daemon-local-client.js";
 import { DaemonControlApiServer } from "../../control-api/src/daemon-server.js";
 
+const SCOPE_MARKER = "CLAUDEXOR_SCOPE_0123456789abcdef0123456789abcdef";
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -37,7 +41,13 @@ function barrier() {
 
 async function fixture(
   mode: "ask" | "agent" = "ask",
-  options: { custody?: boolean; failure?: boolean; outcome?: Record<string, unknown> } = {},
+  options: {
+    custody?: boolean;
+    failure?: boolean;
+    outcome?: Record<string, unknown>;
+    scope?: RunProcessScopeOutcome;
+    maxConcurrent?: number;
+  } = {},
 ) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "cx-deferred-integration-")));
   cleanups.push(() => rmSync(root, { recursive: true, force: true }));
@@ -60,7 +70,7 @@ async function fixture(
     socketPath: join(root, "unused.sock"),
     token: "test",
     commands: sql.graph.commands,
-    maxConcurrent: 2,
+    maxConcurrent: options.maxConcurrent ?? 2,
     deferredStart: () => ({ capture, validate }),
     runner: async (params, ctx) => {
       started.push({ params, ctx });
@@ -116,16 +126,17 @@ async function fixture(
         writeFileSync(
           join(runDir, "final/process_scope.yaml"),
           JSON.stringify(
-            RunProcessScopeOutcome.parse({
-              marker: "CLAUDEXOR_SCOPE_0123456789abcdef0123456789abcdef",
-              coverage: "marker+capture",
-              census: "ok",
-              settled: true,
-              incomplete: false,
-              survivors: [],
-              unreadable: [],
-              completeness: "not_provable",
-            }),
+            options.scope ??
+              RunProcessScopeOutcome.parse({
+                marker: SCOPE_MARKER,
+                coverage: "marker+capture",
+                census: "ok",
+                settled: true,
+                incomplete: false,
+                survivors: [],
+                unreadable: [],
+                completeness: "not_provable",
+              }),
           ),
         );
       const type =
@@ -258,6 +269,53 @@ describe("deferred promotion in the existing daemon queue", () => {
       expect(f.read(draft.draftId).hold?.code, JSON.stringify(record)).toBe(code);
     });
     expect(f.started).toHaveLength(1);
+  });
+  it("holds every draft where the platform has no process census (the win32 reap)", async () => {
+    const reap = await reapScopeMembers({ marker: SCOPE_MARKER, platform: "win32" });
+    expect(reap).toMatchObject({ census: "unsupported", coverage: "tree_only", settled: false });
+    const f = await fixture("ask", {
+      scope: RunProcessScopeOutcome.parse({
+        marker: SCOPE_MARKER,
+        coverage: reap.coverage,
+        census: reap.census,
+        settled: reap.settled,
+        incomplete: reap.incomplete,
+        completeness: reap.completeness,
+        completeness_reason: reap.completenessReason,
+      }),
+    });
+    const draft = (await f.create()).draft;
+    f.done.release();
+    await vi.waitFor(() => expect(f.read(draft.draftId).hold?.code).toBe("settlement_unknown"));
+    expect(f.validate).not.toHaveBeenCalled();
+    expect(f.started).toHaveLength(1);
+  });
+  it("reuses the freed slot while the next message's dispatch validation is pending", async () => {
+    const f = await fixture("ask", { maxConcurrent: 1 });
+    const other = (await f.daemon.dispatch("claudexor.enqueue", {
+      request: ControlRunStartRequest.parse({ mode: "ask", prompt: "unrelated" }),
+      clientId: "test",
+      idempotencyKey: "unrelated",
+    })) as { id: string };
+    const draft = (await f.create()).draft;
+    const preflight = barrier();
+    cleanups.push(preflight.release);
+    f.validate.mockImplementation(async () => preflight.promise);
+    f.done.release();
+    await vi.waitFor(() => expect(f.validate).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(f.started.map((s) => s.ctx.jobId)).toEqual([f.initial.id, other.id]),
+    );
+    expect(f.read(draft.draftId).state).toBe("waiting");
+    preflight.release();
+    await vi.waitFor(() => expect(f.read(draft.draftId).state).toBe("dispatched"));
+    const successor = f.read(draft.draftId).successorJobId!;
+    expect(f.sql.graph.commands.queries.select({ ids: [successor] })[0]?.state).toBe("queued");
+    await f.daemon.dispatch("claudexor.cancel", { id: other.id });
+    await vi.waitFor(() =>
+      expect(f.started.map((s) => s.ctx.jobId)).toEqual([f.initial.id, other.id, successor]),
+    );
+    expect(f.started[2]!.params.prompt).toBe("verify");
   });
   it("holds current admission refusal and never rearms on edit or readiness return", async () => {
     const f = await fixture();
@@ -649,6 +707,232 @@ describe("public Stop of a predecessor with a next message", () => {
       },
     });
     expect(f.read(draft.draftId).hold?.code).toBe("predecessor_failed");
+  });
+
+  // Only the Stop's own hold write fails; later writes succeed again.
+  const failHoldOnce = () =>
+    vi.spyOn(SqlDeferredMessages.prototype, "hold").mockImplementationOnce(() => {
+      throw new StoreFullError("fixture: no space for the hold");
+    });
+  async function validating(f: Fixture) {
+    const preflight = barrier();
+    cleanups.push(preflight.release);
+    f.validate.mockImplementation(async () => preflight.promise);
+    f.done.release();
+    await vi.waitFor(() => expect(f.validate).toHaveBeenCalled());
+    expect(state(f, f.initial.id)).toBe("succeeded");
+    return preflight;
+  }
+  async function afterValidation(preflight: ReturnType<typeof barrier>, f: Fixture) {
+    preflight.release();
+    await vi.waitFor(() => expect(f.validate).toHaveResolved());
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  const unsaved = (draftId: string) => ({
+    code: "next_message_hold_failed",
+    retryable: true,
+    context: { deferredMessage: { draftId, state: "waiting" } },
+  });
+
+  it("still stops a live predecessor when its Stop hold cannot be saved", async () => {
+    const f = await fixture();
+    const stop = await publicStop(f);
+    const draft = (await f.create()).draft;
+    failHoldOnce();
+    const stopped = await stop(f.initial.id);
+    expect(f.started[0]!.ctx.signal.aborted).toBe(true);
+    await vi.waitFor(() => expect(f.read(draft.draftId).state).toBe("held"));
+    expect(f.read(draft.draftId).hold?.code).toBe("stop_requested");
+    expect(f.validate).not.toHaveBeenCalled();
+    expect(f.started).toHaveLength(1);
+    expect(commands(f)).toBe(1);
+    expect(stopped).toMatchObject({ status: 503, body: unsaved(draft.draftId) });
+    expect(stopped.body.message).toMatch(/^cancel requested; .*out of space/);
+  });
+
+  it("neither claims nor sends a terminal predecessor's draft whose Stop hold failed during validation", async () => {
+    const f = await fixture();
+    const stop = await publicStop(f);
+    const draft = (await f.create()).draft;
+    const preflight = await validating(f);
+    failHoldOnce();
+    const stopped = await stop(f.initial.id);
+    await afterValidation(preflight, f);
+    expect(f.started).toHaveLength(1);
+    expect(commands(f)).toBe(1);
+    expect(f.read(draft.draftId)).toMatchObject({
+      state: "held",
+      hold: { code: "stop_requested" },
+      successorJobId: null,
+    });
+    expect(stopped).toMatchObject({ status: 503, body: unsaved(draft.draftId) });
+    expect(stopped.body.message).toContain("out of space");
+  });
+
+  it("raw daemon cancel stops a live predecessor before reporting the unsaved hold", async () => {
+    const f = await fixture();
+    const draft = (await f.create()).draft;
+    failHoldOnce();
+    const outcome = await f.daemon
+      .dispatch("claudexor.cancel", { id: f.initial.id })
+      .catch((error: unknown) => error);
+    expect(f.started[0]!.ctx.signal.aborted).toBe(true);
+    await vi.waitFor(() => expect(f.read(draft.draftId).state).toBe("held"));
+    expect(f.read(draft.draftId).hold?.code).toBe("stop_requested");
+    expect(f.started).toHaveLength(1);
+    expect(commands(f)).toBe(1);
+    expect(outcome).toMatchObject({ ...unsaved(draft.draftId), status: 503 });
+  });
+
+  it("raw daemon cancel during validation reports the unsaved hold and never sends the draft", async () => {
+    const f = await fixture();
+    const draft = (await f.create()).draft;
+    const preflight = await validating(f);
+    failHoldOnce();
+    const outcome = await f.daemon
+      .dispatch("claudexor.cancel", { id: f.initial.id })
+      .catch((error: unknown) => error);
+    await afterValidation(preflight, f);
+    expect(f.started).toHaveLength(1);
+    expect(commands(f)).toBe(1);
+    expect(f.read(draft.draftId)).toMatchObject({
+      state: "held",
+      hold: { code: "stop_requested" },
+      successorJobId: null,
+    });
+    expect(outcome).toMatchObject({ ...unsaved(draft.draftId), status: 503 });
+  });
+
+  // No hold can ever be saved, while acceptance and every other write still
+  // work: a missing fence would show up as an accepted successor.
+  const failEveryHold = () => {
+    const owner = SqlDeferredMessages.prototype as unknown as { write(...args: unknown[]): void };
+    const write = owner.write;
+    return vi.spyOn(owner, "write").mockImplementation(function (this: unknown, ...args) {
+      if ((args[1] as { state?: string } | undefined)?.state === "held")
+        throw new StoreFullError("fixture: no hold can be saved");
+      return write.apply(this, args);
+    });
+  };
+  // The unconfirmed shutdown is the asserted outcome; cleanup must not repeat it.
+  async function unconfirmedStop(f: Fixture) {
+    const stopping = f.daemon.stop();
+    f.daemon.stop = () => Promise.resolve();
+    return stopping.then(
+      () => null,
+      (error: unknown) => error,
+    );
+  }
+
+  it.each(["held", "clear", "settle"] as const)(
+    "retires the temporary Stop fence after authoritative %s without sending the draft",
+    async (retirement) => {
+      const f = await fixture();
+      const stop = await publicStop(f);
+      const draft = (await f.create()).draft;
+      const preflight = await validating(f);
+      const stopped = (f.daemon as unknown as { deferred: { stopped: Set<string> } }).deferred
+        .stopped;
+      if (retirement !== "held") failHoldOnce();
+      const outcome = await stop(f.initial.id);
+      expect(outcome.status).toBe(retirement === "held" ? 200 : 503);
+      if (retirement !== "held") {
+        expect(stopped.has(draft.draftId)).toBe(true);
+        expect(f.read(draft.draftId).state).toBe("waiting");
+      }
+      if (retirement === "clear")
+        await f.mutate({
+          request: { action: "clear", draftId: draft.draftId, expectedRevision: 1 },
+          idempotencyKey: "clear-fenced",
+        });
+      if (retirement !== "settle") expect(stopped.has(draft.draftId)).toBe(false);
+      await afterValidation(preflight, f);
+      expect(stopped.size).toBe(0);
+      expect(f.read(draft.draftId).state).toBe(retirement === "clear" ? "cleared" : "held");
+      expect(f.started).toHaveLength(1);
+      expect(commands(f)).toBe(1);
+    },
+  );
+
+  it("repeated raw cancels retry a hold that can never be saved and never send or claim the draft", async () => {
+    const f = await fixture();
+    const draft = (await f.create()).draft;
+    const preflight = await validating(f);
+    const writes = failEveryHold();
+    for (const attempt of [1, 2]) {
+      const before = writes.mock.calls.length;
+      const outcome = await f.daemon
+        .dispatch("claudexor.cancel", { id: f.initial.id })
+        .catch((error: unknown) => error);
+      expect(outcome, `raw cancel ${attempt}`).toMatchObject({
+        ...unsaved(draft.draftId),
+        status: 503,
+      });
+      expect(writes.mock.calls.length, `raw cancel ${attempt}`).toBeGreaterThan(before);
+    }
+    await afterValidation(preflight, f);
+    expect(f.started).toHaveLength(1);
+    expect(commands(f)).toBe(1);
+    expect(f.read(draft.draftId)).toMatchObject({
+      state: "waiting",
+      hold: null,
+      successorJobId: null,
+    });
+    expect(await unconfirmedStop(f)).toMatchObject({ code: "daemon_shutdown_unconfirmed" });
+    expect(f.read(draft.draftId).state).toBe("waiting");
+  });
+
+  it("repeated public Stops keep answering 503 for a hold that can never be saved and never send the draft", async () => {
+    const f = await fixture();
+    const stop = await publicStop(f);
+    const draft = (await f.create()).draft;
+    failEveryHold();
+    const live = await stop(f.initial.id);
+    expect(f.started[0]!.ctx.signal.aborted).toBe(true);
+    expect(live).toMatchObject({ status: 503, body: unsaved(draft.draftId) });
+    expect(live.body.message).toMatch(/^cancel requested; /);
+    await vi.waitFor(() => expect(state(f, f.initial.id)).not.toBe("running"));
+    const ended = await stop(f.initial.id);
+    expect(ended).toMatchObject({ status: 503, body: unsaved(draft.draftId) });
+    expect(ended.body.message).toMatch(/^run is succeeded; /);
+    expect(f.validate).not.toHaveBeenCalled();
+    expect(f.started).toHaveLength(1);
+    expect(commands(f)).toBe(1);
+    expect(f.read(draft.draftId)).toMatchObject({
+      state: "waiting",
+      hold: null,
+      successorJobId: null,
+    });
+    expect(await unconfirmedStop(f)).toMatchObject({ code: "daemon_shutdown_unconfirmed" });
+  });
+
+  it("shutdown still aborts and drains runners when a next-message hold cannot be saved", async () => {
+    const f = await fixture();
+    const draft = (await f.create()).draft;
+    failHoldOnce();
+    const outcome = await unconfirmedStop(f);
+    expect(f.started[0]!.ctx.signal.aborted).toBe(true);
+    expect(state(f, f.initial.id)).not.toBe("running");
+    expect(outcome).toMatchObject({ code: "daemon_shutdown_unconfirmed" });
+    expect((outcome as Error).message).toContain(`next message ${draft.draftId}`);
+    expect((outcome as Error).cause).toMatchObject({ errors: [{ code: "store_full" }] });
+    expect(f.read(draft.draftId).hold?.code).toBe("shutdown");
+    expect(f.validate).not.toHaveBeenCalled();
+    expect(f.started).toHaveLength(1);
+    expect(commands(f)).toBe(1);
+  });
+
+  it("a store-recovery shutdown still tolerates a hold the corrupt store cannot save", async () => {
+    const f = await fixture();
+    const draft = (await f.create()).draft;
+    vi.spyOn(SqlDeferredMessages.prototype, "hold").mockImplementationOnce(() => {
+      throw new StoreCorruptError("fixture: corrupt page");
+    });
+    await f.daemon.stopForStoreRecovery();
+    expect(f.started[0]!.ctx.signal.aborted).toBe(true);
+    expect(state(f, f.initial.id)).not.toBe("running");
+    expect(f.read(draft.draftId).hold?.code).toBe("shutdown");
+    expect(commands(f)).toBe(1);
   });
 });
 

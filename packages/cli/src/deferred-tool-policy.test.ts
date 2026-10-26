@@ -298,3 +298,30 @@ it("unchanged current policy still admits the supported workspace-write continua
   expect(toolFlags(args, "--allowedTools")).toContain("Read(/current/**)");
   expect(toolFlags(args, "--disallowedTools")).toContain("WebFetch");
 });
+
+it("a harness section removed after capture dispatches with current defaults under frozen preferences", async () => {
+  const f = await fixture(["Read(/before/**)"], ["Bash"]);
+  vi.mocked(loadConfig).mockReturnValue(
+    ResolvedConfig.parse({
+      global: { harnesses: {} },
+      project: {},
+      trust: { access_default: "workspace_write" },
+    }),
+  );
+  const { spec, args, route } = await f.specFor();
+  expect(
+    executionRunConfig(process.cwd(), f.captured.deferredDefaults).global.harnesses.claude,
+  ).toMatchObject({
+    enabled: true,
+    native_credentials_enabled: true,
+    profile_policy: { limit_action: "auto" },
+    tools_allow: [],
+    tools_deny: [],
+    default_model: "fake-model",
+    max_rounds: 3,
+  });
+  expect(spec).toMatchObject({ model_hint: "fake-model", effort_hint: "high", max_turns: 5 });
+  expect(route.settings).toMatchObject({ maxRounds: 3, toolsAllow: [], toolsDeny: [] });
+  expect(toolFlags(args, "--allowedTools")).not.toContain("Read(/before/**)");
+  expect(toolFlags(args, "--disallowedTools")).not.toContain("Bash");
+});

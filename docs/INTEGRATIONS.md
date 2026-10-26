@@ -1052,15 +1052,21 @@ claim. Exact accepted replays keep their original applied revision and current
 handles. Failure, cancellation, interruption, incompatible typed outcome,
 unknown process custody, Stop, restart or admission refusal holds without retry;
 editing a held draft never rearms it. Native transient HTTP429/`willRetry`
-progress does not settle the predecessor.
+progress does not settle the predecessor. On Windows the run-scope process
+census is unsupported, so a predecessor's process custody is never proven:
+every draft holds as `settlement_unknown`, and an automatic next message is not
+available there.
 
 Stop is `claudexor_run_cancel` (HTTP `POST /v2/runs/:id/control`) on the
 predecessor. Before acceptance it holds the waiting draft (`stop_requested`)
 whatever the predecessor's lifecycle, including while dispatch validation runs
 after the predecessor ended, and returns the held draft as `deferredMessage`;
-promotion rechecks the draft inside its acceptance transaction, so the draft is
-either held or already dispatched. Stop never cancels an accepted successor: a
-terminal predecessor whose draft was dispatched answers 409
+promotion rechecks the Stop inside its acceptance transaction, so a stopped
+draft is never sent. If the hold cannot be saved, the draft stays waiting but
+unsent (the daemon keeps it fenced and a restart holds it), and Stop answers
+503 `next_message_hold_failed` instead of a held draft, after it has stopped a
+live predecessor; retry the Stop to record the hold. Stop never cancels an
+accepted successor: a terminal predecessor whose draft was dispatched answers 409
 `next_message_dispatched`, whose problem context carries the draft as
 `deferredMessage`, including the successor job and run; stop the successor by
 its own handle. A terminal run without a pending draft keeps the plain 409

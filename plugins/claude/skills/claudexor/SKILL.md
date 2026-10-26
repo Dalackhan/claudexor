@@ -162,7 +162,9 @@ admission/settlement error holds the draft. Held edits do not rearm it.
 `claudexor_run_cancel` on the predecessor holds a draft that is not dispatched
 yet, also after the predecessor ended; an already accepted successor fails
 `next_message_dispatched` with its job handle and keeps running, so stop it by
-that handle. There is no held retry/rearm command: after inspecting the
+that handle. If the hold cannot be saved, it fails `next_message_hold_failed`
+after any cancel was applied; the draft is still not sent, so retry the cancel
+to record the hold. There is no held retry/rearm command: after inspecting the
 predecessor result, clear the draft and, if a successor is still wanted, start
 it deliberately with `claudexor_run_continue`; a new draft on the same
 predecessor meets the same outcome gate. Reads, replay and missing receipts

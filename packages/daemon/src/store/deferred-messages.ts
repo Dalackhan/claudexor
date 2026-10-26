@@ -74,24 +74,24 @@ export class SqlDeferredMessages implements DeferredMessageOwner {
   }
 
   reservation(predecessor: string): DeferredMessageProjection | null {
-    const record = this.predecessor(predecessor);
-    if (!record) return null;
+    const id = this.predecessorId(predecessor);
+    if (!id) return null;
     const row = this.store
       .prepare(
         `SELECT * FROM deferred_message WHERE pid=?
       AND predecessor_job_id=? AND state IN ('waiting','held')`,
       )
-      .get(this.generation.pid, record.id) as DraftRow | undefined;
+      .get(this.generation.pid, id) as DraftRow | undefined;
     return row ? this.project(row) : null;
   }
   latest(predecessor: string): DeferredMessageProjection | null {
-    const record = this.predecessor(predecessor);
-    if (!record) return null;
+    const id = this.predecessorId(predecessor);
+    if (!id) return null;
     const row = this.store
       .prepare(
         "SELECT * FROM deferred_message WHERE pid=? AND predecessor_job_id=? ORDER BY rowid DESC LIMIT 1",
       )
-      .get(this.generation.pid, record.id) as DraftRow | undefined;
+      .get(this.generation.pid, id) as DraftRow | undefined;
     return row ? this.project(row) : null;
   }
   outcomeHold(id: string): DeferredMessageHold | null {
@@ -362,14 +362,17 @@ export class SqlDeferredMessages implements DeferredMessageOwner {
     }
     return deferredMessageHold(record.state, facts, { runId: record.runId, taskId: record.taskId });
   }
-  private predecessor(alias: string): JobRecord | undefined {
+  /** Compact job/run alias resolution. Slot reads stop here; only callers that
+   * use the predecessor's params, state or result hydrate the command. */
+  private predecessorId(alias: string): string | undefined {
     const row = this.store
       .prepare("SELECT id FROM command WHERE pid=? AND (id=? OR run_id=?)")
       .get(this.generation.pid, alias, alias) as { id: string } | undefined;
-    return row ? this.commands.get(row.id) : undefined;
+    return row?.id;
   }
   private requirePredecessor(alias: string): JobRecord {
-    const record = this.predecessor(alias);
+    const id = this.predecessorId(alias);
+    const record = id ? this.commands.get(id) : undefined;
     if (!record)
       throw Object.assign(new Error("no retained daemon-owned predecessor"), {
         code: "predecessor_unknown",

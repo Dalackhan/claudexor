@@ -1,5 +1,5 @@
 import { loadConfig } from "@claudexor/config";
-import { RunDefaultsSnapshot, type ResolvedConfig } from "@claudexor/schema";
+import { GlobalConfig, RunDefaultsSnapshot, type ResolvedConfig } from "@claudexor/schema";
 
 export function captureRunDefaults(config: ResolvedConfig): RunDefaultsSnapshot {
   return RunDefaultsSnapshot.parse({
@@ -22,13 +22,14 @@ export function executionRunConfig(root: string, snapshot?: RunDefaultsSnapshot)
   const harnesses = { ...config.global.harnesses };
   const empty = RunDefaultsSnapshot.shape.harnesses.valueSchema.parse({});
   // Parse through the existing settings schema to retain its defaults, then
-  // remove any execution defaults added after this run was captured.
+  // remove any execution defaults added after this run was captured. A section
+  // removed from Settings since capture reads as its current defaults.
   for (const id of new Set([...Object.keys(harnesses), ...Object.keys(defaults.harnesses)])) {
     const frozen = defaults.harnesses[id] ?? empty;
     harnesses[id] = {
-      ...harnesses[id],
+      ...(harnesses[id] ?? GlobalConfig.shape.harnesses.removeDefault().valueSchema.parse({})),
       ...frozen,
-    } as ResolvedConfig["global"]["harnesses"][string];
+    };
   }
   return {
     ...config,

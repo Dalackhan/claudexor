@@ -6,7 +6,7 @@ import type { EngineStore } from "./store.js";
  * page into an unbounded scan. This is an I/O batch, not a retention policy. */
 export async function* retentionPages<T>(
   store: EngineStore,
-  table: "thread" | "command",
+  table: "thread" | "command" | "deferred_message",
   columns: string,
   signal?: AbortSignal,
 ): AsyncGenerator<T[]> {

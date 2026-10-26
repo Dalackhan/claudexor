@@ -1035,7 +1035,7 @@
       "path": "/v2/runs/:id/control",
       "mutating": true,
       "applicability": "run",
-      "summary": "Cancel a queued or running run.",
+      "summary": "Cancel a queued or running run and hold its pending next message, also after the run ended.",
       "auth": "loopback_bearer",
       "request_schema": "ControlRunControlRequest",
       "parameters": [],
@@ -1210,6 +1210,30 @@
       "request_schema": "RunTimeLimitRequest",
       "parameters": [],
       "response_schema": "RunTimeLimitSnapshot",
+      "error_schema": "ControlProblem"
+    },
+    {
+      "method": "POST",
+      "path": "/v2/runs/next-message",
+      "mutating": true,
+      "applicability": "run",
+      "summary": "Create, replace or clear one operator-owned deferred next message",
+      "auth": "loopback_bearer",
+      "request_schema": "DeferredMessageMutation",
+      "parameters": [],
+      "response_schema": "DeferredMessageReceipt",
+      "error_schema": "ControlProblem"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/runs/next-message/:id",
+      "mutating": false,
+      "applicability": "run",
+      "summary": "Read one exact deferred draft and its existing predecessor result and successor handles",
+      "auth": "loopback_bearer",
+      "request_schema": null,
+      "parameters": [],
+      "response_schema": "DeferredMessageDetail",
       "error_schema": "ControlProblem"
     },
     {

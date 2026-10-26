@@ -17,7 +17,11 @@ import { observeRunEvents, type Observation } from "./run-wait-events.js";
 const STAGE_BUDGET_MS = 5_000;
 
 // Consume only schema-owned snapshot fields, never interpret model/event prose.
-const Snapshot = ControlRunDetail.pick({ lastSeq: true, pendingInteractions: true }).extend({
+const Snapshot = ControlRunDetail.pick({
+  lastSeq: true,
+  pendingInteractions: true,
+  deferredMessage: true,
+}).extend({
   summary: ControlRunDetail.shape.summary.pick({ jobId: true, runId: true, state: true }),
   lastSeq: McpRunWaitResult.shape.snapshotSeq,
   pendingInteractions: ControlRunDetail.shape.pendingInteractions.removeDefault(),
@@ -164,6 +168,7 @@ export async function runWaitQuery(
     interactionBytes += bytes;
     result.pendingInteractions.push(pending);
   }
+  result.deferredMessage = latest.deferredMessage ?? null;
   result.omittedInteractions = result.pendingInteractionCount - result.pendingInteractions.length;
   result.wakeReason = wakeReason(
     signal?.aborted === true,

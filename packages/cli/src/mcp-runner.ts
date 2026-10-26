@@ -1,6 +1,7 @@
 import { accountResourceQuery } from "./account-resource-query.js";
 import {
   ControlProblem,
+  ControlRunControlResponse,
   ModeKind,
   RunExecution,
   type ProcessingPreference,
@@ -30,6 +31,7 @@ import { runsWaitQuery } from "./mcp-runs-wait.js";
 import { taskGroupRunsQuery } from "./task-group-runs.js";
 import { runEventReadQuery } from "./mcp-run-event-read.js";
 import { journalRecoveryQuery } from "./mcp-journal-recovery.js";
+import { deferredMessageQuery } from "./mcp-deferred-message.js";
 
 export interface SurfaceRunnerHooks {
   onEvent?: (event: any) => void;
@@ -67,6 +69,8 @@ export interface McpSurfaceRunnerOptions {
 export function mcpSurfaceRunner(options: McpSurfaceRunnerOptions = {}) {
   return async (p: any, hooks?: SurfaceRunnerHooks) => {
     const beltContext = Boolean(options.delegationParentRunId);
+    if (p?.mode === "__next_message" || p?.mode === "__next_message_read")
+      return deferredMessageQuery(p, beltContext, hooks?.signal);
     if (p?.mode === "__task_group_runs") {
       const { mode: _mode, ...input } = p;
       return taskGroupRunsQuery(input, beltContext, hooks?.signal);
@@ -346,14 +350,19 @@ async function recoveryQuery(
       }),
     });
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    if (!res.ok) {
-      throw new Error(
-        typeof body["message"] === "string"
-          ? (body["message"] as string)
-          : `run cancel failed (HTTP ${res.status})`,
-      );
-    }
-    return { summary: `cancellation acknowledged for run ${runId}`, runId, acknowledged: true };
+    // Typed refusal: an already accepted next message names its successor job.
+    if (!res.ok)
+      throw controlProblemError(res.status, body, `run cancel failed (HTTP ${res.status})`);
+    const control = ControlRunControlResponse.safeParse(body).data;
+    const deferred = control?.deferredMessage;
+    return {
+      summary: deferred
+        ? `${control?.message ?? "cancel applied"} (run ${runId})`
+        : `cancellation acknowledged for run ${runId}`,
+      runId,
+      acknowledged: true,
+      ...(deferred ? { deferredMessage: deferred } : {}),
+    };
   }
   if (mode === "__run_interactions") {
     return projectRunInteractions(runId, await get(`/runs/${encodeURIComponent(runId)}`));

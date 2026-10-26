@@ -60,6 +60,8 @@ describe("portable Agent Skill, Copilot plugin, and MCP distribution", () => {
         "claudexor_run_event_read",
         "claudexor_run_message",
         "claudexor_run_continue",
+        "claudexor_next_message",
+        "claudexor_next_message_read",
       ])
         expect(generated, `generated skill omits ${name}`).toContain(`\`${name}\``);
       // Independent API-reference literals shared by the shipped and generated
@@ -83,6 +85,19 @@ describe("portable Agent Skill, Copilot plugin, and MCP distribution", () => {
         "`not_found` against store/receipts/group",
         "`snapshot_unavailable` with bounded backoff",
         "`not_observed` for",
+        "stable keys and exact bodies",
+        'action:"create"',
+        'action:"replace"',
+        'action:"clear"',
+        "expectedRevision",
+        "captures controls once",
+        "complete replacement resource-ref set",
+        "originally applied revision",
+        "addressed bounded",
+        "terminal predecessor does not resolve the draft",
+        "HTTP429/willRetry",
+        "Held edits do not rearm",
+        "Delegate/belt callers",
       ]) {
         expect(generated).toContain(reference);
         expect(portable).toContain(reference);

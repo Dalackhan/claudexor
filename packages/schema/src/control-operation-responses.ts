@@ -9,6 +9,7 @@ import {
 import { Id, ModeKind } from "./primitives.js";
 import { DeliveryReceipt } from "./delivery.js";
 import { RunExecution } from "./control-run-execution.js";
+import { DeferredMessageProjection } from "./deferred-message.js";
 
 export const ControlRunStartResponse = z
   .union([ControlRunStartInfo, ControlQueuedRunInfo])
@@ -41,6 +42,9 @@ export const ControlRunControlResponse = z
       .default([])
       .describe("Active Claudexor Delegate descendants included in this cancellation."),
     message: z.string().optional().describe("Human-readable detail."),
+    deferredMessage: DeferredMessageProjection.optional().describe(
+      "The run's latest next-message draft after this cancel: a waiting draft is held by the same call; an already accepted successor is named, not cancelled.",
+    ),
   })
   .describe("Response to a run control request.");
 export type ControlRunControlResponse = z.infer<typeof ControlRunControlResponse>;

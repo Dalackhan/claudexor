@@ -72,6 +72,7 @@ import { controlApiFetch, followRun } from "./live.js";
 import { retryCommand, runAgainCommand } from "./retry-command.js";
 import { runsWaitCommand } from "./runs-wait-command.js";
 import { taskGroupRunsCommand } from "./task-group-runs.js";
+import { nextMessageCommand } from "./next-message-command.js";
 import { assertCliRunParamsHaveNoInlineSecrets } from "./run-secret-scan.js";
 import { resolveLocalAttachment, type LocalAttachment } from "./local-attachment.js";
 import { uploadLocalAttachment } from "./attachment-upload.js";
@@ -964,6 +965,9 @@ async function dispatch(args: ParsedArgs, outputMode: CliOutputMode): Promise<nu
   if (opsCommand) return opsCommand;
 
   switch (cmd) {
+    case "next-message":
+    case "next-message-read":
+      return nextMessageCommand(args, json);
     case "runs-wait":
       return runsWaitCommand(args, json);
     case "task-group-runs":

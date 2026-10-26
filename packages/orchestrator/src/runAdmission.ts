@@ -1,6 +1,7 @@
 import { loadConfig } from "@claudexor/config";
 import type { OrchestratorDeps, RunInput } from "./orchestrator.js";
 import { resolveRunInputDefaults } from "./run-input-resolution.js";
+import { executionRunConfig } from "./run-defaults.js";
 import { resolveEngineReview } from "./candidateReview.js";
 import type { AccessProfile, ModeKind } from "@claudexor/schema";
 import {
@@ -158,7 +159,7 @@ export function prepareRunAdmission(
   onDelegatedLedgerAttached: () => void,
 ): { resolved: RunInput; mode: ModeKind; runId: string } {
   let resolved = resolveRunInputDefaults(input, {
-    config: loadConfig(input.repoRoot),
+    config: executionRunConfig(input.repoRoot, deps.executionDefaults),
     registryIds: deps.registry.keys(),
     routingGoal: deps.routingGoal,
   });

@@ -19,6 +19,7 @@ const columns = {
     "params_sha",
   ],
   interaction: ["id", "run_id", "state"],
+  deferred_message: ["id", "pid", "predecessor_job_id", "successor_job_id", "state"],
   project: ["id", "pid", "root", "status", "current_pid"],
   partition: ["id", "name", "status", "project_id"],
   blob: ["sha256", "size", "inline"],

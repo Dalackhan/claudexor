@@ -10,7 +10,7 @@ changing Claudexor.
 
 | Surface | Current role | Stability |
 |---|---|---|
-| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, runs-wait, task-group-runs, retry, run-again, apply, decision, review), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). `runs-wait` observes existing handles read-only through `--targets-json` and optional `--wait-ms`, with `--json` or `--json-stream` output. `task-group-runs` reads one bounded retained group page. | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
+| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, runs-wait, task-group-runs, next-message, next-message-read, retry, run-again, apply, decision, review), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). `runs-wait` observes existing handles read-only through `--targets-json` and optional `--wait-ms`, with `--json` or `--json-stream` output. `task-group-runs` reads one bounded retained group page. `next-message` creates, replaces or clears an authorized one-shot draft; `next-message-read` reads its bounded content and editing handles. | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
 | Daemon and control API | Local durable queue, Agent runs, caller-owned model and image operations, artifacts, SSE events, settings, harness status, secrets metadata, apply, and run control. | Stable contract: endpoints and DTOs per `docs/reference/endpoints.json` + generated schemas (add-only fields). Loopback + bearer token only. |
 | MCP server | Exposes Claudexor tools to MCP clients. `claudexor_runs_wait` projects the same read-only observation with `targets: [{runId, seen?}]` and optional `waitMs`. | Stable contract: the tool set with input/output schemas. Tool list follows the implementation, not old docs. |
 | ACP server | Lets compatible editors or agents talk to Claudexor as a local agent surface. | Experimental (may change in minors, disclosed in the CHANGELOG). |
@@ -656,7 +656,9 @@ Terminal state may include diagnostic non-success states such as
 Telemetry attempts can include adapter-declared transient failures; integrations
 should render those as infrastructure/retry evidence, not as model findings.
 
-`POST /v2/runs/:id/control` supports cancel for active daemon jobs.
+`POST /v2/runs/:id/control` supports cancel for active daemon jobs. The same
+call holds the run's pending next message, also for a run that already ended
+(see the next-message rules under MCP below).
 Interactive runs use the typed interaction surface instead of raw input
 forwarding: `interaction.requested` events carry the questions, the macOS app
 and `claudexor follow` answer via `POST /v2/runs/:id/interactions/:id/answer`,
@@ -811,9 +813,11 @@ separate budget or lifecycle.
 
 A controller saves the exact launch arguments and key before calling a run
 tool, keeps the returned handle, observes it, answers questions or sends
-independent messages, reads the terminal result, and only then starts an
-explicit successor. Each step projects the daemon's existing authority: MCP adds
-no scheduler, handle registry, automatic retry or reconnect.
+independent messages, and reads the terminal result. A successor is then
+started explicitly, or it was reserved earlier as an editable next message
+(below) that the daemon sends as one ordinary continuation only after an
+eligible settled success. Each step projects the daemon's existing authority:
+MCP adds no scheduler, handle registry, automatic retry or reconnect.
 
 **Launch handles.** Run tools return the accepted `jobId` beside `runId`. A job
 still queued after the daemon's binding wait (about 30 seconds) returns
@@ -1028,6 +1032,92 @@ terminated process.
 These existing-run controls are not exposed by the Delegate belt and cannot
 expand a child's authority. They add no automatic retries, worker restarts,
 approval decisions or separate lifecycle.
+
+Operator-only `claudexor_next_message` and `claudexor_next_message_read`
+provide editable deferred one-shot follow-ups. The built stdio/HTTP/SQLite MCP
+controller story passed with fake harnesses; native vendor, GUI and
+cross-platform acceptance remain manual. See [the feature ledger](FEATURES.md)
+for qualification limits. The mutation envelope is `{request, idempotencyKey}`.
+For example:
+
+```json
+{"request":{"action":"create","predecessorId":"job-…","prompt":"Verify the previous work","attachments":[],"controls":{"continueCarrier":"packet"}},"idempotencyKey":"verify-next-1"}
+```
+
+`replace` supplies `draftId`, exact `expectedRevision`, and the complete
+`prompt`/`attachments` list; `[]` clears refs. `clear` supplies only `draftId`
+and exact `expectedRevision`. Controls are captured at creation and cannot be
+edited. A waiting or held draft reserves the predecessor's single continuation
+claim. Exact accepted replays keep their original applied revision and current
+handles. Failure, cancellation, interruption, incompatible typed outcome,
+unknown process custody, Stop, restart or admission refusal holds without retry;
+editing a held draft never rearms it. Native transient HTTP429/`willRetry`
+progress does not settle the predecessor. On Windows the run-scope process
+census is unsupported, so a predecessor's process custody is never proven:
+every draft holds as `settlement_unknown`, and an automatic next message is not
+available there.
+
+Stop is `claudexor_run_cancel` (HTTP `POST /v2/runs/:id/control`) on the
+predecessor. Before acceptance it holds the waiting draft (`stop_requested`)
+whatever the predecessor's lifecycle, including while dispatch validation runs
+after the predecessor ended, and returns the held draft as `deferredMessage`;
+promotion rechecks the Stop inside its acceptance transaction, so a stopped
+draft is never sent. If the hold cannot be saved, the draft stays waiting but
+unsent (the daemon keeps it fenced and a restart holds it), and Stop answers
+503 `next_message_hold_failed` instead of a held draft, after it has stopped a
+live predecessor; retry the Stop to record the hold. Stop never cancels an
+accepted successor: a terminal predecessor whose draft was dispatched answers 409
+`next_message_dispatched`, whose problem context carries the draft as
+`deferredMessage`, including the successor job and run; stop the successor by
+its own handle. A terminal run without a pending draft keeps the plain 409
+(nothing to stop).
+
+A held draft is not rearmed. After reading the predecessor result, clear the
+draft and, if a successor is still wanted, start it deliberately with
+`claudexor_run_continue`, which applies ordinary admission and new-run defaults.
+A new draft on the same predecessor meets the same outcome gate.
+
+The successor is an ordinary continuation with the predecessor's execution.
+A successful isolated (`envelope`) Agent run keeps no envelope, so its
+successor starts from the project base and receives only the path of the
+unapplied saved patch (`final/patch.diff`). The patch is not the successor's
+tree, and nothing is applied automatically, so such a step can review the diff
+but not test the changed files. To test them, run the predecessor in a live
+caller-owned workspace, or Apply its result and continue explicitly.
+
+Promotion resolves the captured request through current canonical project
+routing in the same transaction as acceptance. A relinked root or a different
+project generation holds the draft without changing its captured scope.
+Execution-default snapshots are internal accepted-command data; public inputs
+cannot supply them. Native tool allow/deny lists always use current operator
+settings, including when an older accepted snapshot retained tool lists. Exact Retry recovers
+execution preferences from the accepted source and
+still applies ordinary fresh admission, including `continuation_superseded`.
+Run Again and decision rerun omit these private preferences and disclose that
+current settings apply to the editable follow-up.
+
+HTTP uses `POST /v2/runs/next-message` with the mutation body and required
+`Idempotency-Key`, plus addressed `GET /v2/runs/next-message/:id` for full editing
+content. CLI uses `claudexor next-message '<envelope JSON>' --json` and
+`claudexor next-message-read <draft-id> --json`. MCP reads bound the prompt to
+4096 UTF-8 bytes and refs to 32, with explicit omission counts and a full detail
+path. Their `controls` show the frozen values by origin: `capturedAt`;
+`inherited`, the continuation groups taken from the predecessor; `resolved`, the
+create-time controls (explicit, otherwise ordinary new-run defaults at creation,
+so an omitted `access` is the project default even after a readonly
+predecessor); and `settings`, the captured Settings execution preferences.
+Tool permissions, account and harness enablement, trust, quota, capabilities
+and paid-fallback policy are not frozen and are checked at dispatch. The
+compact state supplies the exact existing predecessor result path
+and predecessor/successor job/run handles; use `claudexor_run_result` for output.
+No second output store is created. Detail/status/result/wait include
+`deferredMessage`; a terminal `run_wait` wake describes only the predecessor,
+so inspect the draft separately for dispatch resolution. Reads never send work.
+
+The tools are absent from the Delegate belt. Raw/HTTP/MCP belt callers and engine
+Delegate child targets receive typed `delegation_forbidden`; ordinary external
+controller-owned one-shot workers remain supported. Thread targets return
+`use_thread_turn`. No persistent thread, FIFO, fork or rate-limit policy is added.
 
 ### Controller-independent approval handback
 

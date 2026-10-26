@@ -25,8 +25,8 @@ export function resolveRunPatch(
   if (saved === null) return { patch: null, unavailable: false };
   const exact = resolveExactPatch({
     savedCopy: saved,
-    meta: safeReadStructuredArtifact(rec, "final/work_product.yaml", WorkProduct)?.meta,
-    roots: [projectRoot, recordedExecutionRoot(rec)],
+    meta: safeReadStructuredArtifact(rec, "final/work_product.yaml", WorkProduct, maxBytes)?.meta,
+    roots: [projectRoot, recordedExecutionRoot(rec, maxBytes)],
     maxBytes,
   });
   return exact.ok

@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { dirname } from "node:path";
 import { sha256 } from "@claudexor/util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -14,6 +15,8 @@ import {
   makeOutcomeFacts,
   THREAD_HISTORY_PAGE_BYTES,
   THREAD_HISTORY_PROMPT_BYTES,
+  THREAD_HISTORY_HEADER_BYTES,
+  THREAD_HISTORY_FACT_BYTES,
 } from "@claudexor/schema";
 import { SqlThreadHistoryRead } from "@claudexor/daemon";
 import { sqlFixture } from "../../daemon/src/store/test-support/sql-fixture.js";
@@ -106,6 +109,24 @@ describe("bounded SQL thread history", () => {
       expect(page.header.latestTurnId).toBe(f.ids.at(-1) ?? null);
     },
   );
+
+  it("packs the session preview into the header budget and reports completeness", async () => {
+    const f = await fixture(1);
+    f.graph.threads.recordSession(f.thread.id, "fake", "small");
+    const complete = f.read();
+    expect(complete.header.sessions).toHaveLength(1);
+    expect(complete.header.sessionsComplete).toBe(true);
+    for (let i = 0; i < 16; i++)
+      f.graph.threads.recordSession(f.thread.id, `fake-${i}`, "x".repeat(4000));
+    const page = f.read();
+    expect(page.turns).toHaveLength(1);
+    expect(page.header.sessions.length).toBeGreaterThan(0);
+    expect(page.header.sessions.length).toBeLessThan(16);
+    expect(page.header.sessionsComplete).toBe(false);
+    expect(Buffer.byteLength(JSON.stringify(page.header))).toBeLessThanOrEqual(
+      THREAD_HISTORY_HEADER_BYTES,
+    );
+  });
 
   it("walks emitted edges in both directions with no skipped or duplicate turn", async () => {
     const f = await fixture(55);
@@ -453,6 +474,32 @@ describe("bounded SQL thread history", () => {
     expect(newer?.turns[0]?.primaryOutput?.text).toContain("published");
     expect(newer!.revision.sequence).toBeGreaterThan(older.revision.sequence);
   });
+
+  it.each([
+    "context/task.yaml",
+    "final/telemetry.yaml",
+    "final/failure.yaml",
+    "arbitration/decision.yaml",
+    "final/run_facts.yaml",
+    "final/work_product.yaml",
+    "final/delivery_state.yaml",
+    "final/questions.json",
+    "tombstone.yaml",
+  ])(
+    "bounds the canonical metadata read for %s without turning overflow into absence",
+    async (relative) => {
+      const f = await fixture(1);
+      const run = f.bind(0, "running", "plan");
+      const path = join(run.runDir, relative);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "x".repeat(THREAD_HISTORY_FACT_BYTES + 1));
+      expect(() => f.read()).toThrow(
+        expect.objectContaining({ code: "artifact_read_limit", status: 503 }),
+      );
+      rmSync(path);
+      expect(f.read().turns).toHaveLength(1);
+    },
+  );
 
   it("bounds apply evidence while preserving canonical mutable delivery facts", async () => {
     const f = await fixture(1);

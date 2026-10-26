@@ -23,11 +23,12 @@ export function validRunOperatorDecision(
   maxBytes?: number,
 ) {
   if (!decision) return null;
-  return decision.patchSha256 === exactPatch.runPatchDigest(rec, runRepoRoot(rec), maxBytes)
+  return decision.patchSha256 ===
+    exactPatch.runPatchDigest(rec, runRepoRoot(rec, maxBytes), maxBytes)
     ? decision
     : null;
 }
-export function runRepoRoot(rec: DaemonRunRecord): string | null {
+export function runRepoRoot(rec: DaemonRunRecord, maxBytes?: number): string | null {
   const p = paramsRecord(rec);
   const scope = p["scope"];
   if (scope && typeof scope === "object" && !Array.isArray(scope)) {
@@ -37,10 +38,11 @@ export function runRepoRoot(rec: DaemonRunRecord): string | null {
   }
   let task: unknown = null;
   try {
-    task = readStructured(readRawTextArtifact(rec, "context/task.yaml"), ".yaml", {
+    task = readStructured(readRawTextArtifact(rec, "context/task.yaml", maxBytes), ".yaml", {
       parse: (value: unknown) => value,
     });
-  } catch {
+  } catch (error) {
+    if (maxBytes !== undefined && (error as { status?: number }).status === 503) throw error;
     task = null;
   }
   if (task && typeof task === "object" && !Array.isArray(task)) {
@@ -61,20 +63,26 @@ export function applyGateInputFor(
   maxBytes?: number,
 ): ApplyGateInput {
   const files = readFilesWorkProduct(rec, maxBytes);
-  const decision = safeReadStructuredArtifact(rec, "arbitration/decision.yaml", DecisionRecord);
+  const decision = safeReadStructuredArtifact(
+    rec,
+    "arbitration/decision.yaml",
+    DecisionRecord,
+    maxBytes,
+  );
   const terminal = effectiveTerminalFacts(
     rec.runDir,
     decision?.facts ?? null,
     decision,
     expectedRunFacts(rec),
+    maxBytes,
   );
   return {
     state: rec.state,
     decision: terminal.decision,
-    workProduct: safeReadStructuredArtifact(rec, "final/work_product.yaml", WorkProduct),
+    workProduct: safeReadStructuredArtifact(rec, "final/work_product.yaml", WorkProduct, maxBytes),
     patch,
     ...(files ? { filesManifest: files.manifest, manifestSha256: files.manifestSha256 } : {}),
-    originalRepoRoot: runExecutionRoot(rec, runRepoRoot(rec)),
+    originalRepoRoot: runExecutionRoot(rec, runRepoRoot(rec, maxBytes)),
     targetRepoRoot,
     operatorDecision: operatorDecision
       ? {
@@ -88,7 +96,7 @@ export function applyGateInputFor(
     // summary.result.applyState (delivery_state overlay → work_product snapshot):
     // an already-applied / reverted run gets a terminal eligibility disposition
     // instead of a stale "rerun a fresh check" (QA-021).
-    applyState: controlRunResult(rec).applyState,
+    applyState: controlRunResult(rec, maxBytes).applyState,
     // D-16 work_state veto (INV-116): thread the model-attested work outcome
     // (the canonical terminal facts) so the gate refuses a needs_input/
     // incomplete winner even with a clean legacy review.
@@ -101,8 +109,12 @@ export function applyEligibilityFor(
   operatorDecision: ControlOperatorDecisionRecord | null,
   maxBytes?: number,
 ): ApplyEligibility | null {
-  const root = runExecutionRoot(rec, runRepoRoot(rec));
-  const { patch, unavailable } = exactPatch.resolveRunPatch(rec, runRepoRoot(rec), maxBytes);
+  const root = runExecutionRoot(rec, runRepoRoot(rec, maxBytes));
+  const { patch, unavailable } = exactPatch.resolveRunPatch(
+    rec,
+    runRepoRoot(rec, maxBytes),
+    maxBytes,
+  );
   const files = readFilesWorkProduct(rec, maxBytes);
   if (!files && (patch === null || patch.trim() === "")) return null;
   if (!root) return null;

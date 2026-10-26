@@ -1,4 +1,3 @@
-import { lstatSync } from "node:fs";
 import { deriveApplyEligibility } from "@claudexor/delivery";
 import {
   DecisionRecord,
@@ -9,7 +8,6 @@ import {
   THREAD_HISTORY_ANSWER_BYTES,
   THREAD_HISTORY_FACT_BYTES,
   THREAD_HISTORY_EVENT_BYTES,
-  threadHistoryProblem,
   outcomeBanner,
 } from "@claudexor/schema";
 import {
@@ -17,7 +15,6 @@ import {
   type DaemonRunRecord,
   type ControlOperatorDecisionRecord,
 } from "./run-record.js";
-import { safeArtifactPath } from "./artifact-paths.js";
 import { safeReadStructuredArtifact } from "./run-artifact-read.js";
 import {
   readFailure,
@@ -32,30 +29,6 @@ import { primaryOutput, outputReadyStateForPrimary } from "./primary-output.js";
 import { controlRunResult } from "./run-delivery-state.js";
 import { applyEligibilityFor, validRunOperatorDecision } from "./run-apply-projection.js";
 
-const FACT_PATHS = [
-  "context/task.yaml",
-  "final/telemetry.yaml",
-  "final/failure.yaml",
-  "arbitration/decision.yaml",
-  "final/run_facts.yaml",
-  "final/work_product.yaml",
-  "final/delivery_state.yaml",
-  "final/questions.json",
-  "tombstone.yaml",
-];
-
-function boundedFacts(record: DaemonRunRecord) {
-  for (const relative of FACT_PATHS) {
-    const path = record.runDir ? safeArtifactPath(record.runDir, relative) : null;
-    if (path && lstatSync(path).size > THREAD_HISTORY_FACT_BYTES)
-      throw threadHistoryProblem(
-        "thread_history_metadata_too_large",
-        503,
-        `run facts exceed the read bound: ${relative}`,
-      );
-  }
-}
-
 /** A bounded receipt read, never summarizeRun/detail/timeline. Canonical owners
  * supply outcome, cash, readiness and delivery; counts retain evidence coverage. */
 export function projectHistoryRun(
@@ -66,17 +39,26 @@ export function projectHistoryRun(
     childRunIds: string[];
   },
 ) {
-  boundedFacts(record);
   const operator = validRunOperatorDecision(record, input.operator, THREAD_HISTORY_FACT_BYTES);
   const p = paramsRecord(record);
   const mode = ModeKind.safeParse(p.mode).data;
-  const decision = safeReadStructuredArtifact(record, "arbitration/decision.yaml", DecisionRecord);
-  const telemetry = safeReadStructuredArtifact(record, "final/telemetry.yaml", RunTelemetry);
-  const failure = readFailure(record);
+  const decision = safeReadStructuredArtifact(
+    record,
+    "arbitration/decision.yaml",
+    DecisionRecord,
+    THREAD_HISTORY_FACT_BYTES,
+  );
+  const telemetry = safeReadStructuredArtifact(
+    record,
+    "final/telemetry.yaml",
+    RunTelemetry,
+    THREAD_HISTORY_FACT_BYTES,
+  );
+  const failure = readFailure(record, THREAD_HISTORY_FACT_BYTES);
   const workState =
     telemetry?.attempts.find((a) => a.attempt_id === telemetry.final_attempt_id)?.outcome
       .work_state ?? null;
-  const result = controlRunResult(record);
+  const result = controlRunResult(record, THREAD_HISTORY_FACT_BYTES);
   const facts = projectRunFactsForDetail(
     record.runDir,
     legacyRunOutcomeFacts(record, decision, failure, workState),
@@ -97,13 +79,15 @@ export function projectHistoryRun(
       return applyEligibilityFor(record, operator, THREAD_HISTORY_FACT_BYTES);
     },
     expectedRunFacts(record),
+    THREAD_HISTORY_FACT_BYTES,
   );
   const output = primaryOutput(record, mode, failure, facts.runFacts, {
     maxBytes: THREAD_HISTORY_ANSWER_BYTES,
     patchReferenceOnly: true,
+    metadataMaxBytes: THREAD_HISTORY_FACT_BYTES,
   });
   const { events, integrity } = readRunEventsWithIntegrity(record, THREAD_HISTORY_EVENT_BYTES);
-  const budget = budgetSnapshot(record, decision, events, integrity);
+  const budget = budgetSnapshot(record, decision, events, integrity, THREAD_HISTORY_FACT_BYTES);
   const coverage =
     integrity.absent || integrity.unreadable
       ? "unavailable"
@@ -126,7 +110,7 @@ export function projectHistoryRun(
     tools++;
     if (tool?.kind === "file") files++;
   }
-  const plan = planProjectionFor(record, mode);
+  const plan = planProjectionFor(record, mode, THREAD_HISTORY_FACT_BYTES);
   const finalAttempt = telemetry?.attempts.find((a) => a.attempt_id === telemetry.final_attempt_id);
   const run = ThreadHistoryRun.parse({
     state: record.state,

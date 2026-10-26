@@ -10,8 +10,8 @@ import {
 } from "@claudexor/schema";
 import type { DaemonRunRecord } from "./run-record.js";
 import { safeReadStructuredArtifact } from "./run-artifact-read.js";
-export function readFailure(rec: DaemonRunRecord): RunFailure | null {
-  const fromArtifact = safeReadStructuredArtifact(rec, "final/failure.yaml", RunFailure);
+export function readFailure(rec: DaemonRunRecord, maxBytes?: number): RunFailure | null {
+  const fromArtifact = safeReadStructuredArtifact(rec, "final/failure.yaml", RunFailure, maxBytes);
   if (fromArtifact) return fromArtifact;
   if (!rec.error) return null;
   return RunFailure.parse({
@@ -58,9 +58,18 @@ export function legacyRunOutcomeFacts(
   };
 }
 
-export function planProjectionFor(rec: DaemonRunRecord, mode: string | null | undefined) {
+export function planProjectionFor(
+  rec: DaemonRunRecord,
+  mode: string | null | undefined,
+  maxBytes?: number,
+) {
   const empty = { readiness: null, questions: [] };
   if (mode !== "plan" || !rec.runDir) return empty;
-  const a = safeReadStructuredArtifact(rec, "final/questions.json", PlanQuestionsArtifact);
+  const a = safeReadStructuredArtifact(
+    rec,
+    "final/questions.json",
+    PlanQuestionsArtifact,
+    maxBytes,
+  );
   return a ? { readiness: derivePlanReadiness(a), questions: a.questions } : empty;
 }

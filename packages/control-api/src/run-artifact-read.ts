@@ -9,8 +9,9 @@ export function readTextArtifact(
   rec: DaemonRunRecord,
   relPath: string,
   redact = true,
+  maxBytes?: number,
 ): string | null {
-  const text = readRawTextArtifact(rec, relPath);
+  const text = readRawTextArtifact(rec, relPath, maxBytes);
   return text === null ? null : redact ? redactSecrets(text) : text;
 }
 
@@ -48,10 +49,12 @@ export function safeReadStructuredArtifact<T>(
   rec: DaemonRunRecord,
   relPath: string,
   schema: { parse(value: unknown): T },
+  maxBytes?: number,
 ): T | null {
   try {
-    return readStructured(readTextArtifact(rec, relPath), extname(relPath), schema);
-  } catch {
+    return readStructured(readTextArtifact(rec, relPath, true, maxBytes), extname(relPath), schema);
+  } catch (error) {
+    if (maxBytes !== undefined && (error as { status?: number }).status === 503) throw error;
     return null;
   }
 }

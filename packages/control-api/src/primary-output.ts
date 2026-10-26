@@ -76,7 +76,7 @@ export function primaryOutput(
   mode: string | null | undefined,
   failure: RunFailure | null,
   runFacts: RunFacts | null = null,
-  options: { maxBytes?: number; patchReferenceOnly?: boolean } = {},
+  options: { maxBytes?: number; patchReferenceOnly?: boolean; metadataMaxBytes?: number } = {},
 ): ControlPrimaryOutput | null {
   const selected = (path: string, kind?: string) =>
     preview(rec, path, options.maxBytes, options.patchReferenceOnly && kind === "patch");
@@ -90,7 +90,7 @@ export function primaryOutput(
       ...output,
       text: options.patchReferenceOnly && kind === "patch" ? null : output.text,
     });
-  const tombstone = rec.runDir ? readRunTombstone(rec.runDir) : null;
+  const tombstone = rec.runDir ? readRunTombstone(rec.runDir, options.metadataMaxBytes) : null;
   if (tombstone) {
     const text = "Run artifacts were reclaimed by retention; inspect tombstone.yaml.";
     return ControlPrimaryOutput.parse({

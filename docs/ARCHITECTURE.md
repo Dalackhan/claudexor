@@ -3070,11 +3070,18 @@ The SQLite owner selects scalar keys through the unique `turn_thread(thread_id,
 ordinal)` index with `LIMIT limit+1`. Only emitted turn bodies and bounded prompt
 parts are decoded. The header returns compact thread fields without `runIds`, the
 true latest stored turn and its admission/refusal (including a queued job handle),
-head-run lifecycle facts, and at most 16 sessions with `sessionsComplete`. Full
-session inspection remains on legacy detail. Header extraction currently uses
+head-run lifecycle facts, and at most 16 sessions with `sessionsComplete`. The
+session preview also packs to the remaining header byte budget; full session
+inspection remains on legacy detail. Header extraction currently uses
 SQLite JSON projection: no growing lineage array reaches the JavaScript decoder,
 but SQLite still parses the stored thread JSON. This residual cost must not be
 represented as constant work for arbitrarily large thread bodies.
+
+History metadata and exact-apply evidence reads enforce their 1 MiB cap on the
+opened file descriptor before allocating or parsing. A limit or a file changing
+during the bounded read fails with 503; it never becomes missing evidence. The
+canonical metadata owners accept this optional bound; legacy detail keeps its
+existing read behavior.
 
 The row contract includes `answeredByTurnId`, a bounded `answeredByPrompt` and
 `planAnswerComplete`. Schema v3 has no inverse plan-answer index. Under the

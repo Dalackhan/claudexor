@@ -179,8 +179,8 @@ export function createThreadHistoryRead(source: () => ThreadHistorySource) {
             }
           : null,
         headRun: headId && head ? { runId: headId, run: ControlTurnRunCard.parse(head.run) } : null,
-        sessions: rawHeader.sessions.map(projectSession),
-        sessionsComplete: rawHeader.sessionsComplete,
+        sessions: [],
+        sessionsComplete: false,
       });
       if (bytes(header) > THREAD_HISTORY_HEADER_BYTES)
         throw threadHistoryProblem(
@@ -188,6 +188,15 @@ export function createThreadHistoryRead(source: () => ThreadHistorySource) {
           503,
           "history header exceeds its byte limit",
         );
+      for (const session of rawHeader.sessions) {
+        header.sessions.push(projectSession(session));
+        if (bytes(header) > THREAD_HISTORY_HEADER_BYTES) {
+          header.sessions.pop();
+          break;
+        }
+      }
+      header.sessionsComplete =
+        header.sessions.length === rawHeader.sessions.length && rawHeader.sessionsComplete;
       const result: ThreadHistoryPage = {
         storeId,
         epoch: identity.epoch,

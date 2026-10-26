@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { join } from "node:path";
 import { ThreadHistoryPage, ThreadPromptPart } from "@claudexor/schema";
 import { cli, makeSandbox, inspectSandboxLease } from "./support.js";
 import { mcpStdioClient } from "./mcp-stdio.js";
@@ -68,6 +69,24 @@ it("[INV-142:thread-history] built CLI/MCP reads bounded answers, explicit promp
     const legacy = await daemonApi(sb)(`/threads/${thread.id}`);
     expect(legacy.turns).toHaveLength(2);
     expect(legacy.thread.runIds).toHaveLength(2);
+    const { DatabaseSync } = await import("node:sqlite");
+    const store = new DatabaseSync(join(sb.configDir, "daemon", "engine.sqlite"), {
+      readOnly: true,
+    });
+    try {
+      expect(store.prepare("PRAGMA user_version").get()).toEqual({ user_version: 4 });
+      expect(store.prepare("SELECT value FROM meta WHERE key='schema_version'").get()).toEqual({
+        value: "4",
+      });
+      expect(
+        store.prepare("SELECT name FROM sqlite_master WHERE name='turn_plan_answer'").get(),
+      ).toEqual({ name: "turn_plan_answer" });
+      expect(
+        store.prepare("SELECT name FROM sqlite_master WHERE name='thread_history_header'").get(),
+      ).toBeUndefined();
+    } finally {
+      store.close();
+    }
   } finally {
     await mcp.close();
     sb.dispose();

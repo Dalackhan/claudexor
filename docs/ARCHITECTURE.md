@@ -3076,6 +3076,14 @@ inspection remains on legacy detail. Header extraction currently uses
 SQLite JSON projection: no growing lineage array reaches the JavaScript decoder,
 but SQLite still parses the stored thread JSON. This residual cost must not be
 represented as constant work for arbitrarily large thread bodies.
+One observation on this shared arm64 Mac under load (2026-10-26, Darwin 25.4.0,
+Node 24.16.0, SQLite 3.53.0, 1-minute load average 10.90): a thread with 10,000
+run IDs (`run_` plus 32 hexadecimal digits) had a 390,548-byte body. Its single
+compact-header SQL execution took 0.216 ms, excluding preparation; the complete
+header read, including preparation, auxiliary queries and compact decoding, took
+0.582 ms. The compact thread JSON was 346 bytes. This was one read with no warmup
+or repetition on one loaded machine, not a performance gate or an asymptotic
+guarantee. No duplicate-header expression index is maintained.
 
 History metadata and exact-apply evidence reads enforce their 1 MiB cap on the
 opened file descriptor before allocating or parsing. A limit or a file changing
@@ -3084,11 +3092,18 @@ canonical metadata owners accept this optional bound; legacy detail keeps its
 existing read behavior.
 
 The row contract includes `answeredByTurnId`, a bounded `answeredByPrompt` and
-`planAnswerComplete`. Schema v3 has no inverse plan-answer index. Under the
-no-migration constraint this producer currently returns unknown coverage for plan
-rows, rather than scanning the archive or falsely declaring a plan unanswered.
-Exact off-page plan-answer production is an outstanding requirement; clients
-cannot yet delete their relation-dependent full-detail read.
+`planAnswerComplete`. Schema v4's `turn_plan_answer` expression index addresses
+each page plan's answering turns by thread, source plan run and ordinal. The
+query selects the first bound, unrefused queued, or retryably refused answer;
+only a non-retryable runless refusal is excluded, matching plan-answer admission
+and `PlanAnswerSubmission.acceptedTurn`. This remains true for superseded plans.
+Acceptance stays in the query, not the partial-index predicate; it examines only
+that plan's answer candidates, including any preceding refusals, rather than
+unrelated archive rows. Only the selected answer's bounded prompt is read.
+Successful reads set `planAnswerComplete: true`, with null answer fields when
+there is no accepted relation; missing/oversized evidence fails typed. Relations
+are current facts even when the answer is off-page or appended beyond a replay's
+frozen membership. Clients can remove the relation-dependent full-detail read.
 
 Cursors are strictly decoded, canonical base64url, at most 2,048 characters and
 bound to store, partition epoch, thread, limit and a frozen tail ordinal. Older
@@ -3849,7 +3864,7 @@ kept only for cold import and an independent frozen copy kept for tests.
   their predicates. Membership is committed in the original
   acceptance transaction, before ACK/dispatch; there is no group table, backfill
   or retention pin. Fresh DDL and the atomic 2→3 migration have the same indexes;
-  version 1 follows 1→2→3, and reopening the current version is write-free.
+  version 1 follows 1→2→3→4, and reopening the current version is write-free.
   A version-2 reader refuses the upgraded file before writing. Downgrading an
   upgraded store requires restoring a compatible complete backup made with all
   writers stopped; swapping only the executable is insufficient. Source and
@@ -3859,6 +3874,19 @@ kept only for cold import and an independent frozen copy kept for tests.
   No automatic rebuild is added. Earlier experimental binaries whose forced-index
   queries lack the tagged predicate cannot query the narrower indexes. Do not swap
   experimental binaries against the same store; the complete-backup rule applies.
+- Schema version 4 adds only `turn_plan_answer`, keyed by thread id, guarded
+  `answers_plan_run_id` JSON expression and ascending ordinal. Its minimal partial
+  predicate is answer-present; `CASE WHEN json_valid(...)` guards both extraction
+  and membership. Missing/null relations and non-JSON bodies remain writable and
+  occupy no index entry. Bound, queued and refused relations all occupy it;
+  acceptance is evaluated by the history query, so retry/bind changes retain the
+  same turn identity. The atomic 3→4 migration builds the index without rewriting
+  turn, prompt, event or other domain rows; it updates only schema metadata.
+  Building it scans existing turns once, and subsequent turn writes maintain it.
+  Fresh stores start at version 4; version 3 readers refuse them before writes.
+  Earlier versions follow the existing migration map. This introduces no history
+  table, header-body copy, backfill or stream. The complete-backup downgrade rule
+  above still applies, including between experimental builds of one release.
 - The flusher worker owns the power-loss barrier. Every 200 ms it fsyncs each
   directory registered since the previous pass, reads `data_version`, runs a
   PASSIVE checkpoint for space, and — whenever anything was committed since

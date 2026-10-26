@@ -31,12 +31,7 @@ export function sqlThreadHistoryReads(current: () => Graph) {
           .publicList({ delegatedFromRunId: record.runId ?? record.id })
           .map((r) => r.runId ?? r.id),
       }),
-      // Relation-index decision is pending; unknown must never mean unanswered.
-      planAnswer: () => ({
-        answeredByTurnId: null,
-        answeredByPrompt: null,
-        planAnswerComplete: false,
-      }),
+      planAnswer: (threadId, planRunId) => reader.planAnswer(threadId, planRunId),
       prompt: (input) => readThreadPromptPart(graph.store, graph.blobs, input),
     };
   });

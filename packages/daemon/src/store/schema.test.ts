@@ -384,11 +384,11 @@ async function populatedOldStore(version: 1 | 2) {
 }
 
 describeStore("task group storage upgrade", () => {
-  it("fresh DDL installs exactly the two live product expression indexes at version 3", async () => {
+  it("fresh DDL installs exactly the two live product expression indexes at version 4", async () => {
     const db = await connect();
     ensureSchema(db);
-    expect(ENGINE_SCHEMA_VERSION).toBe(3);
-    expect(readSchemaIdentity(db).userVersion).toBe(3);
+    expect(ENGINE_SCHEMA_VERSION).toBe(4);
+    expect(readSchemaIdentity(db).userVersion).toBe(4);
     assertGroupIndexes(db);
   });
 
@@ -423,7 +423,7 @@ describeStore("task group storage upgrade", () => {
       // The v2 fixture contains the raw bytes BEFORE either new index is built.
       // The fresh fixture proves writes AFTER both indexes already exist.
       ensureSchema(db);
-      expect(readSchemaIdentity(db).userVersion).toBe(3);
+      expect(readSchemaIdentity(db).userVersion).toBe(4);
       expect({ ...tableSnapshot(db), meta: [] }).toEqual({ ...before, meta: [] });
       assertGroupIndexes(db);
       // Count actual B-tree entries, not SELECT rows filtered by the query.
@@ -456,14 +456,14 @@ describeStore("task group storage upgrade", () => {
   );
 
   it.each([1, 2] as const)(
-    "upgrades populated v%s to v3 without rewriting params, results or membership",
+    "upgrades populated v%s to v4 without rewriting params, results or membership",
     async (version) => {
       const db = await populatedOldStore(version);
       const before = tableSnapshot(db);
       ensureSchema(db);
-      expect(readSchemaIdentity(db).userVersion).toBe(3);
+      expect(readSchemaIdentity(db).userVersion).toBe(4);
       expect(db.prepare("SELECT value FROM meta WHERE key='schema_version'").get()).toEqual({
-        value: "3",
+        value: "4",
       });
       const after = tableSnapshot(db);
       expect({ ...after, meta: [], account_last_service: [] }).toEqual({
@@ -522,10 +522,10 @@ describeStore("task group storage upgrade", () => {
     },
   );
 
-  it("current-version reopen and a real frozen v2 reader leave a populated v3 file untouched", async () => {
+  it("current-version reopen and a real frozen v2 reader leave a populated v4 file untouched", async () => {
     const writer = await populatedOldStore(2);
     ensureSchema(writer);
-    expect(readSchemaIdentity(writer).userVersion).toBe(3);
+    expect(readSchemaIdentity(writer).userVersion).toBe(4);
     const observer = await connect();
     const beforeRows = tableSnapshot(writer),
       beforeSchema = masterRows(writer);
@@ -540,7 +540,7 @@ describeStore("task group storage upgrade", () => {
         code: "store_schema_unsupported",
         status: 503,
         retryable: false,
-        userVersion: 3,
+        userVersion: 4,
       }),
     );
     expect(exec).not.toHaveBeenCalled();
@@ -603,6 +603,7 @@ describeStore("engine schema (SYNTHESIS_R5 §5)", () => {
         "project_root_active",
         "project_current_pid",
         "turn_run",
+        "turn_plan_answer",
         "upload_finalize",
       ].sort(),
     );

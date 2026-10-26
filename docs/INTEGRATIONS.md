@@ -1901,6 +1901,13 @@ repository's `.claudexor/` remains user-owned config. No-project Ask uses a
 synthetic cwd and writes artifacts under `~/.claudexor/v3/runs/`. An explicitly
 bound host data root keeps its own location.
 
+The current SQLite schema is version 4. Its atomic 3→4 upgrade adds only the
+guarded plan-answer expression index for thread history; existing domain rows
+are untouched. Earlier versions follow 1→2 (account service), 2→3 (task-group
+indexes), then 3→4. Reopening version 4 is write-free; older readers refuse an
+upgraded store. See [SQLite engine store](ARCHITECTURE.md#sqlite-engine-store)
+for migration and complete-backup downgrade precautions.
+
 The 4.0 migration requires Node 24.15.0 or newer with supported bundled SQLite.
 Desktop application 4.0 is required before engine 4.0; the existing updater
 keeps the working engine and requests the app update first. Protocol major

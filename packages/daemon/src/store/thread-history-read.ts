@@ -12,6 +12,7 @@ import type { BlobFiles } from "./blob-files.js";
 import { isServedPid } from "./generations.js";
 import type { EngineStore } from "./store.js";
 import { readThreadPromptPart } from "./thread-prompt-read.js";
+import { PLAN_ANSWER_PRESENT_SQL, PLAN_ANSWER_RUN_SQL } from "./schema.js";
 
 export interface HistoryTurnKey {
   id: string;
@@ -232,6 +233,53 @@ export class SqlThreadHistoryRead {
         totalTextBytes: prompt.totalBytes,
         truncated: prompt.nextOffset < prompt.totalBytes,
       },
+    };
+  }
+
+  /** First accepted relation, even beyond this page's frozen tail. Matches
+   * assertPlanAnswerSubmission / PlanAnswerSubmission.acceptedTurn: bound,
+   * unrefused queued, or retryable refusal; only a runless false refusal loses.
+   * No whole turn body is decoded, and only the selected prompt is read. */
+  planAnswer(threadId: string, planRunId: string) {
+    const row = this.store
+      .prepare(
+        `SELECT id,length(body) AS metadataBytes FROM turn INDEXED BY turn_plan_answer
+      WHERE thread_id=? AND ${PLAN_ANSWER_PRESENT_SQL} AND ${PLAN_ANSWER_RUN_SQL}=?
+        AND CASE WHEN length(body)>? THEN 1 WHEN run_id IS NOT NULL THEN 1
+          ELSE json_type(CAST(body AS TEXT),'$.enqueue_error.retryable') IS NOT 'false' END
+      ORDER BY ordinal LIMIT 1`,
+      )
+      .get(threadId, planRunId, THREAD_HISTORY_METADATA_BYTES) as
+      { id: string; metadataBytes: number } | undefined;
+    if (row && row.metadataBytes > THREAD_HISTORY_METADATA_BYTES)
+      throw threadHistoryProblem(
+        "thread_history_metadata_too_large",
+        503,
+        "plan answer metadata exceeds its byte bound",
+      );
+    const prompt = row
+      ? readThreadPromptPart(this.store, this.blobs, {
+          threadId,
+          turnId: row.id,
+          offset: 0,
+          maxBytes: THREAD_HISTORY_PROMPT_BYTES,
+        })
+      : null;
+    return {
+      answeredByTurnId: row?.id ?? null,
+      answeredByPrompt:
+        row && prompt
+          ? {
+              id: row.id,
+              prompt: prompt.text,
+              promptInfo: {
+                textBytes: prompt.nextOffset,
+                totalTextBytes: prompt.totalBytes,
+                truncated: prompt.nextOffset < prompt.totalBytes,
+              },
+            }
+          : null,
+      planAnswerComplete: true,
     };
   }
 

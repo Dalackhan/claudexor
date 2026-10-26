@@ -1,5 +1,14 @@
 # Frozen legacy replay oracle
 
+The separate `fixtures/schema-v3.ts.txt` fixture is the exact schema owner from
+`711cee0e5ec5f551ffcde78b9a336472fd162312`, outside the journal oracle below.
+`schema-history-upgrade.test.ts` executes that frozen owner on temporary databases
+to prove the index-only 3→4 migration preserves domain rows and existing indexes,
+rolls back on failure, and is refused by the actual v3 reader after upgrade.
+The current store creates schema v4; 1→2 adds account service, 2→3 adds task-group
+indexes, and 3→4 adds the guarded plan-answer index. The frozen v3 source is not
+derived from current DDL and must not be regenerated to make a test pass.
+
 Baseline: `820e849cd15cca47758b700603e156ef29129fbf`, the accepted PR-C oracle
 baseline. This is test support, excluded from the daemon's production build.
 It does not select a runtime backend, open the SQL store, migrate a real data

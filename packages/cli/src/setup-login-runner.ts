@@ -153,10 +153,10 @@ export async function runSetupLoginWorker(
     return runDeviceCodeLogin(manifest, permit, { now, spawnProcess });
   }
 
-  // `--device-auth` exists only since codex 0.46.0: probe `login --help`
-  // first so an old CLI yields a typed unsupported outcome. Fails OPEN — a
-  // broken probe falls through to the real spawn and its own diagnostics.
-  if (manifest.args.includes("--device-auth")) {
+  // `--device-auth` exists only since codex 0.46.0, so a codex login probes `login --help`
+  // first and an old CLI yields a typed unsupported outcome; Grok's login passes the same
+  // flag and is not probed. Fails OPEN — a broken probe falls through to the real spawn.
+  if (manifest.harness === "codex" && manifest.args.includes("--device-auth")) {
     const probe = await probeLoginHelp(
       manifest.binary,
       spawnProcess,

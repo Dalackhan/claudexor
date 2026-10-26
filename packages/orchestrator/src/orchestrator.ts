@@ -2470,7 +2470,7 @@ export class Orchestrator {
     // must name the profile that ran, never the one the request asked for.
     const appliedNow = () =>
       appliedAttemptFacts(
-        followSpecHome(harnessHome, spec, runInput?.credentialProfileId ?? null),
+        followSpecHome(harnessHome, spec, runInput?.credentialProfileId ?? null, adapter),
         spec.access,
         spec.credential_profile?.profile_id ?? runInput?.credentialProfileId ?? null,
       );

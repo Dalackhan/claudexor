@@ -65,7 +65,7 @@ struct HarnessFamily: RawRepresentable, Identifiable, Hashable {
     /// vendor brands the PRODUCT "Antigravity" — `agy` is only its binary.
     private static let labels = [
         "codex": "Codex", "claude": "Claude", "cursor": "Cursor", "opencode": "OpenCode",
-        "agy": "Antigravity", "copilot": "GitHub Copilot", "raw-api": "Raw API", "openrouter": "OpenRouter", "fake": "Fake",
+        "agy": "Antigravity", "grok": "Grok Build", "copilot": "GitHub Copilot", "raw-api": "Raw API", "openrouter": "OpenRouter", "fake": "Fake",
     ]
     var label: String {
         Self.labels[rawValue] ?? rawValue.split(separator: "-").map { $0.capitalized }.joined(separator: " ")

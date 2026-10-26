@@ -14,7 +14,7 @@ release gates, and integration notes live in
 ## 1. System Shape
 
 Claudexor is a local-first control plane over external coding harnesses:
-Codex CLI, Claude Code, Cursor CLI, OpenCode, raw APIs, and future adapters.
+Codex CLI, Claude Code, Cursor CLI, OpenCode, Grok Build, raw APIs, and future adapters.
 A harness is not a role. Roles are intents (`explain`, `plan`, `spec`,
 `implement`, `create_from_scratch`, `repair`, `review`, `verify`,
 `synthesize`, `audit`).
@@ -162,7 +162,7 @@ at every wire boundary.
   `RunFacts` projection from canonical run artifacts.
 - `packages/gateway`: harness discovery and capability/intent gating (route
   selection itself lives in the budget router and orchestrator routing).
-- `packages/harness-codex|claude|cursor|opencode|agy|acp|raw-api|fake`: adapters that
+- `packages/harness-codex|claude|cursor|opencode|agy|grok|acp|raw-api|fake`: adapters that
   translate native CLI/API streams into typed `HarnessEvent`s. The `fake-*` kinds
   are deterministic offline test fixtures (incl. `fake-implement`, which writes a
   real worktree file); they are explicit-`--harness` only and never enter
@@ -1190,13 +1190,14 @@ identity or an OS-user-scoped binding:
 secret_ref, enabled}`. There is no separate "default"/"CLI login" account
 type. `config_dir_login` rows point at a Claudexor-owned scoped vendor-state
 root (`CLAUDE_CONFIG_DIR` / `CODEX_HOME` / the Cursor file-store HOME / the agy
-HOME, canonical absolute path); the effective platform policy may keep the
+HOME / the Grok profile HOME with `GROK_HOME=<HOME>/.grok`, canonical absolute
+path); the effective platform policy may keep the
 physical credential at OS-user scope. The Claudexor-owned LEGACY native dirs
 are legal locators —
 the startup migration registers a detected claude/codex default-store login as
 the ordinary `claude-default`/`codex-default` row without moving bytes; the
-vendor's ordinary host stores (~/.claude, ~/.codex, the host Cursor Keychain)
-stay outside the owned root and are never locators.
+vendor's ordinary host stores (~/.claude, ~/.codex, the host Cursor Keychain,
+~/.grok) stay outside the owned root and are never locators.
 `oauth_token`/`api_key` rows point at a namespaced
 secret-store name (`claude_oauth:work`, `anthropic:acc2`, …) — the namespace
 is REQUIRED (the schema refuses a bare engine-default slot like `anthropic`,
@@ -2935,8 +2936,8 @@ not retry automatically.
   bodies stay in the engine store, run trees
   follow the run retention below, native sessions that a route keeps outside
   the lane home stay in the agent's own storage (Agent turns, and Codex
-  config-dir login profiles and Antigravity, which keep sessions in the
-  account's directory), and project files are untouched. (ACP's view of
+  config-dir login profiles, Antigravity and Grok Build, which keep sessions
+  in the account's directory), and project files are untouched. (ACP's view of
   trashed threads is in INTEGRATIONS.)
 - Refused turns are honest end-to-end: when a turn's run dies BEFORE it starts
   (the trust gate refusing `access: full`, preflight validation, an enqueue
@@ -4062,7 +4063,7 @@ fails. Answer delivery remains the same commit-before-delivery child endpoint ab
 parent-side proxy or app-local interaction state is introduced.
 
 `/v2/setup/jobs` (create / status / snapshot / events / cancel / reconcile / extend)
-is the native-login setup surface for Codex, Claude, Cursor, and Antigravity.
+is the native-login setup surface for Codex, Claude, Cursor, Antigravity, and Grok Build.
 The same effective setup-login projector feeds `/v2/harnesses`,
 `/v2/agent-capabilities`, and create admission. Its current producers always
 emit their own `setupLogin` property; omission remains a legacy-wire fact.
@@ -4494,7 +4495,7 @@ refused` lifecycle state before consumption is typed `live_input_refused`
 without failing the run. A one-shot argv run (no interaction channel; never
 the daemon's shape) has no live session and answers `not_active`/`no_live_session`. Cursor declares `none` (no
 persistent live-input channel: its prompt is piped once, then EOF); agy,
-opencode, copilot and raw-api declare `none`. MCP exposes the existing channel
+grok, opencode, copilot and raw-api declare `none`. MCP exposes the existing channel
 through `claudexor_run_message` (see [MCP controls](INTEGRATIONS.md#observing-and-directing-an-existing-run)).
 There is no CLI message verb yet (`claudexor follow` is the later surface), and the
 ACP server's `session/prompt` on an active session is refused rather than
@@ -5203,7 +5204,13 @@ recorded oversized-input refusal remains separate: the app-server preserves
 RPC data and emits `request_refusal`, which reaches final failure as
 `input_too_large` with Unicode-scalar measurements and no quota reset. It stops
 account rotation, same-harness fallback-model and convergence retries; ordinary
-failover remains unchanged. `capability_profile.input_limits` declares the
+failover remains unchanged. Grok's startup frame reporting an `apiKeySource`
+other than `oauth` (session login) is the `credential_source_unconfirmed`
+request refusal with the reported value and stops the same paths, also when
+that frame contradicts the scoped tool policy: each further launch could send
+a paid request before its own startup frame is read. A tool-policy
+contradiction alone stays an ordinary pre-progress failure, and an absent
+field is disclosed as unknown; neither is a refusal. `capability_profile.input_limits` declares the
 verified native turn-text bound only on the observed CLI version. The catalog's
 `inputLimits` entry's `askPromptBudget` subtracts shared thread-pointer framing for ordinary
 ASK initial attempts (`prompt-framing.ts`), including thread turns. Other shapes
@@ -6445,7 +6452,7 @@ code touching one of these areas must honor it or change it explicitly here.
 - A credential profile cannot bootstrap a raw-API instance whose own key is
   absent: raw-API discovery is key-gated (an instance without its configured
   key is not a route, so no manifest exists for the profile probe to
-  override). CLI harnesses (agy/claude/codex/cursor/opencode) discover
+  override). CLI harnesses (agy/claude/codex/cursor/grok/opencode) discover
   credential-neutrally, so their profile probes CAN admit a route past a
   logged-out default store; for raw-API, set the instance key (env or its
   managed slot) and use the profile for per-run key selection within the

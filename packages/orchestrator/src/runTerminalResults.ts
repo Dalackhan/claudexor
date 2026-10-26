@@ -94,7 +94,12 @@ export function writeFailure(
                 "Use the update method for that installation, then retry the requested model",
                 "Open diagnostics",
               ]
-            : (failure.nextActions ?? [])),
+            : failure.code === "credential_source_unconfirmed"
+              ? [
+                  "Check the vendor's own configuration for a per-model API key or managed policy that replaces session login; Claudexor does not read or change it",
+                  "Retry once the vendor reports session login, or choose another model or account",
+                ]
+              : (failure.nextActions ?? [])),
         ...(failure.captureFailure ? (failure.nextActions ?? []) : []),
       ]),
     ],
@@ -111,7 +116,9 @@ export interface DeclaredFailure {
 
 export function requestRefusalFailure(requestRefusal: HarnessRequestRefusal): DeclaredFailure {
   return {
-    category: requestRefusal.kind === "vendor_cli_too_old" ? "harness_unavailable" : "validation",
+    // Only an oversized input is the request's own fault; the other causes are
+    // the installed vendor CLI or its configuration.
+    category: requestRefusal.kind === "input_too_large" ? "validation" : "harness_unavailable",
     code: requestRefusal.kind,
     resetsAt: null,
     requestRefusal,

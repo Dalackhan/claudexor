@@ -44,6 +44,7 @@ import { probeCursorDoctorForAccounts } from "./doctor.js";
 import { coordinatedCursorNativeAuth, cursorFileStoreEnv } from "./status-cache.js";
 export { clearCursorStatusCache } from "./status-cache.js";
 import {
+  cursorChildHome,
   probeCursorCredentialAccount,
   probeCursorCredentialProfile,
   resolveCursorRunRoute,
@@ -257,9 +258,9 @@ export function createCursorAdapter(deps: Partial<CursorRuntimeDeps> = {}): Harn
       reason: "Cursor session/index storage has no proven independent pruning contract.",
     },
     id: "cursor",
-    // The level is a token of the compound model id: `prepareProcessing`
-    // selects the listed variant of the requested model's family from this
-    // account's inventory and returns the effort receipt with it.
+    childHome: cursorChildHome,
+    // The level is a token of the compound model id: `prepareProcessing` selects the
+    // listed variant of the requested family from this account's list, with its receipt.
     effortParameter: "--model",
     capabilityProfile: CURSOR_CAPABILITY_PROFILE,
     ...cursorProcessingMethods((input) =>

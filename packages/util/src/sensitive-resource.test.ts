@@ -14,6 +14,8 @@ describe("SensitiveResourcePolicy hostile corpus", () => {
     ["home/.config/gcloud/application_default_credentials.json", "credential_store"],
     ["home/.ssh/id_ed25519", "credential_store"],
     ["home/Library/Keychains/login.keychain-db", "credential_store"],
+    ["home/.grok/auth.json", "credential_store"],
+    ["profiles/grok-work/.grok/sessions/s.jsonl", "credential_store"],
     ["home/login.keychain-db", "credential_file"],
     ["repo/id_rsa", "private_key"],
     [".claudexor/auth/native.json", "credential_store"],

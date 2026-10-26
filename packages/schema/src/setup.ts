@@ -173,7 +173,7 @@ export type SetupNativeCommandReceipt = z.infer<typeof SetupNativeCommandReceipt
 
 /** Harness ids with a daemon-managed native-login flow. */
 export const ControlHarnessSetupHarness = z
-  .enum(["codex", "claude", "cursor", "agy"])
+  .enum(["codex", "claude", "cursor", "agy", "grok"])
   .describe("Harness ids with a managed native-login flow.");
 export type ControlHarnessSetupHarness = z.infer<typeof ControlHarnessSetupHarness>;
 

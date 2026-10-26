@@ -67,6 +67,21 @@ Start read-only unless the user explicitly asked to change or create files.
    `jobId` is returned, pass it as `runId` to the same tools until it binds.
    `claudexor_thread_read` lists earlier turns without starting work.
 
+Read retained answers with `claudexor_thread_history`:
+`{threadId, limit?, cursor?, beforeTurnId?, afterTurnId?, aroundTurnId?, expectedStoreId?}`.
+Limit is 1..20 (default 20). Omit selectors for the newest page, or supply exactly
+one selector. `aroundTurnId` returns the anchor and earlier turns; follow
+`newerCursor` for later turns. Rows are ordered oldest first; opaque cursors are bound to store,
+epoch, thread and limit. Follow `olderCursor`/`newerCursor` explicitly.
+`replayCursor` refreshes the same membership; consume `replayNextCursor` segments
+when answers grow. Previews are bounded; missing evidence and incomplete
+plan-answer relations are not proof of absence. `claudexor_thread_prompt` reads
+full prompts, including runless refusals, in UTF-8 parts with
+`{threadId, turnId, offset?, maxBytes?, expectedStoreId?}`. Continue at `nextOffset`
+while it is below `totalBytes`. Full answers use the existing artifact read.
+These reads never start a daemon, enqueue work or authorize a retry; legacy
+`claudexor_thread_read` remains available for complete inspection.
+
 Run tools enqueue work and return a durable handle, not terminal output or
 proof of completion. Use `claudexor_runs`, `claudexor_inspect`,
 `claudexor_run_status`, and `claudexor_run_result` to recover and follow it.

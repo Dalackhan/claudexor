@@ -1,7 +1,7 @@
 import { lstatSync, readFileSync } from "node:fs";
 import { extname } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { redactSecrets } from "@claudexor/util";
+import { redactSecrets, readFileUtf8BoundedSync } from "@claudexor/util";
 import { safeArtifactPath } from "./artifact-paths.js";
 import type { DaemonRunRecord } from "./run-record.js";
 
@@ -9,18 +9,25 @@ export function readTextArtifact(
   rec: DaemonRunRecord,
   relPath: string,
   redact = true,
+  maxBytes?: number,
 ): string | null {
-  const text = readRawTextArtifact(rec, relPath);
+  const text = readRawTextArtifact(rec, relPath, maxBytes);
   return text === null ? null : redact ? redactSecrets(text) : text;
 }
 
-export function readRawTextArtifact(rec: DaemonRunRecord, relPath: string): string | null {
+export function readRawTextArtifact(
+  rec: DaemonRunRecord,
+  relPath: string,
+  maxBytes?: number,
+): string | null {
   if (!rec.runDir) return null;
   const path = safeArtifactPath(rec.runDir, relPath);
   if (!path) return null;
   const st = lstatSync(path);
   if (st.isSymbolicLink() || st.isDirectory()) return null;
-  return readFileSync(path, "utf8");
+  return maxBytes === undefined
+    ? readFileSync(path, "utf8")
+    : readFileUtf8BoundedSync(path, maxBytes);
 }
 
 export function readStructured<T>(
@@ -42,10 +49,12 @@ export function safeReadStructuredArtifact<T>(
   rec: DaemonRunRecord,
   relPath: string,
   schema: { parse(value: unknown): T },
+  maxBytes?: number,
 ): T | null {
   try {
-    return readStructured(readTextArtifact(rec, relPath), extname(relPath), schema);
-  } catch {
+    return readStructured(readTextArtifact(rec, relPath, true, maxBytes), extname(relPath), schema);
+  } catch (error) {
+    if (maxBytes !== undefined && (error as { status?: number }).status === 503) throw error;
     return null;
   }
 }

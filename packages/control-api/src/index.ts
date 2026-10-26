@@ -9,3 +9,5 @@ export { findActiveThreadRun } from "./thread-mutation.js";
 
 export { collectNativeRunSessions } from "./native-run-sessions.js";
 export { retainedNativeSessions } from "./native-retention-references.js";
+
+export { createThreadHistoryRead } from "./thread-history-read.js";

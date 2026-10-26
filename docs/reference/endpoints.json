@@ -1566,6 +1566,73 @@
       "error_schema": "ControlProblem"
     },
     {
+      "method": "GET",
+      "path": "/v2/threads/:id/history",
+      "mutating": false,
+      "applicability": "thread",
+      "summary": "Read an addressed bounded page of thread turns with answers and receipt facts.",
+      "auth": "loopback_bearer",
+      "request_schema": null,
+      "parameters": [
+        {
+          "name": "limit",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": null,
+          "schema_ref": "ThreadHistoryInput#/properties/limit",
+          "description": "Optional limit; validated by ThreadHistoryInput."
+        },
+        {
+          "name": "cursor",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": null,
+          "schema_ref": "ThreadHistoryInput#/properties/cursor",
+          "description": "Optional cursor; validated by ThreadHistoryInput."
+        },
+        {
+          "name": "beforeTurnId",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": null,
+          "schema_ref": "ThreadHistoryInput#/properties/beforeTurnId",
+          "description": "Optional beforeTurnId; validated by ThreadHistoryInput."
+        },
+        {
+          "name": "afterTurnId",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": null,
+          "schema_ref": "ThreadHistoryInput#/properties/afterTurnId",
+          "description": "Optional afterTurnId; validated by ThreadHistoryInput."
+        },
+        {
+          "name": "aroundTurnId",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": null,
+          "schema_ref": "ThreadHistoryInput#/properties/aroundTurnId",
+          "description": "Optional aroundTurnId; validated by ThreadHistoryInput."
+        },
+        {
+          "name": "expectedStoreId",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": null,
+          "schema_ref": "ThreadHistoryInput#/properties/expectedStoreId",
+          "description": "Optional expectedStoreId; validated by ThreadHistoryInput."
+        }
+      ],
+      "response_schema": "ThreadHistoryPage",
+      "error_schema": "ControlProblem"
+    },
+    {
       "method": "POST",
       "path": "/v2/threads/:id/purge",
       "mutating": true,
@@ -1611,6 +1678,46 @@
       "request_schema": "ControlThreadTurnRequest",
       "parameters": [],
       "response_schema": "ControlThreadTurnResponse",
+      "error_schema": "ControlProblem"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/threads/:id/turns/:id/prompt",
+      "mutating": false,
+      "applicability": "thread",
+      "summary": "Read a UTF-8 part of a turn's complete stored prompt, including refused turns.",
+      "auth": "loopback_bearer",
+      "request_schema": null,
+      "parameters": [
+        {
+          "name": "offset",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": null,
+          "schema_ref": "ThreadPromptPartInput#/properties/offset",
+          "description": "Optional offset; validated by ThreadPromptPartInput."
+        },
+        {
+          "name": "maxBytes",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": null,
+          "schema_ref": "ThreadPromptPartInput#/properties/maxBytes",
+          "description": "Optional maxBytes; validated by ThreadPromptPartInput."
+        },
+        {
+          "name": "expectedStoreId",
+          "in": "query",
+          "required": false,
+          "repeatable": false,
+          "enum": null,
+          "schema_ref": "ThreadPromptPartInput#/properties/expectedStoreId",
+          "description": "Optional expectedStoreId; validated by ThreadPromptPartInput."
+        }
+      ],
+      "response_schema": "ThreadPromptPart",
       "error_schema": "ControlProblem"
     },
     {

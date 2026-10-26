@@ -5,7 +5,7 @@ import { StoreSchemaUnsupportedError } from "./errors.js";
 /** `PRAGMA application_id` of every engine store ("CXEN"). */
 export const ENGINE_APPLICATION_ID = 0x4358454e;
 /** `PRAGMA user_version`: the one schema this engine creates and serves. */
-export const ENGINE_SCHEMA_VERSION = 3;
+export const ENGINE_SCHEMA_VERSION = 4;
 
 /**
  * Version 2: the latest request each account served per requested model
@@ -33,6 +33,16 @@ CREATE INDEX command_task_group ON command(json_extract(CAST(summary AS TEXT),'$
   WHERE live=1 AND kind='product' AND json_valid(CAST(summary AS TEXT)) AND ${TASK_GROUP_PRESENT_SQL};
 CREATE INDEX command_task_group_state ON command(json_extract(CAST(summary AS TEXT),'$.params.taskGroupId'),state,created_at DESC,id DESC)
   WHERE live=1 AND kind='product' AND json_valid(CAST(summary AS TEXT)) AND ${TASK_GROUP_PRESENT_SQL};
+`;
+
+/** Guard both the expression key and partial predicate against non-JSON bodies.
+ * Acceptance is mutable query policy, not index membership. */
+export const PLAN_ANSWER_RUN_SQL = `CASE WHEN json_valid(CAST(body AS TEXT))
+  THEN json_extract(CAST(body AS TEXT),'$.answers_plan_run_id') END`;
+export const PLAN_ANSWER_PRESENT_SQL = `${PLAN_ANSWER_RUN_SQL} IS NOT NULL`;
+const PLAN_ANSWER_INDEX_SQL = `
+CREATE INDEX turn_plan_answer ON turn(thread_id,${PLAN_ANSWER_RUN_SQL},ordinal)
+  WHERE ${PLAN_ANSWER_PRESENT_SQL};
 `;
 
 /**
@@ -126,7 +136,7 @@ CREATE TABLE import_partition(name TEXT PRIMARY KEY, status TEXT NOT NULL, pid I
   previous_frame_hash TEXT, source_size INTEGER, source_mtime TEXT, fingerprint TEXT, records INTEGER, digest TEXT, problem TEXT) STRICT;
 CREATE TABLE unclassified(pid INTEGER NOT NULL, seq INTEGER NOT NULL, type TEXT NOT NULL, reason TEXT NOT NULL, payload BLOB NOT NULL,
   PRIMARY KEY(pid, seq)) WITHOUT ROWID, STRICT;
-${ACCOUNT_LAST_SERVICE_SQL}${TASK_GROUP_INDEX_SQL}`;
+${ACCOUNT_LAST_SERVICE_SQL}${TASK_GROUP_INDEX_SQL}${PLAN_ANSWER_INDEX_SQL}`;
 
 /** Every table the DDL creates, in creation order (for tests and the importer seam). */
 export const ENGINE_TABLES: readonly string[] = Object.freeze(
@@ -142,6 +152,7 @@ export const ENGINE_TABLES: readonly string[] = Object.freeze(
 const SCHEMA_MIGRATIONS: ReadonlyMap<number, (db: DatabaseSync) => void> = new Map([
   [1, (db: DatabaseSync) => db.exec(ACCOUNT_LAST_SERVICE_SQL)],
   [2, (db: DatabaseSync) => db.exec(TASK_GROUP_INDEX_SQL)],
+  [3, (db: DatabaseSync) => db.exec(PLAN_ANSWER_INDEX_SQL)],
 ]);
 
 export interface SchemaIdentity {

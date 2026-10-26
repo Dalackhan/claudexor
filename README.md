@@ -263,6 +263,10 @@ alias claudexor="node $(pwd)/packages/cli/dist/cli.js"
 claudexor ask "2+2?"
 claudexor ask "google the latest release notes" --web auto
 claudexor ask --deep-scan "map this repo's auth and run storage"
+
+# Read bounded saved turns and answer previews from an existing daemon
+claudexor thread history <thread-id> --limit 20 --json
+claudexor thread prompt <thread-id> <turn-id> --offset 0 --max-bytes 32768 --json
 claudexor agent "fix the failing auth refresh test" --harness codex
 claudexor best-of "fix add() and keep the patch minimal" --harness codex,claude --n 2
 claudexor inspect <run_id>
@@ -485,7 +489,11 @@ Examples:
 claudexor                       # REPL: a thread of turns (read-only turns resume natively)
 claudexor ask "2+2?"
 claudexor ask "google the latest release notes" --web auto
-claudexor ask --deep-scan "map this repo's auth and run storage"   # bounded multi-scout research sweep
+claudexor ask --deep-scan "map this repo's auth and run storage"
+
+# Read bounded saved turns and answer previews from an existing daemon
+claudexor thread history <thread-id> --limit 20 --json
+claudexor thread prompt <thread-id> <turn-id> --offset 0 --max-bytes 32768 --json
 claudexor agent "fix the failing auth refresh test" --harness codex
 claudexor best-of "fix add() in src/math.js and keep the patch minimal" --harness codex,claude --n 2
 claudexor agent "repair the parser test" --attempts 3

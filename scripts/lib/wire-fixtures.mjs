@@ -1,3 +1,4 @@
+import { threadHistoryFixtures } from "./thread-history-fixtures.mjs";
 /**
  * Canonical wire fixtures for the TS↔Swift drift gate (D13).
  *
@@ -27,7 +28,7 @@ const NOW = "2026-07-19T12:00:00.000Z";
 
 /** @type {Array<{ name: string, schema: string, value: unknown }>} */
 export function buildWireFixtures() {
-  const fixtures = [];
+  const fixtures = threadHistoryFixtures(schema);
   const add = (name, schemaName, value) =>
     fixtures.push({ name, schema: schemaName, value: parse(schemaName, value) });
 

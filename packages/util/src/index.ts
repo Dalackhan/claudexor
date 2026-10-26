@@ -569,3 +569,4 @@ export function engineBuildIdentity(): EngineBuildIdentity {
 }
 export * from "./node-heap-args.js";
 export * from "./daemon-heap.js";
+export { readFileUtf8BoundedSync } from "./bounded-file-read.js";

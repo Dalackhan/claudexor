@@ -12,14 +12,15 @@ import { existsSync, lstatSync, realpathSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { setImmediate as yieldToAdmission } from "node:timers/promises";
 import { dirname, join } from "node:path";
-import { parse as yamlParse, stringify as yamlStringify } from "yaml";
+import { stringify as yamlStringify } from "yaml";
 import {
   ControlGcReceipt,
   ControlGcRequest,
   type GcKeepCounts,
   type GcRunDeletion,
 } from "@claudexor/schema";
-import { prunePatchObjects, readTextSafe } from "@claudexor/util";
+import { prunePatchObjects } from "@claudexor/util";
+export { readRunTombstone } from "./run-tombstone.js";
 import { treeReclaimableBytes } from "./retention-bytes.js";
 import { ageStampOf, runKeepReason } from "./retention-candidates.js";
 import {
@@ -534,26 +535,6 @@ export async function runRetentionPass(
     errors,
     ...(dataRootUnrecognized === undefined ? {} : { data_root_unrecognized: dataRootUnrecognized }),
   });
-}
-
-export interface RunTombstone {
-  run_id: string;
-  deleted_at: string;
-  reason: string;
-}
-
-/** The honest post-GC projection: why this run's artifacts are gone. */
-export function readRunTombstone(runDir: string): RunTombstone | null {
-  const text = readTextSafe(join(runDir, TOMBSTONE));
-  if (text === null) return null;
-  try {
-    const value = yamlParse(text) as Partial<RunTombstone> | null;
-    return value && typeof value.run_id === "string" && typeof value.deleted_at === "string"
-      ? { run_id: value.run_id, deleted_at: value.deleted_at, reason: String(value.reason ?? "") }
-      : null;
-  } catch {
-    return null;
-  }
 }
 
 /**

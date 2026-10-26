@@ -53,7 +53,7 @@ export interface StoreFacts {
   };
   obligations_open: number | null;
   integrity: "pending" | "ok" | "failed";
-  /** Filled by the importer (PR-D); the store core never migrates. */
+  /** Legacy-import status; schema upgrades are applied separately by ensureSchema. */
   migration: null;
 }
 

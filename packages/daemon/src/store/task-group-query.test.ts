@@ -94,11 +94,11 @@ async function fixture() {
 }
 
 describe("SQL taskGroupPage retained selection", () => {
-  it("reads an earlier unpublished v3 store without rebuilding its broader indexes", async () => {
+  it("reads a current store retaining broader v3 group indexes without rebuilding them", async () => {
     const f = await fixture();
     f.seed("tagged");
     f.seed("untagged", { params: { mode: "ask", prompt: "ungrouped" } });
-    // Exact original PR498 predicates at 5b9d6d75; same version, broader membership.
+    // Original PR498 predicates at 5b9d6d75, retained in the current schema after upgrade.
     f.store.db.exec(`DROP INDEX command_task_group; DROP INDEX command_task_group_state;
       CREATE INDEX command_task_group ON command(json_extract(CAST(summary AS TEXT),'$.params.taskGroupId'),created_at DESC,id DESC)
         WHERE live=1 AND kind='product' AND json_valid(CAST(summary AS TEXT));
@@ -113,7 +113,7 @@ describe("SQL taskGroupPage retained selection", () => {
       f.store.db
         .prepare("SELECT sum(ncell) AS n FROM dbstat WHERE name='command_task_group'")
         .get(),
-    ).toEqual({ n: 2 }); // Existing v3 keeps its original storage cost.
+    ).toEqual({ n: 2 }); // Retained v3 group indexes keep their original storage cost.
   });
 
   it.each([1, 10])(

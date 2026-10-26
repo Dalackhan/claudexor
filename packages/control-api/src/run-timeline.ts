@@ -101,7 +101,10 @@ export function evidenceLevel(i: RunEventsIntegrity): ControlEvidenceIntegrity {
  * preserves the historical array-only shape for callers that do not disclose
  * integrity.
  */
-export function readRunEventsWithIntegrity(rec: RunDirCarrier): RunEventsRead {
+export function readRunEventsWithIntegrity(
+  rec: RunDirCarrier,
+  maxBytes = EVENTS_READ_TAIL_BYTES,
+): RunEventsRead {
   const integrity: RunEventsIntegrity = { ...COMPLETE_INTEGRITY };
   if (!rec.runDir) return { events: [], integrity };
   const path = safeArtifactPath(rec.runDir, "events.jsonl");
@@ -130,12 +133,12 @@ export function readRunEventsWithIntegrity(rec: RunDirCarrier): RunEventsRead {
     const st = lstatSync(path);
     if (st.isSymbolicLink() || st.isDirectory())
       return { events: [], integrity: { ...integrity, unreadable: true } };
-    if (st.size > EVENTS_READ_TAIL_BYTES) {
+    if (st.size > maxBytes) {
       // Bounded tail: read only the final window; drop the first (partial) line.
       const fd = openSync(path, "r");
       try {
-        const buf = Buffer.allocUnsafe(EVENTS_READ_TAIL_BYTES);
-        const read = readSync(fd, buf, 0, EVENTS_READ_TAIL_BYTES, st.size - EVENTS_READ_TAIL_BYTES);
+        const buf = Buffer.allocUnsafe(maxBytes);
+        const read = readSync(fd, buf, 0, maxBytes, st.size - maxBytes);
         raw = buf.toString("utf8", 0, read);
       } finally {
         closeSync(fd);

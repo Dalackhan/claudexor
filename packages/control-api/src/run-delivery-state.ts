@@ -9,13 +9,13 @@ import { safeReadStructuredArtifact } from "./run-artifact-read.js";
 import type { DaemonRunRecord } from "./run-record.js";
 
 /** Revert targets the tree recorded at execution, even if its thread moved later. */
-export function recordedExecutionRoot(rec: DaemonRunRecord): string | null {
-  const wp = safeReadStructuredArtifact(rec, "final/work_product.yaml", WorkProduct);
+export function recordedExecutionRoot(rec: DaemonRunRecord, maxBytes?: number): string | null {
+  const wp = safeReadStructuredArtifact(rec, "final/work_product.yaml", WorkProduct, maxBytes);
   return typeof wp?.meta["execution_root"] === "string" ? wp.meta["execution_root"] : null;
 }
 
-export function controlRunResult(rec: DaemonRunRecord): ControlRunResult {
-  const wp = safeReadStructuredArtifact(rec, "final/work_product.yaml", WorkProduct);
+export function controlRunResult(rec: DaemonRunRecord, maxBytes?: number): ControlRunResult {
+  const wp = safeReadStructuredArtifact(rec, "final/work_product.yaml", WorkProduct, maxBytes);
   const meta = (wp?.meta ?? {}) as Record<string, unknown>;
   const kindRaw = meta["result_kind"];
   const kind =
@@ -40,7 +40,7 @@ export function controlRunResult(rec: DaemonRunRecord): ControlRunResult {
   // (final/delivery_state.yaml, V8/PLAN addendum 2); work_product.yaml is the
   // immutable run snapshot. Prefer the delivery-state overlay when present,
   // else fall back to the initial snapshot the orchestrator stamped.
-  const delivery = readDeliveryState(rec);
+  const delivery = readDeliveryState(rec, maxBytes);
   const applyStateRaw = delivery?.applyState ?? meta["apply_state"];
   const applyState =
     applyStateRaw === "applied" ||
@@ -75,8 +75,11 @@ export function controlRunResult(rec: DaemonRunRecord): ControlRunResult {
 /** Read the MUTABLE delivery/apply state overlay (final/delivery_state.yaml);
  * null when the run never delivered/reverted (its state is the immutable
  * work_product snapshot). */
-export function readDeliveryState(rec: DaemonRunRecord): RunDeliveryState | null {
-  return safeReadStructuredArtifact(rec, "final/delivery_state.yaml", RunDeliveryState);
+export function readDeliveryState(
+  rec: DaemonRunRecord,
+  maxBytes?: number,
+): RunDeliveryState | null {
+  return safeReadStructuredArtifact(rec, "final/delivery_state.yaml", RunDeliveryState, maxBytes);
 }
 
 /** Flip the run's MUTABLE delivery/apply state after a successful apply or

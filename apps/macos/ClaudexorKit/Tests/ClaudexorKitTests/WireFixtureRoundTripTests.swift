@@ -23,6 +23,8 @@ import Testing
         case "EffortResolution": return try recode(JSONValue.self, data)
         case "ControlHandshakeResponse": return try recode(ControlHandshakeResponse.self, data)
         case "ControlProblem": return try recode(ControlProblem.self, data)
+        case "ThreadHistoryPage": return try recode(ThreadHistoryPage.self, data)
+        case "ThreadPromptPart": return try recode(ThreadPromptPart.self, data)
         case "ControlThread": return try recode(ThreadSummary.self, data)
         case "ControlThreadTurn": return try recode(ThreadTurnInfo.self, data)
         case "RunOutcomeFacts": return try recode(RunOutcomeFacts.self, data)
@@ -42,6 +44,7 @@ import Testing
 
     /// The set of schema names the switch above handles (kept in lockstep with it).
     private static let handledSchemas: Set<String> = [
+        "ThreadHistoryPage", "ThreadPromptPart",
         "ControlHandshakeResponse", "ControlProblem", "ControlThread", "ControlThreadTurn",
         "RunOutcomeFacts", "DelegationCapability", "RunDelegationInfo", "RunFailure",
         "ControlBudgetSnapshot", "PlanReadiness", "PlanQuestionsArtifact",

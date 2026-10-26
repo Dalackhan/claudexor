@@ -1,3 +1,17 @@
+import { handleThreadHistoryRoute, type ThreadHistoryServices } from "./thread-history-routes.js";
+import {
+  runRepoRoot,
+  applyGateInputFor,
+  applyEligibilityFor,
+  validRunOperatorDecision,
+} from "./run-apply-projection.js";
+import {
+  readFailure,
+  strategyFromParams,
+  legacyRunOutcomeFacts,
+  planProjectionFor,
+} from "./run-card-facts.js";
+import { budgetSnapshot } from "./run-budget-snapshot.js";
 import { requestGone } from "./request-liveness.js";
 import { measureSync } from "@claudexor/util";
 import { trackRequest } from "./request-timing.js";
@@ -11,7 +25,6 @@ import * as exactPatch from "./run-exact-patch.js";
 import {
   readTextArtifact,
   readRawTextArtifact,
-  readStructured,
   safeReadStructuredArtifact,
 } from "./run-artifact-read.js";
 import { controlRunResult, readDeliveryState, markRunApplyState } from "./run-delivery-state.js";
@@ -19,13 +32,7 @@ import { timingSafeEqual } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import { basename, extname, join } from "node:path";
-import {
-  type ApplyGateInput,
-  deriveApplyEligibility,
-  revertInPlaceFromAnchor,
-  validateApplyGate,
-  verifyAndDeliver,
-} from "@claudexor/delivery";
+import { revertInPlaceFromAnchor, validateApplyGate, verifyAndDeliver } from "@claudexor/delivery";
 import { lastRunEventSeq } from "@claudexor/event-log";
 import { isVanishedErrno, safeArtifactPath, safeArtifactRoot } from "./artifact-paths.js";
 import { TERMINAL_STATES } from "./sse-shared.js";
@@ -37,21 +44,10 @@ import { applyFilesResult } from "./files-apply-route.js";
 import { deliverableWorkspaceChanges } from "@claudexor/workspace";
 import { streamRunEvents } from "./run-events-stream.js";
 import { boundedArtifactText, outputReadyState, primaryOutput } from "./primary-output.js";
+
 import {
-  budgetValuationFromEvents,
-  cashEstimatedFromLedgerEvent,
-  cashKnowledgeFromEvents,
-  controllableSpendFromEvents,
-  decisionCashAnchor,
-  normalizeLegacyBudgetComponents,
-} from "./budget-valuation.js";
-import {
-  type RunEventsIntegrity,
   controlWebEvidence,
-  eventPayload,
-  evidenceLevel,
   latestPlanProgress,
-  readRunEvents,
   readRunEventsWithIntegrity,
   timelineEvents,
 } from "./run-timeline.js";
@@ -148,10 +144,7 @@ import {
   projectRunFactsForDetail,
 } from "./run-facts-projection.js";
 import {
-  PlanQuestionsArtifact,
   CouncilProjection,
-  derivePlanReadiness,
-  type ApplyEligibility,
   ControlAuthReadinessRefreshRequest,
   ControlAuthReadinessRefreshResponse,
   ControlProblem,
@@ -175,7 +168,6 @@ import {
   ControlReviewerPanelEntry,
   ControlRunDetail,
   ControlRunSummary,
-  ControlBudgetSnapshot,
   PaidBudget,
   ControlSettingsSnapshot,
   ControlSettingsUpdateRequest,
@@ -215,11 +207,9 @@ import {
   type FinalVerifyRecord,
   type RunOutcomeFacts,
   type WorkState,
-  isTerminalLifecycle,
   needsDecision,
   needsOperatorAttention,
   outcomeBanner,
-  outcomeFactsFromFailure,
   TestCommandInvocation,
   WorkProduct,
 } from "@claudexor/schema";
@@ -251,6 +241,7 @@ export interface DaemonControlApiOptions {
   storeId?: () => string | undefined;
   /** Body-free, positional run observations from the current durable store. */
   runObservations?: RunWaitManyHost["snapshot"];
+  threadHistoryReads?: ThreadHistoryServices;
   taskGroupRuns?: (input: TaskGroupRunsInput, signal?: AbortSignal) => Promise<TaskGroupRunsResult>;
   bus?: { subscribe(listener: (event: { run_id: string }) => void): () => void };
   /** Internal storage fact; a committed terminal may still need its file effects. */
@@ -777,6 +768,7 @@ export class DaemonControlApiServer {
       services: this.opts.services,
       runObservations: this.opts.runObservations,
       taskGroupRuns: this.opts.taskGroupRuns,
+      threadHistoryReads: this.opts.threadHistoryReads,
       bus: this.opts.bus,
       pollMs: this.opts.pollMs,
       readBody: (request: IncomingMessage, maxBytes?: number) => this.readBody(request, maxBytes),
@@ -788,6 +780,7 @@ export class DaemonControlApiServer {
     for (const route of [
       handleRunWaitManyRoute,
       handleTaskGroupRunsRoute,
+      handleThreadHistoryRoute,
       handleResourceRoute,
       handleModelRoute,
       handleMaintenanceRoute,
@@ -2051,12 +2044,7 @@ export class DaemonControlApiServer {
   }
 
   private validOperatorDecisionFor(rec: DaemonRunRecord): ControlOperatorDecisionRecord | null {
-    const decision = this.operatorDecisionFor(rec);
-    if (!decision) return null;
-    // INV-062: the decision binds to the EXACT patch, never to a redacted copy.
-    return decision.patchSha256 === exactPatch.runPatchDigest(rec, runRepoRoot(rec))
-      ? decision
-      : null;
+    return validRunOperatorDecision(rec, this.operatorDecisionFor(rec));
   }
 
   /** The RISK-OVERRIDABLE needs-decision signal: a terminal run whose review is
@@ -2350,29 +2338,7 @@ function projectMetadata(rec: DaemonRunRecord): {
   };
 }
 
-function readFailure(rec: DaemonRunRecord): RunFailure | null {
-  const fromArtifact = safeReadStructuredArtifact(rec, "final/failure.yaml", RunFailure);
-  if (fromArtifact) return fromArtifact;
-  if (!rec.error) return null;
-  return RunFailure.parse({
-    category: "unknown",
-    safeMessage: rec.error,
-    runDir: rec.runDir ?? null,
-  });
-}
-
 /** v0.9 strategy flags projected back so surfaces can tell a race from a repair loop. */
-function strategyFromParams(
-  p: Record<string, unknown>,
-): "race" | "attempts" | "until_clean" | "deep_scan" | "create" | null {
-  if (p["untilClean"] === true) return "until_clean";
-  if (typeof p["attempts"] === "number" && p["attempts"] > 0) return "attempts";
-  if (p["create"] === true) return "create";
-  if (p["deepScan"] === true) return "deep_scan";
-  if (typeof p["n"] === "number" && p["n"] > 1) return "race";
-  return null;
-}
-
 /**
  * Honest terminal outcome, projected from final/work_product.yaml's meta (the
  * orchestrator-owned record of what the turn produced). Answers the v0.9 "is the
@@ -2400,32 +2366,6 @@ function runOutcomeFacts(
 }
 
 /** Legacy-only terminal projection retained for active/pre-RunFacts records. */
-function legacyRunOutcomeFacts(
-  rec: DaemonRunRecord,
-  decision: DecisionRecord | null,
-  failure: RunFailure | null,
-  workState: WorkState | null = null,
-): RunOutcomeFacts | null {
-  if (!isTerminalLifecycle(rec.state)) return null;
-  // Arbitrated runs already carry work_state on decision.facts (INV-116).
-  if (decision) return decision.facts;
-  const lifecycle = rec.state as RunOutcomeFacts["lifecycle"];
-  const base = outcomeFactsFromFailure(lifecycle, failure?.category);
-  if (!workState || lifecycle !== "succeeded") return base;
-  const vetoed = workState.state === "needs_input" || workState.state === "incomplete";
-  return {
-    ...base,
-    work_state: workState,
-    ...(vetoed
-      ? {
-          reason:
-            base.reason ??
-            (workState.state === "needs_input" ? "input_required" : "work_incomplete"),
-        }
-      : {}),
-  };
-}
-
 /** D-16: the winning attempt's work_state from a run's telemetry.yaml, used to
  * fold the veto axis into a decision-less terminal's outcome facts. */
 function winnerWorkStateFor(rec: DaemonRunRecord): WorkState | null {
@@ -2713,152 +2653,8 @@ function parseAccessMaybe(value: unknown): AccessProfile | undefined {
 }
 
 /** Typed severity per event type — no string matching over event names. */
-function budgetSnapshot(
-  rec: DaemonRunRecord,
-  decision: DecisionRecord | null,
-  eventsSnapshot?: Record<string, unknown>[],
-  integrity?: RunEventsIntegrity,
-): ControlBudgetSnapshot {
-  const p = paramsRecord(rec);
-  // The ENGINE-EFFECTIVE cap lives in the immutable contract (request input,
-  // surface default, or the configured global per-run default); request params
-  // alone under-report a config-defaulted cap as "no cap".
-  const contractBudget = safeReadStructuredArtifact(rec, "context/task.yaml", TaskContract)?.budget
-    .paid_budget;
-  const paidBudget = PaidBudget.safeParse(p["paidBudget"]).data ??
-    contractBudget ?? { kind: "unlimited" as const };
-  const evs = eventsSnapshot ?? readRunEvents(rec);
-  const anchor = decisionCashAnchor(decision?.budget_summary);
-  let spendUsd = anchor.spendUsd;
-  let estimated = decision?.budget_summary?.estimated ?? false;
-  let source: "decision" | "events" | "settings" | "unknown" =
-    spendUsd === null ? "unknown" : "decision";
-  // Subscription VALUATION (QA-023c/QA-017b) beside cash — computed by the pure
-  // event fold so an UNKNOWN valuation stays null, never a fabricated $0.
-  const normalized = normalizeLegacyBudgetComponents(
-    decision?.budget_summary ?? null,
-    evs,
-    budgetValuationFromEvents(evs),
-  );
-  let { valuationUsd, valuationKnowledge } = normalized;
-  estimated = normalized.cashEstimated;
-  if (spendUsd === null) {
-    // The CASH truth for a decision-less run (plan/ask/explore — they never
-    // write a decision record) is the ledger's own `budget.cash` disclosure:
-    // cumulative, last-wins, subscription work settles to 0 there (W4.3).
-    // budget.observation ticks are vendor VALUATION — for a subscription run
-    // they are NON-ZERO while the cash truth is $0.00, so summing them as
-    // spend showed valuation under a "real money" label (F4 review lane 1).
-    // They remain only as the LEGACY fallback for runs predating budget.cash
-    // (every new run settles at least once), disclosed as estimated.
-    let lastCash: number | null = null;
-    let observationSpend = 0;
-    let sawObservation = false;
-    let observationEstimated = false;
-    let eventSpend = 0;
-    let sawCost = false;
-    let sawUsage = false;
-    for (const ev of evs) {
-      const payload = eventPayload(ev);
-      if (ev["type"] === "budget.cash") {
-        const cash = payload["cash_spend_usd"];
-        if (typeof cash === "number" && Number.isFinite(cash)) {
-          lastCash = cash;
-          estimated = cashEstimatedFromLedgerEvent(payload);
-        }
-        continue;
-      }
-      if (ev["type"] === "budget.observation" && payload["kind"] === "spend") {
-        const usd = payload["usd"];
-        if (typeof usd === "number" && Number.isFinite(usd)) {
-          observationSpend += usd;
-          sawObservation = true;
-        }
-        if (payload["estimated"] === true) observationEstimated = true;
-        continue;
-      }
-      if (ev["type"] !== "harness.event") continue;
-      const usage = payload["usage"];
-      if (usage && typeof usage === "object" && !Array.isArray(usage)) {
-        sawUsage = true;
-        const cost = (usage as Record<string, unknown>)["cost_usd"];
-        if (typeof cost === "number" && Number.isFinite(cost)) {
-          eventSpend += cost;
-          sawCost = true;
-        }
-        if ((usage as Record<string, unknown>)["estimated"] === true) observationEstimated = true;
-      }
-    }
-    if (lastCash !== null) {
-      spendUsd = lastCash;
-      source = "events";
-    } else if (sawObservation) {
-      spendUsd = observationSpend;
-      source = "events";
-      estimated = true; // valuation-derived: at best an estimate of cash
-    } else if (sawCost) {
-      spendUsd = eventSpend;
-      source = "events";
-      estimated = true;
-    } else if (sawUsage) {
-      source = "events";
-    }
-    if (observationEstimated && lastCash === null) estimated = true;
-  }
-  const cashKnowledge = cashKnowledgeFromEvents(evs);
-  const controllableSpendUsd = controllableSpendFromEvents(evs, spendUsd);
-  if (cashKnowledge === "unknown" || anchor.totalUnknown) spendUsd = null;
-  if (cashKnowledge !== undefined) estimated = cashKnowledge !== "exact";
-  const remainingUsd =
-    paidBudget.kind === "finite" && controllableSpendUsd !== null
-      ? Math.max(0, paidBudget.maxUsd - controllableSpendUsd)
-      : null;
-  // Disclose when the spend fallback read incomplete/unreadable canonical
-  // events (QA-074): a partial event set can silently drop a spend tick, so the
-  // projected spend must never present as clean when its evidence was not.
-  const evidence = integrity ? evidenceLevel(integrity) : "complete";
-  return ControlBudgetSnapshot.parse({
-    cashKnowledge,
-    paidBudget,
-    spendUsd,
-    controllableSpendUsd,
-    valuationUsd,
-    valuationKnowledge,
-    remainingUsd,
-    estimated,
-    source,
-    evidence,
-  });
-}
-
 function readPatch(rec: DaemonRunRecord): string | null {
   return exactPatch.readExactRunPatch(rec, runRepoRoot(rec));
-}
-
-function runRepoRoot(rec: DaemonRunRecord): string | null {
-  const p = paramsRecord(rec);
-  const scope = p["scope"];
-  if (scope && typeof scope === "object" && !Array.isArray(scope)) {
-    const s = scope as Record<string, unknown>;
-    if (s["kind"] === "project" && typeof s["root"] === "string") return s["root"];
-    if (s["kind"] === "none") return NO_PROJECT_ROOT;
-  }
-  let task: unknown = null;
-  try {
-    task = readStructured(readRawTextArtifact(rec, "context/task.yaml"), ".yaml", {
-      parse: (value: unknown) => value,
-    });
-  } catch {
-    task = null;
-  }
-  if (task && typeof task === "object" && !Array.isArray(task)) {
-    const repo = (task as Record<string, unknown>)["repo"];
-    if (repo && typeof repo === "object" && !Array.isArray(repo)) {
-      const root = (repo as Record<string, unknown>)["root"];
-      if (typeof root === "string") return root;
-    }
-  }
-  return null;
 }
 
 function applyTargetRoot(
@@ -2883,48 +2679,6 @@ function applyGateError(
   });
 }
 
-function applyGateInputFor(
-  rec: DaemonRunRecord,
-  patch: string,
-  targetRepoRoot: string,
-  operatorDecision: ControlOperatorDecisionRecord | null,
-): ApplyGateInput {
-  const files = readFilesWorkProduct(rec);
-  const decision = safeReadStructuredArtifact(rec, "arbitration/decision.yaml", DecisionRecord);
-  const terminal = effectiveTerminalFacts(
-    rec.runDir,
-    decision?.facts ?? null,
-    decision,
-    expectedRunFacts(rec),
-  );
-  return {
-    state: rec.state,
-    decision: terminal.decision,
-    workProduct: safeReadStructuredArtifact(rec, "final/work_product.yaml", WorkProduct),
-    patch,
-    ...(files ? { filesManifest: files.manifest, manifestSha256: files.manifestSha256 } : {}),
-    originalRepoRoot: runExecutionRoot(rec, runRepoRoot(rec)),
-    targetRepoRoot,
-    operatorDecision: operatorDecision
-      ? {
-          action: operatorDecision.action,
-          ...(files
-            ? { manifest_sha256: operatorDecision.patchSha256 }
-            : { patch_sha256: operatorDecision.patchSha256 }),
-        }
-      : null,
-    // Effective mutable delivery/apply state from the SAME owner that projects
-    // summary.result.applyState (delivery_state overlay → work_product snapshot):
-    // an already-applied / reverted run gets a terminal eligibility disposition
-    // instead of a stale "rerun a fresh check" (QA-021).
-    applyState: controlRunResult(rec).applyState,
-    // D-16 work_state veto (INV-116): thread the model-attested work outcome
-    // (the canonical terminal facts) so the gate refuses a needs_input/
-    // incomplete winner even with a clean legacy review.
-    workState: terminal.outcomeFacts?.work_state ?? null,
-  };
-}
-
 /**
  * The GET /runs/:id projection of the apply gate: null when the run has no
  * patch artifact (nothing to apply); otherwise the derived verdict against
@@ -2933,13 +2687,6 @@ function applyGateInputFor(
 
 /** Readiness AND open questions of a plan run, from ONE read of the same
  * final/questions.json artifact (D17) — no plan-text re-parse, no double read. */
-function planProjectionFor(rec: DaemonRunRecord, mode: string | null | undefined) {
-  const empty = { readiness: null, questions: [] };
-  if (mode !== "plan" || !rec.runDir) return empty;
-  const a = safeReadStructuredArtifact(rec, "final/questions.json", PlanQuestionsArtifact);
-  return a ? { readiness: derivePlanReadiness(a), questions: a.questions } : empty;
-}
-
 /** Council membership + merge disclosure (INV-031), projected from
  * `council/membership.yaml`. Null for solo plans and non-plan runs — the plan
  * artifacts themselves are shape-identical, so this is purely additive. */
@@ -2949,21 +2696,6 @@ function councilFor(
 ): CouncilProjection | null {
   if (mode !== "plan" || !rec.runDir) return null;
   return safeReadStructuredArtifact(rec, "council/membership.yaml", CouncilProjection);
-}
-
-function applyEligibilityFor(
-  rec: DaemonRunRecord,
-  operatorDecision: ControlOperatorDecisionRecord | null,
-): ApplyEligibility | null {
-  const root = runExecutionRoot(rec, runRepoRoot(rec));
-  const { patch, unavailable } = exactPatch.resolveRunPatch(rec, runRepoRoot(rec));
-  const files = readFilesWorkProduct(rec);
-  if (!files && (patch === null || patch.trim() === "")) return null;
-  if (!root) return null;
-  return deriveApplyEligibility({
-    ...applyGateInputFor(rec, patch ?? "", root, operatorDecision),
-    exactPatchUnavailable: unavailable,
-  });
 }
 
 /** Compatibility projection for artifact-only CLI reads; the journal record is authority. */

@@ -1,6 +1,8 @@
+import { THREAD_HISTORY_COMMAND_SPECS } from "./thread-history-command-specs.js";
 import type { CliCommandSpec } from "./command-registry.js";
 
 export const RUN_OBSERVATION_COMMAND_SPECS: readonly CliCommandSpec[] = [
+  ...THREAD_HISTORY_COMMAND_SPECS,
   {
     id: "task-group-runs",
     positionalPatterns: [{ min: 1, max: 1 }],

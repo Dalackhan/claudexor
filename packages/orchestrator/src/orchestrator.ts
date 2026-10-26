@@ -291,7 +291,7 @@ import {
   unrecoveredToolErrors,
   webUnsatisfied,
 } from "./attemptTelemetry.js";
-import { newAttemptOutputMarkers } from "./attemptOutputMarkers.js";
+import { beginNativeRetry } from "./native-retry-telemetry.js";
 import * as delegateFailure from "./delegationFailure.js";
 import * as secretDiff from "./secretDiff.js";
 import {
@@ -2534,10 +2534,10 @@ export class Orchestrator {
     try {
       for (let nativeTry = 0; !signal?.aborted; nativeTry += 1) {
         currentCapture = undefined;
-        // A3 per-try isolation: neither output nor progress markers leak across tries.
+        // A3 per-try isolation: no output, progress marker or model proof crosses tries.
         if (nativeTry > 0) {
           answer = new secretDiff.CountedAnswerAssembly();
-          telemetry.outputMarkers = newAttemptOutputMarkers();
+          beginNativeRetry(telemetry);
         }
         const clearFileBackedContext = stageFileBackedContext(
           envelope.worktree_path,
@@ -6733,11 +6733,11 @@ export class Orchestrator {
       let poolExhausted: Error | null = null; // A5: typed pool-exhausted refusal
       try {
         for (let nativeTry = 0; !input.signal?.aborted; nativeTry += 1) {
-          // A3 per-try isolation (candidate-lane parity): neither a failed try's
-          // output nor its progress markers leak into the next try's evidence.
+          // A3 per-try isolation (candidate-lane parity): a failed try's output,
+          // progress markers and model proof never carry into the next try.
           if (nativeTry > 0) {
             answer = new secretDiff.CountedAnswerAssembly();
-            telemetry.outputMarkers = newAttemptOutputMarkers();
+            beginNativeRetry(telemetry);
           }
           const runSpec =
             nativeTry === 0

@@ -1,5 +1,17 @@
 # @claudexor/schema
 
+## 4.7.1
+
+### Patch Changes
+
+- 880081d: Record exact catalog proof for Cursor's display-label model. Attempts keep the raw `init.model` string in `observed_model` and, in `final/telemetry.yaml`, add `observed_model_catalog_match` (`label`, `id`, `source: account_catalog`, `profile_id`) when the account catalog that the same spawn's processing preparation read lists exactly one live row with that exact label, with no collision against a different row ID. The per-spawn model gate is the only author and strips any value it did not compute; the attempt keeps the proof of the event that set `observed_model`, never a later try's, the requested model's or a normalized match, and drops it when the Agent or Ask/report loop starts another native try or a later event reports another model, so proof from an earlier try cannot verify a later answer. A missing, empty, unmatched or ambiguous catalog leaves the field null. No vendor call is added, and admission, routing and `auth_route.model_mismatch` are unchanged. The `HarnessEvent` and `RunTelemetry` JSON Schemas gain the optional field.
+- 30f8195: Preserve optional caller-generated task group membership in accepted one-shot jobs and their receipts. Tagged receipts identify the accepting store, Exact Retry retains membership, and new continuations join a group only when explicitly requested. Add atomic engine-store schema version 3 expression indexes for retained group membership.
+
+  Recover original queued and bound job handles with the bounded `task-group-runs` CLI, `claudexor_task_group_runs` MCP tool and HTTP group page. Store/view/filter-bound cursors require explicit paging; compact member observations share the multi-run attention contract. Results cover retained rows in currently served generations, not a permanent roster. Discovery adds no launch, retry, resume, answer, permissions or budget authority.
+
+  Document durable caller receipts, exact keyed replay, separate interaction/result reads and storage downgrade precautions. Add deterministic built CLI/MCP/HTTP qualification stories for controller loss, queued binding, replay conflicts, store mismatch, archive visibility and daemon-crash interruption without autoresume. Manual host UI and real-vendor qualification remain separate.
+  - @claudexor/util@4.7.1
+
 ## 4.7.0
 
 ### Minor Changes

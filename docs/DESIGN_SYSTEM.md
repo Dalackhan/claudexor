@@ -316,10 +316,10 @@ every descendant `Text`. This is THE mechanism — do NOT sprinkle per-`Text`
 nothing opts in. The ONE documented exception is the CONVERSATION FEED (D-13 B,
 a performance scope): the scrolled column overrides the root global to
 `.textSelection(.disabled)` so the receipts / chips / status containers carry no
-selectable NSText backing, and the message / answer / transcript PROSE nodes
-re-enable it locally (a descendant `.enabled` wins over the ancestor
-`.disabled`) — selection is preserved exactly where users select, backing cost
-removed where they never do. Persistent banners (thread status line and equivalents)
+selectable NSText backing. Message, answer and transcript prose uses `ProseText`,
+a read-only TextKit 1 `NSTextView` per contiguous prose run. Tables retain a
+configurable per-cell selection residual; tool/error captions also retain their
+existing selectable fields. Native prose hosts stay out of the Tab loop. Persistent banners (thread status line and equivalents)
 additionally carry an explicit copy button (`doc.on.doc`, `.plain` style, "Copy
 message" help). An unselectable content surface is a defect, not a style choice.
 
@@ -438,7 +438,7 @@ frequency and volume are. The contracts:
   (mirroring the server's capped timeline); transcripts cap at 200 blocks with
   the same disclosure. Full logs stay in `events.jsonl` — the UI never
   pretends the capped view is complete.
-- **Bounded chat presentation.** The chat card is a progress SUMMARY: it lazily
+- **Bounded chat presentation.** The chat card is a progress SUMMARY: it eagerly
   renders only the newest 80 folded rows and at most 4,000 characters from one
   narration block, with an honest omitted count/link to raw evidence. The
   reducer's larger 200-block / text budgets protect evidence retention; they
@@ -459,9 +459,14 @@ frequency and volume are. The contracts:
 - **Bounded eager history; no lazy nesting (D-13 A).** Reopening long selectable
   chat text can still trigger a SwiftUI lazy-geometry layout/allocation loop on
   macOS 26 even without expanding a receipt. `ConversationHistoryStack` uses a
-  plain `VStack`, and `ConversationHistoryWindow` mounts at most 20 turns.
-  Older/Newer/Latest navigation keeps the entire stored history reachable;
-  an older page stays anchored while new turns arrive. The inline transcript
+  plain `VStack`, and `ConversationFeedState` mounts at most 20 turn IDs.
+  In-feed “Show earlier turns” and “Show later turns” move the window. One
+  “Jump to latest” sits beside the later control at its bottom edge, otherwise
+  in a solid raised capsule above the composer while reading. Its 64pt count
+  slot reports delivered arrivals only; it never shifts the label. Opens use
+  the bottom initial anchor; explicit moves use `ScrollPosition` by ID.
+  A reading window stays fixed when new turns arrive. The current adapter
+  slices in-memory detail; engine paging is separate work. The inline transcript
   remains a plain `VStack` with its existing reducer/presentation caps. No
   cumulative unbounded "load more", reversed copies, or thousand-row eager stacks.
 - **Per-card equatable containment (D-13 E).** `AppModel` is one coarse
@@ -477,8 +482,10 @@ frequency and volume are. The contracts:
 - **Selection backing is scoped in the feed (D-13 B).** `.textSelection` creates
   selectable NSText backing for every enabled descendant `Text`. The conversation
   feed OVERRIDES the window-root global (§2.9) to `.textSelection(.disabled)` and
-  re-enables it only on the message / answer / transcript prose nodes that users
-  actually select — the receipts, chips, and status containers carry no backing.
+  hosts prose in `ProseText`, with cached heights keyed by document ID, font
+  generation and EXACT width. Measuring writes no SwiftUI state. Unchanged
+  document IDs retain native storage and selection. Table cells and existing
+  selectable tool/error captions remain disclosed residuals.
 - **Per-row readable measure (D-13 C).** The 680pt conversation measure
   (`conversationMeasure()`) is applied PER ROW (each `TurnCard`), not as a
   double-frame around the whole history page; a sidebar drag / width change
@@ -738,6 +745,18 @@ frequency and volume are. The contracts:
     FINAL ANSWER bubble (loudest element — solid `surfaceRaisedHi` inset, 2 pt
     accent leading edge, W22 Show-more clamp), the persistent RECEIPT row, and
     the inline activity transcript. The always-live composer closes the feed.
+  - **Prose and history comparisons (PR #504 mockups):** wrapped fences are
+    monospaced paragraphs on solid `surface/code` text blocks with a two-character
+    continuation indent. Soft wrapping never changes copied source lines. The
+    alternative is a separate horizontal code scroller, which ends selection.
+    Tables offer selectable cells or non-selectable cells with “Copy table” and
+    help. Prompts offer the 1,200-character / 14-newline Show-more rule or full
+    display; beyond 32 KiB an explicit preview line and “Copy full prompt” expose
+    the bound. The prototype defaults are wrap / selectable cells / collapse,
+    pending the owner's visual decision. Images and tables split prose runs.
+    `ProseLinkGate` owns both AppKit delegate clicks and SwiftUI table links.
+    Loading and failed selected-thread states use “Loading saved history…” and
+    “Retry loading messages”, separately from the draft illustration.
   - **Thread workspace (trailing `.inspector`, glass chrome):** the panel's
     IDENTITY is the CURRENT THREAD's workspace (D42), not a per-run inspector.
     Three always-present tabs — **Changes / Artifacts / Evidence** — aggregate

@@ -407,7 +407,7 @@ final class AppModel {
         client = newClient
     }
 
-    init(client: GatewayClient? = nil, requestNotificationAuthorization: Bool = true,
+    init(client: GatewayClient? = nil, requestNotificationAuthorization: Bool = true, loadPersistedState: Bool = true,
          lifecycleOwner: LocalRuntimeLifecycleOwner = LocalRuntimeLifecycleOwner()) {
         self.localRuntimeLifecycleOwner = lifecycleOwner
         let sshManager = SSHConnectionManager()
@@ -420,11 +420,11 @@ final class AppModel {
         // Without this first-run authorization request, run-completion
         // notifications are silently dropped in the bundled .app forever.
         if requestNotificationAuthorization { Notifier.requestAuthIfPossible() }
+        guard loadPersistedState else { return }
         if let raw = UserDefaults.standard.string(forKey: "claudexor.appearance"),
            let saved = AppearanceMode(rawValue: raw) {
             appearance = saved
         }
-        // Dev/QA only: force an appearance for deterministic screenshots.
         switch ProcessInfo.processInfo.environment["CLAUDEXOR_DEBUG_APPEARANCE"] {
         case "light": appearance = .light
         case "dark": appearance = .dark

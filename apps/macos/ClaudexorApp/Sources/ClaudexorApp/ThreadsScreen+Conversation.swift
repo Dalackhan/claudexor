@@ -16,39 +16,6 @@ extension View {
 // screen stays under the readability ratchet. Same views, same behavior — the
 // empty-conversation placeholder and the native-session footer.
 extension ThreadsScreen {
-    func scrollToVisibleHistory(_ proxy: ScrollViewProxy, turns: [ThreadTurnInfo]) {
-        let range = historyWindow.visibleRange(totalCount: turns.count)
-        let visible = turns[range]
-        if historyWindow.isFollowingLatest, let last = visible.last {
-            proxy.scrollTo(last.id, anchor: .bottom)
-        } else if let first = visible.first {
-            proxy.scrollTo(first.id, anchor: .top)
-        }
-    }
-
-    @ViewBuilder
-    func conversationHistoryNavigation(totalCount: Int) -> some View {
-        if totalCount > historyWindow.pageSize || !historyWindow.isFollowingLatest {
-            let range = historyWindow.visibleRange(totalCount: totalCount)
-            HStack(spacing: Theme.Spacing.sm) {
-                Button("Older") { historyWindow.showOlder(totalCount: totalCount) }
-                    .disabled(!historyWindow.canShowOlder(totalCount: totalCount))
-                Text("Turns \(range.isEmpty ? 0 : range.lowerBound + 1)–\(range.upperBound) of \(totalCount)")
-                    .font(.caption).foregroundStyle(.secondary)
-                Button("Newer") { historyWindow.showNewer(totalCount: totalCount) }
-                    .disabled(!historyWindow.canShowNewer(totalCount: totalCount))
-                if !historyWindow.isFollowingLatest {
-                    Button("Latest") { historyWindow.showLatest() }
-                }
-                Spacer()
-            }
-            .buttonStyle(.borderless)
-            .padding(.horizontal, Theme.Spacing.lg)
-            .padding(.top, Theme.Spacing.sm)
-            .conversationMeasure()
-        }
-    }
-
     /// Project-aware intents need a project scope. A selected thread uses its own
     /// repo; a draft binds its first turn to the current project.
     var threadHasProject: Bool {

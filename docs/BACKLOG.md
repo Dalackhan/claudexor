@@ -404,8 +404,13 @@ deferred; they are recorded here now.
   and transport stops are done (in-run continuation ladder); the remaining
   context-exhaustion follow-ups (`prompt_too_long`, codex typed context frames,
   a second continuation) stay deferred.
-- D-13 step D: transcript List migration for pathologically long threads —
-  A/B/C/E sufficed at owner dogfood, List reserved for pathological threads.
+- D-13 step D: native prose and bounded eager history verification —
+  PR #504 mockups use TextKit 1 prose and an eager window of at most 20 turns.
+  Engine paging, owner variant decisions and macOS 26.5 stress verification
+  remain. List and LazyVStack are not the history strategy.
+- Conversation Find: a future feed-level NSTextFinderClient can search mounted
+  prose runs; searching unmounted history requires an engine history contract.
+  Table selection remains a configurable per-cell residual in the mockups.
 
 ## v3.1.0 dogfood finding (2026-07-23)
 

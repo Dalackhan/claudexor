@@ -15,6 +15,7 @@ import ClaudexorKit
 
 struct TurnCard: View {
     @Environment(AppModel.self) private var model
+    @Environment(ConversationPresentation.self) private var presentation: ConversationPresentation?
     let turn: ThreadTurnInfo
     let target: TurnStartTarget
     /// Current per-turn routing choices shared with plan-card actions. Strategy,
@@ -44,11 +45,25 @@ struct TurnCard: View {
     @State private var applied = false
     /// nil => follow the run state (expanded while active, collapsed when done);
     /// a user toggle pins it.
-    @State private var transcriptExpanded: Bool?
+    @State private var localTranscriptExpanded: Bool?
+    private var transcriptExpanded: Bool? {
+        get { presentation?.transcripts[turn.id] ?? localTranscriptExpanded }
+        nonmutating set {
+            if let presentation { presentation.transcripts[turn.id] = newValue }
+            else { localTranscriptExpanded = newValue }
+        }
+    }
     /// True while an "Implement plan" turn is being sent.
     @State private var implementingPlan = false
     /// W22: a LONG final answer starts height-collapsed with a Show more toggle.
-    @State private var answerExpanded = false
+    @State private var localAnswerExpanded = false
+    private var answerExpanded: Bool {
+        get { presentation?.expanded["answer:" + turn.id] ?? (presentation?.latestTurnID == turn.id || localAnswerExpanded) }
+        nonmutating set {
+            if let presentation { presentation.expanded["answer:" + turn.id] = newValue }
+            else { localAnswerExpanded = newValue }
+        }
+    }
 
     private var run: TaskRun? {
         turn.runId.flatMap { model.task($0, at: target.locationID) }
@@ -91,31 +106,10 @@ struct TurnCard: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             // W-C5: the user's message is a right-aligned BUBBLE above the
             // assistant card — the feed reads as a conversation.
-            HStack(alignment: .top) {
-                Spacer(minLength: 48)
-                // Bounded before layout (sol #16): a pasted megabyte prompt must
-                // not lay out unbounded on the main thread.
-                Text(turn.prompt.count > 8_000 ? String(turn.prompt.prefix(8_000)) + "…" : turn.prompt)
-                    .font(.body)
-                    // D-12 (owner dogfood): the user bubble is a clearly accent-
-                    // TINTED steel-blue fill with PRIMARY text — the sender/receiver
-                    // convention (tinted sender vs the assistant's NEUTRAL answer
-                    // bubble). Not a saturated accent slab: that outshouted the
-                    // answer and broke light-theme contrast. No stroke; identity =
-                    // right alignment + the blue tint. The final answer bubble
-                    // stays the loudest element in the feed.
-                    .foregroundStyle(.primary)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, Theme.Spacing.md)
-                    .padding(.vertical, Theme.Spacing.sm)
-                    // D-12 round 2: a tinted frosted material so the bubble reads as
-                    // genuinely translucent (it sits over the behind-window desktop
-                    // frost — rich content the material can blur) — solid under
-                    // Reduce Transparency.
-                    .bubbleFill(tint: Theme.bubbleUser, radius: Theme.Radius.bubble)
-            }
+            PromptBubble(prompt: turn.prompt, turnID: turn.id)
             assistantSection
         }
+        .environment(\.proseMessageID, turn.id)
     }
 
     /// The assistant side of the turn — its own card surface under the user
@@ -283,7 +277,7 @@ struct TurnCard: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 // Collapsed = a bounded PREFIX (the W23 hang class): frame+clip
                 // alone still lays out the full text on the main thread.
-                MarkdownOutputView(markdown: long && !answerExpanded ? String(answer.prefix(4_000)) : answer,
+                MarkdownOutputView(markdown: long && !answerExpanded ? String(answer.prefix(1_200)) : answer,
                                    fileScopeRoots: Self.fileScopeRoots(
                                        executionRoot: executionRoot, runDir: run.runDir),
                                    remoteFileScope: Self.remoteFileScope(run, executionRoot: executionRoot),
@@ -292,7 +286,9 @@ struct TurnCard: View {
                     .clipped()
                 if long {
                     Button(answerExpanded ? "Show less" : "Show more") { answerExpanded.toggle() }
-                        .buttonStyle(.borderless).font(.caption)
+                        .buttonStyle(.borderless).font(.caption).foregroundStyle(Theme.accent)
+                        .help(answerExpanded ? "Show only the start of this message." : "Show the rest of this message.")
+                        .accessibilityLabel(answerExpanded ? "Show less of answer" : "Show more of answer")
                 }
             }
             .padding(Theme.Spacing.md)

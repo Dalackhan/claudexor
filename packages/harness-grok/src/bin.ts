@@ -21,7 +21,11 @@ export function resolveGrokBin(
 
 export async function detectGrokVersion(): Promise<string | null> {
   try {
-    const result = await runCapture(resolveGrokBin(), ["--version"], { timeoutMs: 10_000 });
+    // The vendor updater switch login and runs already set.
+    const result = await runCapture(resolveGrokBin(), ["--version"], {
+      timeoutMs: 10_000,
+      env: { GROK_DISABLE_AUTOUPDATER: "1" },
+    });
     return result.stdout.match(/\b\d+\.\d+\.\d+(?:[-+][\w.-]+)?\b/)?.[0] ?? null;
   } catch {
     return null;

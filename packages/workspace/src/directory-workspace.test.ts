@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { WorkspaceManager } from "./manager.js";
 import { applyWorkspaceFiles, readWorkspaceFilesManifest } from "./files-apply.js";
 import { readWorkspaceFile } from "./files-io.js";
+import { git } from "./git.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -230,5 +231,99 @@ describe("ordinary directory workspaces", () => {
     expect(captured.manifest.entries).toEqual([
       { path: "unselected.txt", before: "unknown", after: null },
     ]);
+  });
+});
+
+// A vendor state root (auth, config, sessions) is a credential-store path for
+// the shared sensitive-resource policy: selected for capture it is refused,
+// never copied or published. A scope that leaves it out keeps working.
+describe("vendor state directories in a selected folder", () => {
+  it.each([".grok", ".claude"])(
+    "refuses a selected %s directory and keeps a scope that excludes it working",
+    async (dir) => {
+      const f = await fixture();
+      await mkdir(join(f.source, dir, "sessions"), { recursive: true });
+      await writeFile(join(f.source, dir, "config.toml"), "[cli]\n");
+      await writeFile(join(f.source, dir, "sessions", "s.jsonl"), '{"role":"user"}\n');
+      // Isolated copy of the whole folder: refused while the copy is prepared.
+      await expect(
+        f.manager.create({
+          taskId: "t",
+          attemptId: "copy",
+          workspaceKind: "directory",
+          scopePaths: ["."],
+        }),
+      ).rejects.toThrow("Selected file uses a credential-resource path; no artifact was published");
+      // Writable in-place whole-folder work: refused at capture, nothing published.
+      const live = await f.manager.create({
+        taskId: "t",
+        attemptId: "live",
+        workspaceKind: "directory",
+        inPlace: true,
+        scopePaths: ["."],
+      });
+      await writeFile(join(f.source, "src", "a.txt"), "live\r\n");
+      await expect(f.manager.captureFiles(live, join(f.root, "run-live"))).rejects.toThrow(
+        "no artifact was published",
+      );
+      await expect(readdir(join(f.root, "run-live", "final", "files"))).rejects.toThrow();
+      // Surviving paths: copied and in-place scopes that leave the directory out.
+      const copied = await f.manager.create({
+        taskId: "t",
+        attemptId: "scoped",
+        workspaceKind: "directory",
+        scopePaths: ["src", "unselected.txt"],
+      });
+      expect((await readdir(copied.worktree_path)).sort()).toEqual(["src", "unselected.txt"]);
+      await writeFile(join(copied.worktree_path, "src", "a.txt"), "after\r\n");
+      const captured = await f.manager.captureFiles(copied, join(f.root, "run-scoped"));
+      expect(captured.changedPaths).toEqual(["src/a.txt"]);
+      const direct = await f.manager.create({
+        taskId: "t",
+        attemptId: "live-scoped",
+        workspaceKind: "directory",
+        inPlace: true,
+        scopePaths: ["src"],
+      });
+      await writeFile(join(f.source, "src", "a.txt"), "direct\r\n");
+      const directCapture = await f.manager.captureFiles(direct, join(f.root, "run-direct"));
+      expect(directCapture.changedPaths).toEqual(["src/a.txt"]);
+      for (const manifest of [captured.manifest, directCapture.manifest])
+        expect(manifest.entries.some((entry) => entry.path.startsWith(dir))).toBe(false);
+      expect(await readFile(join(f.source, dir, "config.toml"), "utf8")).toBe("[cli]\n");
+    },
+  );
+
+  it("copies an ordinary dot-directory in the same whole-folder scope (control)", async () => {
+    const f = await fixture();
+    await mkdir(join(f.source, ".github"));
+    await writeFile(join(f.source, ".github", "config.toml"), "[cli]\n");
+    const env = await f.manager.create({
+      taskId: "t",
+      attemptId: "a",
+      workspaceKind: "directory",
+      scopePaths: ["."],
+    });
+    expect(await readFile(join(env.worktree_path, ".github", "config.toml"), "utf8")).toBe(
+      "[cli]\n",
+    );
+    expect((await f.manager.captureFiles(env, f.run)).noChanges).toBe(true);
+  });
+
+  it("does not refuse a Git-backed run over a tracked .grok directory (control)", async () => {
+    const f = await fixture();
+    await mkdir(join(f.source, ".grok"));
+    await writeFile(join(f.source, ".grok", "config.toml"), "[cli]\n");
+    for (const args of [
+      ["init", "-b", "main"],
+      ["add", "-A"],
+      ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "base"],
+    ])
+      await git(f.source, args);
+    const manager = new WorkspaceManager(f.source, { runtimeRoot: f.runtime });
+    const env = await manager.create({ taskId: "t", attemptId: "git", baseRef: "HEAD" });
+    await writeFile(join(env.worktree_path, "src", "a.txt"), "after\n");
+    expect(await manager.diff(env)).toContain("src/a.txt");
+    await manager.dispose(env);
   });
 });

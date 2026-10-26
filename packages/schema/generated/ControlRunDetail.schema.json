@@ -806,9 +806,38 @@
                             "installed_version"
                           ],
                           "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "credential_source_unconfirmed"
+                            },
+                            "native_code": {
+                              "type": "string",
+                              "const": "grok_credential_source_unconfirmed"
+                            },
+                            "source": {
+                              "type": "string",
+                              "const": "grok_init"
+                            },
+                            "reported_source": {
+                              "type": "string",
+                              "maxLength": 80,
+                              "description": "Redacted credential source the vendor's startup frame reported."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "native_code",
+                            "source",
+                            "reported_source"
+                          ],
+                          "additionalProperties": false
                         }
                       ],
-                      "description": "Vendor-attested request refusal that another account cannot repair; input and executable causes carry their own evidence."
+                      "description": "Vendor-attested request refusal that stops retries and account rotation on its harness; input, executable and credential-source causes carry their own evidence."
                     },
                     "captureFailure": {
                       "type": "object",
@@ -908,6 +937,7 @@
                             "credential_pool_exhausted",
                             "input_too_large",
                             "vendor_cli_too_old",
+                            "credential_source_unconfirmed",
                             "delegated_home_unavailable",
                             "delegated_confinement_unavailable",
                             "delegated_evidence_incomplete",

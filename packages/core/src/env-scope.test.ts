@@ -63,10 +63,11 @@ describe("composeBaseEnv (env_inheritance)", () => {
 
   it("mirror_native copies the whole parent env", () => {
     const env = composeBaseEnv("mirror_native", source, NO_RUNNER);
-    expect(env.PATH?.split(":").slice(0, 4)).toEqual([
+    expect(env.PATH?.split(":").slice(0, 5)).toEqual([
       "/home/x/.claudexor/node/bin",
       "/home/x/.local/bin",
       "/home/x/.cursor/bin",
+      "/home/x/.grok/bin",
       "/home/x/.npm-global/bin",
     ]);
     expect(env.PATH?.split(":")).toContain("/usr/bin");
@@ -76,10 +77,11 @@ describe("composeBaseEnv (env_inheritance)", () => {
 
   it("clean keeps only the minimal allowlist (agent isolation): no arbitrary or provider vars leak", () => {
     const env = composeBaseEnv("clean", source, NO_RUNNER);
-    expect(env.PATH?.split(":").slice(0, 4)).toEqual([
+    expect(env.PATH?.split(":").slice(0, 5)).toEqual([
       "/home/x/.claudexor/node/bin",
       "/home/x/.local/bin",
       "/home/x/.cursor/bin",
+      "/home/x/.grok/bin",
       "/home/x/.npm-global/bin",
     ]);
     expect(env.PATH?.split(":")).toContain("/usr/bin");

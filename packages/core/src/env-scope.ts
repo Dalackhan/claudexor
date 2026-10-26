@@ -70,6 +70,15 @@ export const PROVIDER_SECRET_ENV: readonly string[] = [
   "GROK_XAI_API_BASE_URL",
   "GROK_MODELS_BASE_URL",
   "GROK_MODELS_LIST_URL",
+  // Grok login selectors: another credential, login store, deployment key,
+  // token helper or identity provider would replace a named profile's own
+  // grok.com login (documented in the Grok Build user guide).
+  "GROK_AUTH",
+  "GROK_AUTH_PATH",
+  "GROK_DEPLOYMENT_KEY",
+  "GROK_AUTH_PROVIDER_COMMAND",
+  "GROK_OIDC_ISSUER",
+  "GROK_OIDC_CLIENT_ID",
   "OPENROUTER_API_KEY",
   "OPENROUTER_BASE_URL",
   "CURSOR_API_KEY",

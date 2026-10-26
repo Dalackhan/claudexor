@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -10,7 +10,7 @@ import {
 import { HarnessRunSpec, type CredentialProfile, type HarnessEvent } from "@claudexor/schema";
 import { userConfigDir } from "@claudexor/util";
 import { createGrokAdapter } from "./index.js";
-import { grokProfileEnv, grokLoginPresent, grokRouteEnv } from "./profile.js";
+import { grokProfileEnv, grokRouteEnv } from "./profile.js";
 import { parseGrokModels } from "./models.js";
 import { resolveGrokBin } from "./bin.js";
 
@@ -43,6 +43,9 @@ const collect = async (events: AsyncIterable<HarnessEvent>) => {
 describe("Grok adapter routes", () => {
   it("transports a large prompt exactly and removes its private file after failure", async () => {
     const prompt = "Unicode: Привет\r\n`$()\n" + "x".repeat(100_000);
+    // System-level rules keep their own native channel and exact bytes; the
+    // task file carries only the task (Grok documents no rules-file form).
+    const instructions = "  Rules: Привет\r\nkeep `$()` literal\n";
     let path = "";
     const adapter = createGrokAdapter({
       probeLogin: ready,
@@ -50,10 +53,13 @@ describe("Grok adapter routes", () => {
         path = opts.args[opts.args.indexOf("--prompt-file") + 1]!;
         expect(readFileSync(path, "utf8")).toBe(prompt);
         expect(opts.args).not.toContain(prompt);
+        expect(opts.args[opts.args.indexOf("--rules") + 1]).toBe(instructions);
         throw new Error("native failure");
       },
     });
-    await expect(collect(adapter.run(spec({ prompt })))).rejects.toThrow("native failure");
+    await expect(collect(adapter.run(spec({ prompt, instructions })))).rejects.toThrow(
+      "native failure",
+    );
     expect(existsSync(path)).toBe(false);
   });
 
@@ -107,6 +113,14 @@ describe("Grok adapter routes", () => {
       "GROK_XAI_API_BASE_URL",
       "GROK_MODELS_BASE_URL",
       "GROK_MODELS_LIST_URL",
+      "GROK_AUTH",
+      "GROK_AUTH_PATH",
+      "GROK_DEPLOYMENT_KEY",
+      "GROK_AUTH_PROVIDER_COMMAND",
+      "GROK_OIDC_ISSUER",
+      "GROK_OIDC_CLIENT_ID",
+      "GROK_OIDC_SCOPES",
+      "GROK_OAUTH2_TOKEN_URL",
       "OPENAI_API_KEY",
     ];
     const env = grokProfileEnv(profile.isolation_locator!, {
@@ -127,6 +141,29 @@ describe("Grok adapter routes", () => {
     expect(env.GROK_CONFIG).toBeNull();
     expect(env.GROK_CONFIG_PATH).toBeNull();
     expect(() => grokProfileEnv("relative")).toThrow();
+  });
+
+  it("removes inherited login selectors from the engine environment too", () => {
+    const inherited = ["GROK_AUTH_PATH", "GROK_OIDC_AUDIENCE", "GROK_OAUTH2_CLIENT_ID"];
+    const saved = Object.fromEntries(inherited.map((key) => [key, process.env[key]]));
+    for (const key of inherited) process.env[key] = "/elsewhere";
+    try {
+      const child = composeSpawnEnv("mirror_native", grokProfileEnv(profile.isolation_locator!));
+      for (const key of inherited) expect(child[key], key).toBeUndefined();
+      // Unrelated Grok settings still pass through.
+      expect(
+        composeSpawnEnv(
+          "mirror_native",
+          grokProfileEnv(profile.isolation_locator!, {
+            GROK_RESPECT_GITIGNORE: "1",
+          }),
+        ).GROK_RESPECT_GITIGNORE,
+      ).toBe("1");
+    } finally {
+      for (const key of inherited)
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+    }
   });
 
   it("refuses missing profiles without probing or spawning, even with an ambient Grok home", async () => {
@@ -158,15 +195,6 @@ describe("Grok adapter routes", () => {
     ).toEqual([]);
     expect(probeLogin).not.toHaveBeenCalled();
     expect(runCli).not.toHaveBeenCalled();
-  });
-
-  it("treats malformed/oversized auth as unavailable without exporting parse errors", () => {
-    const home = join(profile.isolation_locator!, ".grok");
-    mkdirSync(home, { recursive: true });
-    for (const content of ['{"secret":"do-not-show"', "[]", "x".repeat(65537)]) {
-      writeFileSync(join(home, "auth.json"), content);
-      expect(grokLoginPresent({ GROK_HOME: home })).toBe(false);
-    }
   });
 
   it("refuses a wrong credential transport before probing or spawning", async () => {

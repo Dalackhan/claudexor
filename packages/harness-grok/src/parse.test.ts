@@ -65,6 +65,24 @@ describe("Grok finality and vendor failures", () => {
     },
   );
 
+  // Grok documents no authentication error code, and its guide says the CLI
+  // itself refreshes and retries on a 401; neither text nor a code merely
+  // containing "auth" is a verdict about the account.
+  it.each([
+    "HTTP 401 Unauthorized",
+    "407 Proxy Authentication Required",
+    "error: unauthenticated",
+    { code: "auth_proxy_unavailable", message: "upstream failed" },
+    { code: "unauthorized", message: "rejected" },
+    { type: "login_required", message: "sign in again" },
+  ])("keeps %j an untyped failure, never an authentication verdict", (failure) => {
+    const event = grokFailure(failure, "s");
+    expect(event.status).toBeUndefined();
+    expect(event.rate_limit).toBeUndefined();
+    expect(event.error).not.toBe("");
+    validateTypedStream([event]);
+  });
+
   it("types stderr-only quota refusals but never quota words in model prose", () => {
     expect(grokFailure("HTTP 429: Too many requests", "s").rate_limit).toBeTruthy();
     const p = createGrokParser();
@@ -144,6 +162,90 @@ describe("Grok finality and vendor failures", () => {
     expect(events).toHaveLength(1);
     expect(events[0]?.type).toBe("status");
     validateTypedStream(events);
+  });
+
+  it("keeps a later result's usage after a vendor error frame without inventing an answer", () => {
+    const p = createGrokParser();
+    const failure = p.parseEvent(
+      { type: "error", error: { code: "quota_exceeded", message: "limit reached" } },
+      "s",
+    )!;
+    const late = {
+      type: "result",
+      subtype: "success",
+      result: "late narration",
+      usage: { input_tokens: 7, output_tokens: 2, cache_read_input_tokens: 1 },
+    };
+    const events = [...failure, ...p.parseEvent(late, "s")!];
+    expect(events.filter((event) => event.type === "error")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "usage")).toMatchObject([
+      { usage: { input_tokens: 7, output_tokens: 2, cached_input_tokens: 1 } },
+    ]);
+    expect(events.some((event) => event.final)).toBe(false);
+    expect(p.parseEvent(late, "s")).toEqual([]);
+    expect(p.hasTerminal()).toBe(true);
+    validateTypedStream(events);
+  });
+
+  it("reports disjoint input buckets with their complete total", () => {
+    const parser = createGrokParser();
+    const usage = readFileSync(new URL("../fixtures/write.jsonl", import.meta.url), "utf8")
+      .trim()
+      .split("\n")
+      .flatMap((line) => parser.parseEvent(JSON.parse(line), "s") ?? [])
+      .find((event) => event.type === "usage")?.usage;
+    // Recorded 1.0.67: 9856 cache-read tokens beside 6086 uncached input tokens.
+    expect(usage).toMatchObject({ input_tokens: 6086, cached_input_tokens: 9856 });
+    expect(usage?.input_token_usage).toEqual({
+      total_tokens: 6086 + 9856,
+      cache_read_tokens: 9856,
+      cache_write_tokens: 0,
+    });
+    const written = createGrokParser()
+      .parseEvent(
+        {
+          type: "result",
+          subtype: "success",
+          result: "ok",
+          usage: {
+            input_tokens: 10,
+            output_tokens: 1,
+            cache_read_input_tokens: 5,
+            cache_creation_input_tokens: 3,
+          },
+        },
+        "s",
+      )
+      ?.find((event) => event.type === "usage")?.usage;
+    // Bundled 1.0.70 guide: the three input buckets are disjoint.
+    expect(written?.input_token_usage).toEqual({
+      total_tokens: 18,
+      cache_read_tokens: 5,
+      cache_write_tokens: 3,
+    });
+  });
+
+  it("reports an all-zero usage record as unknown, not as free work", () => {
+    const zero = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0 };
+    const events = createGrokParser().parseEvent(
+      {
+        type: "result",
+        subtype: "success",
+        result: "answer",
+        usage: { ...zero, cache_creation_input_tokens: 0 },
+      },
+      "s",
+    )!;
+    expect(events.map((event) => event.type)).toEqual(["message"]);
+    // A partly measured record is still reported.
+    expect(
+      createGrokParser()
+        .parseEvent(
+          { type: "result", subtype: "success", result: "a", usage: { ...zero, output_tokens: 4 } },
+          "s",
+        )
+        ?.find((event) => event.type === "usage")?.usage,
+    ).toMatchObject({ input_tokens: 0, output_tokens: 4 });
   });
 
   it("handles unknown/malformed events without throwing", () => {

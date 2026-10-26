@@ -54,6 +54,31 @@ describe("Cursor config-dir credential profiles (INV-135)", () => {
     expect(() => canonicalCursorProfileHome(join(tmpdir(), "outside"))).toThrow(/must live under/);
   });
 
+  it("names the profile HOME a native profile child receives for applied evidence", () => {
+    const adapter = createCursorAdapter();
+    const live = HarnessRunSpec.parse({
+      session_id: "s",
+      intent: "explain",
+      cwd: root,
+      prompt: "p",
+      credential_profile: profile(),
+      env: { HOME: "/engine/lane/home" },
+    });
+    expect(adapter.childHome?.(live)).toBe(home);
+    // An API-key row keeps the engine HOME: no profile HOME is substituted.
+    expect(
+      adapter.childHome?.({
+        ...live,
+        credential_profile: profile({
+          credential_kind: "api_key",
+          isolation_locator: null,
+          secret_ref: "cursor:valentine",
+        }),
+      }),
+    ).toBeNull();
+    expect(adapter.childHome?.({ ...live, credential_profile: null })).toBeNull();
+  });
+
   it("separates profile auth paths from lane config/session paths", () => {
     const paths = cursorProfilePathEnv(home, "/tmp/cursor-lane");
     expect(paths).toMatchObject({

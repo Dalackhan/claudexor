@@ -6,7 +6,12 @@ const object = (value: unknown): ObjectValue =>
   value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
 const string = (value: unknown): string => (typeof value === "string" ? value : "");
 
-/** Only vendor failure channels call this classifier; assistant prose never does. */
+/** Only vendor failure channels call this classifier; assistant prose never does.
+ * It types quota and rate limits only. Grok documents no authentication error
+ * code and refreshes and retries a 401 itself, and a proxy or backend can
+ * print the same words, so no text or code becomes an authentication verdict:
+ * such a failure stays untyped and never marks the account unusable. Login
+ * readiness belongs to the pre-run `grok models` probe. */
 export function grokFailure(value: unknown, sessionId: string): HarnessEvent {
   const data = object(value);
   const message = string(value) || string(data.message) || string(data.error) || "Grok CLI failed";
@@ -36,20 +41,59 @@ export function grokFailure(value: unknown, sessionId: string): HarnessEvent {
         : null;
     event.rate_limit = { resets_at: resets, retry_delay_ms: delay, applies_to_models: null };
     event.status = { kind: "api_retry", error_category: "rate_limit" };
-  } else if (
-    /auth|unauthorized|login_required/.test(code) ||
-    /\b(?:unauthenticated|unauthorized|authentication required)\b/i.test(message)
-  ) {
-    event.status = { kind: "api_retry", error_category: "authentication_failed" };
   }
   return event;
 }
 
+const tokens = (value: unknown): number | null =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+
+/** One aggregate usage record from a result frame. The bundled 1.0.70 guide
+ * (`14-headless-mode.md`) defines three disjoint input buckets, `input_tokens`
+ * (uncached), cache reads and cache creation, so their sum is the complete
+ * input total; recorded 1.0.67 results agree (9856 cached beside 6086 input).
+ * Grok emits a bucket it cannot account for as 0, so an all-zero record is
+ * unknown, not free, and is not reported as usage. */
+function resultUsage(raw: unknown): NonNullable<HarnessEvent["usage"]> | null {
+  const source = object(raw);
+  const buckets = [
+    source.input_tokens,
+    source.output_tokens,
+    source.cache_read_input_tokens,
+    source.cache_creation_input_tokens,
+  ].filter((value): value is number => typeof value === "number");
+  if (buckets.length > 0 && buckets.every((value) => value === 0)) return null;
+  const usage: NonNullable<HarnessEvent["usage"]> = {};
+  for (const [native, normalized] of [
+    ["input_tokens", "input_tokens"],
+    ["output_tokens", "output_tokens"],
+    ["cache_read_input_tokens", "cached_input_tokens"],
+  ] as const) {
+    const n = source[native];
+    if (typeof n === "number" && Number.isFinite(n) && n >= 0) usage[normalized] = n;
+  }
+  const input = tokens(source.input_tokens);
+  const read = tokens(source.cache_read_input_tokens);
+  const write = tokens(source.cache_creation_input_tokens);
+  if (read !== null || write !== null)
+    usage.input_token_usage = {
+      total_tokens: input !== null && read !== null && write !== null ? input + read + write : null,
+      cache_read_tokens: read,
+      cache_write_tokens: write,
+    };
+  // OAuth cost is vendor accounting, not a charge to the user's API key.
+  // Tokens remain useful without manufacturing a subscription price.
+  return Object.keys(usage).length ? usage : null;
+}
+
 /** Messages JSON is Claude-shaped, but usage/finality belong to Grok's result,
- * never to intermediate assistant messages or tool-result text. */
+ * never to intermediate assistant messages or tool-result text. A top-level
+ * error frame fails the turn; a result that still follows contributes only its
+ * aggregate usage, so spend is counted once and no answer is manufactured. */
 export function createGrokParser() {
   const tools = new Map<string, ToolRef>();
-  let terminal = false;
+  let failed = false;
+  let resulted = false;
   const parseEvent = (raw: unknown, sessionId: string): HarnessEvent[] | null => {
     const obj = object(raw);
     const base = { session_id: sessionId, ts: nowIso() };
@@ -138,7 +182,7 @@ export function createGrokParser() {
       return events;
     }
     if (obj.type === "error") {
-      terminal = true;
+      failed = true;
       return [
         grokFailure(
           {
@@ -151,10 +195,12 @@ export function createGrokParser() {
       ];
     }
     if (obj.type === "result" || (obj.type === undefined && typeof obj.response === "string")) {
-      if (terminal) return [];
-      terminal = true;
+      if (resulted) return [];
+      resulted = true;
       const events: HarnessEvent[] = [];
-      if (obj.is_error === true || (obj.subtype && obj.subtype !== "success")) {
+      // After a vendor error frame the turn has already failed: keep the
+      // spend, never a late answer or a second failure.
+      if (!failed && (obj.is_error === true || (obj.subtype && obj.subtype !== "success"))) {
         const detail = Array.isArray(obj.errors)
           ? obj.errors.filter((v: unknown) => typeof v === "string").join("; ")
           : "";
@@ -172,7 +218,7 @@ export function createGrokParser() {
             sessionId,
           ),
         );
-      } else {
+      } else if (!failed) {
         const text =
           obj.structured_output != null
             ? JSON.stringify(obj.structured_output)
@@ -183,23 +229,12 @@ export function createGrokParser() {
             : grokFailure("Grok returned an empty final response", sessionId),
         );
       }
-      const usage: NonNullable<HarnessEvent["usage"]> = {};
-      const source = object(obj.usage);
-      for (const [native, normalized] of [
-        ["input_tokens", "input_tokens"],
-        ["output_tokens", "output_tokens"],
-        ["cache_read_input_tokens", "cached_input_tokens"],
-      ] as const) {
-        const n = source[native];
-        if (typeof n === "number" && Number.isFinite(n) && n >= 0) usage[normalized] = n;
-      }
-      // OAuth cost is vendor accounting, not a charge to the user's API key.
-      // Tokens remain useful without manufacturing a subscription price.
-      if (Object.keys(usage).length) events.push({ ...base, type: "usage", usage });
+      const usage = resultUsage(obj.usage);
+      if (usage) events.push({ ...base, type: "usage", usage });
       return events;
     }
     if (obj.type === "stream_event") return [];
     return null;
   };
-  return { parseEvent, hasTerminal: () => terminal };
+  return { parseEvent, hasTerminal: () => failed || resulted };
 }

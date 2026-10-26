@@ -25,8 +25,10 @@ export function grokAccessArgs(
   ];
   if (spec.access === "workspace_write") {
     const root = realpathSync(spec.cwd).replace(/\\/g, "/").replace(/\/$/, "");
-    // Glob-bearing roots cannot be represented by a literal permission rule.
-    if (/[\[\]*?()]/.test(root))
+    // Glob-bearing roots cannot be represented by a literal permission rule,
+    // and a comma splits one `--allow` value into several rules (vendor guide);
+    // no escape for it is documented.
+    if (/[\[\]*?(),]/.test(root))
       throw new AccessProfileIncompatibleError(
         "Grok workspace path contains permission-rule metacharacters",
       );

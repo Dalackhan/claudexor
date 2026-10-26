@@ -29,6 +29,9 @@ export const RunFailureCode = z
     "credential_pool_exhausted",
     "input_too_large",
     "vendor_cli_too_old",
+    /* The vendor's own startup frame reported a credential source other than
+     * the session login a subscription route requires (Grok `apiKeySource`). */
+    "credential_source_unconfirmed",
     /* Active scoped-HOME/evidence refusals plus the historical confinement
      * decoder code. Attempt-loop failures must be listed here or
      * `declaredFailure` drops them to `code: null` and the terminal states less

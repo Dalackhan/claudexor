@@ -1,4 +1,3 @@
-import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { canonicalIsolationLocator, providerScrubEnv } from "@claudexor/core";
 import type { CredentialProfile } from "@claudexor/schema";
@@ -10,6 +9,18 @@ const MANAGED_ENV: Env = {
   GROK_CONFIG_PATH: null,
 };
 
+/** The guide documents OIDC and OAuth2 login settings by family; members not
+ * named in the shared provider scrub are removed by prefix, from the engine
+ * environment and from the run's own env. */
+const LOGIN_SELECTOR_FAMILIES = ["GROK_OIDC_", "GROK_OAUTH2_"];
+function loginSelectorScrub(...sources: Env[]): Env {
+  const out: Env = {};
+  for (const source of sources)
+    for (const name of Object.keys(source))
+      if (LOGIN_SELECTOR_FAMILIES.some((family) => name.startsWith(family))) out[name] = null;
+  return out;
+}
+
 export const GROK_PROFILE_REQUIRED =
   "Grok has no default credential store; select a named profile (--profile <id>): " +
   "claudexor profiles add grok <id> and claudexor profiles login grok <id>";
@@ -18,13 +29,16 @@ export function canonicalGrokProfileHome(locator: string): string {
   return canonicalIsolationLocator(locator, "credential profile Grok HOME");
 }
 
-/** HOME and GROK_HOME must agree for login, models, and execution. */
+/** HOME and GROK_HOME must agree for login, models, and execution. The
+ * profile HOME is also where Grok keeps its sessions, so one account's native
+ * state is shared by every thread that runs on it. */
 export function grokProfileEnv(locator: string, env: Env = {}): Env {
   if (!locator) throw new Error(GROK_PROFILE_REQUIRED);
   const home = canonicalGrokProfileHome(locator);
   return {
     ...env,
     ...providerScrubEnv(),
+    ...loginSelectorScrub(process.env, env),
     ...MANAGED_ENV,
     HOME: home,
     USERPROFILE: home,
@@ -39,27 +53,4 @@ export function grokRouteEnv(profile?: CredentialProfile | null, env: Env = {}):
     return grokProfileEnv(profile.isolation_locator ?? "", env);
   }
   throw new Error(GROK_PROFILE_REQUIRED);
-}
-
-/** File presence is diagnostic only; `grok models` owns authentication proof.
- * Do not export credentials, JSON parse errors, or stale expiry guesses. The
- * official CLI owns renewal, including expired OIDC sessions. */
-export function grokLoginPresent(env: Env): boolean {
-  try {
-    const path = join(env.GROK_HOME!, "auth.json");
-    if (statSync(path).size > 64 * 1024) return false;
-    const data: unknown = JSON.parse(readFileSync(path, "utf8"));
-    if (!data || typeof data !== "object" || Array.isArray(data)) return false;
-    return [
-      "https://auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828",
-      "https://accounts.x.ai/sign-in",
-    ].some((scope) => {
-      const entry = (data as Record<string, { key?: unknown }>)[scope];
-      return (
-        typeof entry?.key === "string" && entry.key.trim().length > 0 && !/[\r\n]/.test(entry.key)
-      );
-    });
-  } catch {
-    return false;
-  }
 }

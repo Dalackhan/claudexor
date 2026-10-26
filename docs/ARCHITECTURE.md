@@ -3272,7 +3272,9 @@ history projection/store pin before validating the new projection.
 The old last-five hydration and per-card eligibility hydrators are removed. A
 mounted parent whose page projects missing Delegate children authorizes one
 addressed parent-detail load per mounted residence (at most eight child IDs);
-ordinary settled cards never cause hydration. The workspace panel separately
+ordinary settled cards never cause hydration. Inline families and workspace
+membership resolve children from the same execution location, including when
+local and remote stores reuse a run ID. The workspace panel separately
 reads the legacy full roster only when shown. Accepted turns and changes to the
 header's latest-turn membership invalidate it through its own coalescer; routine
 replays do not. A new mounted receipt remains selectable while that roster is

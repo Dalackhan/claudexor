@@ -6,6 +6,47 @@ import Testing
 extension HistoryGatewayTests {
 @MainActor @Suite(.serialized)
 struct HistoryWorkspaceRegressionTests {
+    @Test(arguments: HistoryInteractionTests.locations)
+    func projectedDelegateChildrenRestoreInlineWithOneParentRead(location: ExecutionLocationID) async throws {
+        defer { HistoryURLProtocol.handler = nil }
+        let source = try HistoryTestSource(count: 3)
+        source.transform = { json in
+            var rows = json["turns"] as! [[String: Any]]
+            var run = rows[0]["run"] as! [String: Any]
+            run["delegatedChildRunIds"] = ["child"]
+            rows[0]["run"] = run
+            json["turns"] = rows
+        }
+        let (model, _) = ThreadHistoryIntegrationTests().makeModel(location)
+        model.selectedThreadId = source.detail.thread.id
+        let history = model.makeHistoryStore(locationID: location, id: source.detail.thread.id)
+        model.selectedHistory = history
+        var parentReads = 0
+        HistoryURLProtocol.handler = { request in
+            if request.url?.path.hasSuffix("/history") == true {
+                return (200, try JSONEncoder().encode(source.page(nil)))
+            }
+            #expect(request.url?.path == "/v2/runs/mock-run-0")
+            parentReads += 1
+            return (200, Data(#"{"summary":{"runId":"mock-run-0","state":"succeeded","mode":"agent","outputReadyState":"ready"},"primaryOutput":{"kind":"answer","path":"final/answer.md","text":"recorded parent answer","truncated":false},"children":[{"runId":"child","state":"succeeded","mode":"ask","parentRunId":"mock-run-0","delegatedFromRunId":"mock-run-0"}],"lastSeq":9}"#.utf8))
+        }
+        await history.open()
+        await model.loadHistoryDelegates(history)
+        if location != .local {
+            var collision = try #require(model.task("child", at: location))
+            collision.title = "Wrong local child"
+            model.liveTasks = [collision]
+        }
+        #expect(!model.workspaceHistoryVisible && model.selectedThreadDetail == nil)
+        #expect(model.delegatedChildren(of: "mock-run-0").map(\.id) == ["child"])
+        #expect(model.delegatedChildren(of: "mock-run-0").first?.title != "Wrong local child")
+        #expect(model.task("child", at: location)?.delegatedFromRunId == "mock-run-0")
+        #expect(model.workspaceRunIDs.contains("child"))
+        await history.refresh()
+        await model.loadHistoryDelegates(history)
+        #expect(parentReads == 1)
+    }
+
     @Test func visibleWorkspaceFollowsMembershipButNotRoutineReplay() async throws {
         defer { HistoryURLProtocol.handler = nil }
         let source = try HistoryTestSource(count: 1)

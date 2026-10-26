@@ -163,7 +163,7 @@ struct TurnCard: View {
                 // rule; native vendor subagents never appear in this list.
                 ForEach(model.delegatedChildren(
                     of: run,
-                    projectedIds: turn.run?.delegatedChildRunIds ?? []
+                    projectedIds: turn.run?.delegatedChildRunIds ?? [], at: target.locationID
                 )) { child in
                     DelegatedRunRow(child: child)
                 }

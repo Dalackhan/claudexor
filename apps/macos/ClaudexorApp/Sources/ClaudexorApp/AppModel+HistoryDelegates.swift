@@ -35,7 +35,8 @@ extension AppModel {
             parents += history.rows.compactMap(\.runId)
             parents += [history.header?.headRun?.runId, history.header?.latestAdmission?.runId].compactMap { $0 }
         }
-        return ThreadWorkspacePanel.workspaceRunIds(parentRunIds: parents, tasks: tasks)
+        let locatedTasks = selectedExecutionLocation == .local ? tasks : remoteTasks[selectedExecutionLocation] ?? []
+        return ThreadWorkspacePanel.workspaceRunIds(parentRunIds: parents, tasks: locatedTasks)
     }
 
     func invalidateWorkspaceHistory() {

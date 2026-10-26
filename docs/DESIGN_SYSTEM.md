@@ -508,7 +508,8 @@ frequency and volume are. The contracts:
   shown, with independent coalesced invalidation on accepted turns and header
   membership changes. Routine feed replay does not re-fetch it; a freshly selected
   receipt remains addressable before its roster catches up. A mounted parent with
-  projected missing Delegate children gets one bounded addressed parent read.
+  projected missing Delegate children gets one bounded addressed parent read;
+  child lookup stays in that parent’s execution location.
   Stream updates publish live card fields; older detail reads preserve pending
   questions and cannot resurrect resolved ones. PATCH metadata wins over older
   in-flight reads; a replacement remote store retires the old history pin. Initial loading, loaded

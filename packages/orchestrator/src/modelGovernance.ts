@@ -41,12 +41,14 @@ import {
   prepareHarnessProcessing,
   admitPreparedProcessing,
   observeCredentialExecution,
+  observedModelCatalogMatch,
 } from "@claudexor/core";
 import {
   knownModelIdsForRoute,
   type CredentialProfile,
   type HarnessCapabilities,
   type HarnessEvent,
+  type HarnessModel,
   type HarnessRunSpec,
   type KnownModelEntry,
   type ModelInventoryAbsence,
@@ -249,6 +251,7 @@ export async function* runModelGovernedRoute(
 ): AsyncIterable<HarnessEvent> {
   let nativeModel: string | null = null;
   let preparedEffort: EffortResolution | undefined;
+  let catalog: readonly HarnessModel[] = [];
   if (spec.processing_preference || routed.adapter.prepareProcessing) {
     // The lane's own intent (an Exact Retry original included); a copied
     // retry/rotation spec otherwise still carries the first account's choice.
@@ -266,6 +269,7 @@ export async function* runModelGovernedRoute(
     });
     nativeModel = prepared.model;
     preparedEffort = prepared.effort;
+    catalog = prepared.catalog ?? [];
     spec = { ...spec, processing: prepared.receipt, processing_cost_basis: prepared.costBasis };
   }
   const model = spec.model_hint?.trim();
@@ -323,5 +327,35 @@ export async function* runModelGovernedRoute(
       resolveEffortEvidence(spec.effort_hint, [], [], "adapter", null),
     );
   }
-  yield* observeCredentialExecution(routed.adapter.id, spec, routed.adapter.run(spec));
+  const events = stampObservedModelCatalogMatch(
+    routed.adapter.run(spec),
+    catalog,
+    spec.credential_profile?.profile_id ?? null,
+  );
+  yield* observeCredentialExecution(routed.adapter.id, spec, events);
+}
+
+/**
+ * The gate is the only author of `observed_model_catalog_match`: it
+ * resolves each disclosed model string against THIS spawn's catalog, and only
+ * on events of the profile that catalog was read for. Whatever it did not
+ * compute is stripped, so no stale or adapter-supplied proof travels on.
+ */
+async function* stampObservedModelCatalogMatch(
+  events: AsyncIterable<HarnessEvent>,
+  catalog: readonly HarnessModel[],
+  profileId: string | null,
+): AsyncIterable<HarnessEvent> {
+  for await (const event of events) {
+    if (!event.observed_model && event.observed_model_catalog_match === undefined) {
+      yield event;
+      continue;
+    }
+    const match =
+      event.observed_model && (event.credential_profile_id ?? null) === profileId
+        ? observedModelCatalogMatch(event.observed_model, catalog, profileId)
+        : null;
+    const { observed_model_catalog_match: _stripped, ...rest } = event;
+    yield match ? { ...rest, observed_model_catalog_match: match } : rest;
+  }
 }

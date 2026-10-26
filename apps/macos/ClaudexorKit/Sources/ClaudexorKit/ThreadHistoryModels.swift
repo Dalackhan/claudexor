@@ -59,6 +59,8 @@ public struct ThreadHistoryRun: Codable, Sendable, Equatable {
     public let finishedAt: String?
     public let harnesses: [String]?
     public let primaryHarness: String?
+    public let runDir: String?
+    public let authRoute: RunAuthRoute?
     public let route: RouteInfo?
     public let delegation: RunDelegationInfo?
     public let delegatedChildRunIds: [String]
@@ -147,8 +149,10 @@ public struct ThreadHistoryHeader: Codable, Sendable, Equatable {
         public let runId: String
         public let run: TurnRunCard
     }
-    public let thread: ThreadHistoryThread
+    public var thread: ThreadHistoryThread
     public let latestTurnId: String?
+    /// Nil on older servers without ordinal evidence, or an empty thread.
+    public let latestOrdinal: Int?
     public let latestAdmission: Admission?
     public let headRun: Head?
     public let headRunStatus: String

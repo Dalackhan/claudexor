@@ -90,12 +90,19 @@ export class SqlThreadHistoryRead {
       );
     const latest = this.store
       .prepare(
-        `SELECT id,run_id AS runId,
+        `SELECT id,ordinal,run_id AS runId,
       CASE WHEN length(body)<=? THEN json_extract(CAST(body AS TEXT),'$.enqueue_error') END AS refusal,
       length(body)>? AS oversized FROM turn INDEXED BY turn_thread WHERE thread_id=? ORDER BY ordinal DESC LIMIT 1`,
       )
       .get(THREAD_HISTORY_METADATA_BYTES, THREAD_HISTORY_METADATA_BYTES, id) as
-      { id: string; runId: string | null; refusal: string | null; oversized: number } | undefined;
+      | {
+          id: string;
+          ordinal: number;
+          runId: string | null;
+          refusal: string | null;
+          oversized: number;
+        }
+      | undefined;
     if (latest?.oversized)
       throw threadHistoryProblem(
         "thread_history_metadata_too_large",

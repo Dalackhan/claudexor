@@ -30,6 +30,7 @@
         "updatedAt": "2026-10-26T10:00:00Z"
       },
       "latestTurnId": null,
+      "latestOrdinal": null,
       "latestAdmission": null,
       "headRun": null,
       "headRunStatus": "unbound",

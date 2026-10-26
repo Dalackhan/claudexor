@@ -33,7 +33,8 @@ enum HistoryRunPresentation {
         task.valuationUsd = run.budget.knownValuationUsd
         task.engineError = run.failure?.safeMessage
         task.failureCategory = run.failure?.category
-        task.runDir = run.failure?.runDir
+        task.runDir = run.runDir ?? run.failure?.runDir
+        task.authRoute = run.authRoute
         task.outcomeFacts = run.outcomeFacts
         task.outcomeBanner = run.outcomeBanner
         task.operatorDecisionAction = run.operatorDecision?.action

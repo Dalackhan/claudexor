@@ -7,6 +7,7 @@ import {
   type DecisionRecord,
   type RunOutcomeFacts,
   type WorkState,
+  type RunTelemetry,
 } from "@claudexor/schema";
 import type { DaemonRunRecord } from "./run-record.js";
 import { safeReadStructuredArtifact } from "./run-artifact-read.js";
@@ -72,4 +73,20 @@ export function planProjectionFor(
     maxBytes,
   );
   return a ? { readiness: derivePlanReadiness(a), questions: a.questions } : empty;
+}
+
+/** Project the recorded auth receipt identically on detail and history. */
+export function projectAuthRoute(telemetry: RunTelemetry | null) {
+  return telemetry?.auth_route
+    ? {
+        requested: telemetry.auth_route.requested,
+        effective: telemetry.auth_route.effective,
+        source: telemetry.auth_route.source,
+        reason: telemetry.auth_route.reason,
+        harnessId: telemetry.auth_route.harness_id,
+        attemptId: telemetry.auth_route.attempt_id,
+        profileId: telemetry.auth_route.profile_id,
+        modelMismatch: telemetry.auth_route.model_mismatch,
+      }
+    : null;
 }

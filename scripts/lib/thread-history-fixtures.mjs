@@ -13,6 +13,7 @@ export function threadHistoryFixtures(schema) {
     header: {
       thread,
       latestTurnId: null,
+      latestOrdinal: null,
       latestAdmission: null,
       headRun: null,
       headRunStatus: "unbound",
@@ -61,6 +62,14 @@ export function threadHistoryFixtures(schema) {
       state: "succeeded",
       mode: "plan",
       harnesses: ["fake"],
+      runDir: "/fixtures/runs/run-history",
+      authRoute: {
+        requested: "auto",
+        effective: "local_session",
+        source: "native_session",
+        reason: "native_first",
+        profileId: "profile-history",
+      },
       startedAt: thread.createdAt,
       finishedAt: thread.updatedAt,
       spendUsd: null,
@@ -98,6 +107,7 @@ export function threadHistoryFixtures(schema) {
       ...empty.header,
       thread: { ...empty.header.thread, headRunId: settled.runId },
       latestTurnId: settled.id,
+      latestOrdinal: settled.ordinal,
       latestAdmission: {
         id: settled.id,
         runId: settled.runId,

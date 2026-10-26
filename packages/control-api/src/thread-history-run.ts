@@ -20,6 +20,7 @@ import {
 import { safeReadStructuredArtifact } from "./run-artifact-read.js";
 import {
   readFailure,
+  projectAuthRoute,
   strategyFromParams,
   legacyRunOutcomeFacts,
   planProjectionFor,
@@ -142,6 +143,8 @@ export function projectHistoryRun(
     decision ? { action: decision.action, decidedAt: decision.decidedAt } : null;
   const run = ThreadHistoryRun.parse({
     state: record.state,
+    runDir: record.runDir,
+    authRoute: projectAuthRoute(telemetry),
     mode,
     strategy: strategyFromParams(p),
     n: p.n,

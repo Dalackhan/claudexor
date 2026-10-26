@@ -1,3 +1,4 @@
+import { projectAuthRoute } from "./run-card-facts.js";
 import { handleThreadHistoryRoute, type ThreadHistoryServices } from "./thread-history-routes.js";
 import {
   runRepoRoot,
@@ -2477,18 +2478,7 @@ function summarizeRun(
     // The single engine validator's receipt, projected verbatim — surfaces
     // never re-validate the answer (null = no structured-output contract).
     outputConformance: outputConformance?.status ?? null,
-    authRoute: telemetry?.auth_route
-      ? {
-          requested: telemetry.auth_route.requested,
-          effective: telemetry.auth_route.effective,
-          source: telemetry.auth_route.source,
-          reason: telemetry.auth_route.reason,
-          harnessId: telemetry.auth_route.harness_id,
-          attemptId: telemetry.auth_route.attempt_id,
-          profileId: telemetry.auth_route.profile_id,
-          modelMismatch: telemetry.auth_route.model_mismatch,
-        }
-      : null,
+    authRoute: projectAuthRoute(telemetry),
     access: effectiveAccess ?? parsedAccess,
     requestedAccess,
     effectiveAccess,

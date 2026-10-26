@@ -107,6 +107,7 @@ describe("bounded SQL thread history", () => {
       expect(page.hasNewer).toBe(false);
       expect(page.header.thread).not.toHaveProperty("runIds");
       expect(page.header.latestTurnId).toBe(f.ids.at(-1) ?? null);
+      expect(page.header).toHaveProperty("latestOrdinal", count ? count - 1 : null);
     },
   );
 
@@ -359,6 +360,8 @@ describe("bounded SQL thread history", () => {
     const run = f.bind(0, "running", "plan");
     const pending = f.read();
     expect(pending.turns[0]?.run?.outputReadyState).toBe("pending");
+    expect(pending.turns[0]?.run).toHaveProperty("runDir", run.runDir);
+    expect(pending.turns[0]?.run).toHaveProperty("authRoute", null);
     writeFileSync(join(run.runDir, "final/plan.md"), "answer 😀");
     const ready = f.read();
     expect(ready.turns[0]?.primaryOutput?.text).toBe("answer 😀");
@@ -407,6 +410,15 @@ describe("bounded SQL thread history", () => {
       run_id: run.id,
       task_id: "task-0",
       mode: "plan",
+      auth_route: {
+        requested: "auto",
+        effective: "local_session",
+        source: "native_session",
+        reason: "native_first",
+        harness_id: "fake",
+        attempt_id: "p01",
+        profile_id: "profile-a",
+      },
       requested_access: "full",
       effective_access: "full",
       external_context_policy: "off",
@@ -435,6 +447,7 @@ describe("bounded SQL thread history", () => {
     );
     const terminal = f.read();
     expect(terminal.turns[0]?.run?.state).toBe("succeeded");
+    expect(terminal.turns[0]?.run).toHaveProperty("authRoute.profileId", "profile-a");
     expect(terminal.revision.sequence).toBeGreaterThan(ready.revision.sequence);
     expect(terminal.turns[0]?.run?.runFacts?.run_id).toBe(run.id);
     rmSync(join(run.runDir, "final/plan.md"));

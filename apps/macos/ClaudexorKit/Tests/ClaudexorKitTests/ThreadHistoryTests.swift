@@ -29,6 +29,9 @@ struct ThreadHistoryTests {
         }
         let page = try await client.threadHistory(id: "th-history", selector: .beforeTurnId("mounted-edge"))
         #expect(page.turns.count == 2)
+        #expect(page.header.latestOrdinal == 1)
+        #expect(page.turns[1].run?.runDir == "/fixtures/runs/run-history")
+        #expect(page.turns[1].run?.authRoute?.profileId == "profile-history")
         #expect(page.turns[1].answeredByPrompt?.prompt == "Continue")
         let partData = try fixture("thread-prompt-part")
         HistoryURLProtocol.handler = { request in

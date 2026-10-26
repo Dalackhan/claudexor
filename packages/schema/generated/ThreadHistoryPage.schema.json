@@ -241,6 +241,19 @@
               ],
               "description": "Thread id."
             },
+            "latestOrdinal": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Latest stored turn ordinal, including runless turns; null only for an empty thread."
+            },
             "latestAdmission": {
               "anyOf": [
                 {
@@ -899,6 +912,7 @@
           "required": [
             "thread",
             "latestTurnId",
+            "latestOrdinal",
             "latestAdmission",
             "headRun",
             "headRunStatus",
@@ -1063,9 +1077,7 @@
                 "description": "When the turn was created."
               },
               "ordinal": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 9007199254740991
+                "$ref": "#/definitions/ThreadHistoryPage/properties/header/properties/latestOrdinal/anyOf/0"
               },
               "revision": {
                 "$ref": "#/definitions/ThreadHistoryPage/properties/revision"
@@ -1074,12 +1086,12 @@
                 "type": "object",
                 "properties": {
                   "textBytes": {
-                    "$ref": "#/definitions/ThreadHistoryPage/properties/turns/items/properties/ordinal"
+                    "$ref": "#/definitions/ThreadHistoryPage/properties/header/properties/latestOrdinal/anyOf/0"
                   },
                   "totalTextBytes": {
                     "anyOf": [
                       {
-                        "$ref": "#/definitions/ThreadHistoryPage/properties/turns/items/properties/ordinal"
+                        "$ref": "#/definitions/ThreadHistoryPage/properties/header/properties/latestOrdinal/anyOf/0"
                       },
                       {
                         "type": "null"
@@ -1138,6 +1150,128 @@
                       },
                       "delegatedChildRunIds": {
                         "$ref": "#/definitions/ThreadHistoryPage/properties/header/properties/headRun/anyOf/0/properties/run/properties/delegatedChildRunIds"
+                      },
+                      "runDir": {
+                        "type": "string",
+                        "description": "On-disk run artifact directory."
+                      },
+                      "authRoute": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "requested": {
+                                "$ref": "#/definitions/ThreadHistoryPage/properties/header/properties/thread/properties/authPreference"
+                              },
+                              "effective": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "local_session",
+                                      "api_key",
+                                      "unknown"
+                                    ],
+                                    "description": "Auth mode a route runs under: a native local session, an API key, or unknown."
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Auth mode a route runs under: a native local session, an API key, or unknown.",
+                                "default": null
+                              },
+                              "source": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "native_session",
+                                      "oauth_token_env",
+                                      "api_key_env",
+                                      "api_key_flag",
+                                      "provider_auth_file",
+                                      "none"
+                                    ],
+                                    "description": "Concrete credential source used or probed by a harness."
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Concrete credential source used or probed by a harness.",
+                                "default": null
+                              },
+                              "reason": {
+                                "type": "string",
+                                "enum": [
+                                  "as_requested",
+                                  "native_first",
+                                  "no_native_session_fallback",
+                                  "requested_route_unavailable",
+                                  "undisclosed"
+                                ],
+                                "description": "Deterministic reason for the effective auth route: as_requested, native_first (auto, INV-061), no_native_session_fallback (auto downgraded to api_key), requested_route_unavailable (explicit preference contradicted), or undisclosed."
+                              },
+                              "harnessId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "default": null
+                              },
+                              "attemptId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "default": null
+                              },
+                              "profileId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "default": null,
+                                "description": "Credential profile the deciding attempt ran under; null = engine-default credentials."
+                              },
+                              "modelMismatch": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "requested": {
+                                        "type": "string"
+                                      },
+                                      "observed": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "requested",
+                                      "observed"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "default": null,
+                                "description": "Requested-vs-observed model mismatch; null when none."
+                              }
+                            },
+                            "required": [
+                              "requested",
+                              "reason"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Auth route receipt (requested/effective/source/reason + disclosing attempt), projected verbatim from telemetry; null when unavailable."
                       },
                       "harnesses": {
                         "type": "array",
@@ -2414,7 +2548,7 @@
                           "value": {
                             "anyOf": [
                               {
-                                "$ref": "#/definitions/ThreadHistoryPage/properties/turns/items/properties/ordinal"
+                                "$ref": "#/definitions/ThreadHistoryPage/properties/header/properties/latestOrdinal/anyOf/0"
                               },
                               {
                                 "type": "null"
@@ -2514,7 +2648,7 @@
                         "$ref": "#/definitions/ThreadHistoryPage/properties/turns/items/properties/promptInfo/properties/truncated"
                       },
                       "textBytes": {
-                        "$ref": "#/definitions/ThreadHistoryPage/properties/turns/items/properties/ordinal"
+                        "$ref": "#/definitions/ThreadHistoryPage/properties/header/properties/latestOrdinal/anyOf/0"
                       },
                       "totalTextBytes": {
                         "$ref": "#/definitions/ThreadHistoryPage/properties/turns/items/properties/promptInfo/properties/totalTextBytes"

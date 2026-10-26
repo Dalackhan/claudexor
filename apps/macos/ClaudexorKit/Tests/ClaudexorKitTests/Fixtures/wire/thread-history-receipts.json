@@ -30,6 +30,7 @@
         "updatedAt": "2026-10-26T10:00:00Z"
       },
       "latestTurnId": "turn-settled",
+      "latestOrdinal": 1,
       "latestAdmission": {
         "id": "turn-settled",
         "runId": "run-history",
@@ -151,6 +152,17 @@
           "finishedAt": "2026-10-26T10:00:00Z",
           "delegation": null,
           "delegatedChildRunIds": [],
+          "runDir": "/fixtures/runs/run-history",
+          "authRoute": {
+            "requested": "auto",
+            "effective": "local_session",
+            "source": "native_session",
+            "reason": "native_first",
+            "harnessId": null,
+            "attemptId": null,
+            "profileId": "profile-history",
+            "modelMismatch": null
+          },
           "harnesses": [
             "fake"
           ],

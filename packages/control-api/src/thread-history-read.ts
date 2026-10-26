@@ -31,6 +31,7 @@ export interface ThreadHistorySource {
     thread: Record<string, unknown>;
     latest?: {
       id: string;
+      ordinal: number;
       runId: string | null;
       refusal: string | null;
       jobId: string | null;
@@ -172,6 +173,7 @@ export function createThreadHistoryRead(source: () => ThreadHistorySource) {
       const header = ThreadHistoryHeader.parse({
         thread,
         latestTurnId: latest?.id ?? null,
+        latestOrdinal: latest?.ordinal ?? null,
         latestAdmission: admission
           ? {
               id: admission.id,

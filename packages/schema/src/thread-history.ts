@@ -81,6 +81,8 @@ const count = z
 const runStatus = z.enum(["available", "unbound", "not_retained"]);
 export const ThreadHistoryRun = ControlTurnRunCard.extend({
   ...ControlRunSummary.pick({
+    runDir: true,
+    authRoute: true,
     harnesses: true,
     primaryHarness: true,
     startedAt: true,
@@ -136,6 +138,11 @@ export const ThreadHistoryHeader = z
   .object({
     thread: ControlThread.omit({ runIds: true }).strict(),
     latestTurnId: id.nullable(),
+    latestOrdinal: ordinal
+      .nullable()
+      .describe(
+        "Latest stored turn ordinal, including runless turns; null only for an empty thread.",
+      ),
     latestAdmission: ControlThreadTurn.pick({ id: true, runId: true, enqueueError: true })
       .extend({ jobId: id.nullable(), state: ControlRunState.nullable() })
       .strict()

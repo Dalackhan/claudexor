@@ -39,6 +39,9 @@ it("[INV-142:thread-history] built CLI/MCP reads bounded answers, explicit promp
     expect(newest.turns[0]?.runStatus).toBe("available");
     expect(newest.turns[0]?.primaryOutputStatus).toBe("available");
     expect(newest.header.headRunStatus).toBe("available");
+    expect(newest.header.latestOrdinal).toBe(1);
+    expect(newest.turns[0]?.run?.runDir).toBeTruthy();
+    expect(newest.turns[0]?.run).toHaveProperty("authRoute");
     const oldest = ThreadHistoryPage.parse(
       await ok(mcp, "claudexor_thread_history", {
         threadId: thread.id,
@@ -47,6 +50,7 @@ it("[INV-142:thread-history] built CLI/MCP reads bounded answers, explicit promp
       }),
     );
     expect(oldest.turns[0]?.prompt).toBe("first question");
+    expect(oldest.header.latestOrdinal).toBe(1);
     const before = ThreadHistoryPage.parse(
       await ok(mcp, "claudexor_thread_history", {
         threadId: thread.id,

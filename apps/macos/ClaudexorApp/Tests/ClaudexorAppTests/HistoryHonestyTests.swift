@@ -11,7 +11,11 @@ struct HistoryHonestyTests {
         await store.open()
         let row = try #require(store.rows.first { $0.runStatus == "not_retained" })
         #expect(!row.prompt.isEmpty && row.runId != nil && row.run == nil)
-        #expect(store.renderedRun(for: row, live: nil) == nil)
+        let retained = try fixture("thread-history-receipts")
+        let cached = try #require(HistoryRunPresentation.task(retained.turns[1], thread: retained.header.thread))
+        #expect(cached.id == row.runId)
+        store.liveFacts[cached.id] = ThreadHistoryStore.LiveFact(task: cached, throughRead: store.readSerial)
+        #expect(store.renderedRun(for: row, live: cached) == nil)
         #expect(row.primaryOutputStatus == "not_retained")
         #expect(store.header?.headRunStatus == "not_retained")
     }
@@ -26,6 +30,35 @@ struct HistoryHonestyTests {
         #expect(row.run?.failureMessageInfo?.truncated == true)
         #expect(row.run?.failure?.rawDetailRef != nil)
         #expect(HistoryRunPresentation.counts(row.run!)?.contains("2+") == true)
+    }
+
+    @Test func unavailableCoverageOverridesAnOtherwiseApplyableReceipt() throws {
+        let page = try fixture("thread-history-unavailable-evidence")
+        let source = try HistoryTestSource(count: 1)
+        var json = try source.object(page.turns[1])
+        var run = json["run"] as! [String: Any]
+        // Deliberately conflicting cached DTO evidence tests the consumer guard,
+        // beyond the producer schema which already rejects this combination.
+        run["applyEligibility"] = ["eligible": true, "state": "ok"]
+        run["operatorDecision"] = ["action": "accept_risk"]
+        run["operatorDecisionCoverage"] = "complete"
+        run["unverifiedOperatorDecision"] = NSNull()
+        json["run"] = run
+        let row = try JSONDecoder().decode(ThreadHistoryTurn.self, from: JSONSerialization.data(withJSONObject: json))
+        let task = try #require(HistoryRunPresentation.task(row, thread: page.header.thread))
+        #expect(task.applyEligibility == nil)
+        #expect(!DecisionApplyPresentation.showsApply(task))
+        var competing = task
+        competing.applyEligibility = row.run?.applyEligibility
+        #expect(DecisionApplyPresentation.showsApply(competing))
+    }
+
+    @Test func reopenedHistoryRetainsRunDirectoryAndAuthRoute() throws {
+        let page = try fixture("thread-history-receipts")
+        let task = try #require(HistoryRunPresentation.task(page.turns[1], thread: page.header.thread))
+        #expect(task.runDir == "/fixtures/runs/run-history")
+        #expect(TurnCard.fileScopeRoots(executionRoot: nil, runDir: task.runDir) == ["/fixtures/runs/run-history"])
+        #expect(task.authRoute?.profileId == "profile-history")
     }
 
     @Test func aLaterGestureCancelsPendingNavigationAndKeepsThePaintedIsland() async throws {

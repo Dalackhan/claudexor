@@ -3111,7 +3111,8 @@ are failures, never empty successes.
 The SQLite owner selects scalar keys through the unique `turn_thread(thread_id,
 ordinal)` index with `LIMIT limit+1`. Only emitted turn bodies and bounded prompt
 parts are decoded. The header returns compact thread fields without `runIds`, the
-true latest stored turn and its admission/refusal (including a queued job handle),
+true latest stored turn ID, its gap-free `latestOrdinal` (null for an empty
+thread), and its admission/refusal (including a queued job handle),
 head-run lifecycle facts, and at most 16 sessions with `sessionsComplete`. The
 session preview also packs to the remaining header byte budget; full session
 inspection remains on legacy detail. Header extraction currently uses
@@ -3154,6 +3155,10 @@ does not guess a directory or claim that still-present artifact bytes have been
 physically reclaimed. With a retained command, canonical answer/tombstone reads
 remain unchanged. Indexed plan-answer relations and full prompt parts remain
 readable independently of command retention. Store read errors still propagate.
+
+Retained run rows also carry `runDir` and the canonical `authRoute` projection,
+so reopened file links and failure route captions use recorded facts without a
+per-card detail read. Missing route telemetry remains null.
 
 The row contract includes `answeredByTurnId`, a bounded `answeredByPrompt` and
 `planAnswerComplete`. Schema v4's `turn_plan_answer` expression index addresses

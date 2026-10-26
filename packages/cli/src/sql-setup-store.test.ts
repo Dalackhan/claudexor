@@ -33,7 +33,7 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function job(jobId: string): ControlSetupJob {
+function job(jobId: string): ControlSetupJob & { harness: "codex" } {
   return {
     jobId,
     harness: "codex",

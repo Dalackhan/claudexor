@@ -59,7 +59,6 @@ import {
   awaitingSetupUserMessage,
   deviceCodeRejectionRemedy,
   clientPtyWaitingPatch,
-  isDeviceCodeSetupJob,
   projectSetupDeviceCode,
   removeSetupDeviceCodeSidecar,
   setupTransportConflict,
@@ -714,15 +713,10 @@ export function createSetupJobManager(opts: SetupJobManagerOptions) {
       });
       return;
     }
-    // R6: a failed device-code / device-auth flow ALWAYS carries the toggle
-    // remedy — the vendor's rejection prose is not classified (no regex
-    // governance), the remedy is keyed deterministically on the authorized flow
-    // itself (the `--device-auth` Terminal flow or the app-server device-code
-    // flow, whose argv carries `app-server`).
-    const deviceAuthRemedy =
-      job.authorization?.args.includes("--device-auth") || isDeviceCodeSetupJob(job)
-        ? deviceCodeRejectionRemedy(platform)
-        : "";
+    // R6: a failed codex device-code / device-auth flow ALWAYS carries the
+    // toggle remedy, keyed on the harness and its authorized flow rather than
+    // the vendor's rejection prose (no regex governance; setup-client-pty.ts).
+    const deviceAuthRemedy = deviceCodeRejectionRemedy(job, platform);
     finish(
       jobId,
       "failed",

@@ -23,7 +23,7 @@ afterEach(() => {
   rmSync(plainRoot, { recursive: true, force: true });
 });
 
-const job = (jobId: string): ControlSetupJob => ({
+const job = (jobId: string): ControlSetupJob & { harness: "codex" } => ({
   jobId,
   harness: "codex",
   action: "login",

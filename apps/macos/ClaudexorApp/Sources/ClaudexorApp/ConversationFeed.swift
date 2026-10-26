@@ -20,7 +20,6 @@ import ClaudexorKit
     var navigationTarget: String?
     var navigationAnchor: UnitPoint = .top
     var visibleTurnID: String?
-    @ObservationIgnored var turnFrames: [String: CGRect] = [:]
     static let limit = 20
     static let topID = "history:top"
     static let bottomID = "history:bottom"
@@ -34,18 +33,9 @@ import ClaudexorKit
 
     func synchronize(_ history: ThreadHistoryStore) {
         mountedIDs = history.mountedIDs
-        turnFrames = turnFrames.filter { mountedIDs.contains($0.key) }
+        if let visibleTurnID, !mountedIDs.contains(visibleTurnID) { self.visibleTurnID = nil }
         newCount = history.newCount
         presentation = history.presentation
-    }
-
-    /// ScrollPosition's view ID is a navigation target, not a reliable manual
-    /// scrolling read anchor. Track the actual visible cards without publishing
-    /// every pixel of geometry into the observed view state.
-    func measuredTurn(_ id: String, frame: CGRect) {
-        turnFrames[id] = frame
-        let visible = turnFrames.filter { mountedIDs.contains($0.key) && $0.value.maxY > 0 && $0.value.minY < viewportHeight }
-        visibleTurnID = visible.min { abs($0.value.minY) < abs($1.value.minY) }?.key
     }
 
     func navigate(_ history: ThreadHistoryStore) {
@@ -108,9 +98,6 @@ struct ConversationFeed: View {
                             routingOptions: routingOptions,
                             executionRoot: ThreadWorkspacePanel.executionRoot(for: thread), historyRow: turn)
                             .conversationMeasure().padding(.bottom, Theme.Spacing.md).id(turn.id)
-                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("history-viewport")) } action: {
-                                state.measuredTurn(turn.id, frame: $0)
-                            }
                     }
                 }
                 if !tailMounted {
@@ -122,11 +109,16 @@ struct ConversationFeed: View {
                 Color.clear.frame(height: 1).id(state.markerID(for: ConversationFeedState.bottomID))
             }
         }
-        .coordinateSpace(name: "history-viewport")
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(state.follows ? .bottom : .top, for: .sizeChanges)
         .defaultScrollAnchor(.top, for: .alignment)
         .scrollPosition($state.position, anchor: .top)
+        .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.000_001) { visible in
+            // Only cards use String IDs; navigation markers use NavigationAnchor.
+            // A positive threshold excludes offscreen targets at zero visibility,
+            // while including slivers of even very tall cards. Use feed order.
+            state.visibleTurnID = history.mountedIDs.first { visible.contains($0) }
+        }
         .onChange(of: state.navigationRevision) { state.commitNavigation() }
         .onChange(of: history.navigationRevision) { state.navigate(history) }
         .onChange(of: history.mountedIDs) { state.synchronize(history) }

@@ -475,10 +475,12 @@ frequency and volume are. The contracts:
   eviction. Refresh replays the mounted ranges through every continuation,
   coalescing one in-flight read and at most one trailing read. Only newer row
   revisions replace painted facts. Stale cursors or a new serving incarnation
-  re-snapshot around the visible reading turn, then refill below it. Card
-  geometry identifies that turn after manual scrolling; a prior programmatic
-  scroll target is not treated as the reader's current place. Painted content
-  remains during loading and errors; a background replay never evicts rows.
+  re-snapshot around the visible reading turn, then refill below it. One
+  scroll-level target-visibility callback identifies the first visible card in
+  mounted order, including partially visible and taller-than-viewport cards.
+  Navigation markers have separate typed IDs; there are no row geometry observers.
+  A prior programmatic scroll target is not treated as the reader's current place.
+  Painted content remains during loading and errors; a background replay never evicts rows.
   The live head retains its per-run stream and terminal read. A terminal answer
   published during the trailing replay wins without a third chained history GET.
 - **History evidence and actions.** Prompt previews disclose `promptInfo`; full

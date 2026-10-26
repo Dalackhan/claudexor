@@ -106,17 +106,7 @@ struct HistoryMockupRenderingTests {
                 }
                 await settle(host)
                 if scene == "02-tail-top" {
-                    let scroll = try #require(feedScroll(host))
-                    #expect(abs(scroll.contentInsets.bottom - state.floatingControlHeight - 8) <= 1)
-                    let origin = scroll.contentView.bounds.origin
-                    scroll.contentView.scroll(to: CGPoint(x: origin.x, y: origin.y + 1_400))
-                    scroll.reflectScrolledClipView(scroll.contentView)
-                    await settle(host)
-                    #expect(history.readingAnchor == state.visibleTurnID)
-                    #expect(history.readingAnchor != history.mountedIDs.first)
-                    scroll.contentView.scroll(to: origin)
-                    scroll.reflectScrolledClipView(scroll.contentView)
-                    await settle(host)
+                    try await checkManualReading(host, state: state, history: history)
                 }
                 manifest.append(try capture(host, window: window, scene: scene, name: name,
                     directory: directory, claim: claim(scene), state: state))
@@ -271,6 +261,47 @@ struct HistoryMockupRenderingTests {
         #expect(preview <= 260 && preview > 230)
         #expect(abs(preview - grid - control) <= 1)
         print("PREVIEW \(appearance.rawValue): copy control=\(control) grid=\(grid) total=\(preview)")
+    }
+
+    private func checkManualReading(_ host: NSView, state: ConversationFeedState,
+                                    history: ThreadHistoryStore) async throws {
+        let scroll = try #require(feedScroll(host))
+        let document = try #require(scroll.documentView)
+        #expect(abs(scroll.contentInsets.bottom - state.floatingControlHeight - 8) <= 1)
+        let origin = scroll.contentView.bounds.origin
+        let row = history.rows[3]
+        let next = history.rows[4]
+        let key = "prompt:" + row.id
+        let expansion = history.presentation.expanded[key]
+        func promptFrame(_ prompt: String) throws -> CGRect {
+            let prose = try #require(views(host).compactMap { $0 as? ProseTextView }
+                .first { $0.string.hasPrefix(String(prompt.prefix(60))) })
+            return prose.convert(prose.bounds, to: document)
+        }
+        func check(_ y: CGFloat, label: String) async {
+            scroll.contentView.scroll(to: CGPoint(x: origin.x, y: y))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            await settle(host)
+            #expect(abs(scroll.contentView.bounds.minY - y) <= 1)
+            #expect(!history.following)
+            #expect(state.visibleTurnID == row.id)
+            #expect(history.readingAnchor == row.id)
+            print("READING \(host.effectiveAppearance.name.rawValue) \(label): expected=\(row.id) visible=\(state.visibleTurnID ?? "nil") anchor=\(history.readingAnchor ?? "nil")")
+        }
+        // Native frames are a test oracle only; production observes no row geometry.
+        await check(try promptFrame(row.prompt).midY, label: "inside prompt")
+        await check(try promptFrame(next.prompt).minY - 80, label: "partial first card")
+        history.presentation.expanded[key] = true
+        await settle(host)
+        let expanded = try promptFrame(row.prompt)
+        #expect(expanded.height > 2 * scroll.contentView.bounds.height)
+        await check(expanded.midY, label: "taller than viewport")
+        history.presentation.expanded[key] = expansion
+        await settle(host)
+        scroll.contentView.scroll(to: origin)
+        scroll.reflectScrolledClipView(scroll.contentView)
+        await settle(host)
+        #expect(state.visibleTurnID == history.mountedIDs.first)
     }
 
     private func settle(_ host: NSView) async {

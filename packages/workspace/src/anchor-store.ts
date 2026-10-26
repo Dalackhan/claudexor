@@ -1,6 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fsyncDirectory, projectRuntimeDir, sha256, writePatchObject } from "@claudexor/util";
+import {
+  fsyncDirectory,
+  projectRuntimeDir,
+  sha256,
+  writePatchObject,
+  readFileUtf8BoundedSync,
+} from "@claudexor/util";
 import { WorkspaceError } from "@claudexor/core";
 import { diffTrees } from "./git.js";
 
@@ -50,8 +56,10 @@ function persistRevertAnchor(repo: string, patch: string): string {
   return id;
 }
 
-export function readRevertAnchor(repo: string, id: string): string {
-  const patch = readFileSync(objectPath(repo, id), "utf8");
+export function readRevertAnchor(repo: string, id: string, maxBytes?: number): string {
+  const path = objectPath(repo, id);
+  const patch =
+    maxBytes === undefined ? readFileSync(path, "utf8") : readFileUtf8BoundedSync(path, maxBytes);
   if (sha256(patch) !== id) throw new WorkspaceError(`revert anchor ${id} is corrupt`);
   return patch;
 }
@@ -78,6 +86,7 @@ export function resolveExactPatch(input: {
   savedCopy: string;
   meta: Record<string, unknown> | null | undefined;
   roots: readonly (string | null | undefined)[];
+  maxBytes?: number;
 }): ExactPatchResolution {
   if (input.meta?.["persisted_patch"] !== "redacted")
     return { ok: true, patch: input.savedCopy, fromExactObject: false };
@@ -91,8 +100,9 @@ export function resolveExactPatch(input: {
   for (const root of input.roots) {
     if (!root) continue;
     try {
-      return { ok: true, patch: readRevertAnchor(root, id), fromExactObject: true };
-    } catch {
+      return { ok: true, patch: readRevertAnchor(root, id, input.maxBytes), fromExactObject: true };
+    } catch (error) {
+      if ((error as { code?: string }).code?.startsWith("artifact_read_")) throw error;
       // Try the next recorded root; absence everywhere is the typed refusal below.
     }
   }

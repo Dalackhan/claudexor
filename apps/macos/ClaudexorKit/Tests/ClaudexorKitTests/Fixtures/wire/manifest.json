@@ -1,4 +1,7 @@
 {
+  "thread-history-empty": "ThreadHistoryPage",
+  "thread-history-receipts": "ThreadHistoryPage",
+  "thread-prompt-part": "ThreadPromptPart",
   "effort-resolution-downward": "EffortResolution",
   "handshake-response": "ControlHandshakeResponse",
   "handshake-response-unknown-sha": "ControlHandshakeResponse",

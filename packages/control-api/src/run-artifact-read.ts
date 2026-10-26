@@ -1,7 +1,7 @@
 import { lstatSync, readFileSync } from "node:fs";
 import { extname } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { redactSecrets } from "@claudexor/util";
+import { redactSecrets, readFileUtf8BoundedSync } from "@claudexor/util";
 import { safeArtifactPath } from "./artifact-paths.js";
 import type { DaemonRunRecord } from "./run-record.js";
 
@@ -14,13 +14,19 @@ export function readTextArtifact(
   return text === null ? null : redact ? redactSecrets(text) : text;
 }
 
-export function readRawTextArtifact(rec: DaemonRunRecord, relPath: string): string | null {
+export function readRawTextArtifact(
+  rec: DaemonRunRecord,
+  relPath: string,
+  maxBytes?: number,
+): string | null {
   if (!rec.runDir) return null;
   const path = safeArtifactPath(rec.runDir, relPath);
   if (!path) return null;
   const st = lstatSync(path);
   if (st.isSymbolicLink() || st.isDirectory()) return null;
-  return readFileSync(path, "utf8");
+  return maxBytes === undefined
+    ? readFileSync(path, "utf8")
+    : readFileUtf8BoundedSync(path, maxBytes);
 }
 
 export function readStructured<T>(

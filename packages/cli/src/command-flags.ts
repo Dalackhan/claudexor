@@ -118,10 +118,15 @@ const FROZEN_REVIEW_FLAGS: readonly CliFlagSpec[] = [
 export const FROZEN_REVIEW_FLAG_NAMES = FROZEN_REVIEW_FLAGS.map((flag) => flag.name);
 
 export const CLI_FLAGS: readonly CliFlagSpec[] = [
-  valueFlag("limit", "<N>", "task-group-runs: page limit 1..200 (default 50)"),
+  valueFlag("before", "<turn-id>", "thread history: read before the mounted edge"),
+  valueFlag("after", "<turn-id>", "thread history: read after the mounted edge"),
+  valueFlag("around", "<turn-id>", "thread history: include this anchor"),
+  valueFlag("offset", "<N>", "thread prompt: UTF-8 byte offset"),
+  valueFlag("max-bytes", "<N>", "thread prompt: maximum bytes in one part (4..65536)"),
+  valueFlag("limit", "<N>", "Page limit: task-group-runs 1..200 (50); thread history 1..20 (20)"),
   valueFlag("state", "<state>", "task-group-runs: filter retained members by lifecycle"),
-  valueFlag("cursor", "<cursor>", "task-group-runs: opaque cursor from the prior returned page"),
-  valueFlag("expected-store-id", "<id>", "task-group-runs: refuse a different durable store"),
+  valueFlag("cursor", "<cursor>", "Opaque cursor from the prior returned page"),
+  valueFlag("expected-store-id", "<id>", "Refuse a different durable store"),
   valueFlag("targets-json", "<array>", "runs-wait: JSON array of {runId, seen?} targets (1..1000)"),
   valueFlag(
     "wait-ms",

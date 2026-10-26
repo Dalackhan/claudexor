@@ -2691,10 +2691,12 @@ visibility, not a permanent roster. Reads add no execution or approval authority
 - `GET /v2/threads/:id`
 - `PATCH /v2/threads/:id`
 - `POST /v2/threads/:id/apply`
+- `GET /v2/threads/:id/history`
 - `POST /v2/threads/:id/purge`
 - `POST /v2/threads/:id/restore`
 - `POST /v2/threads/:id/trash`
 - `POST /v2/threads/:id/turns`
+- `GET /v2/threads/:id/turns/:id/prompt`
 - `POST /v2/threads/:id/turns/:id/retry`
 - `GET /v2/trust`
 - `POST /v2/trust`
@@ -3045,6 +3047,98 @@ not retry automatically.
 
 `GET /healthz` is the only unauthenticated route; it is loopback-host guarded
 and returns liveness only.
+
+### Bounded thread history
+
+`GET /v2/threads/:id/history` is the addressed feed read. Its strict contract is
+`packages/schema/src/thread-history.ts`; the operation catalog, generated JSON
+Schemas, CLI/MCP and Swift Kit share that contract. The legacy thread-detail
+route keeps its full `turns`, `sessions` and `thread.runIds`: ACP replay accounting
+and explicit workspace inspection still depend on it. History does not call the
+legacy detail projector, enumerate the run archive, or hydrate run detail per turn.
+
+The query accepts `limit` (1–20, default 20), optional `expectedStoreId`, and at
+most one of `cursor`, `beforeTurnId`, `afterTurnId`, `aroundTurnId`. No selector
+opens the newest page or jumps to latest. Before/after use the client's actual
+mounted edge after eviction, exclusively. Around includes the addressed anchor
+and proceeds backward, then returns rows in ascending ordinal. A foreign edge is
+404, not a neighboring thread's page. Empty threads have an empty array and both
+coverage flags false; validation (400), absence (404), stale scope (409), purged
+thread (410), and unavailable evidence (503) are failures, never empty successes.
+
+The SQLite owner selects scalar keys through the unique `turn_thread(thread_id,
+ordinal)` index with `LIMIT limit+1`. Only emitted turn bodies and bounded prompt
+parts are decoded. The header returns compact thread fields without `runIds`, the
+true latest stored turn and its admission/refusal (including a queued job handle),
+head-run lifecycle facts, and at most 16 sessions with `sessionsComplete`. Full
+session inspection remains on legacy detail. Header extraction currently uses
+SQLite JSON projection: no growing lineage array reaches the JavaScript decoder,
+but SQLite still parses the stored thread JSON. This residual cost must not be
+represented as constant work for arbitrarily large thread bodies.
+
+The row contract includes `answeredByTurnId`, a bounded `answeredByPrompt` and
+`planAnswerComplete`. Schema v3 has no inverse plan-answer index. Under the
+no-migration constraint this producer currently returns unknown coverage for plan
+rows, rather than scanning the archive or falsely declaring a plan unanswered.
+Exact off-page plan-answer production is an outstanding requirement; clients
+cannot yet delete their relation-dependent full-detail read.
+
+Cursors are strictly decoded, canonical base64url, at most 2,048 characters and
+bound to store, partition epoch, thread, limit and a frozen tail ordinal. Older
+and newer edges advance only past emitted rows, never the lookahead probe or a
+row excluded by the byte budget. Coverage is relative to that frozen traversal;
+`header.latestTurnId` remains current. Use a fresh edge selector or no selector to
+include later arrivals. A stale cursor returns `thread_history_cursor_stale` with
+`requiredActions: ["resnapshot"]`. Replays preserve their original ordinal
+membership across appends and refresh mutable facts. If larger answers now require
+more bytes, `replayNextCursor` continues the same membership; every segment returns
+the original `replayCursor`. Merge every segment before calling that refresh
+complete. No history stream or durable projection table is introduced.
+
+Shared byte bounds are 32 KiB per prompt preview, 64 KiB per answer, 32 KiB for the
+header, 832 KiB per serialized row and 2 MiB for the complete minified JSON page,
+including escaping, redaction and cursor envelope. Packing reserves a maximum row
+before decoding it and emits a contiguous traversal prefix. The reserve is
+conservative; `limitedBy` is `turns`, `bytes`, or null. One maximum row always fits.
+Run metadata and exact apply evidence have a 1 MiB per-artifact read bound; an
+oversized receipt is a typed failure, not fabricated negative apply eligibility.
+Receipt counts and budget evidence use a 256 KiB event tail. Counts disclose
+complete/partial/unavailable coverage; an absent log is unknown rather than zero.
+The file count is the number of file-kind tool calls, not a diffstat or a number
+of distinct paths. Activity transcripts remain explicit per-run expansion reads.
+
+Primary output is selected once per projected run by the canonical owner. The
+same selected output feeds readiness (pending/finalizing/ready/diagnostic), keeping
+retention and missing-output diagnostics. A patch is an artifact reference, never
+inline patch text. `textBytes` counts delivered redacted UTF-8; `totalTextBytes` is
+null when the full redacted length is unknown. Do not derive a remainder from raw
+artifact bytes. `GET /v2/threads/:id/turns/:turnId/prompt` supplies explicit full
+prompt parts for bound and runless refused turns: `offset` defaults to 0,
+`maxBytes` defaults to 32 KiB (4–64 KiB), UTF-8 boundaries are preserved, and
+`totalBytes`/`sha256` identify the immutable stored redacted prompt. Concatenate
+through `nextOffset == totalBytes` and verify the SHA-256. Full answers retain the
+existing addressed artifact read.
+
+The projection revision producer is `createThreadHistoryRead`: it allocates
+`{epoch, sequence}` **before** the synchronous SQL/artifact projection and does not
+await during projection. Sequence advances on every observation, including output
+publication before terminal commit, operator/apply overlays and retention. An old
+projection therefore cannot receive a later sampled revision; delayed HTTP
+responses retain their older revision. Epoch is a random serving-owner incarnation
+and resets when the attached store graph changes. It is separate from the durable
+partition epoch in paging cursors. Compare sequence only within an incarnation;
+resnapshot across incarnations. The producer is shared by HTTP, CLI and MCP.
+
+Clients merge by turn id/revision and keep visible content during refresh. A
+retry/bind updates that id and ordinal; it is not an arrival. Coalesce thread pings
+and lifecycle notifications to one in-flight mounted-range read and at most one
+trailing read (INV-136). The existing addressed live-run stream and terminal read
+remain the authority for the answer settling while open; never replace that newer
+live answer with a delayed page. A terminal delivered during the trailing read
+must therefore render without chaining a third history request. The same contract
+applies through the remote gateway. The app owns viewport retention, and this
+engine read does not authorize background eviction or automatically fetch the
+legacy workspace roster.
 
 ### Plan lifecycle (typed open questions → readiness → Implement freezes the plan)
 

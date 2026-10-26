@@ -19,13 +19,15 @@ import type { DaemonRunRecord } from "./run-record.js";
 export function resolveRunPatch(
   rec: DaemonRunRecord,
   projectRoot: string | null,
+  maxBytes?: number,
 ): { patch: string | null; unavailable: boolean } {
-  const saved = readRawTextArtifact(rec, "final/patch.diff");
+  const saved = readRawTextArtifact(rec, "final/patch.diff", maxBytes);
   if (saved === null) return { patch: null, unavailable: false };
   const exact = resolveExactPatch({
     savedCopy: saved,
     meta: safeReadStructuredArtifact(rec, "final/work_product.yaml", WorkProduct)?.meta,
     roots: [projectRoot, recordedExecutionRoot(rec)],
+    maxBytes,
   });
   return exact.ok
     ? { patch: exact.patch, unavailable: false }
@@ -47,8 +49,12 @@ export function readExactRunPatch(rec: DaemonRunRecord, projectRoot: string | nu
 
 /** Digest a recorded operator decision must equal; null when there is no exact
  * patch to bind to (no artifact, or its exact bytes are unavailable). */
-export function runPatchDigest(rec: DaemonRunRecord, projectRoot: string | null): string | null {
-  const resolved = resolveRunPatch(rec, projectRoot);
+export function runPatchDigest(
+  rec: DaemonRunRecord,
+  projectRoot: string | null,
+  maxBytes?: number,
+): string | null {
+  const resolved = resolveRunPatch(rec, projectRoot, maxBytes);
   return resolved.patch !== null && !resolved.unavailable ? sha256(resolved.patch) : null;
 }
 

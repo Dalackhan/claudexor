@@ -10,7 +10,7 @@ changing Claudexor.
 
 | Surface | Current role | Stability |
 |---|---|---|
-| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, runs-wait, task-group-runs, retry, run-again, apply, decision, review), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). `runs-wait` observes existing handles read-only through `--targets-json` and optional `--wait-ms`, with `--json` or `--json-stream` output. `task-group-runs` reads one bounded retained group page. | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
+| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, thread, runs-wait, task-group-runs, retry, run-again, apply, decision, review), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). `runs-wait` observes existing handles read-only through `--targets-json` and optional `--wait-ms`, with `--json` or `--json-stream` output. `task-group-runs` reads one bounded retained group page. | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
 | Daemon and control API | Local durable queue, Agent runs, caller-owned model and image operations, artifacts, SSE events, settings, harness status, secrets metadata, apply, and run control. | Stable contract: endpoints and DTOs per `docs/reference/endpoints.json` + generated schemas (add-only fields). Loopback + bearer token only. |
 | MCP server | Exposes Claudexor tools to MCP clients. `claudexor_runs_wait` projects the same read-only observation with `targets: [{runId, seen?}]` and optional `waitMs`. | Stable contract: the tool set with input/output schemas. Tool list follows the implementation, not old docs. |
 | ACP server | Lets compatible editors or agents talk to Claudexor as a local agent surface. | Experimental (may change in minors, disclosed in the CHANGELOG). |
@@ -758,6 +758,7 @@ answer, finished work, or applyability.
 The implemented tools include `claudexor_ask` (with `deepScan`), `claudexor_run`,
 `claudexor_best_of`, `claudexor_plan`, `claudexor_create`,
 `claudexor_thread_create`, `claudexor_thread_turn`, `claudexor_thread_read`,
+`claudexor_thread_history`, `claudexor_thread_prompt`,
 `claudexor_status`, `claudexor_account_resources` (the same rich quota read,
 with optional `refresh`, `target` and `model`), `claudexor_account_reset`
 (explicit reset with original `idempotency_key`, or receipt lookup by `operation_id`),
@@ -804,8 +805,31 @@ explicit `repoPath` (see below). `claudexor_thread_turn` declares the durable
 `McpThreadTurnResult` handle as its outputSchema. `claudexor_thread_read`
 returns daemon-owned thread, turn and session records without starting work or
 a daemon; with no daemon running it fails with retryable `daemon_unavailable`.
-Final output remains on the run result surface. Thread tools do not add a
-separate budget or lifecycle.
+`claudexor_thread_history` returns bounded answer previews and settled receipts;
+complete output remains on the addressed run artifact surface. Thread tools do not
+add a separate budget or lifecycle.
+
+**Paged conversation reads.** `claudexor thread history <id> [--limit N]
+[--cursor C | --before ID | --after ID | --around ID] [--expected-store-id ID]
+[--json]` and MCP `claudexor_thread_history` share the same existing-daemon read.
+MCP uses `threadId`, `limit`, `cursor`, `beforeTurnId`, `afterTurnId`,
+`aroundTurnId`, `expectedStoreId`. Limits are 1–20 (default 20); no selector reads
+the newest turns. Rows ascend by ordinal. Follow the opaque emitted-edge cursors
+with the same limit, or use the actual mounted edge after eviction. Cursor walks
+freeze their tail; a fresh read includes later arrivals. Refresh fixed membership
+with `replayCursor`, consuming `replayNextCursor` when larger current facts need
+multiple bounded segments. Stale cursors require a resnapshot, not an empty feed.
+
+Prompt previews are at most 32 KiB, answers 64 KiB, and the complete page 2 MiB of
+minified JSON. Byte truncation is explicit; full redacted text lengths are only
+reported when known. `claudexor thread prompt <id> <turn-id> [--offset N]
+[--max-bytes N] [--expected-store-id ID] --json` and MCP
+`claudexor_thread_prompt` (`threadId`, `turnId`, `offset`, `maxBytes`,
+`expectedStoreId`) read a full prompt in UTF-8 parts, including runless refusals.
+Follow `nextOffset` through `totalBytes`, then verify `sha256`. Unknown or unavailable
+facts never become an empty successful page or a zero receipt count. These reads
+never start a daemon or submit model work. The full cursor, revision and client
+reconciliation contract is in [Architecture](ARCHITECTURE.md#bounded-thread-history).
 
 ### Observing and directing an existing run
 

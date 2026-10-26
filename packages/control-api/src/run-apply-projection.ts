@@ -1,0 +1,113 @@
+import { type ApplyGateInput, deriveApplyEligibility } from "@claudexor/delivery";
+import { DecisionRecord, WorkProduct, type ApplyEligibility } from "@claudexor/schema";
+import { noProjectRepoRoot } from "@claudexor/util";
+import {
+  paramsRecord,
+  type DaemonRunRecord,
+  type ControlOperatorDecisionRecord,
+} from "./run-record.js";
+import {
+  readStructured,
+  readRawTextArtifact,
+  safeReadStructuredArtifact,
+} from "./run-artifact-read.js";
+import { effectiveTerminalFacts, expectedRunFacts } from "./run-facts-projection.js";
+import { controlRunResult } from "./run-delivery-state.js";
+import { runExecutionRoot } from "./run-execution-root.js";
+import { readFilesWorkProduct } from "./files-work-product.js";
+import * as exactPatch from "./run-exact-patch.js";
+/** Decisions bind exact content, including on a bounded history receipt. */
+export function validRunOperatorDecision(
+  rec: DaemonRunRecord,
+  decision: ControlOperatorDecisionRecord | null,
+  maxBytes?: number,
+) {
+  if (!decision) return null;
+  return decision.patchSha256 === exactPatch.runPatchDigest(rec, runRepoRoot(rec), maxBytes)
+    ? decision
+    : null;
+}
+export function runRepoRoot(rec: DaemonRunRecord): string | null {
+  const p = paramsRecord(rec);
+  const scope = p["scope"];
+  if (scope && typeof scope === "object" && !Array.isArray(scope)) {
+    const s = scope as Record<string, unknown>;
+    if (s["kind"] === "project" && typeof s["root"] === "string") return s["root"];
+    if (s["kind"] === "none") return noProjectRepoRoot();
+  }
+  let task: unknown = null;
+  try {
+    task = readStructured(readRawTextArtifact(rec, "context/task.yaml"), ".yaml", {
+      parse: (value: unknown) => value,
+    });
+  } catch {
+    task = null;
+  }
+  if (task && typeof task === "object" && !Array.isArray(task)) {
+    const repo = (task as Record<string, unknown>)["repo"];
+    if (repo && typeof repo === "object" && !Array.isArray(repo)) {
+      const root = (repo as Record<string, unknown>)["root"];
+      if (typeof root === "string") return root;
+    }
+  }
+  return null;
+}
+
+export function applyGateInputFor(
+  rec: DaemonRunRecord,
+  patch: string,
+  targetRepoRoot: string,
+  operatorDecision: ControlOperatorDecisionRecord | null,
+  maxBytes?: number,
+): ApplyGateInput {
+  const files = readFilesWorkProduct(rec, maxBytes);
+  const decision = safeReadStructuredArtifact(rec, "arbitration/decision.yaml", DecisionRecord);
+  const terminal = effectiveTerminalFacts(
+    rec.runDir,
+    decision?.facts ?? null,
+    decision,
+    expectedRunFacts(rec),
+  );
+  return {
+    state: rec.state,
+    decision: terminal.decision,
+    workProduct: safeReadStructuredArtifact(rec, "final/work_product.yaml", WorkProduct),
+    patch,
+    ...(files ? { filesManifest: files.manifest, manifestSha256: files.manifestSha256 } : {}),
+    originalRepoRoot: runExecutionRoot(rec, runRepoRoot(rec)),
+    targetRepoRoot,
+    operatorDecision: operatorDecision
+      ? {
+          action: operatorDecision.action,
+          ...(files
+            ? { manifest_sha256: operatorDecision.patchSha256 }
+            : { patch_sha256: operatorDecision.patchSha256 }),
+        }
+      : null,
+    // Effective mutable delivery/apply state from the SAME owner that projects
+    // summary.result.applyState (delivery_state overlay → work_product snapshot):
+    // an already-applied / reverted run gets a terminal eligibility disposition
+    // instead of a stale "rerun a fresh check" (QA-021).
+    applyState: controlRunResult(rec).applyState,
+    // D-16 work_state veto (INV-116): thread the model-attested work outcome
+    // (the canonical terminal facts) so the gate refuses a needs_input/
+    // incomplete winner even with a clean legacy review.
+    workState: terminal.outcomeFacts?.work_state ?? null,
+  };
+}
+
+export function applyEligibilityFor(
+  rec: DaemonRunRecord,
+  operatorDecision: ControlOperatorDecisionRecord | null,
+  maxBytes?: number,
+): ApplyEligibility | null {
+  const root = runExecutionRoot(rec, runRepoRoot(rec));
+  const { patch, unavailable } = exactPatch.resolveRunPatch(rec, runRepoRoot(rec), maxBytes);
+  const files = readFilesWorkProduct(rec, maxBytes);
+  if (!files && (patch === null || patch.trim() === "")) return null;
+  if (!root) return null;
+  return deriveApplyEligibility({
+    ...applyGateInputFor(rec, patch ?? "", root, operatorDecision, maxBytes),
+    exactPatchUnavailable: unavailable,
+  });
+}

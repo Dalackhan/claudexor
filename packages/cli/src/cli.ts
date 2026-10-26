@@ -70,8 +70,7 @@ import { dispatchOpsCommand } from "./ops-commands.js";
 import { reviewCommand } from "./review-command.js";
 import { controlApiFetch, followRun } from "./live.js";
 import { retryCommand, runAgainCommand } from "./retry-command.js";
-import { runsWaitCommand } from "./runs-wait-command.js";
-import { taskGroupRunsCommand } from "./task-group-runs.js";
+import { dispatchObservationCommand } from "./observation-command-dispatch.js";
 import { assertCliRunParamsHaveNoInlineSecrets } from "./run-secret-scan.js";
 import { resolveLocalAttachment, type LocalAttachment } from "./local-attachment.js";
 import { uploadLocalAttachment } from "./attachment-upload.js";
@@ -963,11 +962,9 @@ async function dispatch(args: ParsedArgs, outputMode: CliOutputMode): Promise<nu
   const opsCommand = dispatchOpsCommand(cmd, args, json);
   if (opsCommand) return opsCommand;
 
+  const observationCommand = dispatchObservationCommand(cmd, args, json);
+  if (observationCommand) return observationCommand;
   switch (cmd) {
-    case "runs-wait":
-      return runsWaitCommand(args, json);
-    case "task-group-runs":
-      return taskGroupRunsCommand(args, json);
     case "init": {
       const res = initProjectConfig(cwd);
       if (json) printJson(res);

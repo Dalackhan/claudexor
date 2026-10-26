@@ -8,7 +8,12 @@ import SwiftUI
     private let storage = NSTextStorage()
     private let layout = NSLayoutManager()
     private let container = NSTextContainer(size: .zero)
-    private let cache = NSCache<NSString, NSValue>()
+    private final class Measurement {
+        let size: CGSize
+        let lines: [CGRect]
+        init(size: CGSize, lines: [CGRect]) { self.size = size; self.lines = lines }
+    }
+    private let cache = NSCache<NSString, Measurement>()
     private(set) var layoutCount = 0
 
     init() {
@@ -17,29 +22,43 @@ import SwiftUI
         layout.addTextContainer(container)
         storage.addLayoutManager(layout)
         cache.countLimit = 50_000
+        cache.totalCostLimit = 16 * 1024 * 1024
     }
 
-    func size(_ document: ProseDocument, width: CGFloat) -> CGSize {
+    private func measure(_ document: ProseDocument, width: CGFloat) -> Measurement {
         precondition(width.isFinite && width > 0)
         let key = "\(document.id):\(document.style.generation):\(Double(width).bitPattern)" as NSString
-        if let hit = cache.object(forKey: key) { return hit.sizeValue }
+        if let hit = cache.object(forKey: key) { return hit }
         storage.setAttributedString(document.text)
         container.containerSize = CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
         layout.ensureLayout(for: container)
         let rect = layout.usedRect(for: container)
         let value = CGSize(width: min(width, ceil(rect.maxX)), height: max(1, ceil(rect.maxY)))
-        cache.setObject(NSValue(size: value), forKey: key)
+        var lines: [CGRect] = []
+        layout.enumerateLineFragments(forGlyphRange: layout.glyphRange(for: container)) { _, used, _, _, _ in
+            lines.append(used)
+        }
+        let measured = Measurement(size: value, lines: lines)
+        cache.setObject(measured, forKey: key, cost: lines.count * MemoryLayout<CGRect>.stride + 64)
         layoutCount += 1
-        return value
+        return measured
     }
 
+    func size(_ document: ProseDocument, width: CGFloat) -> CGSize { measure(document, width: width).size }
     func height(_ document: ProseDocument, width: CGFloat) -> CGFloat { size(document, width: width).height }
+    func lines(_ document: ProseDocument, width: CGFloat) -> [CGRect] { measure(document, width: width).lines }
+    func wholeLineHeight(_ document: ProseDocument, width: CGFloat, limit: CGFloat) -> CGFloat {
+        let measured = measure(document, width: width)
+        guard measured.size.height > limit else { return measured.size.height }
+        return measured.lines.filter { ceil($0.maxY) <= limit }.last.map { ceil($0.maxY) } ?? 0
+    }
 }
 
 struct ProseText: NSViewRepresentable {
     let document: ProseDocument
     var hugs = false
     var cap: CGFloat = Theme.Layout.conversationMaxWidth
+    var heightLimit: CGFloat? = nil
     var accessibilityName = "Message text"
     var onSelectionChange: ((Bool) -> Void)?
     var onFocusChange: ((Bool) -> Void)?
@@ -84,7 +103,9 @@ struct ProseText: NSViewRepresentable {
         var width = min(proposed ?? cap, cap)
         if hugs { width = max(1, ProseMeasurer.shared.size(document, width: width).width) }
         // Only the cache mutates. No SwiftUI state writes or asynchronous height feedback.
-        return CGSize(width: width, height: ProseMeasurer.shared.height(document, width: width))
+        let height = heightLimit.map { ProseMeasurer.shared.wholeLineHeight(document, width: width, limit: $0) }
+            ?? ProseMeasurer.shared.height(document, width: width)
+        return CGSize(width: width, height: height)
     }
 
     static func dismantleNSView(_ view: ProseTextView, coordinator: Coordinator) {

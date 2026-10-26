@@ -160,3 +160,29 @@ struct HistoryClampSurface: View {
         .background(Theme.surfaceBase)
     }
 }
+
+@MainActor @Observable final class HistoryInsetCaptureState {
+    var show = false
+    var buttonHeight: CGFloat = 0
+    var position = ScrollPosition(idType: Int.self)
+}
+
+/// Exercise the production inset independently of follow-tail mode: forcing
+/// following while anchored above the tail is not a valid feed state.
+struct HistoryInsetCaptureSurface: View {
+    @Bindable var state: HistoryInsetCaptureState
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                ForEach(0..<8) { index in
+                    ProseText(document: ProseBuilder.plain("Checkpoint \(index): " + String(repeating: HistoryMockupFixtures.paragraph(index), count: 4)))
+                        .id(index)
+                }
+            }.frame(width: 680).scrollTargetLayout()
+        }
+        .defaultScrollAnchor(.top, for: .sizeChanges)
+        .scrollPosition($state.position)
+        .modifier(ConversationJumpInset(isPresented: state.show, newCount: 0,
+            measuredHeight: { state.buttonHeight = $0 }, latest: {}))
+    }
+}

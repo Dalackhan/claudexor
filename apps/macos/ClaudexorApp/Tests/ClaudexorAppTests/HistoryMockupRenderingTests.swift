@@ -4,6 +4,13 @@ import SwiftUI
 import Testing
 @testable import ClaudexorApp
 
+/// Active native selection for pictures only; this window is never ordered.
+private final class HistoryCaptureWindow: NSWindow {
+    var captureActiveSelection = false
+    override var isKeyWindow: Bool { captureActiveSelection || super.isKeyWindow }
+    override var canBecomeKey: Bool { true }
+}
+
 /// Explicit opt-in: a prohibited application and never-ordered borderless windows.
 /// No client, saved state, credentials, daemon, or provider actions.
 @MainActor @Suite(.serialized)
@@ -28,6 +35,8 @@ struct HistoryMockupRenderingTests {
         for (appearance, name, scheme) in [(NSAppearance.Name.aqua, "light", ColorScheme.light),
                                            (.darkAqua, "dark", .dark)] {
             app.appearance = NSAppearance(named: appearance)
+            try await checkInset(appearance: appearance)
+            await checkTablePreview(appearance: appearance)
             for scene in scenes {
                 let short = scene.hasPrefix("05b")
                 let detail = short ? shortDetail : regularDetail
@@ -78,7 +87,7 @@ struct HistoryMockupRenderingTests {
                     state.navigate(to: ConversationFeedState.topID, anchor: .top)
                     state.viewport = .reading(anchor: state.mountedIDs.first)
                 }
-                if scene == "05-before-earlier" || short {
+                if short {
                     state.navigate(to: state.mountedIDs.first!, anchor: .top)
                 }
                 if scene == "03-reading-new" {
@@ -90,6 +99,10 @@ struct HistoryMockupRenderingTests {
                     model.selectedThreadDetail = arrived
                 }
                 await settle(host)
+                if scene == "02-tail-top" {
+                    let scroll = try #require(feedScroll(host))
+                    #expect(abs(scroll.contentInsets.bottom - state.floatingControlHeight - 8) <= 1)
+                }
                 manifest.append(try capture(host, window: window, scene: scene, name: name,
                     directory: directory, claim: claim(scene), state: state))
                 if scene == "05-before-earlier" || short {
@@ -102,10 +115,18 @@ struct HistoryMockupRenderingTests {
                     #expect(state.mountedIDs.count <= 20 && state.mountedIDs.contains(anchor))
                     #expect(state.mountedIDs != oldIDs)
                     let afterY = try proseY(host, prefix: prefix)
-                    #expect(abs(afterY - beforeY) <= 1)
+                    if short { #expect(abs(afterY - beforeY) <= 1) }
+                    else { #expect(beforeY > afterY && abs(afterY - 8) <= 1) }
                     let after = short ? "05b-twenty-one-line-after" : "05-after-earlier"
-                    manifest.append(try capture(host, window: window, scene: after, name: name,
-                        directory: directory, claim: "The previous first turn remains at the top after revealing earlier turns within the 20-turn bound.", state: state))
+                    let pairClaim = "The previous first prompt is at y = \(beforeY) pt before revealing earlier turns and y = \(afterY) pt after; the window remains bounded to 20 turns."
+                    manifest[manifest.count - 1]["claim"] = short ? pairClaim : "Show earlier turns is visible above turn 26. " + pairClaim
+                    manifest[manifest.count - 1]["anchor_y_before"] = beforeY
+                    manifest[manifest.count - 1]["anchor_y_after"] = afterY
+                    var captured = try capture(host, window: window, scene: after, name: name,
+                        directory: directory, claim: pairClaim, state: state)
+                    captured["anchor_y_before"] = beforeY
+                    captured["anchor_y_after"] = afterY
+                    manifest.append(captured)
                 }
                 window.close()
             }
@@ -182,13 +203,57 @@ struct HistoryMockupRenderingTests {
     private func makeWindow<V: View>(_ root: V, width: CGFloat, appearance: NSAppearance.Name) -> (NSHostingView<V>, NSWindow) {
         let host = NSHostingView(rootView: root)
         let rect = NSRect(x: 0, y: 0, width: width, height: 700)
-        let window = NSWindow(contentRect: rect, styleMask: [.borderless], backing: .buffered, defer: false)
+        let window = HistoryCaptureWindow(contentRect: rect, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = host
         window.appearance = NSAppearance(named: appearance)
         host.appearance = window.appearance
         host.frame = rect
         return (host, window)
+    }
+
+    private func checkInset(appearance: NSAppearance.Name) async throws {
+        let state = HistoryInsetCaptureState()
+        let (host, window) = makeWindow(HistoryInsetCaptureSurface(state: state), width: 1100, appearance: appearance)
+        defer { window.close() }
+        await settle(host)
+        state.position.scrollTo(y: 400)
+        await settle(host)
+        let scroll = try #require(feedScroll(host))
+        #expect((scroll.documentView?.frame.height ?? 0) > scroll.contentView.bounds.height)
+        #expect(scroll.contentView.bounds.minY > 0)
+        let before = try proseY(host, prefix: "Checkpoint 2:")
+        for show in [true, false, true, false] {
+            state.show = show
+            await settle(host)
+            let y = try proseY(host, prefix: "Checkpoint 2:")
+            // Native insets update even when SwiftUI does not emit an
+            // onScrollGeometryChange callback for an inset-only change.
+            let inset = scroll.contentInsets.bottom
+            #expect(abs(y - before) <= 1)
+            #expect(abs(inset - (show ? state.buttonHeight + 8 : 0)) <= 1)
+            print("INSET \(appearance.rawValue): visible=\(show) inset=\(inset) button=\(state.buttonHeight) anchor=\(before)->\(y)")
+        }
+    }
+
+    private func checkTablePreview(appearance: NSAppearance.Name) async {
+        func height(_ mode: TablePresentation, limit: CGFloat? = nil) async -> CGFloat {
+            let root = MarkdownOutputView(tablePresentation: mode, markdown: HistoryMockupFixtures.table,
+                bodyFont: .body, previewHeight: limit).frame(width: 680).fixedSize(horizontal: false, vertical: true)
+            let (host, window) = makeWindow(root, width: 680, appearance: appearance)
+            defer { window.close() }
+            await settle(host)
+            return host.fittingSize.height
+        }
+        let full = await height(.selectableCells)
+        let copy = await height(.copyTable)
+        let control = copy - full
+        let preview = await height(.copyTable, limit: 260)
+        let grid = await height(.selectableCells, limit: 260 - control)
+        #expect(control > 0 && control < 30)
+        #expect(preview <= 260 && preview > 230)
+        #expect(abs(preview - grid - control) <= 1)
+        print("PREVIEW \(appearance.rawValue): copy control=\(control) grid=\(grid) total=\(preview)")
     }
 
     private func settle(_ host: NSView) async {
@@ -200,6 +265,15 @@ struct HistoryMockupRenderingTests {
     }
 
     private func views(_ root: NSView) -> [NSView] { [root] + root.subviews.flatMap(views) }
+
+    private func feedScroll(_ host: NSView) -> NSScrollView? {
+        var ancestor = views(host).first { $0 is ProseTextView }?.superview
+        while let view = ancestor {
+            if let scroll = view as? NSScrollView, scroll.hasVerticalScroller { return scroll }
+            ancestor = view.superview
+        }
+        return nil
+    }
 
     private func proseY(_ host: NSView, prefix: String) throws -> CGFloat {
         let view = try #require(views(host).compactMap { $0 as? ProseTextView }.first { $0.string.hasPrefix(prefix) })
@@ -213,6 +287,7 @@ struct HistoryMockupRenderingTests {
         }
         let start = (view.string as NSString).range(of: starting).location
         let length = min(maxLength ?? view.string.utf16.count, view.string.utf16.count - start)
+        (window as? HistoryCaptureWindow)?.captureActiveSelection = true
         window.makeFirstResponder(view)
         view.setSelectedRange(NSRange(location: start, length: length))
         view.needsDisplay = true
@@ -220,7 +295,7 @@ struct HistoryMockupRenderingTests {
 
     private func capture(_ host: NSView, window: NSWindow, scene: String, name: String, directory: URL,
                          claim: String, state: ConversationFeedState? = nil) throws -> [String: Any] {
-        #expect(!window.isVisible && !window.isKeyWindow)
+        #expect(!window.isVisible)
         #expect((state?.mountedIDs.count ?? 0) <= 20)
         host.layoutSubtreeIfNeeded()
         let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
@@ -234,6 +309,7 @@ struct HistoryMockupRenderingTests {
         if scene == "17a-table-selectable-cells" { #expect(residuals == 39) }
         if scene == "17b-table-copy-table" { #expect(residuals == 0) }
         let selected = prose.filter { $0.selectedRange().length > 0 }
+        if !selected.isEmpty { #expect(window.isKeyWindow && selected.contains { window.firstResponder === $0 }) }
         let labels = all.compactMap { $0.accessibilityLabel() }
         let visibleProse = prose.compactMap { view -> [String: Any]? in
             let rect = view.convert(view.bounds, to: host)
@@ -245,10 +321,13 @@ struct HistoryMockupRenderingTests {
             "size": ["width": host.bounds.width, "height": host.bounds.height],
             "pixel_size": ["width": bitmap.pixelsWide, "height": bitmap.pixelsHigh], "claim": claim,
             "mounted_turn_ids": state?.mountedIDs ?? [], "new_count": state?.newCount ?? 0,
+            "bottom_content_inset": state == nil ? 0 : feedScroll(host)?.contentInsets.bottom ?? 0,
+            "floating_control_height": state?.floatingControlHeight ?? 0,
             "native_prose_views": prose.count, "visible_prose": visibleProse,
             "residual_selection_fields": residuals,
             "selected_ranges": selected.map { ["location": $0.selectedRange().location, "length": $0.selectedRange().length] },
             "native_accessibility_labels": labels,
+            "active_selection": !selected.isEmpty && window.isKeyWindow,
             "window_shown": window.isVisible]
     }
 

@@ -51,6 +51,32 @@ struct ProseTextTests {
         #expect(table.count == 3)
     }
 
+    @Test func wrappedCodeKeepsWordsWholeAndPreviewEndsOnALine() throws {
+        let doc = try document(HistoryMockupFixtures.selectionAnswer)
+        for width: CGFloat in [420, 680] {
+            let view = ProseTextView.make()
+            view.textStorage?.setAttributedString(doc.text)
+            view.setFrameSize(CGSize(width: width, height: ProseMeasurer.shared.height(doc, width: width)))
+            let manager = try #require(view.layoutManager)
+            let container = try #require(view.textContainer)
+            manager.ensureLayout(for: container)
+            var lines: [NSRange] = []
+            manager.enumerateLineFragments(forGlyphRange: manager.glyphRange(for: container)) { _, _, _, glyphs, _ in
+                lines.append(manager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil))
+            }
+            for word in ["ConversationHistoryWindow", "verified"] {
+                let range = (doc.text.string as NSString).range(of: word)
+                #expect(lines.contains { NSIntersectionRange($0, range).length == range.length })
+            }
+            let prompt = ProseBuilder.plain(HistoryMockupFixtures.prompt(0))
+            let clipped = ProseMeasurer.shared.wholeLineHeight(prompt, width: width, limit: 260)
+            let rects = ProseMeasurer.shared.lines(prompt, width: width)
+            #expect(clipped <= 260 && clipped > 230)
+            #expect(rects.contains { ceil($0.maxY) == clipped })
+            #expect(!rects.contains { $0.minY < clipped && ceil($0.maxY) > clipped })
+        }
+    }
+
     @Test func exactFractionalWidthsHaveSeparateCacheEntriesAndMatchDisplay() throws {
         let docs = try [document(HistoryMockupFixtures.selectionAnswer),
                         ProseBuilder.plain(HistoryMockupFixtures.prompt(0)),

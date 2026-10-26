@@ -25,7 +25,7 @@ extension EnvironmentValues {
 
 struct ProseStyle: Hashable {
     var bodySize: CGFloat = NSFont.preferredFont(forTextStyle: .body).pointSize
-    var generation: String { "prose-1:\(bodySize)" }
+    var generation: String { "prose-2:\(bodySize)" }
     var font: NSFont { .systemFont(ofSize: bodySize) }
     var codeFont: NSFont { .monospacedSystemFont(ofSize: max(10, bodySize - 2), weight: .regular) }
 
@@ -128,15 +128,23 @@ struct ProseSegment: Identifiable {
             case .code:
                 // Each source line remains a real newline. Soft wrapping and indentation
                 // are paragraph attributes, so copying never inserts continuation spaces.
-                let box = NSTextBlock()
-                box.backgroundColor = NSColor(Theme.surfaceCode)
+                if run.length > 0,
+                   let previous = run.attribute(.paragraphStyle, at: run.length - 1, effectiveRange: nil) as? NSParagraphStyle,
+                   let ending = previous.mutableCopy() as? NSMutableParagraphStyle {
+                    ending.paragraphSpacing = 0 // Match the final line of the separate prose host.
+                    let last = (run.string as NSString).paragraphRange(for: NSRange(location: run.length - 1, length: 0))
+                    run.addAttribute(.paragraphStyle, value: ending, range: last)
+                }
+                let box = ProseCodeBlock()
                 box.setValue(100, type: .percentageValueType, for: .width)
                 box.setWidth(Theme.Spacing.md, type: .absoluteValueType, for: .padding)
+                box.setWidth(Theme.Spacing.md, type: .absoluteValueType, for: .margin, edge: .minY)
+                box.setWidth(Theme.Spacing.md, type: .absoluteValueType, for: .margin, edge: .maxY)
                 let p = paragraph(spacing: 0)
                 p.textBlocks = [box]
                 p.headIndent = ("  " as NSString).size(withAttributes: [.font: style.codeFont]).width
                 p.firstLineHeadIndent = 0
-                p.lineBreakMode = .byCharWrapping
+                p.lineBreakMode = .byWordWrapping
                 append(NSAttributedString(string: block.text, attributes: [
                     .font: style.codeFont, .foregroundColor: NSColor.labelColor, .paragraphStyle: p
                 ]))
@@ -174,6 +182,13 @@ struct ProseSegment: Identifiable {
         p.paragraphSpacing = spacing
         p.lineBreakMode = .byWordWrapping
         return p
+    }
+
+    static func tableCell(_ source: String, style: ProseStyle, header: Bool) -> ProseDocument {
+        let font = NSFont.systemFont(ofSize: style.bodySize, weight: header ? .semibold : .regular)
+        let text = NSMutableAttributedString(attributedString: inline(source, font: font, style: style))
+        text.addAttribute(.paragraphStyle, value: paragraph(spacing: 0), range: NSRange(location: 0, length: text.length))
+        return ProseDocument(identity: "table:\(header):" + source, text: text, style: style)
     }
 
     private static func inline(_ source: String, font: NSFont, style: ProseStyle) -> NSAttributedString {

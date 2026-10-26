@@ -100,3 +100,27 @@ struct SavedHistoryControl: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
+
+/// Reserve the measured control height plus eight points without re-anchoring
+/// the scroll content. A zero-height container explicitly removes the inset.
+struct ConversationJumpInset: ViewModifier {
+    var isPresented: Bool
+    var newCount: Int
+    var measuredHeight: (CGFloat) -> Void
+    var latest: () -> Void
+
+    func body(content: Content) -> some View {
+        content.safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                if isPresented {
+                    JumpToLatestControl(newCount: newCount, action: latest)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measuredHeight($0) }
+                        .padding(.bottom, Theme.Spacing.sm)
+                }
+            }
+            .frame(height: isPresented ? nil : 0)
+            .frame(maxWidth: .infinity)
+            .background(Rectangle().fill(Theme.surfaceBase))
+        }
+    }
+}

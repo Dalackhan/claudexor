@@ -47,7 +47,7 @@ struct PromptBubble: View {
         let text = collapsed ? String(bounded.prefix(1_200)) : bounded
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             ProseText(document: ProseBuilder.plain(text, style: .make(body: true, size: dynamicTypeSize)),
-                hugs: !long, accessibilityName: "User message",
+                hugs: !long, heightLimit: collapsed ? 260 : nil, accessibilityName: "User message",
                 onSelectionChange: { selected in
                     if selected { store?.selectedMessages.insert(turnID) }
                     else { store?.selectedMessages.remove(turnID) }
@@ -55,7 +55,7 @@ struct PromptBubble: View {
                     if focused { store?.focusedMessages.insert(turnID) }
                     else { store?.focusedMessages.remove(turnID) }
                 })
-                .frame(maxHeight: collapsed ? 260 : nil, alignment: .top).clipped()
+                .clipped()
             if mode == .collapse && long {
                 Button(expansion.wrappedValue ? "Show less" : "Show more") { expansion.wrappedValue.toggle() }
                     .buttonStyle(.borderless).font(.caption).foregroundStyle(Theme.accent)

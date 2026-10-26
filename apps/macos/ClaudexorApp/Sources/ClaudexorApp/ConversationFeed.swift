@@ -13,6 +13,7 @@ import ClaudexorKit
     var atBottom = true
     var viewportHeight: CGFloat = 600
     var width: CGFloat = 680
+    var floatingControlHeight: CGFloat = 0
     var earlierState: HistoryControlState = .ready
     var laterState: HistoryControlState = .ready
     var presentation = ConversationPresentation()
@@ -146,12 +147,12 @@ struct ConversationFeed: View {
             }
         }
         .defaultScrollAnchor(.bottom, for: .initialOffset)
-        .defaultScrollAnchor(.bottom, for: .sizeChanges)
+        .defaultScrollAnchor(state.follows ? .bottom : .top, for: .sizeChanges)
         .defaultScrollAnchor(.top, for: .alignment)
         .scrollPosition($state.position, anchor: .top)
         .onChange(of: state.navigationRevision) { state.commitNavigation() }
         .onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 1
+            geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height + geometry.contentInsets.bottom - 1
         } action: { _, bottom in
             state.geometry(bottom: bottom, tailMounted: tailMounted)
         }
@@ -159,12 +160,9 @@ struct ConversationFeed: View {
             state.viewportHeight = size.height
             state.width = min(680, max(1, size.width - 2 * Theme.Spacing.lg))
         }
-        .overlay(alignment: .bottom) {
-            if !state.follows && !(state.atBottom && !tailMounted) {
-                JumpToLatestControl(newCount: state.newCount, action: { state.latest(detail.turns) })
-                    .padding(.bottom, Theme.Spacing.sm)
-            }
-        }
+        .modifier(ConversationJumpInset(isPresented: !state.follows && !(state.atBottom && !tailMounted),
+            newCount: state.newCount, measuredHeight: { state.floatingControlHeight = $0 },
+            latest: { state.latest(detail.turns) }))
         .environment(state.presentation)
         .onAppear { state.install(detail.turns) }
         .onChange(of: detail.turns.map(\.id)) { state.receive(detail.turns) }

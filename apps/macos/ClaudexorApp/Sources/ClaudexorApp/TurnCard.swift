@@ -281,8 +281,7 @@ struct TurnCard: View {
                                    fileScopeRoots: Self.fileScopeRoots(
                                        executionRoot: executionRoot, runDir: run.runDir),
                                    remoteFileScope: Self.remoteFileScope(run, executionRoot: executionRoot),
-                                   bodyFont: .body)
-                    .frame(maxHeight: long && !answerExpanded ? 260 : nil, alignment: .top)
+                                   bodyFont: .body, previewHeight: long && !answerExpanded ? 260 : nil)
                     .clipped()
                 if long {
                     Button(answerExpanded ? "Show less" : "Show more") { answerExpanded.toggle() }

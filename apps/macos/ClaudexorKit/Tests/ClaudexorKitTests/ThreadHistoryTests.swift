@@ -55,6 +55,14 @@ struct ThreadHistoryTests {
         }
     }
 
+    @Test func onlyTheEnginesUnknownRouteReplyMeansAnOlderEngine() {
+        #expect(GatewayError.http(status: 404, body: #"{"error":"not found"}"#).isUnknownRoute)
+        #expect(!GatewayError.http(status: 404, body: #"{"code":"thread_not_found","message":"gone"}"#).isUnknownRoute)
+        #expect(!GatewayError.http(status: 404, body: #"{"error":"no such run"}"#).isUnknownRoute)
+        #expect(!GatewayError.http(status: 500, body: #"{"error":"not found"}"#).isUnknownRoute)
+        #expect(!GatewayError.transport("offline").isUnknownRoute)
+    }
+
     @Test func revisionsRejectDelayedObservationsAndDoNotCompareIncarnations() throws {
         let page = try JSONDecoder().decode(ThreadHistoryPage.self, from: fixture("thread-history-receipts"))
         let older = ThreadHistoryRevision(epoch: page.revision.epoch, sequence: page.revision.sequence - 1)

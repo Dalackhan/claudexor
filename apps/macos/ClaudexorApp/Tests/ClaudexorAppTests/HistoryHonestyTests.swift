@@ -5,6 +5,20 @@ import Testing
 
 @MainActor @Suite(.serialized)
 struct HistoryHonestyTests {
+    @Test func anOlderEngineWithoutTheHistoryReadAsksForTheUpdate() async throws {
+        let store = ThreadHistoryStore(locationID: .local, threadID: "th-older") { _, _, _ in
+            throw GatewayError.http(status: 404, body: #"{"error":"not found"}"#)
+        }
+        await store.open()
+        #expect(store.state == .failed(ThreadHistoryStore.olderEngineMessage))
+        #expect(store.errorMessage == ThreadHistoryStore.olderEngineMessage && store.rows.isEmpty)
+        let typed = ThreadHistoryStore(locationID: .local, threadID: "th-gone") { _, _, _ in
+            throw GatewayError.http(status: 404, body: #"{"code":"thread_not_found","message":"gone"}"#)
+        }
+        await typed.open()
+        #expect(typed.errorMessage != ThreadHistoryStore.olderEngineMessage)
+    }
+
     @Test func prunedRunsNeverReuseAnUnrelatedCachedReceipt() async throws {
         let page = try fixture("thread-history-not-retained")
         let store = ThreadHistoryStore(locationID: .local, threadID: page.threadId) { _, _, _ in page }

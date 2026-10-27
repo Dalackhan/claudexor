@@ -43,3 +43,14 @@ extension GatewayClient {
         return try Self.decoder.decode(type, from: data)
     }
 }
+
+extension GatewayError {
+    /// True for the engine's reply to a route it does not serve: an engine older
+    /// than the history read answers `/threads/:id/history` this way, while the
+    /// history read itself reports typed problems.
+    public var isUnknownRoute: Bool {
+        guard case .http(404, let body) = self,
+              let reply = try? JSONDecoder().decode([String: String].self, from: Data(body.utf8)) else { return false }
+        return reply == ["error": "not found"]
+    }
+}

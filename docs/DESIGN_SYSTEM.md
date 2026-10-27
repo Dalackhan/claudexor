@@ -473,7 +473,8 @@ frequency and volume are. The contracts:
   the bottom initial anchor; explicit moves use `ScrollPosition` by ID.
   A reading window stays fixed when new turns arrive. Local and remote feeds
   use the addressed engine history read; a selected thread retains at most two
-  pages of DTOs (40 rows / 4 MiB). The inline transcript
+  pages of DTOs (40 rows / 4 MiB). An engine older than that read (kept while
+  its work runs) gets a Retry with an update explanation, never an empty feed. The inline transcript
   remains a plain `VStack` with its existing reducer/presentation caps. No
   cumulative unbounded "load more", reversed copies, or thousand-row eager stacks.
 - **History observation and recovery.** Open and Jump request the newest page.

@@ -318,9 +318,13 @@ import Observation
 
     private func finishTravel() { earlierState = .ready; laterState = .ready }
     private enum Control { case jump, earlier, later, refresh }
+    static let olderEngineMessage = "This engine is older than the app and cannot show conversation history. "
+        + "Claudexor updates it, or offers an update, once its current work finishes; then choose Retry."
+
     private func fail(_ error: Error, control: Control) {
-        errorMessage = error.localizedDescription
-        if header == nil { state = .failed(error.localizedDescription) }
+        let message = (error as? GatewayError)?.isUnknownRoute == true ? Self.olderEngineMessage : error.localizedDescription
+        errorMessage = message
+        if header == nil { state = .failed(message) }
         switch control {
         case .jump: jumpState = .failed
         case .earlier: earlierState = .failed

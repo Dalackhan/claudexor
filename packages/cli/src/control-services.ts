@@ -28,6 +28,7 @@ import {
 import { rollbackAccountsUnifiedMigration } from "./accounts-unified-migration.js";
 import { credentialProfileMutations } from "./credential-profile-mutations.js";
 import { quotaControlServices } from "./quota-services.js";
+import { uploadServices } from "./upload-services.js";
 import { registerConfigDirProfile } from "./profile-registration.js";
 import { StatusProjectionCache, globalConfigVersion } from "./status-projection-cache.js";
 import { vendorVerifiedProfileStatus } from "@claudexor/orchestrator";
@@ -156,17 +157,7 @@ export function controlServices(
   return {
     preflightRunRequirements,
     preflightThreadRunRequirements,
-    createUpload: async (input: unknown, idempotencyKey: string) =>
-      resources().create(input, idempotencyKey),
-    writeUpload: async (uploadId: string, chunks: AsyncIterable<Uint8Array>) =>
-      resources().write(uploadId, chunks),
-    uploadStatus: async (uploadId: string) => resources().status(uploadId),
-    cancelUpload: async (uploadId: string) => resources().cancel(uploadId),
-    finalizeUpload: async (
-      uploadId: string,
-      expectedSha256: string | undefined,
-      idempotencyKey: string,
-    ) => resources().finalize(uploadId, expectedSha256, idempotencyKey),
+    ...uploadServices(resources),
     validateResources: async (refs: ResourceAttachmentRef[]) => {
       resources().resolve(refs);
     },

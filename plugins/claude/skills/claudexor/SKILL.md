@@ -67,6 +67,57 @@ Start read-only unless the user explicitly asked to change or create files.
    `jobId` is returned, pass it as `runId` to the same tools until it binds.
    `claudexor_thread_read` lists earlier turns without starting work.
 
+## Documents
+
+For an explicitly selected document on an already-running daemon, first call
+`claudexor_store_identity` and durably save its `storeId`. Save a caller-owned
+import key with the exact arguments, then call `claudexor_upload_import` with
+`{expectedStoreId,path,idempotencyKey}` (optional `kind`, `mime`, `name`). Select
+one absolute regular file on the MCP-server host, not a remote client's path, URL,
+glob or directory; sensitive source/content checks still apply. After any
+uncertainty or failure repeat the identical call with the saved store id and key,
+never a later store answer. A completed import returns its original `resource`
+without reading the file again, even after the file changed or was deleted. Other
+arguments under a used key fail `idempotency_conflict`; a new edition needs a new
+key. An unfinished import whose source changed or vanished fails
+`upload_import_source_changed` or `upload_import_source_unavailable` with its
+`uploadId`; another store fails `store_mismatch` before the file is touched.
+
+The low-level stages remain available.
+Save a caller-owned create key and exact body before `claudexor_upload_create`
+with `{idempotencyKey,request:{kind,mime,name,sizeBytes}}`. Save its `uploadId`, then
+call `claudexor_upload_import_local` with `{uploadId,path}`; save the returned
+`expectedSha256`. Save a separate finalize key and exact body before
+`claudexor_upload_finalize` with `{uploadId,idempotencyKey,request:{expectedSha256}}`.
+
+After an unknown create/finalize response, replay the same key and body. After an
+uncertain PUT, use `claudexor_upload_status` with `{uploadId}`: uploaded means
+finalize with the saved digest, uploading means observe later, and cancelled
+needs an explicit new upload. Never overwrite uploaded bytes; repeating import
+can hash the explicit source to recover its digest, which finalize still checks
+against the actual uploaded bytes. A finalized upload may be absent from status:
+replay the original finalize key/body even after status 404.
+Never auto-cancel an unknown finalize outcome. `claudexor_upload_cancel` with
+`{uploadId}` is only an explicit decision about an unfinished upload.
+
+Pass the ready resource as `attachments: [{resourceId}]` to a public run,
+`claudexor_thread_turn` or `claudexor_run_continue` (CLI `--attach-resource`);
+paths, base64 and internal resolved objects are invalid run refs.
+Omission adds no new refs; `[]` is explicit empty.
+A continuation inherits no attachments: pass the refs again when the successor
+needs the documents. Continuation refs do not rewrite retained history.
+Model-purpose resources are not ordinary attachments. The Delegate belt accepts
+refs on its run tools but has no upload controls. Every selected lane must admit
+the MIME and finite byte/count limits. Ordinary CLI --attach/--image convenience
+retains its existing best-effort cancellation; explicit stages retain caller-owned
+recovery identities.
+
+Codex provides verified byte references for plain text, Markdown, JSON, PDF and DOCX,
+with no built-in PDF/DOCX parsing or OCR promise. Native readability follows the
+selected sandbox; documents add no permission grant or project copy.
+
+## Observe and recover
+
 Run tools enqueue work and return a durable handle, not terminal output or
 proof of completion. Use `claudexor_runs`, `claudexor_inspect`,
 `claudexor_run_status`, and `claudexor_run_result` to recover and follow it.

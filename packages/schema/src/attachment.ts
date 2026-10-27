@@ -1,5 +1,8 @@
 import { z } from "zod/v3";
+import { ControlHandshakeResponse } from "./operation.js";
 import { ContentHash, Id, IsoTimestamp } from "./primitives.js";
+
+const storeId = ControlHandshakeResponse.shape.storeId.unwrap();
 
 export const AttachmentKind = z
   .enum(["image", "file"])
@@ -94,3 +97,63 @@ export const ControlUploadFinalizeRequest = z
   .object({ expectedSha256: ContentHash.optional() })
   .strict();
 export type ControlUploadFinalizeRequest = z.infer<typeof ControlUploadFinalizeRequest>;
+
+export const ControlUploadImportContent = z
+  .object({
+    sizeBytes: z.number().int().nonnegative().describe("Exact byte length."),
+    sha256: z
+      .string()
+      .regex(/^sha256:[a-f0-9]{64}$/)
+      .describe('Exact digest of the bytes: "sha256:" and 64 lowercase hex digits.'),
+  })
+  .strict()
+  .describe("Exact bytes a keyed import owns, bound by its first accepted declaration.");
+export type ControlUploadImportContent = z.infer<typeof ControlUploadImportContent>;
+
+/** The key binds every field except the store check and `content`, which its first declaration binds. */
+export const ControlUploadImportRequest = z
+  .object({
+    expectedStoreId: storeId.describe(
+      "Store UUID from the opt-in handshake, saved with the key BEFORE the first import and replayed unchanged; never replaced by the current store. A different store is refused before any effect.",
+    ),
+    kind: AttachmentKind,
+    mime: z.string().min(1),
+    name: z.string().default(""),
+    source: z
+      .string()
+      .min(1)
+      .max(4096)
+      .optional()
+      .describe(
+        "Opaque caller identity of the selected source, such as the absolute path a local client read or a task artifact id. Bound into the key only; the daemon never reads, resolves, stores or returns it.",
+      ),
+    content: ControlUploadImportContent.optional().describe(
+      "Required to begin an import. Omit it to read or replay an already bound key without touching the source.",
+    ),
+  })
+  .strict()
+  .describe("Keyed import of one ordinary attachment through the upload owner.");
+export type ControlUploadImportRequest = z.infer<typeof ControlUploadImportRequest>;
+
+export const ControlUploadImport = z
+  .object({
+    storeId: storeId.describe("Durable store that owns this import key and its resource."),
+    state: z
+      .enum(["open", "uploading", "ready", "cancelled"])
+      .describe(
+        "open: send the bound bytes; uploading: a transfer is in flight; ready: resource is published; cancelled: finished without a resource, a new attempt needs a new key.",
+      ),
+    uploadId: Id.describe("Upload that receives this import's bytes."),
+    content: ControlUploadImportContent,
+    receivedBytes: z.number().int().nonnegative(),
+    resource: ControlResource.optional().describe(
+      "The immutable resource, present exactly when state is ready.",
+    ),
+  })
+  .strict()
+  .refine((value) => (value.state === "ready") === (value.resource !== undefined), {
+    message: "resource is present exactly when state is ready",
+    path: ["resource"],
+  })
+  .describe("Current state of one keyed import, identical for its first call and every replay.");
+export type ControlUploadImport = z.infer<typeof ControlUploadImport>;

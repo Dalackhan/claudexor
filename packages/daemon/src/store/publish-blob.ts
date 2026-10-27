@@ -46,6 +46,12 @@ export class PublishBlob {
       return ControlResource.parse(prior.result);
     }
     const upload = this.uploads.get(id);
+    if (upload.import)
+      throw resourceError(
+        "this upload belongs to a keyed import; replay POST /v2/uploads/imports to complete it",
+        409,
+        "upload_import_owned",
+      );
     const keyDigest = uploadKeyDigest("finalize", key);
     if (upload.finalization) {
       if (
@@ -59,6 +65,32 @@ export class PublishBlob {
         );
       return this.complete(upload);
     }
+    return this.publish(upload, expectedSha256, keyDigest, requestDigest, true);
+  }
+
+  /** A keyed import completes under its own binding, with the digest it declared up front. */
+  publishImport(upload: UploadRow): ControlResource {
+    const binding = upload.import;
+    if (!binding) throw new Error(`upload ${upload.status.uploadId} has no import binding`);
+    if (upload.finalization) {
+      if (upload.state !== "published") return this.complete(upload);
+      return ControlResource.parse(upload.finalization.result);
+    }
+    const requestDigest = hashJson({
+      uploadId: upload.status.uploadId,
+      expectedSha256: binding.sha256,
+    });
+    return this.publish(upload, binding.sha256, binding.keyDigest, requestDigest, false);
+  }
+
+  private publish(
+    upload: UploadRow,
+    expectedSha256: string | undefined,
+    keyDigest: string,
+    requestDigest: string,
+    bindFinalizeKey: boolean,
+  ): ControlResource {
+    const id = upload.status.uploadId;
     if (upload.status.state !== "uploaded")
       throw resourceError(`upload ${id} is ${upload.status.state}`, 409, "upload_not_uploaded");
     const bytes = readFileSync(this.uploads.partPath(id));
@@ -99,16 +131,17 @@ export class PublishBlob {
     runMutation(this.store, (tx) => {
       putUploadInTx(tx, upload);
       putResourceInTx(tx, { resource, state: "publishing", expiresAt: null, releasedAt: null });
-      bindIdempotencyInTx(tx, {
-        owner: "upload",
-        pid: 0,
-        keyDigest,
-        operation: "finalize",
-        requestDigest,
-        targetId: id,
-        result: resource,
-        createdAt: tx.now().toISOString(),
-      });
+      if (bindFinalizeKey)
+        bindIdempotencyInTx(tx, {
+          owner: "upload",
+          pid: 0,
+          keyDigest,
+          operation: "finalize",
+          requestDigest,
+          targetId: id,
+          result: resource,
+          createdAt: tx.now().toISOString(),
+        });
       this.obligations.create("publish_blob", id, 0, { sha, resource_id: resource.resourceId });
       tx.changes.blobChanged(sha);
       tx.changes.uploadChanged(id);

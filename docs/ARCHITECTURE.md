@@ -237,6 +237,19 @@ at every wire boundary.
   its session IDs are daemon thread IDs and list/load/resume/close/prompt/cancel
   all project the same `/v2` thread authority. ACP images and embedded resources
   are finalized through the daemon attachment pipeline before a turn enqueues.
+  MCP upload controls and CLI stage commands project that same HTTP resource
+  owner. A keyed import (`POST /v2/uploads/imports`,
+  `packages/daemon/src/store/upload-imports.ts`) binds a caller key, the
+  semantic request and the first declared digest in the existing upload and
+  idempotency tables, checks the saved store id first and publishes verified
+  bytes on replay; the one-call MCP/CLI client asks before it reads its source.
+  MCP public/belt runs and thread turns forward strict resource refs;
+  local import owns only a bounded host-file descriptor, never durable upload
+  state. The [ingress contract](INTEGRATIONS.md#document-ingress-and-resource-references)
+  defines keyed and stage identities, source custody and uncertain-response recovery.
+  Codex's shared attachment translator verifies document bytes and constructs
+  user-context references for app-server and exec; format and native-readability
+  limits are described in that same contract.
 - `packages/canary`: canary golden stories — user-level E2E smokes over the
   BUILT CLI with offline fake harnesses, each pinned to a Bible invariant
   tag (`pnpm canary`; runs in CI on every PR). The shared fixture pins the built
@@ -2762,6 +2775,7 @@ visibility, not a permanent roster. Reads add no execution or approval authority
 - `GET /v2/uploads/:id`
 - `PUT /v2/uploads/:id/bytes`
 - `POST /v2/uploads/:id/finalize`
+- `POST /v2/uploads/imports`
 <!-- END GENERATED ENDPOINTS -->
 
 Endpoint semantics beyond the inventory:

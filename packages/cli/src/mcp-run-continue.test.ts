@@ -134,6 +134,42 @@ describe("MCP sparse continuation query", () => {
     expect(controlApiFetch).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { attachments: undefined },
+    { attachments: [] },
+    { attachments: [{ resourceId: "res-document" }] },
+  ])(
+    "preserves sparse attachment refs $attachments and the caller key/body on replay",
+    async ({ attachments }) => {
+      connected();
+      const request = {
+        mode: "__run_continue",
+        runId: "run-p",
+        prompt: "",
+        idempotencyKey: "document-successor",
+        ...(attachments === undefined ? {} : { attachments }),
+      };
+      const first = await mcpSurfaceRunner()(request);
+      expect(await mcpSurfaceRunner()(request)).toEqual(first);
+      const expected = {
+        method: "POST",
+        headers: { "content-type": "application/json", "Idempotency-Key": request.idempotencyKey },
+        body: JSON.stringify({
+          continueFrom: "run-p",
+          prompt: "",
+          ...(attachments === undefined ? {} : { attachments }),
+        }),
+      };
+      expect(controlApiFetch).toHaveBeenCalledTimes(2);
+      for (const call of vi.mocked(controlApiFetch).mock.calls) {
+        expect(call[1]).toBe("/runs");
+        expect(call[2]).toEqual(expected);
+      }
+      expect(ensureDaemon).not.toHaveBeenCalled();
+      expect(enqueueAndAwait).not.toHaveBeenCalled();
+    },
+  );
+
   it("forwards explicit successor controls verbatim and omits absent ones", async () => {
     connected();
     const controls = {
@@ -165,6 +201,24 @@ describe("MCP sparse continuation query", () => {
   });
 
   it.each([
+    { attachments: null },
+    { attachments: [{ path: "/host/document.txt" }] },
+    { attachments: [{ base64: "Zml4dHVyZQ==" }] },
+    { attachments: [{ resourceId: "res-document", path: "/host/document.txt" }] },
+    { attachments: [{ resourceId: "" }] },
+    {
+      attachments: [
+        {
+          resource_id: "res-document",
+          kind: "file",
+          mime: "text/plain",
+          name: "document.txt",
+          path: "/store/blob",
+          sha256: `sha256:${"0".repeat(64)}`,
+          size_bytes: 7,
+        },
+      ],
+    },
     { taskGroupId: "not-a-uuid" },
     { taskGroupId: null },
     { access: "full_access" },
@@ -181,6 +235,7 @@ describe("MCP sparse continuation query", () => {
     async (extra) => {
       await expect(runContinueQuery({ runId: "run-p", ...extra })).rejects.toBeDefined();
       expect(connectDaemonIfRunning).not.toHaveBeenCalled();
+      expect(controlApiFetch).not.toHaveBeenCalled();
     },
   );
 

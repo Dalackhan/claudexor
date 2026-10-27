@@ -65,9 +65,18 @@ describe("MCP run-control applicability", () => {
     expect(received).toMatchObject({ mode: "agent", review });
   });
 
-  it("does not invent an MCP attachment/upload surface for Plan", () => {
+  it("exposes canonical resource refs for Plan without alternate attachment authority", () => {
     const schema = tools.find((tool) => tool.name === "claudexor_plan")?.inputSchema as any;
-    for (const key of ["attachments", "attachment", "resources", "resourceIds", "images"]) {
+    expect(schema.properties.attachments).toMatchObject({
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["resourceId"],
+        properties: { resourceId: { type: "string", minLength: 1 } },
+      },
+    });
+    for (const key of ["attachment", "resources", "resourceIds", "images"]) {
       expect(schema.properties[key]).toBeUndefined();
     }
   });

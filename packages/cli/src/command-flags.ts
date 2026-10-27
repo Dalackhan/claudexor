@@ -42,6 +42,7 @@ export const COMMON_RUN_FLAGS: readonly string[] = [
   "instructions",
   "instructions-file",
   "attach",
+  "attach-resource",
   "image",
   "json",
 ];
@@ -118,6 +119,11 @@ const FROZEN_REVIEW_FLAGS: readonly CliFlagSpec[] = [
 export const FROZEN_REVIEW_FLAG_NAMES = FROZEN_REVIEW_FLAGS.map((flag) => flag.name);
 
 export const CLI_FLAGS: readonly CliFlagSpec[] = [
+  valueFlag(
+    "request-json",
+    "<object>",
+    "Upload create/finalize: exact schema-owned request body; upload import: optional kind/mime/name",
+  ),
   valueFlag("limit", "<N>", "task-group-runs: page limit 1..200 (default 50)"),
   valueFlag("state", "<state>", "task-group-runs: filter retained members by lifecycle"),
   valueFlag("cursor", "<cursor>", "task-group-runs: opaque cursor from the prior returned page"),
@@ -293,6 +299,11 @@ export const CLI_FLAGS: readonly CliFlagSpec[] = [
     "Read --instructions from a file (avoids ARG_MAX and ps leakage)",
   ),
   valueFlag("attach", "<path[,path...]>", "Attach file(s) to ask/agent/best-of/plan"),
+  valueFlag(
+    "attach-resource",
+    "<resourceId[,resourceId...]>",
+    "Attach ready immutable resource id(s) from upload-import or upload-finalize",
+  ),
   valueFlag(
     "image",
     "<path[,path...]>",

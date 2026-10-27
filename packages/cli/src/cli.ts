@@ -71,6 +71,8 @@ import { reviewCommand } from "./review-command.js";
 import { controlApiFetch, followRun } from "./live.js";
 import { retryCommand, runAgainCommand } from "./retry-command.js";
 import { runsWaitCommand } from "./runs-wait-command.js";
+import { uploadCommand } from "./upload-command.js";
+import { UPLOAD_COMMAND_SPECS } from "./upload-command-specs.js";
 import { taskGroupRunsCommand } from "./task-group-runs.js";
 import { nextMessageCommand } from "./next-message-command.js";
 import { assertCliRunParamsHaveNoInlineSecrets } from "./run-secret-scan.js";
@@ -223,6 +225,11 @@ function attachmentInputs(args: ParsedArgs): LocalAttachment[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
+/** Ready refs are sent as-is; the daemon admits them like every other resource ref. */
+function attachmentResources(args: ParsedArgs): ResourceAttachmentRef[] {
+  return flagStringList(args, "attach-resource").map((resourceId) => ({ resourceId }));
+}
+
 /** Per-family reviewer model map from `--reviewer-model "openai=gpt-4o-mini,anthropic=claude-haiku"`. Fails loudly on malformed input. */
 function reviewerModels(args: ParsedArgs): Partial<Record<ProviderFamily, string>> | undefined {
   return parseReviewerModelFlags(flagValues(args, "reviewer-model"));
@@ -313,6 +320,7 @@ async function orchestrate(
   let resolvedPrimaryHarness: string | undefined;
   let resolvedModel: string | undefined;
   let attachmentRequest: ReturnType<typeof attachmentInputs> | undefined;
+  let attachmentRefs: ResourceAttachmentRef[] = [];
   let resolvedProtectedPathApprovals: ProtectedPathApproval[] | undefined;
   let resolvedInstructions: string | undefined;
   let groupMetadata: ReturnType<typeof taskGroupOptions>;
@@ -364,6 +372,7 @@ async function orchestrate(
     council = flagBool(args, "council") ? true : undefined;
     resolvedSynthesis = synthesisMode(args);
     attachmentRequest = attachmentInputs(args);
+    attachmentRefs = attachmentResources(args);
     resolvedProtectedPathApprovals = protectedPathApprovals(args);
     resolvedInstructions = resolveInstructions(args);
     resolvedMaxSeconds = intFlag(args, "max-seconds");
@@ -481,6 +490,7 @@ async function orchestrate(
     nFlag,
     attemptsFlag,
     attachmentRequest,
+    attachmentRefs,
     forced,
   });
 }
@@ -519,6 +529,7 @@ interface DaemonRunParams {
   nFlag: number | undefined;
   attemptsFlag: number | undefined;
   attachmentRequest: ReturnType<typeof attachmentInputs> | undefined;
+  attachmentRefs: ResourceAttachmentRef[];
   forced: { deepScan?: boolean; create?: boolean; race?: boolean };
 }
 
@@ -587,13 +598,16 @@ async function daemonRun(
       );
     }
   }
-  let attachmentRefs: ResourceAttachmentRef[] | undefined;
+  let attachmentRefs = p.attachmentRefs;
   try {
-    attachmentRefs = p.attachmentRequest
-      ? await Promise.all(
+    // Local files are uploaded first, then ready refs follow in their flag order.
+    if (p.attachmentRequest)
+      attachmentRefs = [
+        ...(await Promise.all(
           p.attachmentRequest.map((attachment) => uploadLocalAttachment(addr, attachment)),
-        )
-      : undefined;
+        )),
+        ...attachmentRefs,
+      ];
   } catch (err) {
     // D-7 projector: message/code envelope, NDJSON-safe. (Previously this branch
     // ignored --json-stream and fell through to a stderr line.)
@@ -612,7 +626,7 @@ async function daemonRun(
     ...(p.maxTurns !== undefined ? { maxTurns: p.maxTurns } : {}),
     ...(p.denyPaths?.length ? { denyPaths: p.denyPaths } : {}),
     ...(p.outputSchema !== undefined ? { outputSchema: p.outputSchema } : {}),
-    ...(attachmentRefs ? { attachments: attachmentRefs } : {}),
+    ...(attachmentRefs.length > 0 ? { attachments: attachmentRefs } : {}),
     mode: p.mode,
     ...(threadId ? { threadId } : {}),
     ...(p.delegate ? { delegate: true } : {}),
@@ -961,6 +975,7 @@ async function dispatch(args: ParsedArgs, outputMode: CliOutputMode): Promise<nu
     return runRepl(process.cwd());
   }
   const cwd = process.cwd();
+  if (UPLOAD_COMMAND_SPECS.some((spec) => spec.id === cmd)) return uploadCommand(args, json);
   const opsCommand = dispatchOpsCommand(cmd, args, json);
   if (opsCommand) return opsCommand;
 

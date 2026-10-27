@@ -53,5 +53,19 @@ export const CODEX_CAPABILITY_PROFILE: HarnessCapabilityProfile =
         max_count: 20,
         transport: "file_path",
       },
+      {
+        kind: "file",
+        mime_types: [
+          "text/plain",
+          "text/markdown",
+          "application/json",
+          "application/pdf",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ],
+        // Engine admission limits; native document extraction is not promised.
+        max_bytes: 20 * 1024 * 1024,
+        max_count: 20,
+        transport: "file_path",
+      },
     ],
   });

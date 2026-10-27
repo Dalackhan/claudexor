@@ -168,6 +168,7 @@ describe("command registry — the one owner of the CLI surface", () => {
       "instructions",
       "instructions-file",
       "attach",
+      "attach-resource",
       "image",
       "json",
     ];

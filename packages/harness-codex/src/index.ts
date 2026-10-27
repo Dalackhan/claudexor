@@ -62,7 +62,7 @@ import { CODEX_ACCESS_PROFILES, probeCodexCredentialProfile, resolveCodexProfile
 import { codexPersistence } from "./native-home-retention.js";
 import { smokeIsolatedApiKey } from "./smoke.js";
 export { canonicalCodexProfileHome, codexAccountIdentity } from "./profile.js";
-import { codexImageArgs } from "./attachments.js";
+import { codexExecInput, codexImageArgs, verifyCodexAttachments } from "./attachments.js";
 import { assertCodexExecSpec, codexSandboxMode } from "./sandbox.js";
 import {
   CodexAppServerController,
@@ -625,6 +625,7 @@ async function* runCodex(
   runtime: CodexRuntimeDeps,
   controller?: CodexAppServerController,
 ): AsyncIterable<HarnessEvent> {
+  verifyCodexAttachments(spec.attachments);
   const profile = spec.credential_profile;
   const authPreference = spec.auth_preference ?? "auto";
   let nativeEnv = codexNativeEnv(spec.env);
@@ -811,7 +812,7 @@ async function* runCodex(
       bin: BIN,
       args,
       spec,
-      input: spec.prompt,
+      input: codexExecInput(spec),
       env,
       label: "codex",
       redact: redactSecrets,

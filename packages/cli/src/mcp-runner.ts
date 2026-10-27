@@ -4,6 +4,7 @@ import {
   ControlRunControlResponse,
   ModeKind,
   RunExecution,
+  ResourceAttachmentRef,
   type ProcessingPreference,
   type PromptCacheTtl,
   normalizeCancelReasonCode,
@@ -31,6 +32,7 @@ import { runsWaitQuery } from "./mcp-runs-wait.js";
 import { taskGroupRunsQuery } from "./task-group-runs.js";
 import { runEventReadQuery } from "./mcp-run-event-read.js";
 import { journalRecoveryQuery } from "./mcp-journal-recovery.js";
+import { uploadQuery } from "./upload-query.js";
 import { deferredMessageQuery } from "./mcp-deferred-message.js";
 
 export interface SurfaceRunnerHooks {
@@ -69,6 +71,10 @@ export interface McpSurfaceRunnerOptions {
 export function mcpSurfaceRunner(options: McpSurfaceRunnerOptions = {}) {
   return async (p: any, hooks?: SurfaceRunnerHooks) => {
     const beltContext = Boolean(options.delegationParentRunId);
+    if (typeof p?.mode === "string" && p.mode.startsWith("__upload_")) {
+      const { mode, ...input } = p;
+      return uploadQuery(mode.slice("__upload_".length), input, beltContext, hooks?.signal);
+    }
     if (p?.mode === "__next_message" || p?.mode === "__next_message_read")
       return deferredMessageQuery(p, beltContext, hooks?.signal);
     if (p?.mode === "__task_group_runs") {
@@ -144,6 +150,8 @@ export function mcpSurfaceRunner(options: McpSurfaceRunnerOptions = {}) {
       });
     }
     const mode = ModeKind.parse(p?.mode ?? "agent");
+    const attachments =
+      p?.attachments === undefined ? undefined : ResourceAttachmentRef.array().parse(p.attachments);
     const metadata = taskGroupLaunchMetadata(p, beltContext);
     // A replayable launch key names one stable project; it never follows
     // whatever directory this server process happens to run in.
@@ -164,6 +172,7 @@ export function mcpSurfaceRunner(options: McpSurfaceRunnerOptions = {}) {
     const body: Record<string, unknown> = {
       ...metadata,
       prompt: String(p?.prompt ?? ""),
+      ...(attachments !== undefined ? { attachments } : {}),
       mode,
       scope: { kind: "project", root: repoRoot },
       execution: options.delegationParentRunId

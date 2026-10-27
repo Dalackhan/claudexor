@@ -250,6 +250,13 @@ final class ProseTextView: NSTextView {
 
     override func accessibilityChildren() -> [Any]? { (super.accessibilityChildren() ?? []) + codeAccessibilityActions() }
 
+    /// Only the message the reader works in may scroll the conversation to its selection. Any
+    /// other message would move a followed feed to its own text without a reader action.
+    override func scrollRangeToVisible(_ range: NSRange) {
+        guard window?.firstResponder === self else { return }
+        super.scrollRangeToVisible(range)
+    }
+
     override func scrollWheel(with event: NSEvent) {
         if abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX), let feed = verticalScrollView {
             feed.scrollWheel(with: event)

@@ -565,7 +565,9 @@ frequency and volume are. The contracts:
   measurements. A new gesture or explicit navigation cancels a pending restore.
   Following continues to pin the bottom and ends only on the reader's own upward scroll
   (wheel, trackpad, scroller or keys) or on focus, selection and navigation, never on
-  placement, anchoring or growth. Full-prompt sheets own independent prose:
+  placement, anchoring or growth. Message text scrolls the feed to its selection only
+  while the reader works in that text (it is first responder); a message the reader
+  is not in never moves the feed. Full-prompt sheets own independent prose:
   they inherit neither the feed registry nor a turn’s selection/focus identity.
 - **Per-row readable measure (D-13 C).** The 680pt conversation measure
   (`conversationMeasure()`) is applied PER ROW (each `TurnCard`), not as a

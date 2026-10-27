@@ -271,6 +271,18 @@ struct ConversationNativeRoutingTests {
         let prose = try #require(views(host).compactMap { $0 as? ProseTextView }.first)
         let feed = try #require(outerScroll(of: prose))
         let document = try #require(feed.documentView)
+        // Names the AppKit caller of each clip move, which a newer macOS on CI may add.
+        nonisolated(unsafe) let movers = trace
+        feed.contentView.postsBoundsChangedNotifications = true
+        let mover = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification,
+            object: feed.contentView, queue: nil) { _ in
+            let methods = Thread.callStackSymbols.compactMap { line in
+                line.range(of: "-[").map { String(line[$0.lowerBound...].prefix { $0 != "]" }) + "]" }
+            }.filter { !$0.contains("otification") && !$0.contains("Bounds") }
+                .reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+            movers.lines.append("clip moved via " + methods.prefix(14).joined(separator: " < "))
+        }
+        defer { NotificationCenter.default.removeObserver(mover) }
         #expect(document.frame.height <= feed.contentView.bounds.height)
         let top = feed.contentView.bounds.minY
         try wheelUp(feed, reading: state.readingPosition)

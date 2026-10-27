@@ -262,6 +262,34 @@ struct ProseTextTests {
         #expect(state.geometry(FeedEdge(offset: 90, content: 690, container: 600), after: masked, tailMounted: true))
         #expect(state.follows)
     }
+
+    /// Revealing a message's insertion point moves the feed only for the message the reader works
+    /// in. For any other message it puts the clip at that text's first line while the feed still
+    /// follows, the state the macOS 26.6 runner reported after an answer grew (offset 80).
+    @Test func onlyTheFocusedMessageScrollsTheFeedToItsSelection() throws {
+        let app = NSApplication.shared
+        let previousPolicy = app.activationPolicy()
+        app.setActivationPolicy(.prohibited)
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 600))
+        scroll.hasVerticalScroller = true
+        let document = FlippedDocument(frame: NSRect(x: 0, y: 0, width: 400, height: 2000))
+        scroll.documentView = document
+        let text = ProseTextView.make()
+        text.frame = NSRect(x: 0, y: 80, width: 400, height: 1800)
+        text.string = "A growing answer"
+        document.addSubview(text)
+        let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        defer { window.close(); app.setActivationPolicy(previousPolicy) }
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 1400))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        text.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        #expect(scroll.contentView.bounds.minY == 1400)
+        #expect(window.makeFirstResponder(text))
+        text.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        #expect(scroll.contentView.bounds.minY <= 80)
+    }
 }
 
 }

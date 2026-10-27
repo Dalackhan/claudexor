@@ -327,7 +327,7 @@ export const RoutePrimaryDivergedPayload = z
       .nullable()
       .default(null)
       .describe("The harness that actually ran first, or null when nothing remained routable."),
-    reason: FallbackReason.default("quota_exhausted"),
+    reason: FallbackReason.or(z.literal("capability_incompatible")).default("quota_exhausted"),
     detail: z
       .string()
       .nullable()

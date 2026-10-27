@@ -1,4 +1,9 @@
-import { continuedRunOf, delegatedParentOf, taskGroupLaunchMetadata } from "@claudexor/schema";
+import {
+  assertDeferredReservation,
+  continuedRunOf,
+  delegatedParentOf,
+  taskGroupLaunchMetadata,
+} from "@claudexor/schema";
 import {
   commandStoreForRequest,
   type CommandAuthority,
@@ -18,9 +23,12 @@ export function admitCommandRequest(
   raw: unknown,
   operation: string | undefined,
   delegation?: DelegationAdmissionAuthority,
+  reservedDraftId?: string,
 ): unknown {
   taskGroupLaunchMetadata(raw, operation === "delegated-run");
   const from = continuedRunOf(raw);
+  const reservation = from ? commands.deferredFor?.(from)?.reservation(from) : null;
+  assertDeferredReservation(reservation, reservedDraftId);
   const request = admitContinuationRequest(
     raw,
     from ? commands.queries.select({ continuationChainOf: from }) : [],

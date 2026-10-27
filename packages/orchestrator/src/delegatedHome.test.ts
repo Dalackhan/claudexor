@@ -315,4 +315,49 @@ describe("applied attempt evidence", () => {
     ).not.toThrow();
     expect(() => assertDelegatedEvidence(true, "readonly", [{ attemptId: "a01" }])).not.toThrow();
   });
+
+  it("records the HOME an adapter actually gave its child instead of the engine HOME", () => {
+    const spec = {
+      env: { HOME: "/runtime/lane/home" },
+      credential_profile: { profile_id: "acct" },
+    };
+    const profileHome = { childHome: () => "/owned/profiles/acct" };
+    const delegated = followSpecHome(
+      {
+        isolated: true,
+        homeDir: "/runtime/lane/home",
+        outerBoundaryUnavailableReason: DELIBERATE_NO_OUTER_BOUNDARY_REASON,
+      },
+      spec,
+      null,
+      profileHome,
+    );
+    const facts = appliedAttemptFacts(delegated, "workspace_write", "acct");
+    expect(facts).toMatchObject({
+      harness_home_isolated: true,
+      harness_home_dir: "/owned/profiles/acct",
+      credential_profile_applied: "acct",
+      confinement_unavailable_reason: DELIBERATE_NO_OUTER_BOUNDARY_REASON,
+    });
+    expect(appliedEvidenceComplete(facts)).toBe(true);
+    // An ordinary in-place attempt inherits the operator env, but a child the
+    // adapter moved into a Claudexor-owned profile HOME did not run there.
+    const ordinary = () => ({
+      isolated: false,
+      homeDir: null,
+      outerBoundaryUnavailableReason: null,
+    });
+    expect(
+      appliedAttemptFacts(followSpecHome(ordinary(), spec, null, profileHome), "full", "acct"),
+    ).toMatchObject({ harness_home_isolated: true, harness_home_dir: "/owned/profiles/acct" });
+    // Without an adapter-named HOME the record is unchanged.
+    for (const adapter of [undefined, {}, { childHome: () => null }])
+      expect(
+        appliedAttemptFacts(followSpecHome(ordinary(), spec, null, adapter), "full", "acct"),
+      ).toMatchObject({ harness_home_isolated: false, harness_home_dir: null });
+    // A failure before the home was decided keeps its gap: no child ran.
+    expect(appliedAttemptFacts(undefined, "workspace_write", "acct")).not.toHaveProperty(
+      "harness_home_isolated",
+    );
+  });
 });

@@ -70,7 +70,7 @@ import { dispatchOpsCommand } from "./ops-commands.js";
 import { reviewCommand } from "./review-command.js";
 import { controlApiFetch, followRun } from "./live.js";
 import { retryCommand, runAgainCommand } from "./retry-command.js";
-import { dispatchObservationCommand } from "./observation-command-dispatch.js";
+import { dispatchRetainedCommand } from "./retained-command-dispatch.js";
 import { assertCliRunParamsHaveNoInlineSecrets } from "./run-secret-scan.js";
 import { resolveLocalAttachment, type LocalAttachment } from "./local-attachment.js";
 import { uploadLocalAttachment } from "./attachment-upload.js";
@@ -962,8 +962,8 @@ async function dispatch(args: ParsedArgs, outputMode: CliOutputMode): Promise<nu
   const opsCommand = dispatchOpsCommand(cmd, args, json);
   if (opsCommand) return opsCommand;
 
-  const observationCommand = dispatchObservationCommand(cmd, args, json);
-  if (observationCommand) return observationCommand;
+  const retainedCommand = dispatchRetainedCommand(cmd, args, json);
+  if (retainedCommand) return retainedCommand;
   switch (cmd) {
     case "init": {
       const res = initProjectConfig(cwd);

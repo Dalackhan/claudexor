@@ -142,6 +142,49 @@ new run): restate access, web, account, budget, time limit and review settings
 the successor must keep. Retain its handle and use the same key and arguments
 to recover an unknown response. These controllers do not restart a daemon or
 expand Delegate access.
+
+Use `claudexor_next_message` only for an authorized operator-owned one-shot
+Agent/Ask follow-up on a supporting engine. Ordinary controller-owned workers
+are distinct from engine Delegate children. Delegate/belt callers and
+delegated-child targets are refused; this control grants no extra access,
+budget, time or post-parent authority.
+
+Save stable keys and exact bodies before mutation. Create with
+`{request:{action:"create",predecessorId,prompt,attachments:[],controls?},idempotencyKey}`.
+It reserves one slot and captures controls once, including current execution
+preferences and inherited prompt-cache lifetime. Replace with
+`{request:{action:"replace",draftId,expectedRevision,prompt,attachments:[]},idempotencyKey}`;
+provide the complete replacement resource-ref set, including `[]` to remove all
+refs. Clear with `{request:{action:"clear",draftId,expectedRevision},idempotencyKey}`.
+Content edits cannot change frozen controls. Use a new key for each distinct
+mutation; recover an unknown outcome with the original key and exact body.
+Same-key replay returns the originally applied revision plus the current draft
+projection. On revision conflict, read and reconcile before another authorized edit.
+The successor keeps the predecessor's execution: after a successful isolated
+(envelope) Agent run it starts from the project base with only the path of the
+unapplied saved patch, so it can review the diff but does not test changed
+files; nothing is applied automatically.
+
+Use `claudexor_next_message_read` with `{draftId}` for an addressed bounded
+content preview, ref omissions, editing handles and `controls`: the values
+frozen at creation by origin, with their capture time; permissions, trust,
+accounts and quota stay current at dispatch. It is not a collection body
+read. Collection observations stay compact. Read predecessor output separately
+with `claudexor_run_result`. A terminal predecessor does not resolve the draft:
+follow its waiting/held/dispatched/cleared projection and successor handle.
+Live HTTP429/willRetry progress stays waiting; actual terminal failure or another
+admission/settlement error holds the draft. Held edits do not rearm it.
+`claudexor_run_cancel` on the predecessor holds a draft that is not dispatched
+yet, also after the predecessor ended; an already accepted successor fails
+`next_message_dispatched` with its job handle and keeps running, so stop it by
+that handle. If the hold cannot be saved, it fails `next_message_hold_failed`
+after any cancel was applied; the draft is still not sent, so retry the cancel
+to record the hold. There is no held retry/rearm command: after inspecting the
+predecessor result, clear the draft and, if a successor is still wanted, start
+it deliberately with `claudexor_run_continue`; a new draft on the same
+predecessor meets the same outcome gate. Reads, replay and missing receipts
+grant no relaunch or delegation authority.
+
 Use `claudexor_run_interactions` to read pending questions. For a native
 permission request, inspect the exact command/cwd or paths/diff before using
 `claudexor_answer_interaction`: answer only within the user's existing mandate

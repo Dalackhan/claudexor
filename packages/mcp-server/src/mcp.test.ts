@@ -226,6 +226,8 @@ describe("Claudexor MCP server (SDK v2)", () => {
         "claudexor_thread_prompt",
         "claudexor_run_event_read",
         "claudexor_run_continue",
+        "claudexor_next_message",
+        "claudexor_next_message_read",
       ]),
     );
     const call = w.responses.find((r) => r.id === 3);

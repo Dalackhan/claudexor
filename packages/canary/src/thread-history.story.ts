@@ -102,7 +102,7 @@ it("[INV-142:thread-history] built CLI/MCP reads bounded answers, explicit promp
       readOnly: true,
     });
     try {
-      expect(store.prepare("PRAGMA user_version").get()).toEqual({ user_version: 4 });
+      expect(store.prepare("PRAGMA user_version").get()).toEqual({ user_version: 5 });
       expect(store.prepare("SELECT value FROM meta WHERE key='schema_version'").get()).toEqual({
         value: "4",
       });

@@ -1,8 +1,38 @@
 /** Candidate-harness membership shared by requirements admission and execution. */
-import type { GlobalConfig, Intent } from "@claudexor/schema";
-import { HarnessUnavailableError, type AdapterRegistry } from "@claudexor/core";
+import type { GlobalConfig, Intent, RouteDropStage } from "@claudexor/schema";
+import {
+  AccessProfileIncompatibleError,
+  AuxiliaryWritableRootsUnsupportedError,
+  HarnessUnavailableError,
+  type AdapterRegistry,
+} from "@claudexor/core";
 import type { HarnessStatus } from "@claudexor/gateway";
 import { accountPoolRows } from "./account-pool.js";
+
+/** Preserve ordinary admission refusal precedence before Browser projection. */
+export function assertCandidatePoolAvailable(
+  pool: unknown[],
+  intent: Intent,
+  droppedLanes: { harnessId: string; stage: RouteDropStage; detail: string }[],
+  auxiliaryUnsupported: Set<string>,
+): void {
+  if (pool.length > 0) return;
+  const details = droppedLanes.map((lane) => lane.detail).join(", ");
+  if (
+    droppedLanes.length > 0 &&
+    droppedLanes.every((lane) => auxiliaryUnsupported.has(lane.harnessId))
+  )
+    throw new AuxiliaryWritableRootsUnsupportedError(
+      `no harness can apply the requested auxiliary writable roots (${details})`,
+    );
+  if (droppedLanes.length > 0 && droppedLanes.every((lane) => lane.stage === "access"))
+    throw new AccessProfileIncompatibleError(
+      `no harness can enforce the requested access profile (${details})`,
+    );
+  throw new HarnessUnavailableError(
+    `no harness can perform '${intent}' for this mode${details ? ` (skipped: ${details})` : ""}`,
+  );
+}
 
 export function resolveCandidateHarnessIds(args: {
   harnesses?: string[];

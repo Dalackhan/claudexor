@@ -5,7 +5,18 @@ import { StoreSchemaUnsupportedError } from "./errors.js";
 /** `PRAGMA application_id` of every engine store ("CXEN"). */
 export const ENGINE_APPLICATION_ID = 0x4358454e;
 /** `PRAGMA user_version`: the one schema this engine creates and serves. */
-export const ENGINE_SCHEMA_VERSION = 4;
+export const ENGINE_SCHEMA_VERSION = 5;
+
+/** Version 4: one reserved editable next message; accepted params stay immutable. */
+const DEFERRED_MESSAGE_SQL = `
+CREATE TABLE deferred_message(id TEXT PRIMARY KEY, pid INTEGER NOT NULL, predecessor_job_id TEXT NOT NULL,
+  revision INTEGER NOT NULL, state TEXT NOT NULL CHECK(state IN ('waiting','held','dispatched','cleared')),
+  body_sha TEXT, hold BLOB, successor_job_id TEXT, dispatched_revision INTEGER, created_at TEXT NOT NULL) STRICT;
+CREATE UNIQUE INDEX deferred_message_slot ON deferred_message(pid,predecessor_job_id) WHERE state IN ('waiting','held');
+CREATE INDEX deferred_message_predecessor ON deferred_message(predecessor_job_id);
+CREATE INDEX deferred_message_successor ON deferred_message(successor_job_id) WHERE successor_job_id IS NOT NULL;
+CREATE INDEX deferred_message_body ON deferred_message(body_sha) WHERE body_sha IS NOT NULL;
+`;
 
 /**
  * Version 2: the latest request each account served per requested model
@@ -35,7 +46,7 @@ CREATE INDEX command_task_group_state ON command(json_extract(CAST(summary AS TE
   WHERE live=1 AND kind='product' AND json_valid(CAST(summary AS TEXT)) AND ${TASK_GROUP_PRESENT_SQL};
 `;
 
-/** Guard both the expression key and partial predicate against non-JSON bodies.
+/** Version 5: guard both the expression key and partial predicate against non-JSON bodies.
  * Acceptance is mutable query policy, not index membership. */
 export const PLAN_ANSWER_RUN_SQL = `CASE WHEN json_valid(CAST(body AS TEXT))
   THEN json_extract(CAST(body AS TEXT),'$.answers_plan_run_id') END`;
@@ -136,7 +147,7 @@ CREATE TABLE import_partition(name TEXT PRIMARY KEY, status TEXT NOT NULL, pid I
   previous_frame_hash TEXT, source_size INTEGER, source_mtime TEXT, fingerprint TEXT, records INTEGER, digest TEXT, problem TEXT) STRICT;
 CREATE TABLE unclassified(pid INTEGER NOT NULL, seq INTEGER NOT NULL, type TEXT NOT NULL, reason TEXT NOT NULL, payload BLOB NOT NULL,
   PRIMARY KEY(pid, seq)) WITHOUT ROWID, STRICT;
-${ACCOUNT_LAST_SERVICE_SQL}${TASK_GROUP_INDEX_SQL}${PLAN_ANSWER_INDEX_SQL}`;
+${ACCOUNT_LAST_SERVICE_SQL}${TASK_GROUP_INDEX_SQL}${DEFERRED_MESSAGE_SQL}${PLAN_ANSWER_INDEX_SQL}`;
 
 /** Every table the DDL creates, in creation order (for tests and the importer seam). */
 export const ENGINE_TABLES: readonly string[] = Object.freeze(
@@ -152,7 +163,8 @@ export const ENGINE_TABLES: readonly string[] = Object.freeze(
 const SCHEMA_MIGRATIONS: ReadonlyMap<number, (db: DatabaseSync) => void> = new Map([
   [1, (db: DatabaseSync) => db.exec(ACCOUNT_LAST_SERVICE_SQL)],
   [2, (db: DatabaseSync) => db.exec(TASK_GROUP_INDEX_SQL)],
-  [3, (db: DatabaseSync) => db.exec(PLAN_ANSWER_INDEX_SQL)],
+  [3, (db: DatabaseSync) => db.exec(DEFERRED_MESSAGE_SQL)],
+  [4, (db: DatabaseSync) => db.exec(PLAN_ANSWER_INDEX_SQL)],
 ]);
 
 export interface SchemaIdentity {

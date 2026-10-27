@@ -28,9 +28,7 @@ import { formatRunResult, structuredRunResult } from "./run-result-format.js";
 import { assertNoPluginArtifactSkew } from "./plugin-skew.js";
 import { accountsTool } from "./accounts-tool.js";
 import { threadTools } from "./thread-tools.js";
-import { runTimeLimitTool } from "./run-time-limit-tool.js";
-import { runMessageTool } from "./run-message-tool.js";
-import { runContinueTool } from "./run-continue-tool.js";
+import { runControlTools } from "./run-control-tools.js";
 import { runObservationTools } from "./run-observation-tools.js";
 import { runStatusTool } from "./run-status-tool.js";
 import { inlineJsonSchemaRefs } from "./inline-json-schema-refs.js";
@@ -401,9 +399,7 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
       },
     ),
     ...threadTools(runner),
-    runTimeLimitTool(runner),
-    runMessageTool(runner),
-    runContinueTool(runner),
+    ...runControlTools(runner),
     ...runObservationTools(runner),
     {
       name: "claudexor_status",
@@ -499,7 +495,7 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
     {
       name: "claudexor_run_cancel",
       description:
-        "Request cancellation of a daemon-owned run; success is returned only after the control API acknowledges the durable command.",
+        "Request cancellation of a daemon-owned run; success is returned only after the control API acknowledges the durable command. The same call holds the run's next message (claudexor_next_message) that is not accepted yet, also after the run ended; an already accepted successor fails next_message_dispatched with its job handle and keeps running. If that hold cannot be saved, the call fails next_message_hold_failed (retryable) after any cancel was applied; the next message is still not sent, and a retried cancel records the hold.",
       inputSchema: runIdSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
       handler: async (args) => {

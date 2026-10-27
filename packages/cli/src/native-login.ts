@@ -21,6 +21,7 @@ import {
   resolveCursorBin,
 } from "@claudexor/harness-cursor";
 import { AGY_MANAGED_LOGIN, canonicalAgyProfileHome } from "@claudexor/harness-agy";
+import { GROK_MANAGED_LOGIN, grokProfileEnv, resolveGrokBin } from "@claudexor/harness-grok";
 import type { ManagedLogin } from "@claudexor/schema";
 import { ensureDir } from "@claudexor/util";
 import { basename, isAbsolute } from "node:path";
@@ -65,6 +66,11 @@ export type CodexLoginFlow = "device_auth" | "browser_callback" | "browser_redir
 export const AGY_LOGIN_WINDOW_MS = 60_000;
 
 const NATIVE_LOGIN_DEFINITIONS: Record<string, LoginDefinition> = {
+  grok: {
+    binaryName: (resolver) => resolveGrokBin(process.env, resolver),
+    args: ["login", "--device-auth"],
+    displayCommand: "grok login --device-auth",
+  },
   codex: {
     binaryName: () => process.env.CLAUDEXOR_CODEX_BIN || "codex",
     // D-17: device-code auth is the DEFAULT flow, now driven over the codex
@@ -125,6 +131,7 @@ export const NATIVE_LOGIN_INPUTS: Record<string, ManagedLogin> = {
   claude: CLAUDE_MANAGED_LOGIN,
   cursor: CURSOR_MANAGED_LOGIN,
   agy: AGY_MANAGED_LOGIN,
+  grok: GROK_MANAGED_LOGIN,
 };
 
 /**
@@ -280,6 +287,14 @@ export function nativeLoginEnv(
     // Default and profile Claude stores are both Claudexor-owned (INV-067 /
     // INV-135); ordinary ~/.claude is never created, read, or mutated here.
     ensureDir(env.CLAUDE_CONFIG_DIR);
+  } else if (harness === "grok") {
+    if (!configDirOverride)
+      throw new Error(
+        "Grok has no default credential store; use claudexor profiles add grok <id> and claudexor profiles login grok <id>",
+      );
+    const scoped = grokProfileEnv(configDirOverride);
+    for (const [key, value] of Object.entries(scoped)) if (value) env[key] = value;
+    ensureDir(env.GROK_HOME!);
   } else if (harness === "agy") {
     // agy takes its whole state root from $HOME; the profile HOME is the named
     // binding's isolation locator. There is NO default agy binding store (owner

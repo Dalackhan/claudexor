@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { canonicalIsolationLocator, providerScrubEnv } from "@claudexor/core";
-import type { CredentialProfile, CredentialProfileStatus } from "@claudexor/schema";
+import type { CredentialProfile, CredentialProfileStatus, HarnessRunSpec } from "@claudexor/schema";
 import { CredentialProfileStatus as CredentialProfileStatusSchema } from "@claudexor/schema";
 import { nowIso, redactSecrets } from "@claudexor/util";
 import { isAgyProfileKeychainUnsafe } from "./keychain.js";
@@ -77,6 +77,13 @@ export function resolveAgyProfileRoute(
   } catch (err) {
     return { refusal: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/** The HOME an agy child receives: the named binding's own HOME (applied
+ * attempt evidence), since agy has no config-dir variable. */
+export function agyChildHome(spec: Pick<HarnessRunSpec, "credential_profile">): string | null {
+  const route = spec.credential_profile ? resolveAgyProfileRoute(spec.credential_profile) : null;
+  return route && !("refusal" in route) ? route.home : null;
 }
 
 export interface AgyProfileProbeDeps {

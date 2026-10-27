@@ -491,12 +491,12 @@ export type ControlCredentialProfileUpdateResponse = z.infer<
   typeof ControlCredentialProfileUpdateResponse
 >;
 
-/** Register a config-dir login profile (agy/claude/codex/cursor) from a UI surface —
+/** Register a config-dir login profile (agy/claude/codex/cursor/grok) from a UI surface —
  * the same ONE locked registration owner `claudexor profiles add` uses. */
 export const ControlCredentialProfileCreateRequest = z
   .object({
     harnessId: Id.describe(
-      "Harness family (agy | claude | codex | cursor) for the config-dir login profile.",
+      "Harness family (agy | claude | codex | cursor | grok) for the config-dir login profile.",
     ),
     profileId: Id.describe("New profile id (bounded slug, unique per harness)."),
     displayName: z

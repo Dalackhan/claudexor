@@ -10,12 +10,20 @@ changing Claudexor.
 
 | Surface | Current role | Stability |
 |---|---|---|
-| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, thread, runs-wait, task-group-runs, retry, run-again, apply, decision, review), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). `runs-wait` observes existing handles read-only through `--targets-json` and optional `--wait-ms`, with `--json` or `--json-stream` output. `task-group-runs` reads one bounded retained group page. | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
+| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, thread, runs-wait, task-group-runs, next-message, next-message-read, retry, run-again, apply, decision, review), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). `runs-wait` observes existing handles read-only through `--targets-json` and optional `--wait-ms`, with `--json` or `--json-stream` output. `task-group-runs` reads one bounded retained group page. `next-message` creates, replaces or clears an authorized one-shot draft; `next-message-read` reads its bounded content and editing handles. | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
 | Daemon and control API | Local durable queue, Agent runs, caller-owned model and image operations, artifacts, SSE events, settings, harness status, secrets metadata, apply, and run control. | Stable contract: endpoints and DTOs per `docs/reference/endpoints.json` + generated schemas (add-only fields). Loopback + bearer token only. |
 | MCP server | Exposes Claudexor tools to MCP clients. `claudexor_runs_wait` projects the same read-only observation with `targets: [{runId, seen?}]` and optional `waitMs`. | Stable contract: the tool set with input/output schemas. Tool list follows the implementation, not old docs. |
 | ACP server | Lets compatible editors or agents talk to Claudexor as a local agent surface. | Experimental (may change in minors, disclosed in the CHANGELOG). |
 | Host plugins | User-global Claude Code, Codex, Cursor, and OpenCode integrations managed by `claudexor plugin`. | Experimental file layout (regenerate with `claudexor plugin repair all`). Installs owned local files/config only; host enablement can still require reload/manual action. |
 | Engine runtime closure | Node-free release artifact containing reviewed daemon and CLI entrypoints for a host that owns its daemon lifecycle, such as [Ouroboros](https://github.com/razzant/ouroboros). | Exact-pin contract: one link-free archive and the existing signed runtime manifest; the host supplies the tested full Node toolchain and verifies archive plus `--probe` identity. |
+
+Browser requests on ordinary single-candidate Auto Agent runs use the engine's
+[Browser eligibility projection](ARCHITECTURE.md#4-routing). Explicit route
+controls retain their existing meaning, including inherited thread selections
+and the route group inherited by HTTP `continueFrom`. Browser itself is not an
+inherited continuation group; MCP run continuation has no Browser override.
+Deterministic source tests cover routing and adapter spec wiring, not native
+Browser navigation or rendered app behavior.
 
 ## Caller-Owned Model Operations
 
@@ -656,7 +664,9 @@ Terminal state may include diagnostic non-success states such as
 Telemetry attempts can include adapter-declared transient failures; integrations
 should render those as infrastructure/retry evidence, not as model findings.
 
-`POST /v2/runs/:id/control` supports cancel for active daemon jobs.
+`POST /v2/runs/:id/control` supports cancel for active daemon jobs. The same
+call holds the run's pending next message, also for a run that already ended
+(see the next-message rules under MCP below).
 Interactive runs use the typed interaction surface instead of raw input
 forwarding: `interaction.requested` events carry the questions, the macOS app
 and `claudexor follow` answer via `POST /v2/runs/:id/interactions/:id/answer`,
@@ -686,7 +696,7 @@ engine older than 3.16.0 omits both the field and the route): Codex declares
 `next_tool_boundary` (the message is queued on the live stream-json stdin and
 picked up right after the current tool batch, or as the next native turn of
 the same run when it arrives during the final text; recorded on Claude Code
-2.1.283); Cursor, Antigravity, OpenCode, GitHub Copilot and raw-api declare `none` and answer
+2.1.283); Cursor, Antigravity, Grok Build, OpenCode, GitHub Copilot and raw-api declare `none` and answer
 `unsupported` without any native write. The message is admitted journal-first
 (`message.accepted`) and closed with `message.delivered` or `message.refused`
 on the run's event stream and timeline, where the text shows as the row detail;
@@ -849,9 +859,11 @@ reconciliation contract is in [Architecture](ARCHITECTURE.md#bounded-thread-hist
 
 A controller saves the exact launch arguments and key before calling a run
 tool, keeps the returned handle, observes it, answers questions or sends
-independent messages, reads the terminal result, and only then starts an
-explicit successor. Each step projects the daemon's existing authority: MCP adds
-no scheduler, handle registry, automatic retry or reconnect.
+independent messages, and reads the terminal result. A successor is then
+started explicitly, or it was reserved earlier as an editable next message
+(below) that the daemon sends as one ordinary continuation only after an
+eligible settled success. Each step projects the daemon's existing authority:
+MCP adds no scheduler, handle registry, automatic retry or reconnect.
 
 **Launch handles.** Run tools return the accepted `jobId` beside `runId`. A job
 still queued after the daemon's binding wait (about 30 seconds) returns
@@ -1066,6 +1078,92 @@ terminated process.
 These existing-run controls are not exposed by the Delegate belt and cannot
 expand a child's authority. They add no automatic retries, worker restarts,
 approval decisions or separate lifecycle.
+
+Operator-only `claudexor_next_message` and `claudexor_next_message_read`
+provide editable deferred one-shot follow-ups. The built stdio/HTTP/SQLite MCP
+controller story passed with fake harnesses; native vendor, GUI and
+cross-platform acceptance remain manual. See [the feature ledger](FEATURES.md)
+for qualification limits. The mutation envelope is `{request, idempotencyKey}`.
+For example:
+
+```json
+{"request":{"action":"create","predecessorId":"job-…","prompt":"Verify the previous work","attachments":[],"controls":{"continueCarrier":"packet"}},"idempotencyKey":"verify-next-1"}
+```
+
+`replace` supplies `draftId`, exact `expectedRevision`, and the complete
+`prompt`/`attachments` list; `[]` clears refs. `clear` supplies only `draftId`
+and exact `expectedRevision`. Controls are captured at creation and cannot be
+edited. A waiting or held draft reserves the predecessor's single continuation
+claim. Exact accepted replays keep their original applied revision and current
+handles. Failure, cancellation, interruption, incompatible typed outcome,
+unknown process custody, Stop, restart or admission refusal holds without retry;
+editing a held draft never rearms it. Native transient HTTP429/`willRetry`
+progress does not settle the predecessor. On Windows the run-scope process
+census is unsupported, so a predecessor's process custody is never proven:
+every draft holds as `settlement_unknown`, and an automatic next message is not
+available there.
+
+Stop is `claudexor_run_cancel` (HTTP `POST /v2/runs/:id/control`) on the
+predecessor. Before acceptance it holds the waiting draft (`stop_requested`)
+whatever the predecessor's lifecycle, including while dispatch validation runs
+after the predecessor ended, and returns the held draft as `deferredMessage`;
+promotion rechecks the Stop inside its acceptance transaction, so a stopped
+draft is never sent. If the hold cannot be saved, the draft stays waiting but
+unsent (the daemon keeps it fenced and a restart holds it), and Stop answers
+503 `next_message_hold_failed` instead of a held draft, after it has stopped a
+live predecessor; retry the Stop to record the hold. Stop never cancels an
+accepted successor: a terminal predecessor whose draft was dispatched answers 409
+`next_message_dispatched`, whose problem context carries the draft as
+`deferredMessage`, including the successor job and run; stop the successor by
+its own handle. A terminal run without a pending draft keeps the plain 409
+(nothing to stop).
+
+A held draft is not rearmed. After reading the predecessor result, clear the
+draft and, if a successor is still wanted, start it deliberately with
+`claudexor_run_continue`, which applies ordinary admission and new-run defaults.
+A new draft on the same predecessor meets the same outcome gate.
+
+The successor is an ordinary continuation with the predecessor's execution.
+A successful isolated (`envelope`) Agent run keeps no envelope, so its
+successor starts from the project base and receives only the path of the
+unapplied saved patch (`final/patch.diff`). The patch is not the successor's
+tree, and nothing is applied automatically, so such a step can review the diff
+but not test the changed files. To test them, run the predecessor in a live
+caller-owned workspace, or Apply its result and continue explicitly.
+
+Promotion resolves the captured request through current canonical project
+routing in the same transaction as acceptance. A relinked root or a different
+project generation holds the draft without changing its captured scope.
+Execution-default snapshots are internal accepted-command data; public inputs
+cannot supply them. Native tool allow/deny lists always use current operator
+settings, including when an older accepted snapshot retained tool lists. Exact Retry recovers
+execution preferences from the accepted source and
+still applies ordinary fresh admission, including `continuation_superseded`.
+Run Again and decision rerun omit these private preferences and disclose that
+current settings apply to the editable follow-up.
+
+HTTP uses `POST /v2/runs/next-message` with the mutation body and required
+`Idempotency-Key`, plus addressed `GET /v2/runs/next-message/:id` for full editing
+content. CLI uses `claudexor next-message '<envelope JSON>' --json` and
+`claudexor next-message-read <draft-id> --json`. MCP reads bound the prompt to
+4096 UTF-8 bytes and refs to 32, with explicit omission counts and a full detail
+path. Their `controls` show the frozen values by origin: `capturedAt`;
+`inherited`, the continuation groups taken from the predecessor; `resolved`, the
+create-time controls (explicit, otherwise ordinary new-run defaults at creation,
+so an omitted `access` is the project default even after a readonly
+predecessor); and `settings`, the captured Settings execution preferences.
+Tool permissions, account and harness enablement, trust, quota, capabilities
+and paid-fallback policy are not frozen and are checked at dispatch. The
+compact state supplies the exact existing predecessor result path
+and predecessor/successor job/run handles; use `claudexor_run_result` for output.
+No second output store is created. Detail/status/result/wait include
+`deferredMessage`; a terminal `run_wait` wake describes only the predecessor,
+so inspect the draft separately for dispatch resolution. Reads never send work.
+
+The tools are absent from the Delegate belt. Raw/HTTP/MCP belt callers and engine
+Delegate child targets receive typed `delegation_forbidden`; ordinary external
+controller-owned one-shot workers remain supported. Thread targets return
+`use_thread_turn`. No persistent thread, FIFO, fork or rate-limit policy is added.
 
 ### Controller-independent approval handback
 
@@ -1850,6 +1948,27 @@ immediately. These checks cannot enter interactive sign-in; explicit managed
 login retains its terminal input. Ambiguous authentication timeouts are probe
 failures, not credential revocation. Local token-file presence is not readiness.
 
+**Grok Build (`grok`)** — wire: `grok --no-auto-update --prompt-file <file>
+--cwd <cwd> --output-format streaming-messages-json` plus the access flags in
+the [adapter README](../packages/harness-grok/README.md) (`--resume <id>`
+resumes on the same named account). Events: the `system/init` frame → `started`
+(native session id, model); it is also the only confirmation of the scoped tool
+policy and of the credential source (`apiKeySource`). A contradicting frame ends
+the try; a source other than `oauth` is the typed `credential_source_unconfirmed`
+request refusal, which also stops retries and account rotation, whatever else
+the frame reports. A tool-policy contradiction alone is an ordinary failure, so
+the engine's bounded retry and rotation apply. Error text is never read as an
+authentication verdict. Assistant
+`tool_use` / user `tool_result` pairs map to tool
+events, with `file_change` only for a successful `search_replace`/`write`; a
+statusless result is a diagnostic `status`. The terminal `result` emits the
+final (`final_source: result`, or its `structured_output`) and one aggregate
+`usage` with cache reads and writes; `total_cost_usd` is not read. A top-level
+`error` frame fails the turn, and a later `result` adds only its usage. Quota
+and rate failures from the stream or stderr become typed `rate_limit` signals.
+Fixtures were recorded with CLI 1.0.67 on Windows; the quota stream is
+synthetic.
+
 **OpenCode** — markerless: no typed final message; the engine's
 AnswerAssembly falls back to joining narration (the documented degradation
 for adapters without a finality marker).
@@ -1915,10 +2034,10 @@ repository's `.claudexor/` remains user-owned config. No-project Ask uses a
 synthetic cwd and writes artifacts under `~/.claudexor/v3/runs/`. An explicitly
 bound host data root keeps its own location.
 
-The current SQLite schema is version 4. Its atomic 3→4 upgrade adds only the
+The current SQLite schema is version 5. Its atomic 4→5 upgrade adds only the
 guarded plan-answer expression index for thread history; existing domain rows
 are untouched. Earlier versions follow 1→2 (account service), 2→3 (task-group
-indexes), then 3→4. Reopening version 4 is write-free; older readers refuse an
+indexes), 3→4 (deferred messages), then 4→5. Reopening version 5 is write-free; older readers refuse an
 upgraded store. See [SQLite engine store](ARCHITECTURE.md#sqlite-engine-store)
 for migration and complete-backup downgrade precautions.
 
@@ -2013,7 +2132,7 @@ subscription sessions are always preferred.
 | `CLAUDEXOR_HOST_BINDING_VERSION` | plugins / mcp-server | Declared dynamic binding format, independently of the manifest's generator version; see [external host integrations](#externally-owned-host-integrations). |
 | `CLAUDEXOR_BUILD_SHA` | util | Build-time stamp of the engine's git commit SHA (packaging sets it); without it a dev checkout reads `git rev-parse HEAD` and packaged builds report `unknown`. Reported in the handshake build identity. |
 | `CLAUDEXOR_DISABLE_STORED_SECRETS` | secrets | Ignore v2 file-stored secret refs entirely (hermetic runs; native sessions still work). |
-| `CLAUDEXOR_CODEX_BIN` / `CLAUDEXOR_CLAUDE_BIN` / `CLAUDEXOR_CURSOR_BIN` / `CLAUDEXOR_OPENCODE_BIN` / `CLAUDEXOR_AGY_BIN` / `CLAUDEXOR_COPILOT_BIN` | adapters | Explicit vendor CLI binary when PATH discovery is not enough. |
+| `CLAUDEXOR_CODEX_BIN` / `CLAUDEXOR_CLAUDE_BIN` / `CLAUDEXOR_CURSOR_BIN` / `CLAUDEXOR_OPENCODE_BIN` / `CLAUDEXOR_AGY_BIN` / `CLAUDEXOR_COPILOT_BIN` / `CLAUDEXOR_GROK_BIN` | adapters | Explicit vendor CLI binary when PATH discovery is not enough. |
 | `CLAUDEXOR_CODEX_API_KEY` / `CLAUDEXOR_ANTHROPIC_API_KEY` / `CLAUDEXOR_CURSOR_API_KEY` | adapters | Claudexor-scoped API-key overrides (take precedence over provider env names). |
 | `CLAUDEXOR_CODEX_MODEL` | codex adapter | Default model override for the codex route. |
 | `CLAUDEXOR_CODEX_NATIVE_HOME` / `CLAUDEXOR_CLAUDE_NATIVE_DIR` | adapters | Explicit Claudexor-owned Codex profile or Claude native config directory overrides. |

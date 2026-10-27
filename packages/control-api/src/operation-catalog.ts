@@ -12,28 +12,25 @@ import { REMOTE_OPERATION_DRAFTS } from "./remote-operation-descriptors.js";
 import { MODEL_OPERATION_DRAFTS } from "./model-routes.js";
 import { MAINTENANCE_OPERATION_DRAFTS } from "./maintenance-routes.js";
 import { RUN_EVENT_PART_OPERATION_DRAFTS } from "./run-event-part-routes.js";
-import { operationDescriptor as descriptor, type OperationDraft } from "./operation-draft.js";
+import { descriptor, jsonOperation as j } from "./operation-descriptor.js";
 import { TASK_GROUP_RUNS_OPERATION_DRAFTS } from "./task-group-routes.js";
 
-const j = (
-  method: OperationDraft["method"],
-  path: string,
-  mutability: OperationDraft["mutability"],
-  requestSchema: string | null = null,
-  responseSchema: string | null = null,
-  extra: Partial<OperationDraft> = {},
-): ControlOperationDescriptor =>
-  descriptor({
-    method,
-    path,
-    mutability,
-    requestSchema,
-    responseSchema,
-    responseKind: "json",
-    ...extra,
-  });
-
 const operations: ControlOperationDescriptor[] = [
+  j(
+    "POST",
+    "/v2/runs/next-message",
+    "mutating",
+    "DeferredMessageMutation",
+    "DeferredMessageReceipt",
+    {
+      idempotency: "key_required",
+      summary: "Create, replace or clear one operator-owned deferred next message",
+    },
+  ),
+  j("GET", "/v2/runs/next-message/:id", "read_only", null, "DeferredMessageDetail", {
+    summary:
+      "Read one exact deferred draft and its existing predecessor result and successor handles",
+  }),
   ...TASK_GROUP_RUNS_OPERATION_DRAFTS.map(descriptor),
   ...THREAD_HISTORY_OPERATION_DRAFTS.map(descriptor),
   ...MODEL_OPERATION_DRAFTS.map(descriptor),

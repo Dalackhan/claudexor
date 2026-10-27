@@ -1,4 +1,5 @@
 import { z } from "zod/v3";
+import { DeferredMessageProjection } from "./deferred-message.js";
 import { ControlPendingInteraction, ControlRunState } from "./control.js";
 import { RunEvent } from "./events.js";
 
@@ -43,6 +44,11 @@ export type McpRunWaitInput = z.infer<typeof McpRunWaitInput>;
 
 export const McpRunWaitResult = z
   .object({
+    deferredMessage: DeferredMessageProjection.nullable()
+      .optional()
+      .describe(
+        "Snapshot only: terminal wakeReason refers to the predecessor, never proves draft resolution.",
+      ),
     runId: z
       .string()
       .describe("Canonical run id; a queued job id converges to its run id once the run binds."),

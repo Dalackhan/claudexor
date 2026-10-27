@@ -26,6 +26,9 @@ export interface ScopedHarnessHome {
   laneHomeFor?: (resolvedProfileId: string | null) => Record<string, string> | null;
   /** The account the live spec actually ran under, once resolved. */
   profileApplied?: string | null;
+  /** The Claudexor-owned HOME the adapter actually gave its child when it
+   * replaced this one with a named account's HOME (`HarnessAdapter.childHome`). */
+  childHome?: string | null;
 }
 
 /** Access profiles under which the harness can modify the filesystem. */
@@ -114,18 +117,24 @@ export function selectLaneHome(home: ScopedHarnessHome, resolvedProfileId: strin
 /**
  * The applied facts follow the LIVE spec: an in-run account hop moves the spec
  * into the next account's lane, so the recorded home and account move with it
- * on the success and failure paths alike (never profile B with home A).
+ * on the success and failure paths alike (never profile B with home A). An
+ * adapter that gives its child the account's own HOME instead names it, and
+ * that is the home recorded.
  */
-export function followSpecHome(
+export function followSpecHome<
+  S extends { env?: Record<string, string>; credential_profile?: { profile_id: string } | null },
+>(
   home: ScopedHarnessHome,
-  spec: { env?: Record<string, string>; credential_profile?: { profile_id: string } | null },
+  spec: S,
   requestedProfileId: string | null,
+  adapter?: { childHome?(spec: S): string | null },
 ): ScopedHarnessHome {
   home.profileApplied = spec.credential_profile?.profile_id ?? requestedProfileId;
   const specHome = spec.env?.["HOME"];
   if (home.laneHomeFor && spec.env && specHome && specHome !== home.homeDir) {
     Object.assign(home, { env: spec.env, homeDir: specHome });
   }
+  home.childHome = adapter?.childHome?.(spec) ?? null;
   return home;
 }
 
@@ -206,9 +215,11 @@ export function appliedAttemptFacts(
   access: AccessProfile,
   credentialProfileId: string | null,
 ): AppliedAttemptFacts {
+  // A child moved into an owned account HOME did not run in the operator's.
+  const childHome = home?.childHome ?? null;
   return {
-    ...(home ? { harness_home_isolated: home.isolated } : {}),
-    harness_home_dir: home?.homeDir ?? null,
+    ...(home ? { harness_home_isolated: childHome !== null || home.isolated } : {}),
+    harness_home_dir: childHome ?? home?.homeDir ?? null,
     access_applied: access,
     credential_profile_applied:
       home?.profileApplied !== undefined ? home.profileApplied : credentialProfileId,

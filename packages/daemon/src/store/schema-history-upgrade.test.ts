@@ -17,17 +17,17 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 function connect() {
-  const root = mkdtempSync(join(tmpdir(), "cx-schema-v4-"));
+  const root = mkdtempSync(join(tmpdir(), "cx-schema-v5-"));
   roots.push(root);
   const db = new sqlite!.DatabaseSync(join(root, "engine.sqlite"));
   connections.push(db);
   return db;
 }
 
-/** Exact v3 owner from 711cee0e5, not current DDL with an index removed. */
-function version3Owner(): { ensureSchema(db: DatabaseSync): void } {
+/** Exact owners from 711cee0e5 (v3) and bc979941f (v4), never derived from current DDL. */
+function frozenOwner(version: 3 | 4): { ensureSchema(db: DatabaseSync): void } {
   const source = readFileSync(
-    new URL("./test-support/fixtures/schema-v3.ts.txt", import.meta.url),
+    new URL(`./test-support/fixtures/schema-v${version}.ts.txt`, import.meta.url),
     "utf8",
   );
   const executable = stripTypeScriptTypes(source)
@@ -100,85 +100,127 @@ function assertIndex(db: DatabaseSync) {
   ).toEqual({ n: 4 });
 }
 
-describe.skipIf(!sqlite)("thread-history schema v4", () => {
-  it("creates a fresh v4 store and guards new writes with a minimal answer-present index", () => {
+function seedDeferredMessages(db: DatabaseSync) {
+  db.exec("INSERT INTO blob VALUES('draft-body',5,x'6472616674')");
+  const insert = db.prepare(`INSERT INTO deferred_message
+    (id,pid,predecessor_job_id,revision,state,body_sha,hold,successor_job_id,dispatched_revision,created_at)
+    VALUES(?,1,?,3,?,'draft-body',?,?,?,'2026-10-27')`);
+  for (const state of ["waiting", "held", "dispatched", "cleared"] as const) {
+    insert.run(
+      `draft-${state}`,
+      `predecessor-${state}`,
+      state,
+      state === "held" ? Buffer.from('{"code":"settlement_unknown"}') : null,
+      state === "dispatched" ? "successor" : null,
+      state === "dispatched" ? 3 : null,
+    );
+  }
+  expect(db.prepare("SELECT count(*) AS n FROM deferred_message").get()).toEqual({ n: 4 });
+}
+
+describe.skipIf(!sqlite)("thread-history schema v5", () => {
+  it("creates a fresh v5 store with deferred messages and a minimal answer-present index", () => {
     const db = connect();
     ensureSchema(db);
-    expect(ENGINE_SCHEMA_VERSION).toBe(4);
-    expect(readSchemaIdentity(db).userVersion).toBe(4);
+    expect(ENGINE_SCHEMA_VERSION).toBe(5);
+    expect(readSchemaIdentity(db).userVersion).toBe(5);
     expect(db.prepare("SELECT value FROM meta WHERE key='schema_version'").get()).toEqual({
-      value: "4",
+      value: "5",
     });
     seed(db);
+    seedDeferredMessages(db);
     assertIndex(db);
   });
 
-  it("migrates a real populated v3 store without changing data or existing indexes", () => {
-    const db = connect();
-    version3Owner().ensureSchema(db);
-    expect(readSchemaIdentity(db).userVersion).toBe(3);
-    seed(db); // Invalid JSON and refusals predate index creation.
-    const before = rows(db),
-      previousSchema = schema(db);
-    ensureSchema(db);
-    expect(readSchemaIdentity(db).userVersion).toBe(4);
-    expect({ ...rows(db), meta: [] }).toEqual({ ...before, meta: [] });
-    expect(rows(db).meta).toEqual(
-      (before.meta as { key: string; value: string }[]).map((row) =>
-        row.key === "schema_version" ? { ...row, value: "4" } : row,
-      ),
-    );
-    expect(schema(db).filter((row) => row.name !== "turn_plan_answer")).toEqual(previousSchema);
-    assertIndex(db);
-    const fresh = connect();
-    ensureSchema(fresh);
-    expect(schema(db)).toEqual(schema(fresh));
-    expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    const exec = vi.spyOn(db, "exec");
-    ensureSchema(db);
-    expect(exec).not.toHaveBeenCalled();
-    expect(() => version3Owner().ensureSchema(db)).toThrow(
-      expect.objectContaining({ code: "store_schema_unsupported", userVersion: 4 }),
-    );
-    expect(exec).not.toHaveBeenCalled();
-  });
+  it.each([3, 4] as const)(
+    "migrates frozen populated v%s to v5 without changing domain rows or existing indexes",
+    (version) => {
+      const db = connect();
+      frozenOwner(version).ensureSchema(db);
+      expect(readSchemaIdentity(db).userVersion).toBe(version);
+      seed(db); // Invalid JSON and refusals predate index creation.
+      if (version === 4) seedDeferredMessages(db);
+      const before = rows(db),
+        previousSchema = schema(db);
+      ensureSchema(db);
+      expect(readSchemaIdentity(db).userVersion).toBe(5);
+      expect({ ...rows(db), meta: [] }).toEqual({ deferred_message: [], ...before, meta: [] });
+      expect(rows(db).meta).toEqual(
+        (before.meta as { key: string; value: string }[]).map((row) =>
+          row.key === "schema_version" ? { ...row, value: "5" } : row,
+        ),
+      );
+      const added = new Set([
+        "turn_plan_answer",
+        ...(version === 3
+          ? [
+              "deferred_message",
+              "sqlite_autoindex_deferred_message_1",
+              "deferred_message_slot",
+              "deferred_message_predecessor",
+              "deferred_message_successor",
+              "deferred_message_body",
+            ]
+          : []),
+      ]);
+      expect(schema(db).filter((row) => !added.has(row.name as string))).toEqual(previousSchema);
+      assertIndex(db);
+      const fresh = connect();
+      ensureSchema(fresh);
+      expect(schema(db)).toEqual(schema(fresh));
+      expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      const exec = vi.spyOn(db, "exec");
+      ensureSchema(db);
+      expect(exec).not.toHaveBeenCalled();
+      for (const oldVersion of [3, 4] as const)
+        expect(() => frozenOwner(oldVersion).ensureSchema(db)).toThrow(
+          expect.objectContaining({ code: "store_schema_unsupported", userVersion: 5 }),
+        );
+      expect(exec).not.toHaveBeenCalled();
+    },
+  );
 
-  it("rolls back a failed v3-to-v4 index creation and permits a subsequent upgrade", () => {
+  it.each([3, 4] as const)(
+    "rolls back failed v%s-to-v5 index creation and permits a subsequent upgrade",
+    (version) => {
+      const db = connect();
+      frozenOwner(version).ensureSchema(db);
+      seed(db);
+      if (version === 4) seedDeferredMessages(db);
+      const before = rows(db),
+        previousSchema = schema(db);
+      const exec = db.exec.bind(db);
+      const fault = vi.spyOn(db, "exec").mockImplementation((sql) => {
+        exec(sql);
+        if (sql.includes("CREATE INDEX turn_plan_answer")) throw new Error("index failure");
+      });
+      expect(() => ensureSchema(db)).toThrow("index failure");
+      fault.mockRestore();
+      expect(readSchemaIdentity(db).userVersion).toBe(version);
+      expect(rows(db)).toEqual(before);
+      expect(schema(db)).toEqual(previousSchema);
+      ensureSchema(db);
+      expect(readSchemaIdentity(db).userVersion).toBe(5);
+      assertIndex(db);
+    },
+  );
+
+  it("refuses a newer store before writes and still opens a current v5 store", () => {
     const db = connect();
-    version3Owner().ensureSchema(db);
+    ensureSchema(db);
     seed(db);
-    const before = rows(db),
-      previousSchema = schema(db);
-    const exec = db.exec.bind(db);
-    const fault = vi.spyOn(db, "exec").mockImplementation((sql) => {
-      exec(sql);
-      if (sql.includes("CREATE INDEX turn_plan_answer")) throw new Error("index failure");
-    });
-    expect(() => ensureSchema(db)).toThrow("index failure");
-    fault.mockRestore();
-    expect(readSchemaIdentity(db).userVersion).toBe(3);
-    expect(rows(db)).toEqual(before);
-    expect(schema(db)).toEqual(previousSchema);
-    ensureSchema(db);
-    assertIndex(db);
-  });
-
-  it("refuses a newer store before writes and still opens a current v4 store", () => {
-    const db = connect();
-    ensureSchema(db);
-    seed(db);
-    db.exec("PRAGMA user_version=5");
+    db.exec("PRAGMA user_version=6");
     const before = rows(db),
       previousSchema = schema(db);
     const exec = vi.spyOn(db, "exec");
     expect(() => ensureSchema(db)).toThrow(
-      expect.objectContaining({ code: "store_schema_unsupported", userVersion: 5, status: 503 }),
+      expect.objectContaining({ code: "store_schema_unsupported", userVersion: 6, status: 503 }),
     );
     expect(exec).not.toHaveBeenCalled();
     expect(rows(db)).toEqual(before);
     expect(schema(db)).toEqual(previousSchema);
     exec.mockRestore();
-    db.exec("PRAGMA user_version=4"); // Fixture-only restoration of its original header.
+    db.exec("PRAGMA user_version=5"); // Fixture-only restoration of its original header.
     ensureSchema(db);
     assertIndex(db);
   });

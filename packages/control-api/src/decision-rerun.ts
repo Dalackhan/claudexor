@@ -3,6 +3,7 @@ import {
   ControlRunDecisionResponse,
   ControlRunStartRequest,
   restoreRecordedRunReviewRequest,
+  decodeAcceptedRunStart,
   type ControlRunDecisionRequest,
 } from "@claudexor/schema";
 import type {
@@ -53,10 +54,12 @@ export async function rerunWithFeedback(
     planRef: _planRef,
     retryOf: _retryOf,
     protectedPathApprovals: _protectedPathApprovals,
+    deferredDefaults: _deferredDefaults,
     ...original
   } = source;
   let params: ControlRunStartRequest;
   try {
+    decodeAcceptedRunStart(source);
     params = runStart.normalizeRunStart(
       restoreRecordedRunReviewRequest(
         ControlRunStartRequest.parse({
@@ -150,6 +153,7 @@ export async function rerunWithFeedback(
     if (job.reused === false) {
       ctx.appendAudit(rec, {
         decision: body.action,
+        ...(_deferredDefaults ? { omitted_controls: ["deferredDefaults"] } : {}),
         ...(run.runId ? { new_run_id: run.runId } : { new_job_id: run.id }),
       });
     }
@@ -160,9 +164,11 @@ export async function rerunWithFeedback(
         accepted: true,
         status: "requeued",
         ...(run.runId ? { newRunId: run.runId } : {}),
-        message: run.runId
-          ? "follow-up run enqueued with reviewer feedback"
-          : "follow-up job enqueued; run start is still pending",
+        message:
+          (run.runId
+            ? "follow-up run enqueued with reviewer feedback"
+            : "follow-up job enqueued; run start is still pending") +
+          (_deferredDefaults ? "; execution preferences resolve from current settings" : ""),
       }),
     );
   };

@@ -13,6 +13,7 @@ private final class HistoryCaptureWindow: NSWindow {
 
 /// Explicit opt-in: a prohibited application and never-ordered borderless windows.
 /// No client, saved state, credentials, daemon, or provider actions.
+extension KeyboardFocusTests {
 @MainActor @Suite(.serialized)
 struct HistoryMockupRenderingTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["CX_HISTORY_MOCKUP"] == "1"))
@@ -475,4 +476,6 @@ struct HistoryMockupRenderingTests {
         default: "A long answer ends on a whole line with a soft fold fade above Show more."
         }
     }
+}
+
 }

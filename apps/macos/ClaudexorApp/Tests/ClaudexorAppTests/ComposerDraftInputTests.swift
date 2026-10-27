@@ -4,6 +4,7 @@ import SwiftUI
 import Testing
 @testable import ClaudexorApp
 
+extension KeyboardFocusTests {
 @MainActor @Suite(.serialized)
 struct ComposerDraftInputTests {
     @Test(arguments: [false, true])
@@ -95,4 +96,6 @@ struct ComposerDraftInputTests {
             timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: text,
             charactersIgnoringModifiers: unmodified ?? text, isARepeat: false, keyCode: code))
     }
+}
+
 }

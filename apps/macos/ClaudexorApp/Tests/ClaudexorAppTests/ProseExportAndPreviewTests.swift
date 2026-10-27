@@ -3,6 +3,7 @@ import SwiftUI
 import Testing
 @testable import ClaudexorApp
 
+extension KeyboardFocusTests {
 @MainActor @Suite(.serialized)
 struct ProseExportAndPreviewTests {
     @Test func richSelectionExcludesCodeHeadersWithoutChangingTheLiveDocument() throws {
@@ -111,4 +112,6 @@ struct ProseExportAndPreviewTests {
     private func settle(_ host: NSView) async {
         for _ in 0..<4 { host.layoutSubtreeIfNeeded(); try? await Task.sleep(for: .milliseconds(60)) }
     }
+}
+
 }

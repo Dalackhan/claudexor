@@ -4,6 +4,12 @@ import Testing
 import ClaudexorKit
 @testable import ClaudexorApp
 
+/// Suites that move AppKit first responders run one at a time. SwiftUI text
+/// fields share one field editor in the process, so focusing a field in one
+/// test window ends editing in another test's window.
+@Suite(.serialized) struct KeyboardFocusTests {}
+
+extension KeyboardFocusTests {
 @MainActor @Suite(.serialized)
 struct ConversationNativeRoutingTests {
     @Test(arguments: [0, 8, 14]) func firstKeyPreservesExistingComposerDraftAndInsertionPoint(cursor: Int) async throws {
@@ -194,6 +200,7 @@ struct ConversationNativeRoutingTests {
         host.sizingOptions = []
         defer { window.close() }
         await settle(host, count: 10)
+        await settle(host) { state.follows && state.atBottom }
         #expect(state.follows && state.atBottom)
         let prose = try #require(views(host).compactMap { $0 as? ProseTextView }.first { $0.string.hasPrefix("Tail passage 0:") })
         var ancestor = prose.superview
@@ -242,9 +249,15 @@ struct ConversationNativeRoutingTests {
     private func settle(_ host: NSView, count: Int = 4) async {
         for _ in 0..<count { host.layoutSubtreeIfNeeded(); try? await Task.sleep(for: .milliseconds(60)) }
     }
+    // Parallel suites keep the main actor busy, so the first layout passes can arrive late.
+    private func settle(_ host: NSView, until ready: () -> Bool) async {
+        for _ in 0..<50 where !ready() { await settle(host, count: 1) }
+    }
     private func key(_ text: String, code: UInt16, modifiers: NSEvent.ModifierFlags = [], window: NSWindow) throws -> NSEvent {
         try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
             timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: text,
             charactersIgnoringModifiers: text, isARepeat: false, keyCode: code))
     }
+}
+
 }

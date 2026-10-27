@@ -3,6 +3,7 @@ import Foundation
 import Testing
 @testable import ClaudexorApp
 
+extension HistoryGatewayTests {
 @MainActor @Suite(.serialized)
 struct HistorySnapshotOrderingTests {
     @Test(arguments: ["interaction.answered", "interaction.withdrawn", "interaction.timeout"])
@@ -93,4 +94,6 @@ struct HistorySnapshotOrderingTests {
         #expect(history.mountedIDs.contains("mock-turn-44"))
         #expect(history.readingAnchor == "mock-turn-44")
     }
+}
+
 }

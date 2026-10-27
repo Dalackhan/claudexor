@@ -3,6 +3,7 @@ import SwiftUI
 import Testing
 @testable import ClaudexorApp
 
+extension KeyboardFocusTests {
 @MainActor @Suite(.serialized)
 struct ProseTextTests {
     private func document(_ source: String) throws -> ProseDocument {
@@ -161,4 +162,6 @@ struct ProseTextTests {
         state.geometry(bottom: true, tailMounted: true)
         #expect(state.follows)
     }
+}
+
 }

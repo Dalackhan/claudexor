@@ -6,6 +6,7 @@ import Testing
 private final class ProseIdentityWindow: NSWindow {
     override var canBecomeKey: Bool { true }
 }
+extension KeyboardFocusTests {
 @MainActor @Suite(.serialized)
 struct ProseIdentityLifecycleTests {
     @Test(arguments: [false, true])
@@ -59,4 +60,6 @@ struct ProseIdentityLifecycleTests {
             try? await Task.sleep(for: .milliseconds(30))
         }
     }
+}
+
 }

@@ -3,6 +3,7 @@ import SwiftUI
 import Testing
 @testable import ClaudexorApp
 
+extension KeyboardFocusTests {
 @MainActor @Suite(.serialized)
 struct ConversationTextInputTests {
     @Test(arguments: [false, true])
@@ -126,4 +127,6 @@ struct ConversationTextInputTests {
             timestamp: 0, windowNumber: 0, context: nil, characters: text,
             charactersIgnoringModifiers: text, isARepeat: false, keyCode: code))
     }
+}
+
 }

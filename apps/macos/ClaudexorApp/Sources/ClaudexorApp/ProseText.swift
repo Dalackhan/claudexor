@@ -250,11 +250,20 @@ final class ProseTextView: NSTextView {
 
     override func accessibilityChildren() -> [Any]? { (super.accessibilityChildren() ?? []) + codeAccessibilityActions() }
 
-    /// Only the message the reader works in may scroll the conversation to its selection. Any
-    /// other message would move a followed feed to its own text without a reader action.
-    override func scrollRangeToVisible(_ range: NSRange) {
-        guard window?.firstResponder === self else { return }
-        super.scrollRangeToVisible(range)
+    /// A resized NSTextView keeps its selection in view by scrolling its enclosing scroll view
+    /// (macOS 26.6 does so when SwiftUI resizes a message). The feed owns its position, so a
+    /// message never scrolls it because its size changed.
+    private var resizingFrame = false
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let outer = resizingFrame
+        resizingFrame = true
+        defer { resizingFrame = outer }
+        super.setFrameSize(newSize)
+    }
+
+    override func scrollToVisible(_ rect: NSRect) -> Bool {
+        resizingFrame ? false : super.scrollToVisible(rect)
     }
 
     override func scrollWheel(with event: NSEvent) {

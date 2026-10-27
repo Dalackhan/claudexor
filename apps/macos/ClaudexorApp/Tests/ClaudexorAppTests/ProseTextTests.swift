@@ -263,10 +263,11 @@ struct ProseTextTests {
         #expect(state.follows)
     }
 
-    /// Revealing a message's insertion point moves the feed only for the message the reader works
-    /// in. For any other message it puts the clip at that text's first line while the feed still
-    /// follows, the state the macOS 26.6 runner reported after an answer grew (offset 80).
-    @Test func onlyTheFocusedMessageScrollsTheFeedToItsSelection() throws {
+    /// A resized NSTextView keeps its selection in view by scrolling the feed; on the macOS 26.6
+    /// runner a growing answer moved a followed feed to the answer's first line that way (offset 80).
+    /// The test asks for that reveal from inside the frame change, where AppKit asks for it, and
+    /// checks that the same reveal outside a frame change still scrolls the feed.
+    @Test func aResizedMessageNeverScrollsTheFeedToItsSelection() throws {
         let app = NSApplication.shared
         let previousPolicy = app.activationPolicy()
         app.setActivationPolicy(.prohibited)
@@ -275,18 +276,23 @@ struct ProseTextTests {
         let document = FlippedDocument(frame: NSRect(x: 0, y: 0, width: 400, height: 2000))
         scroll.documentView = document
         let text = ProseTextView.make()
-        text.frame = NSRect(x: 0, y: 80, width: 400, height: 1800)
+        text.frame = NSRect(x: 0, y: 80, width: 400, height: 1200)
         text.string = "A growing answer"
         document.addSubview(text)
         let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = scroll
-        defer { window.close(); app.setActivationPolicy(previousPolicy) }
+        nonisolated(unsafe) let resized = text
+        let reveal = NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification,
+            object: text, queue: nil) { _ in
+            MainActor.assumeIsolated { resized.scrollRangeToVisible(NSRange(location: 0, length: 0)) }
+        }
+        defer { NotificationCenter.default.removeObserver(reveal); window.close(); app.setActivationPolicy(previousPolicy) }
         scroll.contentView.scroll(to: NSPoint(x: 0, y: 1400))
         scroll.reflectScrolledClipView(scroll.contentView)
-        text.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        text.setFrameSize(NSSize(width: 400, height: 1800))
+        #expect(text.frame.height == 1800)
         #expect(scroll.contentView.bounds.minY == 1400)
-        #expect(window.makeFirstResponder(text))
         text.scrollRangeToVisible(NSRange(location: 0, length: 0))
         #expect(scroll.contentView.bounds.minY <= 80)
     }

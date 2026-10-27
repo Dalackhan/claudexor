@@ -11,25 +11,46 @@ extension AppModel {
     func resolveHistoryInteraction(runID: String, interactionID: String, at location: ExecutionLocationID) {
         guard let history = selectedHistory, history.locationID == location else { return }
         history.resolvedInteractions[runID, default: []].insert(interactionID)
+        history.interactionRequestSequences[runID]?[interactionID] = nil
         history.presentation.resolveInteraction(runID: runID, interactionID: interactionID)
     }
 
-    /// A detail read can lag an already displayed request or an acknowledged
-    /// answer. Keep live questions until a resolution, and don't resurrect one
-    /// that resolved while this snapshot was in flight.
-    func reconcileHistoryInteractions(_ task: inout TaskRun, at location: ExecutionLocationID) {
+    func recordHistoryInteractionRequest(runID: String, interactionID: String, seq: Int, at location: ExecutionLocationID) {
+        guard let history = selectedHistory, history.locationID == location else { return }
+        history.resolvedInteractions[runID]?.remove(interactionID)
+        history.interactionRequestSequences[runID, default: [:]][interactionID] = seq
+    }
+
+    /// Snapshot lastSeq owns questions through that sequence. Only a newer
+    /// request may override its pending list; an acknowledged answer still wins
+    /// over a delayed snapshot. Covered resolutions clean presentation state
+    /// without replaying covered spend/timeline events from the snapshot fence.
+    func reconcileHistoryInteractions(_ task: inout TaskRun, lastSeq: Int, at location: ExecutionLocationID) {
         let current = self.task(task.id, at: location)
         let history = selectedHistory?.locationID == location ? selectedHistory : nil
+        let requests = history?.interactionRequestSequences[task.id] ?? [:]
+        if location == .local {
+            for event in deferredEnvelopes[task.id] ?? [] where event.seq > 0 && event.seq <= lastSeq {
+                let type = event.event["type"]?.stringValue ?? event.kind
+                let payload = event.event["payload"] ?? event.event
+                if ["interaction.answered", "interaction.withdrawn", "interaction.timeout"].contains(type),
+                   let id = payload["interaction_id"]?.stringValue, (requests[id] ?? 0) <= lastSeq {
+                    resolveHistoryInteraction(runID: task.id, interactionID: id, at: location)
+                }
+            }
+        }
         let resolved = history?.resolvedInteractions[task.id] ?? []
+        let previous = current?.pendingInteractions ?? []
+        let candidates = previous + task.pendingInteractions
+        let newer = previous.filter { (requests[$0.interactionId] ?? 0) > lastSeq }
         var seen = Set<String>()
-        task.pendingInteractions = ((current?.pendingInteractions ?? []) + task.pendingInteractions).filter {
+        task.pendingInteractions = (newer + task.pendingInteractions).filter {
             !resolved.contains($0.interactionId) && seen.insert($0.interactionId).inserted
         }
-        if task.phase.isTerminal {
-            for question in task.pendingInteractions {
-                resolveHistoryInteraction(runID: task.id, interactionID: question.interactionId, at: location)
-            }
-            task.pendingInteractions = []
+        if task.phase.isTerminal { task.pendingInteractions = [] }
+        let pending = Set(task.pendingInteractions.map(\.interactionId))
+        for question in candidates where !pending.contains(question.interactionId) {
+            resolveHistoryInteraction(runID: task.id, interactionID: question.interactionId, at: location)
         }
         if !task.pendingInteractions.isEmpty { task.waitingOnUser = true }
         else if !resolved.isEmpty || task.phase.isTerminal { task.waitingOnUser = false }
@@ -42,7 +63,7 @@ extension AppModel {
         let type = event.event["type"]?.stringValue ?? event.kind
         let payload = event.event["payload"] ?? event.event
         if type == "interaction.requested", let question = Self.pendingInteraction(from: payload, runId: runID) {
-            selectedHistory?.resolvedInteractions[runID]?.remove(question.interactionId)
+            recordHistoryInteractionRequest(runID: runID, interactionID: question.interactionId, seq: event.seq, at: location)
             task.pendingInteractions.removeAll { $0.interactionId == question.interactionId }
             task.pendingInteractions.append(question)
             task.waitingOnUser = true

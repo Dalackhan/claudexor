@@ -49,8 +49,10 @@ import Observation
     var delegateReads: Set<String> = []
     @ObservationIgnored var delegateTask: Task<Void, Never>?
     var resolvedInteractions: [String: Set<String>] = [:]
+    var interactionRequestSequences: [String: [String: Int]] = [:]
     var oldestID: String?
     var readSerial = 0
+    var installedReadSerial = 0
     var intent = 0
     @ObservationIgnored var refreshTask: Task<Void, Never>?
     @ObservationIgnored var trailing = false
@@ -123,11 +125,13 @@ import Observation
             let window = earlier ? Array(combined.prefix(20)) : Array(combined.suffix(20))
             let chosen = fitting(window, anchor: anchor, earlier: earlier)
             // A boundary page is coverage, never a replacement empty feed.
-            guard install([page], ids: chosen.map(\.id), reset: false, serial: serial, limit: limit) else {
+            guard install([page], ids: chosen.map(\.id), reset: false, serial: serial,
+                          limit: limit, countingArrivals: true) else {
                 if earlier { earlierState = .failed } else { laterState = .failed }; return
             }
-            following = false; readingAnchor = anchor
-            navigate(anchor, follows: false, bottom: !earlier)
+            following = !earlier && tailMounted
+            readingAnchor = following ? nil : anchor
+            navigate(following ? nil : anchor, follows: following, bottom: !earlier)
             finishTravel()
         } catch {
             if isStale(error) {
@@ -163,12 +167,12 @@ import Observation
     private func refreshOnce() async {
         do {
             if replays.isEmpty {
+                let navigation = navigationRevision
                 let (page, serial) = try await fetch(nil)
                 if changedEpoch(page) {
                     try await resnapshot(anchor: readingAnchor); return
                 }
-                install([page], ids: following ? page.turns.map(\.id) : mountedIDs,
-                    reset: header == nil, serial: serial)
+                installTail(page, serial: serial, navigation: navigation)
                 return
             }
             var pages: [ThreadHistoryPage] = []
@@ -193,12 +197,12 @@ import Observation
             // Gestures cancel navigation, never background facts. Re-check the
             // viewport after the tail await: an explicit travel may have landed.
             if following, let latest = pages.last?.header.latestTurnId, latest != mountedIDs.last {
+                let navigation = navigationRevision
                 let (page, next) = try await fetch(nil)
                 if changedEpoch(page) {
                     try await resnapshot(anchor: readingAnchor ?? mountedIDs.first); return
                 }
-                install([page], ids: following ? page.turns.map(\.id) : mountedIDs,
-                    reset: false, serial: next)
+                installTail(page, serial: next, navigation: navigation)
             } else {
                 install(pages, ids: mountedIDs, reset: false, serial: serial, replayLimits: replayLimits)
             }
@@ -210,10 +214,27 @@ import Observation
         }
     }
 
-    private func resnapshot(anchor: String?, follows: Bool? = nil) async throws {
+    /// Membership authority is separate from row freshness. Even a useful late
+    /// response cannot undo a completed Jump/Send or a newer installed read.
+    private func installTail(_ page: ThreadHistoryPage, serial: Int, navigation: Int) {
+        let older = revision.map { $0.epoch == page.revision.epoch && $0.sequence > page.revision.sequence } ?? false
+        let replace = following && navigation == navigationRevision && serial >= installedReadSerial && !older
+        install([page], ids: replace ? page.turns.map(\.id) : mountedIDs,
+            reset: header == nil, serial: serial)
+    }
+
+    private func recoveryPosition(fallback: String?) -> (following: Bool, anchor: String?) {
+        let messages = presentation.focusedMessages.union(presentation.selectedMessages)
+        if following && messages.isEmpty { return (true, nil) }
+        let focused = mountedIDs.first { id in messages.contains { $0 == id || $0.hasPrefix(id + ":") } }
+        return (false, readingAnchor ?? focused ?? fallback ?? mountedIDs.first)
+    }
+
+    private func resnapshot(anchor requestedAnchor: String?, follows: Bool? = nil) async throws {
         let ticket = intent, navigation = navigationRevision
-        let recoveringFollower = follows ?? following
-        let anchor = recoveringFollower ? nil : anchor
+        let position = recoveryPosition(fallback: requestedAnchor)
+        let recoveringFollower = follows ?? position.following
+        let anchor = recoveringFollower ? nil : (follows == nil ? position.anchor : requestedAnchor)
         let (first, serial) = try await fetch(anchor.map(ThreadHistorySelector.aroundTurnId))
         var pages = [first]
         var chosen = first.turns
@@ -233,7 +254,17 @@ import Observation
             }
         }
         guard ticket == intent, navigation == navigationRevision else { return }
-        guard install(pages, ids: chosen.map(\.id), reset: true, serial: lastSerial) else { return }
+        if follows == nil {
+            let current = recoveryPosition(fallback: requestedAnchor)
+            if current.following != recoveringFollower || current.anchor != anchor {
+                // Focus/selection can pause following without a scroll gesture.
+                // Keep the painted island until its new anchor has been read.
+                try await resnapshot(anchor: current.anchor)
+                return
+            }
+        }
+        guard install(pages, ids: chosen.map(\.id), reset: true, serial: lastSerial,
+                      countingArrivals: !recoveringFollower) else { return }
         following = recoveringFollower
         readingAnchor = anchor
         if recoveringFollower { navigate(nil, follows: true) }

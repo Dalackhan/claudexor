@@ -6,7 +6,7 @@ extension ThreadHistoryStore {
     /// 4 MiB) cache. Mounted rows have priority; drafts are never consulted.
     @discardableResult
     func install(_ pages: [ThreadHistoryPage], ids: [String], reset: Bool, serial: Int,
-                 limit: Int = 20, replayLimits: [String: Int] = [:]) -> Bool {
+                 limit: Int = 20, replayLimits: [String: Int] = [:], countingArrivals: Bool = false) -> Bool {
         defer {
             let kept = Set(records.values.map(RowSizeKey.init))
             rowSizes = rowSizes.filter { kept.contains($0.key) }
@@ -38,6 +38,7 @@ extension ThreadHistoryStore {
             return false
         }
         prepare?(mounted.compactMap { next[$0] })
+        installedReadSerial = max(installedReadSerial, serial)
         records = next; retainedPages = pageIDs; mountedIDs = mounted
         for row in rows where row.planAnswerComplete && row.answeredByTurnId != nil {
             if let runID = row.runId {
@@ -61,7 +62,7 @@ extension ThreadHistoryStore {
             return ids.isEmpty ? nil : Replay(cursor: $0.cursor, ids: ids, limit: $0.limit)
         }
         if reset || revision == nil || last.revision.isNewer(than: revision!) {
-            if !following, header?.latestTurnId != last.header.latestTurnId {
+            if !following || countingArrivals, header?.latestTurnId != last.header.latestTurnId {
                 if let old = header?.latestOrdinal, let new = last.header.latestOrdinal, new >= old {
                     newCount = newCount.map { $0 + new - old }
                 } else { newCount = nil }
@@ -87,6 +88,8 @@ extension ThreadHistoryStore {
         let runIDs = Set(rows.compactMap(\.runId)).union(header?.headRun.map { [$0.runId] } ?? [])
         delegateReads.formIntersection(runIDs)
         liveRunIDs.formIntersection(runIDs)
+        resolvedInteractions = resolvedInteractions.filter { runIDs.contains($0.key) }
+        interactionRequestSequences = interactionRequestSequences.filter { runIDs.contains($0.key) }
         liveFacts = liveFacts.filter { id, fact in
             guard runIDs.contains(id) else { return false }
             guard serial > fact.throughRead,

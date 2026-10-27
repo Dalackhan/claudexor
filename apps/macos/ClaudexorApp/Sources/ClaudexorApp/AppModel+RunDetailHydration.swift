@@ -244,7 +244,7 @@ extension AppModel {
             // Re-resolve the row index at WRITE time: streams/refreshes may have
             // inserted or removed rows during the awaits above.
             if let writeIdx = liveTasks.firstIndex(where: { $0.id == id }) {
-                reconcileHistoryInteractions(&task, at: .local)
+                reconcileHistoryInteractions(&task, lastSeq: detail.lastSeq, at: .local)
                 liveTasks[writeIdx] = task
                 hydratedRunDetails.insert(id)
                 publishHistoryLive(task, locationID: .local)

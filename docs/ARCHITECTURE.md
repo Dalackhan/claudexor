@@ -3249,19 +3249,30 @@ ranges. Encoded row sizes are cached by ID/revision and reclaimed with DTOs.
 Same-thread refresh never clears the painted feed. Cursor/owner resets read around
 the reading anchor and follow newer coverage to refill beneath it; a follower
 instead requests the newest page and keeps following with no reading anchor.
+Recovery revalidates focus and the current reading position after the awaited
+read; focus gained during a follower read triggers an anchored read before paint.
 An empty boundary page updates coverage without replacing the painted island.
 Gestures cancel travel, Jump and recovery navigation, not background facts. A tail
-refresh rechecks following after its awaited fetch before changing mounted IDs;
-a Jump overtaken by a newer revision retries its newest read once. Arrivals use
+refresh rechecks following after its awaited fetch before changing mounted IDs.
+Membership changes also require an unchanged completed-navigation revision and
+no newer installed read; superseded responses still merge useful row/header facts.
+A Jump overtaken by a newer revision retries its newest read once. Arrivals use
 `latestOrdinal` differences, never refresh counts; missing ordinal evidence is
-shown as unnumbered “new”.
+shown as unnumbered “new”. Travel counts arrivals first observed while leaving
+following. Show later follows at the tail bottom when it reaches the newest
+turn; otherwise it anchors the former last turn at the bottom edge.
 
 The app renders settled prompt, answer, receipt, plan relation and retention
 facts from each history row. Its live-run overlay records which history reads
 were already in flight when a run detail published; those responses cannot erase
 that answer, even when they report terminal state with older output. Stream
-changes publish card-visible live facts immediately. Detail snapshots preserve
-pending questions already displayed and cannot resurrect acknowledged resolutions.
+changes publish card-visible live facts immediately. Detail snapshots own pending
+questions through `lastSeq`; only requests with a newer event sequence override
+that list. Covered deferred resolutions clean up the presentation without replaying
+covered spend/timeline events, and acknowledged answers cannot be resurrected.
+Request sequences and resolved-interaction sets are pruned to mounted runs and
+the head. Dismantled native prose reports selection/focus cleared, so eviction
+cannot leave stale keys preventing following from resuming.
 Interaction selections/free text live in the located presentation store keyed by
 run, interaction and question, survive eviction, and clear on acknowledged answer,
 withdrawal, timeout or terminal resolution. Composer/Stop use the page header, not

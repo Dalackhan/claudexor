@@ -530,7 +530,7 @@ extension AppModel {
             shouldLoadDetail = true
         } else if type == "interaction.requested" {
             if let pending = Self.pendingInteraction(from: payload, runId: runId) {
-                selectedHistory?.resolvedInteractions[runId]?.remove(pending.interactionId)
+                recordHistoryInteractionRequest(runID: runId, interactionID: pending.interactionId, seq: env.seq, at: .local)
                 t.pendingInteractions.removeAll { $0.interactionId == pending.interactionId }
                 t.pendingInteractions.append(pending)
                 t.waitingOnUser = true

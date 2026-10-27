@@ -16,6 +16,17 @@ struct HistoryInteractionTests {
             ], requestedAt: "2026-10-27T00:00:00Z", timeoutAt: nil)
     }
 
+    static func request(seq: Int) -> BusEnvelope {
+        BusEnvelope(seq: seq, kind: "interaction.requested", event: .object([
+            "type": .string("interaction.requested"), "payload": .object([
+                "interaction_id": .string("interaction-1"), "harness_id": .string("codex"),
+                "source_tool": .string("request_user_input"), "requested_at": .string("2026-10-27T00:00:00Z"),
+                "questions": .array([.object(["id": .string("q"), "question": .string("Which approach?"),
+                    "multi_select": .bool(true), "options": .array([.object(["label": .string("Keep")])])])])
+            ])
+        ]))
+    }
+
     @Test(arguments: locations)
     func interactionDraftSurvivesEvictionAndClearsOnlyAfterAcceptedSubmission(location: ExecutionLocationID) async throws {
         defer { HistoryURLProtocol.handler = nil }
@@ -67,6 +78,9 @@ struct HistoryInteractionTests {
         model.selectedHistory = history
         if location == .local { model.liveTasks = source.runs } else { model.remoteTasks[location] = source.runs }
         model.publishHistoryLive(source.runs[0], locationID: location)
+        // The request is newer than the delayed snapshot's lastSeq=1.
+        if location == .local { model.apply(Self.request(seq: 2), to: question.runId) }
+        else { model.applyRemoteHistoryCardEvent(Self.request(seq: 2), runID: question.runId, at: location) }
         var delayed = false
         let gate = HistoryTestGate()
         HistoryURLProtocol.handler = { request in

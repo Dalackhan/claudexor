@@ -109,6 +109,9 @@ struct ProseText: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ view: ProseTextView, coordinator: Coordinator) {
+        coordinator.selectionChanged?(false)
+        view.focusChanged?(false)
+        coordinator.selectionChanged = nil
         view.delegate = nil
         view.focusChanged = nil
         view.textStorage?.setAttributedString(NSAttributedString(string: ""))

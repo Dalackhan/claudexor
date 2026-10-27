@@ -466,8 +466,10 @@ frequency and volume are. The contracts:
   slot reports the header ordinal difference, or unnumbered “new” when ordinal
   evidence is unavailable; it never shifts the label. A click or selection at the
   real tail bottom shows no floating Jump; clearing text focus/selection there
-  resumes following. The whole-thread tail hides “Beginning of saved history”.
-  Show later keeps the former last turn at the bottom edge. Opens use
+  resumes following. Dismantled prose clears its selection/focus keys, including
+  on eviction. The whole-thread tail hides “Beginning of saved history”.
+  Show later pins to the bottom and follows when it reaches the newest turn;
+  within older history it keeps the former last turn at the bottom edge. Opens use
   the bottom initial anchor; explicit moves use `ScrollPosition` by ID.
   A reading window stays fixed when new turns arrive. Local and remote feeds
   use the addressed engine history read; a selected thread retains at most two
@@ -480,9 +482,12 @@ frequency and volume are. The contracts:
   through every continuation, coalescing one in-flight read and at most one trailing read. Only newer row
   revisions replace painted facts. Stale cursors or a new serving incarnation
   re-snapshot around the visible reading turn, then refill below it; followers
-  recover from the newest page and clear their reading anchor. Gestures cancel
+  recover from the newest page and clear their reading anchor. Recovery rechecks
+  focus and the reading position after its read; a newly focused turn gets an
+  anchored recovery before the painted island changes. Gestures cancel
   explicit navigation while background facts still land. A tail refresh must
-  recheck following after the read; a Jump overtaken by a newer revision retries
+  recheck following after the read and cannot replace membership established by
+  a later completed navigation or newer installed read. A Jump overtaken by a newer revision retries
   its newest read once. One
   scroll-level target-visibility callback identifies the first visible card in
   mounted order, including partially visible and taller-than-viewport cards.
@@ -511,7 +516,12 @@ frequency and volume are. The contracts:
   projected missing Delegate children gets one bounded addressed parent read;
   child lookup stays in that parent’s execution location.
   Stream updates publish live card fields; older detail reads preserve pending
-  questions and cannot resurrect resolved ones. PATCH metadata wins over older
+  questions only when their request event is newer than the snapshot's sequence.
+  Resolutions covered by a detail snapshot clear the question and draft even
+  when the event fence suppresses replay. Resolution/request bookkeeping is
+  pruned to mounted runs plus the head. A travel that leaves following counts
+  the ordinal delta it observes, including arrivals first seen by that travel.
+  PATCH metadata wins over older
   in-flight reads; a replacement remote store retires the old history pin. Initial loading, loaded
   empty history, and a failed read remain distinct from the new-thread illustration.
 - **Per-card equatable containment (D-13 E).** `AppModel` is one coarse

@@ -407,7 +407,8 @@ deferred; they are recorded here now.
 - D-13 step D: native prose and bounded eager history verification —
   PR #504 mockups use TextKit 1 prose and an eager window of at most 20 turns.
   Engine paging and review regressions (cursor scopes, live interactions, Delegate
-  restoration, workspace invalidation and follower recovery) are covered by
+  restoration, workspace invalidation, snapshot-covered resolutions, completed
+  navigation membership and focus-aware follower recovery) are covered by
   hermetic tests. Owner variant decisions and macOS 26.5 stress
   verification remain. List is reserved for a separately measured future experiment;
   neither List nor LazyVStack is the current history strategy.

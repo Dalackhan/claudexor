@@ -16,6 +16,41 @@ private final class HistoryCaptureWindow: NSWindow {
 @MainActor @Suite(.serialized)
 struct HistoryMockupRenderingTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["CX_HISTORY_MOCKUP"] == "1"))
+    func evictingSelectedProseClearsItsPresentationFocus() async throws {
+        let app = NSApplication.shared
+        let policy = app.activationPolicy()
+        app.setActivationPolicy(.prohibited)
+        defer { app.setActivationPolicy(policy) }
+        let source = try HistoryTestSource(count: 45)
+        let model = HistoryMockupFixtures.model(detail: source.detail, runs: source.runs, source: source)
+        let state = ConversationFeedState()
+        let history = try #require(model.selectedHistory)
+        let (host, window) = makeWindow(ThreadsScreen(feedState: state).environment(model), width: 1100, appearance: .aqua)
+        defer { window.close() }
+        await settle(host)
+        let selected = try #require(views(host).compactMap { $0 as? ProseTextView }.first { $0.string.hasPrefix("Checkpoint 45:") })
+        #expect(window.makeFirstResponder(selected))
+        selected.setSelectedRange(NSRange(location: 0, length: 10))
+        await settle(host)
+        #expect(!history.presentation.selectedMessages.isEmpty && !history.presentation.focusedMessages.isEmpty)
+        await history.earlier(retaining: 1)
+        await settle(host)
+        #expect(!history.mountedIDs.contains("mock-turn-44"))
+        #expect(history.presentation.selectedMessages.isEmpty && history.presentation.focusedMessages.isEmpty)
+        await history.jump()
+        await settle(host)
+        let returned = try #require(views(host).compactMap { $0 as? ProseTextView }.first { $0.string.hasPrefix("Checkpoint 45:") })
+        #expect(window.makeFirstResponder(returned))
+        returned.setSelectedRange(NSRange(location: 0, length: 10))
+        await settle(host)
+        returned.setSelectedRange(NSRange(location: 0, length: 0))
+        #expect(window.makeFirstResponder(nil))
+        await settle(host)
+        #expect(history.presentation.selectedMessages.isEmpty && history.presentation.focusedMessages.isEmpty)
+        #expect(state.atBottom && history.following && history.readingAnchor == nil)
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CX_HISTORY_MOCKUP"] == "1"))
     func tailTextFocusKeepsJumpHiddenAndClearingResumesFollowing() async throws {
         let app = NSApplication.shared
         let policy = app.activationPolicy()

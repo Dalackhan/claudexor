@@ -201,7 +201,8 @@ struct ConversationNativeRoutingTests {
         defer { window.close() }
         await settle(host, count: 10)
         await settle(host) { state.follows && state.atBottom }
-        #expect(state.follows && state.atBottom)
+        #expect(state.follows)
+        #expect(state.atBottom)
         let prose = try #require(views(host).compactMap { $0 as? ProseTextView }.first { $0.string.hasPrefix("Tail passage 0:") })
         var ancestor = prose.superview
         var scroll: NSScrollView?
@@ -211,6 +212,7 @@ struct ConversationNativeRoutingTests {
         }
         let feed = try #require(scroll)
         let document = try #require(feed.documentView)
+        print("TAIL START follows=\(state.follows) bottom=\(state.atBottom) y=\(feed.contentView.bounds.minY) visible=\(feed.contentView.bounds.height) document=\(document.frame.height)")
         let layout = try #require(prose.layoutManager)
         let container = try #require(prose.textContainer)
         layout.ensureLayout(for: container)

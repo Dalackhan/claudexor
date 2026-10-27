@@ -157,6 +157,9 @@ struct ProseTextTests {
         #expect(history.following && history.newCount == 0)
         #expect(history.presentation.planText["plan"]?["question"] == "Keep this draft")
         let state = ConversationFeedState()
+        // Growth that lands before the bottom anchor adjusts keeps following.
+        state.geometry(bottom: false, movedUp: false, tailMounted: true)
+        #expect(state.follows && !state.atBottom)
         state.geometry(bottom: false, tailMounted: true)
         #expect(!state.follows)
         state.geometry(bottom: true, tailMounted: true)

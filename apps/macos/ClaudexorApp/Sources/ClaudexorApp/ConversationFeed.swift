@@ -18,6 +18,8 @@ import ClaudexorKit
     var navigationRevision = 0
     var navigationTarget: String?
     var navigationAnchor: UnitPoint = .top
+    var navigationY: CGFloat?
+    @ObservationIgnored let readingPosition = ConversationReadingPosition()
     var visibleTurnID: String?
     static let limit = 20
     static let topID = "history:top"
@@ -45,12 +47,20 @@ import ClaudexorKit
     }
 
     func navigate(to id: String, anchor: UnitPoint) {
+        navigationY = nil
         navigationTarget = id
         navigationAnchor = anchor
         navigationRevision += 1
     }
 
+    func navigate(toY y: CGFloat) {
+        navigationTarget = nil
+        navigationY = y
+        navigationRevision += 1
+    }
+
     func commitNavigation() {
+        if let navigationY { position.scrollTo(y: navigationY); return }
         guard let navigationTarget else { return }
         // ScrollPosition coalesces repeated requests for the same target. Only
         // the zero-height marker changes identity; retained TurnCards and their
@@ -64,7 +74,7 @@ import ClaudexorKit
         if bottom && tailMounted {
             viewport = .followingTail
             newCount = 0
-        } else if follows {
+        } else if follows && !readingPosition.isFollowingResize {
             viewport = .reading(anchor: positionedTurnID)
         }
     }
@@ -72,7 +82,6 @@ import ClaudexorKit
 
 struct ConversationFeed: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.conversationTextOptions) private var options
     @Bindable var state: ConversationFeedState
     @Bindable var history: ThreadHistoryStore
     let routingOptions: TurnOptions
@@ -120,15 +129,16 @@ struct ConversationFeed: View {
             // while including slivers of even very tall cards. Use feed order.
             state.visibleTurnID = history.mountedIDs.first { visible.contains($0) }
         }
-        .onChange(of: state.navigationRevision) { state.commitNavigation() }
+        .onChange(of: state.navigationRevision) { state.commitNavigation(); state.readingPosition.navigated() }
         .onChange(of: history.navigationRevision) { state.navigate(history) }
         .onChange(of: history.mountedIDs) { state.synchronize(history) }
         .onChange(of: history.newCount) { state.newCount = history.newCount }
         .onChange(of: state.viewport) { synchronizeReading() }
         .onChange(of: state.positionedTurnID) { synchronizeReading() }
-        .onChange(of: state.visibleTurnID) { synchronizeReading() }
+        .onChange(of: state.visibleTurnID) { synchronizeReading(); state.readingPosition.captureAfterSettling() }
         .onScrollPhaseChange { _, phase in
-            if phase == .interacting { history.cancelNavigation() }
+            if phase == .interacting { history.cancelNavigation(); state.readingPosition.gestureBegan() }
+            if phase == .idle { state.readingPosition.captureAfterSettling() }
         }
         .onScrollGeometryChange(for: Bool.self) { geometry in
             geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height + geometry.contentInsets.bottom - 1
@@ -137,6 +147,7 @@ struct ConversationFeed: View {
             synchronizeReading()
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+            state.readingPosition.widthChanged(size.width)
             state.viewportHeight = size.height
             state.width = min(680, max(1, size.width - 2 * Theme.Spacing.lg))
         }
@@ -144,11 +155,13 @@ struct ConversationFeed: View {
             newCount: history.newCount, state: history.jumpState,
             latest: jump))
         .environment(history.presentation)
+        .environment(\.conversationReadingPosition, state.readingPosition)
         .onAppear {
+            state.readingPosition.attach(state)
             state.synchronize(history)
             history.prepare = { rows in for row in rows { _ = prepare(row) } }
         }
-        .onDisappear { history.prepare = nil }
+        .onDisappear { history.prepare = nil; state.readingPosition.stop() }
         .onChange(of: history.presentation.selectedMessages) { textFocusChanged() }
         .onChange(of: history.presentation.focusedMessages) { textFocusChanged() }
     }
@@ -186,11 +199,11 @@ struct ConversationFeed: View {
     private func prepare(_ turn: ThreadHistoryTurn) -> CGFloat {
         let prompt = PromptBubble.preview(turn.prompt)
         let expanded = history.presentation.expanded["prompt:" + turn.id] ?? (history.header?.latestTurnId == turn.id)
-        let text = options.prompt == .collapse && !expanded ? String(prompt.prefix(1_200)) : prompt
+        let text = !expanded ? String(prompt.prefix(1_200)) : prompt
         let promptHeight = ProseMeasurer.shared.height(ProseBuilder.plain(text), width: max(1, state.width - 72))
         if let answer = turn.primaryOutput?.text {
             let shown = history.presentation.expanded["answer:" + turn.id] == true ? answer : String(answer.prefix(1_200))
-            for segment in ProseBuilder.segments(shown, style: .init(), code: options.code) {
+            for segment in ProseBuilder.segments(shown, style: .init()) {
                 if case .prose(let doc) = segment.content {
                     _ = ProseMeasurer.shared.height(doc, width: max(1, state.width - 48))
                 }

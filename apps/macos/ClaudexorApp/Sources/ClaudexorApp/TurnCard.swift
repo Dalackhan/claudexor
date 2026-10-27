@@ -245,23 +245,10 @@ struct TurnCard: View {
     @ViewBuilder
     private func answerBubble(_ run: TaskRun) -> some View {
         if let answer = run.answerText, !answer.isEmpty, run.phase.isTerminal {
-            let long = Self.isLongAnswer(answer)
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                // Collapsed = a bounded PREFIX (the W23 hang class): frame+clip
-                // alone still lays out the full text on the main thread.
-                MarkdownOutputView(markdown: long && !answerExpanded ? String(answer.prefix(1_200)) : answer,
-                                   fileScopeRoots: Self.fileScopeRoots(
-                                       executionRoot: executionRoot, runDir: run.runDir),
-                                   remoteFileScope: Self.remoteFileScope(run, executionRoot: executionRoot),
-                                   bodyFont: .body, previewHeight: long && !answerExpanded ? 260 : nil)
-                    .clipped()
-                if long {
-                    Button(answerExpanded ? "Show less" : "Show more") { answerExpanded.toggle() }
-                        .buttonStyle(.borderless).font(.caption).foregroundStyle(Theme.accent)
-                        .help(answerExpanded ? "Show only the start of this message." : "Show the rest of this message.")
-                        .accessibilityLabel(answerExpanded ? "Show less of answer" : "Show more of answer")
-                }
-            }
+            ConversationAnswerText(answer: answer,
+                expanded: Binding(get: { answerExpanded }, set: { answerExpanded = $0 }),
+                fileScopeRoots: Self.fileScopeRoots(executionRoot: executionRoot, runDir: run.runDir),
+                remoteFileScope: Self.remoteFileScope(run, executionRoot: executionRoot))
             .padding(Theme.Spacing.md)
             .frame(maxWidth: .infinity, alignment: .leading)
             // D-12 round 2: the same tinted-material recipe as the user bubble

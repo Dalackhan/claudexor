@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 /// Block-aware markdown: contiguous headings, paragraphs, lists and wrapped code
-/// share a native selection host. Tables, images and scrolling fences split runs.
+/// share a native selection host. Tables and images split runs.
 /// The existing block parser preserves paragraph breaks and GFM tables instead
 /// of flattening the whole answer through AttributedString(markdown:) (#24).
 ///
@@ -11,10 +11,8 @@ import AppKit
 struct MarkdownOutputView: View {
     // Passive file snapshots can render without a live conversation model.
     @Environment(AppModel.self) private var model: AppModel?
-    @Environment(\.conversationTextOptions) private var options
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    var codePresentation: CodeFencePresentation? = nil
-    var tablePresentation: TablePresentation? = nil
+    @Environment(\.proseMessageSource) private var messageSource
     let markdown: String
     /// Roots (thread execution root / run dir) whose images may render INLINE and
     /// whose file links may open (F2.5 W-C7). Empty = no local-file access:
@@ -44,20 +42,12 @@ struct MarkdownOutputView: View {
                     .help("Tap to dismiss. Agent-produced files open only inside this thread's scope, and only for safe document/image types.")
             }
             ForEach(ProseBuilder.segments(boundedMarkdown,
-                style: .make(body: bodyFont == .body, size: dynamicTypeSize),
-                code: codePresentation ?? options.code)) { segment in
+                style: .make(body: bodyFont == .body, size: dynamicTypeSize))) { segment in
                 switch segment.content {
                 case .prose(let document):
                     ProseText(document: document)
                         .layoutValue(key: ProsePreviewBoundary.self, value: { width, limit in
                             ProseMeasurer.shared.wholeLineHeight(document, width: min(680, width), limit: limit)
-                        })
-                case .code(let document):
-                    ScrollingCodeProse(document: document)
-                        .layoutValue(key: ProsePreviewBoundary.self, value: { _, limit in
-                            let height = ProseMeasurer.shared.wholeLineHeight(document, width: 100_000,
-                                limit: max(0, limit - Theme.Spacing.md))
-                            return height > 0 ? height + Theme.Spacing.md : 0
                         })
                 case .image(let alt, let target, let source):
                     if isFilePreview || model == nil {
@@ -70,7 +60,7 @@ struct MarkdownOutputView: View {
                 case .table(let table, let source):
                     MarkdownTableView(table: table, bodyFont: bodyFont,
                         overflowHint: MarkdownTableView.overflowHint(filePreview: isFilePreview),
-                        presentation: tablePresentation ?? options.table, markdown: source)
+                        markdown: source)
                 }
             }
             if renderTruncated > 0 {
@@ -83,6 +73,7 @@ struct MarkdownOutputView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .sheet(item: $previewRequest) { SafeFilePreviewSheet(request: $0) }
         .environment(\.proseLinkGate, gate)
+        .environment(\.proseMessageSource, messageSource ?? markdown)
         .environment(\.openURL, OpenURLAction { url in
             gate.handle(url)
             return .handled
@@ -190,6 +181,7 @@ struct MarkdownOutputView: View {
         var list: [String] = []
         var code: [String] = []
         var inCode = false
+        var codeLanguage: String?
 
         func flushParagraph() {
             let text = paragraph.joined(separator: " ").trimmingCharacters(in: .whitespaces)
@@ -209,12 +201,13 @@ struct MarkdownOutputView: View {
             let line = lines[i]
             if line.hasPrefix("```") {
                 if inCode {
-                    out.append(MarkdownBlock(id: out.count, kind: .code, text: code.joined(separator: "\n")))
+                    out.append(MarkdownBlock(id: out.count, kind: .code, text: code.joined(separator: "\n"), language: codeLanguage))
                     code.removeAll()
                     inCode = false
                 } else {
                     flushParagraph(); flushList()
                     inCode = true
+                    codeLanguage = line.dropFirst(3).split(whereSeparator: { $0.isWhitespace }).first.map(String.init)
                 }
                 i += 1; continue
             }
@@ -246,7 +239,7 @@ struct MarkdownOutputView: View {
             }
             i += 1
         }
-        if !code.isEmpty { out.append(MarkdownBlock(id: out.count, kind: .code, text: code.joined(separator: "\n"))) }
+        if !code.isEmpty { out.append(MarkdownBlock(id: out.count, kind: .code, text: code.joined(separator: "\n"), language: codeLanguage)) }
         flushParagraph(); flushList()
         return out.isEmpty ? [MarkdownBlock(id: 0, kind: .paragraph, text: markdown)] : out
     }
@@ -439,5 +432,6 @@ struct MarkdownOutputView: View {
         let id: Int
         let kind: Kind
         let text: String
+        var language: String? = nil
     }
 }

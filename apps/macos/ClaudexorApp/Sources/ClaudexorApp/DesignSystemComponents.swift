@@ -23,6 +23,7 @@ struct GlassField: View {
     var accessibilityHintText: String?
     var maxLines: Int = 6
     var onSubmit: () -> Void = {}
+    var composerInput: ConversationComposerInput? = nil
     @FocusState private var focused: Bool
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -34,6 +35,7 @@ struct GlassField: View {
         let ringAlpha = scheme == .light ? 0.85 : 0.6
         let ringWidth: CGFloat = scheme == .light ? 1.75 : 1.5
         return TextField(placeholder, text: $text, axis: .vertical)
+            .background { if let composerInput { ComposerInputRegistration(input: composerInput) } }
             .textFieldStyle(.plain)
             .font(.body)
             .lineLimit(1...maxLines)

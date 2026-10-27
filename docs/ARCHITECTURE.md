@@ -3271,8 +3271,23 @@ questions through `lastSeq`; only requests with a newer event sequence override
 that list. Covered deferred resolutions clean up the presentation without replaying
 covered spend/timeline events, and acknowledged answers cannot be resurrected.
 Request sequences and resolved-interaction sets are pruned to mounted runs and
-the head. Dismantled native prose reports selection/focus cleared, so eviction
-cannot leave stale keys preventing following from resuming.
+the head. Native prose reports the old selection/focus keys cleared before a
+document replacement and on dismantling, so expansion or eviction cannot leave
+stale keys preventing following from resuming. Explicit earlier/later travel may
+end an evicted selection; presentation drafts remain independent of membership.
+
+A settled reading passage records the visible turn, prose document, character
+index and line offset. Width changes restore that passage after layout settles
+through the feed's single programmatic scroll path; following still pins the
+bottom. Native prose hosts register weakly, without row geometry observers.
+Code wraps within the prose selection host, with a language/Copy header excluded
+from plain-text copies. Code actions use the native link delegate, and the native
+context menu retains selection Copy alongside whole-message Markdown copying.
+Tables expose whole-table copying and fading sides only where columns are hidden.
+Prompt/answer folds use their content rule, with a visual last-line fade and the
+newest turn initially expanded. A printable key in message text is delivered
+synchronously to that conversation's registered, enabled composer; an unavailable
+destination leaves the message alone.
 Interaction selections/free text live in the located presentation store keyed by
 run, interaction and question, survive eviction, and clear on acknowledged answer,
 withdrawal, timeout or terminal resolution. Composer/Stop use the page header, not

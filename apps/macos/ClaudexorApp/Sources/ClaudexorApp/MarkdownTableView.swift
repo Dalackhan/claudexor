@@ -11,8 +11,8 @@ struct MarkdownTableView: View {
     var bodyFont: Font = .callout
     /// Where the rows/columns the caps dropped can still be read.
     var overflowHint = MarkdownTableView.overflowHint(filePreview: false)
-    var presentation: TablePresentation = .selectableCells
     var markdown = ""
+    @State private var hiddenColumns = TableHiddenColumns()
 
     nonisolated static func overflowHint(filePreview: Bool) -> String {
         filePreview ? "choose Show source to inspect the loaded text" : "open the run's full answer artifact"
@@ -24,15 +24,10 @@ struct MarkdownTableView: View {
     var body: some View {
         let widths = columnWidths
         ProsePreviewLayout(usesProposedHeight: true, spacing: Theme.Spacing.xs) {
-            if presentation == .copyTable {
-                Button("Copy table", systemImage: "doc.on.doc") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(markdown, forType: .string)
-                }
+            Button("Copy table", systemImage: "doc.on.doc") { _ = ProseCodeActions.write(markdown) }
                 .buttonStyle(.borderless).font(.caption).foregroundStyle(Theme.accent)
                 .help("Copy the complete table as Markdown.")
                 .accessibilityLabel("Copy table")
-            }
             ScrollView(.horizontal, showsIndicators: true) {
                 Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
                     GridRow {
@@ -73,6 +68,11 @@ struct MarkdownTableView: View {
                 }
             }
             .frame(maxWidth: widths.reduce(0, +), alignment: .leading)
+            .onScrollGeometryChange(for: TableHiddenColumns.self) { geometry in
+                TableHiddenColumns(offset: geometry.contentOffset.x + geometry.contentInsets.leading,
+                    content: geometry.contentSize.width, viewport: geometry.containerSize.width)
+            } action: { _, hidden in hiddenColumns = hidden }
+            .modifier(TableOverflowFade(hidden: hiddenColumns))
             .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
             .codeSurface(Theme.Radius.control)
             .layoutValue(key: ProsePreviewBoundary.self, value: { _, limit in
@@ -113,7 +113,7 @@ struct MarkdownTableView: View {
             .lineLimit(nil)
             .frame(width: max(1, width - 2 * Theme.Spacing.md), alignment: frameAlignment(align))
             .fixedSize(horizontal: false, vertical: true)
-            .modifier(TableCellSelection(enabled: presentation == .selectableCells))
+            .textSelection(.disabled)
             .padding(.horizontal, Theme.Spacing.md)
             .padding(.vertical, Theme.Spacing.sm)
     }
@@ -165,13 +165,5 @@ struct MarkdownTableView: View {
         if table.truncatedColumns > 0 { parts.append("\(table.truncatedColumns) more columns") }
         guard !parts.isEmpty else { return nil }
         return parts.joined(separator: " · ") + " not shown — \(overflowHint)."
-    }
-}
-
-private struct TableCellSelection: ViewModifier {
-    let enabled: Bool
-    func body(content: Content) -> some View {
-        if enabled { content.textSelection(.enabled) }
-        else { content.textSelection(.disabled) }
     }
 }

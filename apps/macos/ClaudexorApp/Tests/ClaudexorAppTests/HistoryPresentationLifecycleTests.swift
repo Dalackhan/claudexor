@@ -6,7 +6,7 @@ import Testing
 
 extension HistoryGatewayTests {
 @MainActor @Suite(.serialized)
-struct HistoryRoundTwoTests {
+struct HistoryPresentationLifecycleTests {
     @Test(arguments: HistoryInteractionTests.locations, [6, 7])
     func snapshotRetiresOnlyRequestsItCovers(location: ExecutionLocationID, snapshotSeq: Int) async throws {
         defer { HistoryURLProtocol.handler = nil }

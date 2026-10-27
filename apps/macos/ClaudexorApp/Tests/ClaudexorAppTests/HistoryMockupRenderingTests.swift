@@ -217,43 +217,64 @@ struct HistoryMockupRenderingTests {
             }
             compactWindow.close()
             for width: CGFloat in [680, 420] {
-                for code in [CodeFencePresentation.wrap, .scroll] {
-                    for selected in [false, true] {
-                        let kind = code == .wrap ? "16a" : "16b"
-                        let scene = "\(kind)-code-\(code.rawValue)-\(Int(width))-\(selected ? "selected" : "plain")"
-                        let root = HistoryComparisonSurface(kind: kind, width: width)
-                            .environment(\.conversationTextOptions, ConversationTextOptions(code: code))
-                            .environment(\.colorScheme, scheme)
-                            .environment(\.locale, Locale(identifier: "en_US_POSIX"))
-                        let (host, window) = makeWindow(root, width: width == 420 ? 476 : 1100, appearance: appearance)
-                        await settle(host)
-                        if selected { selectProse(host, window: window, starting: "The saved conversation") }
-                        manifest.append(try capture(host, window: window, scene: scene, name: name,
-                            directory: directory, claim: code == .wrap
-                            ? "At \(Int(width)) pt, a single native selection can cross the paragraph, list, wrapped source code and closing paragraph."
-                            : "At \(Int(width)) pt, the separate horizontal code block stops the paragraph/list selection."))
-                        window.close()
-                    }
+                for selected in [false, true] {
+                    let scene = "16a-code-wrap-\(Int(width))-\(selected ? "selected" : "plain")"
+                    let root = HistoryProseSurface(kind: "code", width: width)
+                        .environment(\.colorScheme, scheme).environment(\.locale, Locale(identifier: "en_US_POSIX"))
+                    let (host, window) = makeWindow(root, width: width == 420 ? 476 : 1100, appearance: appearance)
+                    await settle(host)
+                    if selected { selectProse(host, window: window, starting: "The saved conversation") }
+                    manifest.append(try capture(host, window: window, scene: scene, name: name,
+                        directory: directory, claim: "At \(Int(width)) pt, wrapped source code has a language/Copy header; one native selection crosses prose and code and copies source without the header."))
+                    window.close()
                 }
                 let scene = "16c-user-selection-\(Int(width))"
-                let root = HistoryComparisonSurface(kind: "16c", width: width)
-                    .environment(\.conversationTextOptions, ConversationTextOptions(prompt: .full))
+                let root = HistoryProseSurface(kind: "selected-prompt", width: width)
                     .environment(\.colorScheme, scheme).environment(\.locale, Locale(identifier: "en_US_POSIX"))
                 let (host, window) = makeWindow(root, width: width == 420 ? 452 : 1100, appearance: appearance)
                 await settle(host)
                 selectProse(host, window: window, starting: "Turn 45", maxLength: 900)
                 manifest.append(try capture(host, window: window, scene: scene, name: name, directory: directory,
-                    claim: "Native user-message selection remains legible over the tinted prompt bubble at \(Int(width)) pt."))
+                    claim: "Native selection is legible in an expanded prompt at \(Int(width)) pt."))
                 window.close()
             }
-            for (scene, options) in [
-                ("17a-table-selectable-cells", ConversationTextOptions(table: .selectableCells)),
-                ("17b-table-copy-table", ConversationTextOptions(table: .copyTable)),
-                ("18a-long-prompt-collapsed", ConversationTextOptions(prompt: .collapse)),
-                ("18b-long-prompt-full", ConversationTextOptions(prompt: .full))
-            ] {
-                let root = HistoryComparisonSurface(kind: String(scene.prefix(3)), width: 680)
-                    .environment(\.conversationTextOptions, options)
+            let wide = HistoryProseSurface(kind: "wide-table", width: 420)
+                .environment(\.colorScheme, scheme).environment(\.locale, Locale(identifier: "en_US_POSIX"))
+            let (wideHost, wideWindow) = makeWindow(wide, width: 476, appearance: appearance)
+            await settle(wideHost)
+            let tableScroll = try #require(views(wideHost).compactMap { $0 as? NSScrollView }.first {
+                $0.hasHorizontalScroller && ($0.documentView?.bounds.width ?? 0) > $0.contentView.bounds.width + 1
+            })
+            for middle in [false, true] {
+                let extent = (tableScroll.documentView?.bounds.width ?? 0) - tableScroll.contentView.bounds.width
+                let offset = middle ? extent / 2 : 0
+                tableScroll.contentView.scroll(to: NSPoint(x: offset, y: 0))
+                tableScroll.reflectScrolledClipView(tableScroll.contentView)
+                await settle(wideHost)
+                let hidden = TableHiddenColumns(offset: tableScroll.contentView.bounds.minX,
+                    content: tableScroll.documentView?.bounds.width ?? 0, viewport: tableScroll.contentView.bounds.width)
+                #expect(hidden.trailing && hidden.leading == middle)
+                var frame = try capture(wideHost, window: wideWindow,
+                    scene: middle ? "17c-wide-table-middle" : "17c-wide-table-start", name: name,
+                    directory: directory, claim: middle
+                        ? "Hidden columns on both sides have soft fades; Copy table retains the complete Markdown."
+                        : "Only the right edge fades at the start of a wide table; words stay whole and long tokens wrap.")
+                frame["horizontal_offset"] = tableScroll.contentView.bounds.minX
+                frame["hidden_columns_leading"] = hidden.leading
+                frame["hidden_columns_trailing"] = hidden.trailing
+                manifest.append(frame)
+            }
+            wideWindow.close()
+            try await HistoryWidthReadingTests.exercise(name: name) { host, window, scene, claim, state, evidence in
+                var frame = try capture(host, window: window, scene: scene, name: name,
+                    directory: directory, claim: claim, state: state)
+                frame.merge(evidence) { _, new in new }
+                manifest.append(frame)
+            }
+            for (scene, kind) in [("17b-table-copy-table", "table"),
+                                  ("18a-long-prompt-collapsed", "prompt"),
+                                  ("18b-answer-collapsed", "answer")] {
+                let root = HistoryProseSurface(kind: kind, width: 680)
                     .environment(\.colorScheme, scheme).environment(\.locale, Locale(identifier: "en_US_POSIX"))
                 let (host, window) = makeWindow(root, width: 1100, appearance: appearance)
                 await settle(host)
@@ -308,23 +329,15 @@ struct HistoryMockupRenderingTests {
     }
 
     private func checkTablePreview(appearance: NSAppearance.Name) async {
-        func height(_ mode: TablePresentation, limit: CGFloat? = nil) async -> CGFloat {
-            let root = MarkdownOutputView(tablePresentation: mode, markdown: HistoryMockupFixtures.table,
-                bodyFont: .body, previewHeight: limit).frame(width: 680).fixedSize(horizontal: false, vertical: true)
-            let (host, window) = makeWindow(root, width: 680, appearance: appearance)
-            defer { window.close() }
-            await settle(host)
-            return host.fittingSize.height
-        }
-        let full = await height(.selectableCells)
-        let copy = await height(.copyTable)
-        let control = copy - full
-        let preview = await height(.copyTable, limit: 260)
-        let grid = await height(.selectableCells, limit: 260 - control)
-        #expect(control > 0 && control < 30)
+        let root = MarkdownOutputView(markdown: HistoryMockupFixtures.table,
+            bodyFont: .body, previewHeight: 260).frame(width: 680).fixedSize(horizontal: false, vertical: true)
+        let (host, window) = makeWindow(root, width: 680, appearance: appearance)
+        defer { window.close() }
+        await settle(host)
+        let preview = host.fittingSize.height
         #expect(preview <= 260 && preview > 230)
-        #expect(abs(preview - grid - control) <= 1)
-        print("PREVIEW \(appearance.rawValue): copy control=\(control) grid=\(grid) total=\(preview)")
+        #expect(!views(host).contains { String(describing: type(of: $0)).contains("SelectionTextField") })
+        print("PREVIEW \(appearance.rawValue): copy control and whole-line grid total=\(preview)")
     }
 
     private func checkManualReading(_ host: NSView, state: ConversationFeedState,
@@ -418,7 +431,6 @@ struct HistoryMockupRenderingTests {
         let all = views(host)
         let prose = all.compactMap { $0 as? ProseTextView }
         let residuals = all.filter { String(describing: type(of: $0)).contains("SelectionTextField") }.count
-        if scene == "17a-table-selectable-cells" { #expect(residuals == 39) }
         if scene == "17b-table-copy-table" { #expect(residuals == 0) }
         let selected = prose.filter { $0.selectedRange().length > 0 }
         if !selected.isEmpty { #expect(window.isKeyWindow && selected.contains { window.firstResponder === $0 }) }
@@ -458,10 +470,9 @@ struct HistoryMockupRenderingTests {
         case "08b-earlier-failed": "A failed earlier read retains the current slice and exposes its retry."
         case "12-running-tail": "The live tail shows the running receipt and transcript with Stop in the composer."
         case "14-plan-draft": "The real plan card displays a prefilled answer draft inside its bounded question scroller."
-        case "17a-table-selectable-cells": "The existing bounded table grid retains native per-cell selection."
-        case "17b-table-copy-table": "The same table has non-selectable cells and one Copy table action."
-        case "18a-long-prompt-collapsed": "An 8,000-character prompt begins collapsed with an explicit Show more action."
-        default: "An 8,000-character prompt remains fully available in the scrolling conversation."
+        case "17b-table-copy-table": "Table cells are non-selectable; Copy table copies the whole Markdown source."
+        case "18a-long-prompt-collapsed": "An 8,000-character prompt ends on a whole line with a soft fold fade above Show more."
+        default: "A long answer ends on a whole line with a soft fold fade above Show more."
         }
     }
 }

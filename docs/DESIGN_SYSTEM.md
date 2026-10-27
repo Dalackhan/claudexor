@@ -317,9 +317,8 @@ nothing opts in. The ONE documented exception is the CONVERSATION FEED (D-13 B,
 a performance scope): the scrolled column overrides the root global to
 `.textSelection(.disabled)` so the receipts / chips / status containers carry no
 selectable NSText backing. Message, answer and transcript prose uses `ProseText`,
-a read-only TextKit 1 `NSTextView` per contiguous prose run. Tables retain a
-configurable per-cell selection residual; tool/error captions also retain their
-existing selectable fields. Native prose hosts stay out of the Tab loop. Persistent banners (thread status line and equivalents)
+a read-only TextKit 1 `NSTextView` per contiguous prose run. Table cells are not selectable and offer one “Copy table” action for the complete
+Markdown source; tool/error captions retain their existing selectable fields. Native prose hosts stay out of the Tab loop. Persistent banners (thread status line and equivalents)
 additionally carry an explicit copy button (`doc.on.doc`, `.plain` style, "Copy
 message" help). An unselectable content surface is a defect, not a style choice.
 
@@ -466,8 +465,9 @@ frequency and volume are. The contracts:
   slot reports the header ordinal difference, or unnumbered “new” when ordinal
   evidence is unavailable; it never shifts the label. A click or selection at the
   real tail bottom shows no floating Jump; clearing text focus/selection there
-  resumes following. Dismantled prose clears its selection/focus keys, including
-  on eviction. The whole-thread tail hides “Beginning of saved history”.
+  resumes following. Prose clears the old selection/focus keys before replacing a document and when
+  dismantled, including on eviction. Explicit earlier/later travel may end a
+  selection in an evicted turn; drafts remain in the presentation store. The whole-thread tail hides “Beginning of saved history”.
   Show later pins to the bottom and follows when it reaches the newest turn;
   within older history it keeps the former last turn at the bottom edge. Opens use
   the bottom initial anchor; explicit moves use `ScrollPosition` by ID.
@@ -539,8 +539,24 @@ frequency and volume are. The contracts:
   feed OVERRIDES the window-root global (§2.9) to `.textSelection(.disabled)` and
   hosts prose in `ProseText`, with cached heights keyed by document ID, font
   generation and EXACT width. Measuring writes no SwiftUI state. Unchanged
-  document IDs retain native storage and selection. Table cells and existing
-  selectable tool/error captions remain disclosed residuals.
+  document IDs retain native storage and selection. Wrapped code shares the
+  prose selection host, with a small language/Copy header in the rounded code
+  well; header labels never enter plain-text copies. Copy code goes through the
+  native link delegate and gives brief “Copied” / “Copy failed” feedback. The
+  native context menu adds “Copy message” for the authored Markdown source while
+  retaining selection Copy. Printable typing in focused message text moves to
+  the registered, enabled conversation composer and delivers the first key
+  synchronously. Command shortcuts, selection keys, scrolling keys and Tab keep
+  their native routing. Without an available composer, typing does nothing.
+  Table cells offer whole-table Markdown copying; existing selectable tool/error
+  captions remain disclosed residuals.
+- **Reading passages survive width changes.** While reading, the feed captures
+  the first visible card, its prose character at the viewport top and the line's
+  offset only after scrolling settles. A settled width change restores that
+  character through the same programmatic scroll path, outside layout. Hosts
+  register weakly; there are no per-row geometry observers or per-frame text
+  measurements. A new gesture or explicit navigation cancels a pending restore.
+  Following continues to pin the bottom.
 - **Per-row readable measure (D-13 C).** The 680pt conversation measure
   (`conversationMeasure()`) is applied PER ROW (each `TurnCard`), not as a
   double-frame around the whole history page; a sidebar drag / width change
@@ -801,16 +817,20 @@ frequency and volume are. The contracts:
     FINAL ANSWER bubble (loudest element — solid `surfaceRaisedHi` inset, 2 pt
     accent leading edge, W22 Show-more clamp), the persistent RECEIPT row, and
     the inline activity transcript. The always-live composer closes the feed.
-  - **Prose and history comparisons (PR #504 mockups):** wrapped fences are
-    monospaced paragraphs on solid `surface/code` text blocks with a two-character
-    continuation indent. Soft wrapping never changes copied source lines. The
-    alternative is a separate horizontal code scroller, which ends selection.
-    Tables offer selectable cells or non-selectable cells with “Copy table” and
-    help. Prompts offer the 1,200-character / 14-newline Show-more rule or full
-    display; beyond 32 KiB an explicit preview line and “Copy full prompt” expose
-    the bound. The prototype defaults are wrap / selectable cells / collapse,
-    pending the owner's visual decision. Images and tables split prose runs.
-    `ProseLinkGate` owns both AppKit delegate clicks and SwiftUI table links.
+  - **Conversation prose:** code fences wrap at word boundaries in a rounded,
+    filled and stroked code well, with a two-character continuation indent.
+    The small header names the fence language (or “text”) and offers “Copy” with
+    “Copy code” help and accessible name. Selection continues through prose and
+    code; the header is excluded from plain text and code copies preserve source
+    lines. Tables have non-selectable cells and one “Copy table” action with help;
+    each side fades only while it hides horizontally scrolled columns. Words stay
+    whole and overlong tokens can wrap. Long prompts and answers use the content
+    rule of about 1,200 characters or 14 lines, with Show more / Show less and a
+    soft fade on the last whole visible line. The newest turn starts expanded.
+    The fade never decides whether content folds. Past 32 KiB the prompt preview
+    remains explicit, with user-initiated Show full / Copy full prompt reads.
+    Images and tables split prose runs. `ProseLinkGate` owns external/scoped-file
+    links; code-copy links are consumed by the same native delegate first.
     Loading and failed selected-thread states use “Loading saved history…” and
     “Retry loading messages”, separately from the draft illustration.
   - **Thread workspace (trailing `.inspector`, glass chrome):** the panel's

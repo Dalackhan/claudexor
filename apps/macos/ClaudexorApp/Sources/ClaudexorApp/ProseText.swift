@@ -64,6 +64,10 @@ struct ProseText: NSViewRepresentable {
     var onFocusChange: ((Bool) -> Void)?
     @Environment(\.proseLinkGate) private var linkGate
     @Environment(\.proseMessageID) private var messageID
+    @Environment(\.conversationComposerInput) private var composerInput
+    @Environment(\.proseMessageSource) private var messageSource
+    @Environment(\.proseMessageCopyAction) private var copyMessageAction
+    @Environment(\.conversationReadingPosition) private var readingPosition
     @Environment(ConversationPresentation.self) private var presentation: ConversationPresentation?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -76,7 +80,22 @@ struct ProseText: NSViewRepresentable {
     }
 
     func updateNSView(_ view: ProseTextView, context: Context) {
+        let replacing = view.shownID != document.id || view.messageID != messageID
+        if replacing {
+            // Notify the old document's owners before installing new callbacks.
+            context.coordinator.selectionChanged?(false)
+            view.focusChanged?(false)
+        }
         context.coordinator.gate = linkGate
+        view.composerInput = composerInput
+        view.messageID = messageID
+        view.messageSource = messageSource
+        view.copyMessageAction = copyMessageAction
+        if view.readingPosition !== readingPosition {
+            view.readingPosition?.unregister(view)
+            view.readingPosition = readingPosition
+            readingPosition?.register(view)
+        }
         context.coordinator.selectionChanged = { selected in
             onSelectionChange?(selected)
             guard let messageID else { return }
@@ -93,9 +112,15 @@ struct ProseText: NSViewRepresentable {
         }
         view.setAccessibilityLabel(accessibilityName)
         // The content identity, not the cache object's address, owns replacement.
-        guard view.shownID != document.id else { return }
-        view.textStorage?.setAttributedString(document.text)
-        view.shownID = document.id
+        if view.shownID != document.id {
+            view.cancelCopyFeedback()
+            view.textStorage?.setAttributedString(document.text)
+            view.shownID = document.id
+        }
+        if replacing {
+            context.coordinator.selectionChanged?(view.selectedRange().length > 0)
+            view.focusChanged?(view.window?.firstResponder === view)
+        }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: ProseTextView, context: Context) -> CGSize? {
@@ -109,6 +134,8 @@ struct ProseText: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ view: ProseTextView, coordinator: Coordinator) {
+        view.cancelCopyFeedback()
+        view.readingPosition?.unregister(view)
         coordinator.selectionChanged?(false)
         view.focusChanged?(false)
         coordinator.selectionChanged = nil
@@ -123,7 +150,11 @@ struct ProseText: NSViewRepresentable {
         var selectionChanged: ((Bool) -> Void)?
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
-            if let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)) { gate?.handle(url) }
+            if let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)) {
+                if url.scheme == "claudexor-code-copy" {
+                    (textView as? ProseTextView)?.copyCode(link: url, at: charIndex)
+                } else { gate?.handle(url) }
+            }
             return true // Never let AppKit's default file URL opener bypass the scope gate.
         }
 
@@ -147,6 +178,13 @@ extension EnvironmentValues {
 
 final class ProseTextView: NSTextView {
     var shownID: String?
+    var messageID: String?
+    weak var composerInput: ConversationComposerInput?
+    weak var readingPosition: ConversationReadingPosition?
+    var messageSource: String?
+    var copyMessageAction: (@MainActor () -> Void)?
+    var writeCopiedText: (String) -> Bool = { ProseCodeActions.write($0) }
+    var copyFeedback: [URL: Task<Void, Never>] = [:]
     var focusChanged: ((Bool) -> Void)?
     override var canBecomeKeyView: Bool { false }
 
@@ -200,8 +238,23 @@ final class ProseTextView: NSTextView {
         let richWritten = !richTypes.isEmpty && super.writeSelection(to: pasteboard, types: richTypes)
         guard types.contains(.string) else { return richWritten }
         pasteboard.addTypes([.string], owner: nil)
-        return pasteboard.setString((string as NSString).substring(with: range), forType: .string) || richWritten
+        guard let textStorage else { return richWritten }
+        return pasteboard.setString(ProseCodeActions.plainText(textStorage, range: range), forType: .string) || richWritten
     }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        if messageSource != nil {
+            let item = NSMenuItem(title: "Copy message", action: #selector(copyMessage(_:)), keyEquivalent: "")
+            item.target = self
+            item.toolTip = "Copy this message's Markdown source."
+            menu.addItem(.separator())
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    override func accessibilityChildren() -> [Any]? { (super.accessibilityChildren() ?? []) + codeAccessibilityActions() }
 
     override func scrollWheel(with event: NSEvent) {
         if abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX), let feed = verticalScrollView {
@@ -216,8 +269,11 @@ final class ProseTextView: NSTextView {
             super.keyDown(with: event)
         } else if [49, 115, 116, 119, 121].contains(event.keyCode) || arrow {
             verticalScrollView?.keyDown(with: event)
+        } else if !event.modifierFlags.contains(.control),
+                  let characters = event.characters, !characters.isEmpty,
+                  characters.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) && !(0xF700...0xF8FF).contains($0.value) }) {
+            composerInput?.forward(event, from: self)
         }
-        // Owner fork Q4: printable keys are swallowed until the composer is clicked.
     }
 
     private var verticalScrollView: NSScrollView? {
@@ -227,19 +283,5 @@ final class ProseTextView: NSTextView {
             ancestor = view.superview
         }
         return nil
-    }
-}
-
-/// The alternative fence deliberately starts a new native selection region.
-struct ScrollingCodeProse: View {
-    let document: ProseDocument
-    var body: some View {
-        let size = ProseMeasurer.shared.size(document, width: 100_000)
-        ScrollView(.horizontal) {
-            ProseText(document: document, cap: max(1, size.width), accessibilityName: "Code block")
-                .frame(width: max(1, size.width))
-                .padding(Theme.Spacing.md)
-        }
-        .codeSurface(Theme.Radius.control)
     }
 }

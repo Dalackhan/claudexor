@@ -2,27 +2,6 @@ import AppKit
 import CryptoKit
 import SwiftUI
 
-enum CodeFencePresentation: String { case wrap, scroll }
-enum TablePresentation: String { case selectableCells, copyTable }
-enum PromptPresentation: String { case collapse, full }
-
-struct ConversationTextOptions {
-    var code: CodeFencePresentation = .wrap
-    var table: TablePresentation = .selectableCells
-    var prompt: PromptPresentation = .collapse
-}
-
-private struct ConversationTextOptionsKey: EnvironmentKey {
-    static let defaultValue = ConversationTextOptions()
-}
-
-extension EnvironmentValues {
-    var conversationTextOptions: ConversationTextOptions {
-        get { self[ConversationTextOptionsKey.self] }
-        set { self[ConversationTextOptionsKey.self] = newValue }
-    }
-}
-
 struct ProseStyle: Hashable {
     var bodySize: CGFloat = NSFont.preferredFont(forTextStyle: .body).pointSize
     var generation: String { "prose-2:\(bodySize)" }
@@ -61,7 +40,7 @@ final class ProseDocument {
 
 struct ProseSegment: Identifiable {
     enum Content {
-        case prose(ProseDocument), code(ProseDocument)
+        case prose(ProseDocument)
         case image(alt: String, target: String, source: String)
         case table(MarkdownOutputView.MarkdownTable, source: String)
     }
@@ -93,8 +72,8 @@ struct ProseSegment: Identifiable {
         return doc
     }
 
-    static func segments(_ markdown: String, style: ProseStyle, code: CodeFencePresentation) -> [ProseSegment] {
-        let key = "\(style.generation):\(code.rawValue):\(markdown)" as NSString
+    static func segments(_ markdown: String, style: ProseStyle) -> [ProseSegment] {
+        let key = "\(style.generation):\(markdown)" as NSString
         if let hit = cache.object(forKey: key) { return hit.segments }
         var result: [ProseSegment] = []
         let run = NSMutableAttributedString(string: "")
@@ -118,13 +97,6 @@ struct ProseSegment: Identifiable {
             case .table(let table):
                 flush()
                 result.append(.init(id: result.count, content: .table(table, source: block.text)))
-            case .code where code == .scroll:
-                flush()
-                let text = NSAttributedString(string: block.text, attributes: [
-                    .font: style.codeFont, .foregroundColor: NSColor.labelColor
-                ])
-                result.append(.init(id: result.count, content: .code(
-                    ProseDocument(identity: "code:" + block.text, text: text, style: style))))
             case .code:
                 // Each source line remains a real newline. Soft wrapping and indentation
                 // are paragraph attributes, so copying never inserts continuation spaces.
@@ -145,10 +117,13 @@ struct ProseSegment: Identifiable {
                 p.headIndent = ("  " as NSString).size(withAttributes: [.font: style.codeFont]).width
                 p.firstLineHeadIndent = 0
                 p.lineBreakMode = .byWordWrapping
-                append(NSAttributedString(string: block.text, attributes: [
+                let header = ProseCodeActions.header(language: block.language, source: block.text,
+                    index: block.id, paragraph: p, style: style)
+                append(header)
+                run.append(NSAttributedString(string: block.text, attributes: [
                     .font: style.codeFont, .foregroundColor: NSColor.labelColor, .paragraphStyle: p
                 ]))
-                identity += "code:" + block.text + "\n"
+                identity += "code:" + (block.language ?? "text") + ":" + block.text + "\n"
             case .list:
                 for item in block.text.components(separatedBy: "\n") {
                     let p = paragraph(spacing: Theme.Spacing.xs)

@@ -5,8 +5,8 @@ import Testing
 
 @MainActor @Suite(.serialized)
 struct ProseTextTests {
-    private func document(_ source: String, code: CodeFencePresentation = .wrap) throws -> ProseDocument {
-        let segments = ProseBuilder.segments(source, style: .init(), code: code)
+    private func document(_ source: String) throws -> ProseDocument {
+        let segments = ProseBuilder.segments(source, style: .init())
         return try #require(segments.compactMap { segment in
             if case .prose(let value) = segment.content { return value }
             return nil
@@ -15,7 +15,7 @@ struct ProseTextTests {
 
     @Test func wrappedCodeStaysInOneSelectionAndCopiesExactSourceLines() throws {
         let source = HistoryMockupFixtures.selectionAnswer
-        let segments = ProseBuilder.segments(source, style: .init(), code: .wrap)
+        let segments = ProseBuilder.segments(source, style: .init())
         #expect(segments.count == 1)
         let doc = try document(source)
         let text = ProseTextView.make()
@@ -43,11 +43,8 @@ struct ProseTextTests {
         #expect(p.headIndent > p.firstLineHeadIndent && p.textBlocks.count == 1)
     }
 
-    @Test func scrollCodeAndTablesSplitOnlyAtTheirBoundaries() {
-        let segments = ProseBuilder.segments(HistoryMockupFixtures.selectionAnswer, style: .init(), code: .scroll)
-        #expect(segments.count == 3)
-        if case .code = segments[1].content {} else { Issue.record("Fence must be a separate selection region") }
-        let table = ProseBuilder.segments("Before\n\n| A | B |\n|---|---|\n| x | y |\n\nAfter", style: .init(), code: .wrap)
+    @Test func tablesSplitProseAtTheirBoundaries() {
+        let table = ProseBuilder.segments("Before\n\n| A | B |\n|---|---|\n| x | y |\n\nAfter", style: .init())
         #expect(table.count == 3)
     }
 

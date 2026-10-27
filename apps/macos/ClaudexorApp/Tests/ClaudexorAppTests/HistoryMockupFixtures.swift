@@ -54,6 +54,14 @@ import SwiftUI
         return text
     }
 
+    static let wideTable = """
+    | Area | Evidence | Reviewer | Revision | Source token | Result |
+    |---|---|---|---|---|---|
+    | Reading passage | Whole words remain together while the column wraps this sentence. | Local review | Saved revision 46 | 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 | Verified |
+    | Width change | Narrow the column and retain the same passage at the viewport top. | Remote review | Saved revision 47 | ConversationHistoryWindowWithoutAnySpacesBetweenTheseWords | Verified |
+    | Table source | Copy table retains the complete Markdown, including hidden columns. | Owner review | Saved revision 48 | exact-source-lines | Ready |
+    """
+
     static func answer(_ index: Int) -> String {
         "## Review of turn \(index + 1)\n\n" + paragraph(index) + "\n\n" + table + "\n\n"
         + selectionAnswer + "\n\n" + (0..<8).map { paragraph(index + $0) }.joined(separator: "\n\n")
@@ -106,28 +114,36 @@ import SwiftUI
     }
 }
 
-/// Focused comparison frames use exactly the production message/table hosts and fills.
-struct HistoryComparisonSurface: View {
+/// Focused frames use the chosen production message/table hosts and fills.
+struct HistoryProseSurface: View {
+    @State private var presentation = ConversationPresentation()
+    @State private var expanded = false
     let kind: String
     let width: CGFloat
     var body: some View {
         ScrollView {
             Group {
-                if kind.hasPrefix("18") || kind == "16c" {
-                    PromptBubble(prompt: HistoryMockupFixtures.prompt(44), turnID: "comparison")
+                if kind == "prompt" || kind == "selected-prompt" {
+                    PromptBubble(prompt: HistoryMockupFixtures.prompt(44), turnID: "prose-example")
+                } else if kind == "answer" {
+                    ConversationAnswerText(answer: (0..<8).map { HistoryMockupFixtures.paragraph($0) }.joined(separator: "\n\n"), expanded: $expanded)
+                        .padding(Theme.Spacing.md)
+                        .bubbleFill(tint: Theme.surfaceRaisedHi, radius: Theme.Radius.control)
                 } else {
-                    MarkdownOutputView(markdown: kind.hasPrefix("17")
-                        ? HistoryMockupFixtures.table : HistoryMockupFixtures.selectionAnswer, bodyFont: .body)
+                    MarkdownOutputView(markdown: kind == "table"
+                        ? HistoryMockupFixtures.table : kind == "wide-table" ? HistoryMockupFixtures.wideTable : HistoryMockupFixtures.selectionAnswer, bodyFont: .body)
                         .frame(width: width, alignment: .leading)
                         .padding(Theme.Spacing.md)
                         .bubbleFill(tint: Theme.surfaceRaisedHi, radius: Theme.Radius.control)
                 }
             }
-            .frame(width: kind.hasPrefix("18") || kind == "16c" ? width : width + 24, alignment: .leading)
+            .frame(width: kind == "prompt" || kind == "selected-prompt" ? width : width + 24, alignment: .leading)
             .padding(Theme.Spacing.lg)
             .frame(maxWidth: .infinity)
         }
         .textSelection(.disabled)
+        .environment(presentation)
+        .onAppear { if kind == "selected-prompt" { presentation.latestTurnID = "prose-example" } }
         .background(Theme.surfaceBase)
     }
 }

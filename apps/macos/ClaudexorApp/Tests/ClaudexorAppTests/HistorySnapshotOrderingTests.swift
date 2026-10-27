@@ -4,7 +4,7 @@ import Testing
 @testable import ClaudexorApp
 
 @MainActor @Suite(.serialized)
-struct RA2OrderingReviewTests {
+struct HistorySnapshotOrderingTests {
     @Test(arguments: ["interaction.answered", "interaction.withdrawn", "interaction.timeout"])
     func resolutionCoveredByDetailFenceMustRetireTheQuestion(type: String) async throws {
         defer { HistoryURLProtocol.handler = nil }

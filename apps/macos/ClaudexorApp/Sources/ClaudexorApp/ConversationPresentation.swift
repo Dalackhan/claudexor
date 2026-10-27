@@ -31,22 +31,20 @@ import ClaudexorKit
 struct PromptBubble: View {
     let prompt: String
     let turnID: String
-    var presentation: PromptPresentation? = nil
     var promptInfo: ThreadHistoryTextFacts? = nil
     var fullPrompt: (() async throws -> String)? = nil
-    @Environment(\.conversationTextOptions) private var options
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(ConversationPresentation.self) private var store: ConversationPresentation?
     @State private var locallyExpanded = false
+    @State private var copyFailure: String?
 
     private var expansion: Binding<Bool> {
         store?.expansion("prompt:" + turnID, default: store?.latestTurnID == turnID) ?? $locallyExpanded
     }
 
     var body: some View {
-        let mode = presentation ?? options.prompt
         let long = TurnCard.isLongAnswer(prompt)
-        let collapsed = mode == .collapse && long && !expansion.wrappedValue
+        let collapsed = long && !expansion.wrappedValue
         let bounded = Self.preview(prompt)
         let text = collapsed ? String(bounded.prefix(1_200)) : bounded
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
@@ -60,12 +58,16 @@ struct PromptBubble: View {
                     else { store?.focusedMessages.remove(turnID) }
                 })
                 .clipped()
-            if mode == .collapse && long {
+                .modifier(ProseFoldFade(collapsed: collapsed))
+                .environment(\.proseMessageSource, prompt)
+                .environment(\.proseMessageCopyAction, promptInfo?.truncated == true ? copyFullMessage : nil)
+            if long {
                 Button(expansion.wrappedValue ? "Show less" : "Show more") { expansion.wrappedValue.toggle() }
                     .buttonStyle(.borderless).font(.caption).foregroundStyle(Theme.accent)
                     .help(expansion.wrappedValue ? "Show only the start of this message." : "Show the rest of this message.")
                     .accessibilityLabel(expansion.wrappedValue ? "Show less of user message" : "Show more of user message")
             }
+            if let copyFailure { Text(copyFailure).font(.caption).foregroundStyle(.secondary) }
             if promptInfo?.truncated == true || bounded.utf8.count < prompt.utf8.count {
                 HistoryPromptActions(read: fullPrompt ?? { prompt })
             }
@@ -74,6 +76,17 @@ struct PromptBubble: View {
         .bubbleFill(tint: Theme.bubbleUser, radius: Theme.Radius.bubble)
         .padding(.leading, Theme.Spacing.xxl + Theme.Spacing.lg)
         .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private func copyFullMessage() {
+        copyFailure = nil
+        Task {
+            do {
+                guard let fullPrompt else { throw CocoaError(.fileReadUnknown) }
+                let source = try await fullPrompt()
+                if !ProseCodeActions.write(source) { copyFailure = "Could not copy full prompt." }
+            } catch { copyFailure = "Could not load full prompt: \(error.localizedDescription)" }
+        }
     }
 
     static func preview(_ source: String) -> String {

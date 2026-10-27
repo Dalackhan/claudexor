@@ -409,8 +409,10 @@ deferred; they are recorded here now.
   Engine paging and review regressions (cursor scopes, live interactions, Delegate
   restoration, workspace invalidation, snapshot-covered resolutions, completed
   navigation membership and focus-aware follower recovery) are covered by
-  hermetic tests. Owner variant decisions and macOS 26.5 stress
-  verification remain. List is reserved for a separately measured future experiment;
+  hermetic tests. The chosen presentation is wrapped code, Copy table, folded
+  long prompts and first-key handoff to the composer. Explicit travel can end an
+  evicted selection while retaining drafts; width changes restore a settled text
+  passage. macOS 26.5 stress verification remains. List is reserved for a separately measured future experiment;
   neither List nor LazyVStack is the current history strategy.
 - Conversation Find: a future feed-level NSTextFinderClient can search mounted
   prose runs; searching unmounted history needs a dedicated engine search contract.

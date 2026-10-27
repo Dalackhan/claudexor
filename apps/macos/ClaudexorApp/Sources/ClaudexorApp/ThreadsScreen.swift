@@ -11,6 +11,7 @@ import UniformTypeIdentifiers
 struct ThreadsScreen: View {
     @Environment(AppModel.self) var model
     @State var composerText = ""
+    @State private var composerInput = ConversationComposerInput()
     /// Eager rows avoid the macOS 26 lazy-history layout feedback loop. Keep
     /// their number bounded; older turns remain available through navigation.
     @State var feedState = ConversationFeedState()
@@ -339,6 +340,7 @@ struct ThreadsScreen: View {
 
             composer
         }
+        .environment(\.conversationComposerInput, composerInput)
     }
 
     /// The conversation's window title/subtitle — the thread title lives in the
@@ -521,7 +523,7 @@ struct ThreadsScreen: View {
                                placeholder: inputCopy.placeholder,
                                accessibilityName: inputCopy.accessibilityName,
                                accessibilityHintText: inputCopy.accessibilityHint,
-                               onSubmit: send)
+                               onSubmit: send, composerInput: composerInput)
                     // While the head turn is still running, a new turn can't start over a
                     // live one (the native session is busy) — swap Send→Stop so the only
                     // action is to cancel the active run, not queue a doomed second turn.

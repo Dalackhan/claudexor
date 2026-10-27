@@ -59,8 +59,10 @@ import SwiftUI
         readerMovedUpAt = nil
     }
 
-    /// The reader asked for earlier content: an upward wheel, trackpad or key scroll.
-    func readerMovedUp() { readerMovedUpAt = .now }
+    /// The reader asked for earlier content: an upward wheel, trackpad or key scroll. A feed
+    /// already at its top, as when the whole chat fits, does not move, so the request is not
+    /// recorded: growth that outruns the bottom anchor would otherwise end following.
+    func readerMovedUp() { if canShowEarlier { readerMovedUpAt = .now } }
     /// The tail or an explicit navigation took over; earlier input no longer applies.
     func readerIntentEnded() { readerMovedUpAt = nil }
     var readerIsMovingUp: Bool { readerMovedUpAt.map { .now - $0 < .milliseconds(400) } ?? false }
@@ -161,6 +163,15 @@ import SwiftUI
         let line = layout.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
             .offsetBy(dx: view.textContainerOrigin.x, dy: view.textContainerOrigin.y)
         return view.convert(line, to: document).minY
+    }
+
+    /// Whether the clip view can scroll toward the document's top; true when the feed is unknown.
+    private var canShowEarlier: Bool {
+        guard let clip = scrollView?.contentView, let flipped = clip.documentView?.isFlipped else { return true }
+        var earlier = clip.bounds
+        earlier.origin.y += flipped ? -1 : 1
+        let moved = clip.constrainBoundsRect(earlier).origin.y - clip.bounds.origin.y
+        return flipped ? moved < -0.5 : moved > 0.5
     }
 
     private var scrollView: NSScrollView? {

@@ -208,6 +208,65 @@ struct ProseTextTests {
         #expect(!chain.geometry(s4, after: s3, tailMounted: true))
         #expect(chain.follows && chain.atBottom)
     }
+
+    /// Upward input the feed cannot carry out, because its content fits and it already shows its
+    /// top, is not the reader leaving: content that then overflows keeps following, with or without
+    /// an unchanged bottom sample first. With room to move, the same input still leaves the tail.
+    @Test(arguments: [false, true]) func upwardInputAtTheTopOfAShortFeedKeepsFollowingThroughGrowth(bottomSample: Bool) throws {
+        let app = NSApplication.shared
+        let previousPolicy = app.activationPolicy()
+        app.setActivationPolicy(.prohibited)
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 600))
+        scroll.hasVerticalScroller = true
+        let document = FlippedDocument(frame: NSRect(x: 0, y: 0, width: 400, height: 580))
+        scroll.documentView = document
+        let text = ProseTextView.make()
+        text.frame = NSRect(x: 0, y: 0, width: 400, height: 80)
+        document.addSubview(text)
+        let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        defer { window.close(); app.setActivationPolicy(previousPolicy) }
+        let state = ConversationFeedState()
+        text.readingPosition = state.readingPosition
+        state.readingPosition.register(text)
+        let pageUp = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "\u{F72C}", charactersIgnoringModifiers: "\u{F72C}",
+            isARepeat: false, keyCode: 116))
+        // The wheel monitor's report, then Page Up from message text, with the whole chat in view.
+        state.readingPosition.readerMovedUp()
+        text.keyDown(with: pageUp)
+        #expect(scroll.contentView.bounds.minY == 0)
+        #expect(!state.readingPosition.readerIsMovingUp)
+        var old = FeedEdge(offset: 0, content: 580, container: 600)
+        if bottomSample {
+            let fits = FeedEdge(offset: 0, content: 590, container: 600)
+            #expect(!state.geometry(fits, after: old, tailMounted: true))
+            old = fits
+        }
+        // The content overflows one sample before the bottom anchor follows it.
+        let grown = FeedEdge(offset: 0, content: 640, container: 600)
+        #expect(!state.geometry(grown, after: old, tailMounted: true))
+        let anchored = FeedEdge(offset: 40, content: 640, container: 600)
+        #expect(!state.geometry(anchored, after: grown, tailMounted: true))
+        #expect(state.follows && state.atBottom)
+        // At the bottom of overflowing content Page Up can move the feed; masked by growth, it leaves.
+        document.setFrameSize(NSSize(width: 400, height: 640))
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 40))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        text.keyDown(with: pageUp)
+        #expect(state.readingPosition.readerIsMovingUp)
+        let masked = FeedEdge(offset: 50, content: 690, container: 600)
+        #expect(state.geometry(masked, after: anchored, tailMounted: true))
+        #expect(!state.follows && !state.atBottom)
+        #expect(state.geometry(FeedEdge(offset: 90, content: 690, container: 600), after: masked, tailMounted: true))
+        #expect(state.follows)
+    }
 }
 
+}
+
+/// SwiftUI's scroll document is flipped: its top is the smallest y.
+private final class FlippedDocument: NSView {
+    override var isFlipped: Bool { true }
 }

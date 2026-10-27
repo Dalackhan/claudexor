@@ -246,6 +246,55 @@ struct ConversationNativeRoutingTests {
         #expect(abs(after - before) <= line.height)
     }
 
+    /// The feed's own scroll view. While the whole chat fits, an upward wheel cannot move it and
+    /// leaves no reader intent, so growth past the viewport keeps following; once the content
+    /// overflows, the same wheel moves the feed and leaves the tail. A never-ordered window gives
+    /// the monitor's filters no event location, so the test makes the monitor's report itself.
+    @Test func upwardWheelOnAShortFeedKeepsFollowingWhenItGrows() async throws {
+        let policy = NSApplication.shared.activationPolicy()
+        NSApplication.shared.setActivationPolicy(.prohibited)
+        defer { NSApplication.shared.setActivationPolicy(policy) }
+        let source = try HistoryTestSource(count: 1)
+        let model = HistoryMockupFixtures.model(detail: source.detail, runs: source.runs, source: source)
+        let history = try #require(model.selectedHistory)
+        let state = ConversationFeedState()
+        final class Trace { var lines: [String] = [] }
+        let trace = Trace()
+        state.onGeometrySample = { _, new in
+            trace.lines.append("o=\(new.offset) c=\(new.content) h=\(new.container) i=\(new.inset) d=\(new.deficit)")
+        }
+        let (host, window) = window(ConversationFeed(state: state, history: history, routingOptions: .init()).environment(model), width: 680)
+        host.sizingOptions = []
+        defer { window.close() }
+        await settle(host, count: 10)
+        await settle(host) { state.follows && state.atBottom }
+        let prose = try #require(views(host).compactMap { $0 as? ProseTextView }.first)
+        let feed = try #require(outerScroll(of: prose))
+        let document = try #require(feed.documentView)
+        #expect(document.frame.height <= feed.contentView.bounds.height)
+        let top = feed.contentView.bounds.minY
+        try wheelUp(feed, reading: state.readingPosition)
+        #expect(!state.readingPosition.readerIsMovingUp)
+        // Growth during the wheel's animated live scroll would let that animation move the grown feed.
+        await settle(host) { !state.readingPosition.liveScrolling }
+        trace.lines.append("wheel up: y=\(feed.contentView.bounds.minY) moving=\(state.readingPosition.readerIsMovingUp)")
+        #expect(feed.contentView.bounds.minY == top)
+        source.runs[0].answerText = (0..<20).map { "Grown passage \($0): " + HistoryMockupFixtures.paragraph($0) }.joined(separator: "\n\n")
+        await history.refresh()
+        await settle(host) { document.frame.height > feed.contentView.bounds.height + 40 }
+        await settle(host)
+        print("SHORT FEED follows=\(state.follows) bottom=\(state.atBottom) flipped=\(document.isFlipped) "
+            + "document=\(document.frame.height) visible=\(feed.contentView.bounds.height)\n" + trace.lines.joined(separator: "\n"))
+        #expect(state.follows && history.following)
+        #expect(document.frame.height - feed.contentView.bounds.maxY <= 8)
+        let bottom = feed.contentView.bounds.minY
+        try wheelUp(feed, reading: state.readingPosition)
+        #expect(state.readingPosition.readerIsMovingUp)
+        await settle(host)
+        #expect(feed.contentView.bounds.minY < bottom - 20)
+        #expect(!state.follows && !history.following)
+    }
+
     private func window<V: View>(_ root: V, width: CGFloat = 1100) -> (NSHostingView<V>, NSWindow) {
         let host = NSHostingView(rootView: root)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 700),
@@ -267,6 +316,21 @@ struct ConversationNativeRoutingTests {
         try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
             timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: text,
             charactersIgnoringModifiers: text, isARepeat: false, keyCode: code))
+    }
+    private func outerScroll(of view: NSView) -> NSScrollView? {
+        var ancestor = view.superview
+        var scroll: NSScrollView?
+        while let view = ancestor {
+            if let candidate = view as? NSScrollView, candidate.hasVerticalScroller { scroll = candidate }
+            ancestor = view.superview
+        }
+        return scroll
+    }
+    /// Five mouse-wheel lines toward earlier content, reported first, as the monitor does.
+    private func wheelUp(_ feed: NSScrollView, reading: ConversationReadingPosition) throws {
+        let event = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: 5, wheel2: 0, wheel3: 0))
+        reading.readerMovedUp()
+        feed.scrollWheel(with: try #require(NSEvent(cgEvent: event)))
     }
 }
 

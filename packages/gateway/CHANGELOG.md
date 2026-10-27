@@ -1,5 +1,15 @@
 # @claudexor/gateway
 
+## 4.8.0
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies [6c31c44]
+  - @claudexor/schema@4.8.0
+  - @claudexor/core@4.8.0
+
 ## 4.7.1
 
 ### Patch Changes

@@ -20,7 +20,8 @@ import ClaudexorKit
     var navigationAnchor: UnitPoint = .top
     var navigationY: CGFloat?
     @ObservationIgnored let readingPosition = ConversationReadingPosition()
-    @ObservationIgnored var userScrolling = false
+    /// Observes each scroll sample before the following rule applies (diagnostics and tests).
+    @ObservationIgnored var onGeometrySample: ((FeedEdge, FeedEdge) -> Void)?
     var visibleTurnID: String?
     static let limit = 20
     static let topID = "history:top"
@@ -70,23 +71,47 @@ import ClaudexorKit
         position.scrollTo(id: markerID(for: navigationTarget, bottom: endOfCard), anchor: navigationAnchor)
     }
 
-    func geometry(bottom: Bool, movedUp: Bool = true, tailMounted: Bool) {
+    func geometry(bottom: Bool, tailMounted: Bool) {
         atBottom = bottom
         if bottom && tailMounted {
             viewport = .followingTail
             newCount = 0
-        } else if follows && movedUp && !readingPosition.isFollowingResize {
-            // Only a move toward earlier content leaves the tail. Content growth can
-            // report a lost bottom before the bottom anchor adjusts (macOS 26.6).
+        } else if follows && !readingPosition.isFollowingResize {
             viewport = .reading(anchor: positionedTurnID)
         }
     }
+
+    /// Applies one scroll sample and reports whether bottom or viewport state changed.
+    /// macOS 26.6 reports content growth before the bottom anchor moves the offset, so a
+    /// following feed that lost the bottom without an offset change waits for the anchor.
+    func geometry(_ edge: FeedEdge, after old: FeedEdge, tailMounted: Bool) -> Bool {
+        let lost = follows && !edge.bottom
+        if lost && (edge.awaitsAnchor(after: old) || readingPosition.isFollowingResize) { return false }
+        guard edge.bottom != atBottom || lost else { return false }
+        geometry(bottom: edge.bottom, tailMounted: tailMounted)
+        return true
+    }
 }
 
-/// Bottom state with the offset that decides whether the reader moved up.
-private struct FeedEdge: Equatable {
-    var bottom: Bool
-    var offset: CGFloat
+/// One scroll-geometry sample of the feed.
+struct FeedEdge: Equatable {
+    var offset: CGFloat = 0
+    var content: CGFloat = 0
+    var container: CGFloat = 0
+    var inset: CGFloat = 0
+    /// How far the viewport ends above the bottom of the content.
+    var deficit: CGFloat { content + inset - offset - container }
+    var bottom: Bool { deficit <= 1 }
+
+    /// The bottom anchor has not applied a size change yet: the size changed while the
+    /// offset stayed, or the offset caught up exactly with the previous sample's deficit
+    /// while a new size change arrived (growth in consecutive frames).
+    func awaitsAnchor(after old: FeedEdge) -> Bool {
+        let moved = offset - old.offset
+        let resized = abs(content - old.content) > 0.5 || abs(container - old.container) > 0.5
+            || abs(inset - old.inset) > 0.5
+        return (resized && abs(moved) < 0.5) || (old.deficit > 1 && abs(moved - old.deficit) < 0.5)
+    }
 }
 
 struct ConversationFeed: View {
@@ -146,21 +171,15 @@ struct ConversationFeed: View {
         .onChange(of: state.positionedTurnID) { synchronizeReading() }
         .onChange(of: state.visibleTurnID) { synchronizeReading(); state.readingPosition.captureAfterSettling() }
         .onScrollPhaseChange { _, phase in
-            state.userScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
             if phase == .interacting { history.cancelNavigation(); state.readingPosition.gestureBegan() }
             if phase == .idle { state.readingPosition.captureAfterSettling() }
         }
         .onScrollGeometryChange(for: FeedEdge.self) { geometry in
-            FeedEdge(bottom: geometry.contentOffset.y + geometry.containerSize.height
-                         >= geometry.contentSize.height + geometry.contentInsets.bottom - 1,
-                     offset: geometry.contentOffset.y)
+            FeedEdge(offset: geometry.contentOffset.y, content: geometry.contentSize.height,
+                     container: geometry.containerSize.height, inset: geometry.contentInsets.bottom)
         } action: { old, new in
-            // A gesture or a smaller offset is the reader's move; anchored growth in the
-            // same frame can hide it, so a following feed checks every later frame too.
-            let movedUp = state.userScrolling || new.offset < old.offset - 0.01
-            guard old.bottom != new.bottom || (state.follows && !new.bottom && movedUp) else { return }
-            state.geometry(bottom: new.bottom, movedUp: movedUp, tailMounted: tailMounted)
-            synchronizeReading()
+            state.onGeometrySample?(old, new)
+            if state.geometry(new, after: old, tailMounted: tailMounted) { synchronizeReading() }
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
             state.readingPosition.widthChanged(size.width)

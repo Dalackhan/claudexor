@@ -562,8 +562,8 @@ frequency and volume are. The contracts:
   character through the same programmatic scroll path, outside layout. Hosts
   register weakly; there are no per-row geometry observers or per-frame text
   measurements. A new gesture or explicit navigation cancels a pending restore.
-  Following continues to pin the bottom and ends only when the viewport moves toward
-  earlier content; growth or a shorter viewport keeps the tail. Full-prompt sheets own independent prose:
+  Following continues to pin the bottom and ends when the reader moves off it, not when
+  growth or a shorter viewport is reported before the bottom anchor adjusts. Full-prompt sheets own independent prose:
   they inherit neither the feed registry nor a turn’s selection/focus identity.
 - **Per-row readable measure (D-13 C).** The 680pt conversation measure
   (`conversationMeasure()`) is applied PER ROW (each `TurnCard`), not as a

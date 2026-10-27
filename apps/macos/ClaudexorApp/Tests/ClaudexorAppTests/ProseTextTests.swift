@@ -157,13 +157,43 @@ struct ProseTextTests {
         #expect(history.following && history.newCount == 0)
         #expect(history.presentation.planText["plan"]?["question"] == "Keep this draft")
         let state = ConversationFeedState()
-        // Growth that lands before the bottom anchor adjusts keeps following.
-        state.geometry(bottom: false, movedUp: false, tailMounted: true)
-        #expect(state.follows && !state.atBottom)
+        // macOS 26.6 reports growth before the bottom anchor moves the offset.
+        let rest = FeedEdge(offset: 400, content: 1_000, container: 600)
+        let grown = FeedEdge(offset: 400, content: 1_300, container: 600)
+        let anchored = FeedEdge(offset: 700, content: 1_300, container: 600)
+        #expect(!state.geometry(grown, after: rest, tailMounted: true))
+        #expect(state.follows && state.atBottom)
+        #expect(!state.geometry(anchored, after: grown, tailMounted: true))
+        #expect(!state.geometry(FeedEdge(offset: 700, content: 1_300, container: 560), after: anchored, tailMounted: true))
+        #expect(state.follows && state.atBottom)
+        // A 40pt move up hidden by 50pt of anchored growth in the same frame still leaves the tail.
+        let masked = FeedEdge(offset: 710, content: 1_350, container: 600)
+        #expect(state.geometry(masked, after: anchored, tailMounted: true))
+        #expect(!state.follows && !state.atBottom)
+        let tail = FeedEdge(offset: 750, content: 1_350, container: 600)
+        #expect(state.geometry(tail, after: masked, tailMounted: true))
+        #expect(state.follows)
+        #expect(state.geometry(FeedEdge(offset: 700, content: 1_350, container: 600), after: tail, tailMounted: true))
+        #expect(!state.follows)
+        state.geometry(bottom: true, tailMounted: true)
+        #expect(state.follows)
         state.geometry(bottom: false, tailMounted: true)
         #expect(!state.follows)
         state.geometry(bottom: true, tailMounted: true)
         #expect(state.follows)
+        // Growth in consecutive frames: a sample carries the anchor for the previous one,
+        // or the anchor lands two samples late.
+        let chain = ConversationFeedState()
+        let s0 = FeedEdge(offset: 400, content: 1_000, container: 600)
+        let s1 = FeedEdge(offset: 400, content: 1_020, container: 600)
+        let s2 = FeedEdge(offset: 420, content: 1_050, container: 600)
+        let s3 = FeedEdge(offset: 420, content: 1_080, container: 600)
+        let s4 = FeedEdge(offset: 480, content: 1_080, container: 600)
+        #expect(!chain.geometry(s1, after: s0, tailMounted: true))
+        #expect(!chain.geometry(s2, after: s1, tailMounted: true))
+        #expect(!chain.geometry(s3, after: s2, tailMounted: true))
+        #expect(!chain.geometry(s4, after: s3, tailMounted: true))
+        #expect(chain.follows && chain.atBottom)
     }
 }
 

@@ -196,11 +196,18 @@ struct ConversationNativeRoutingTests {
         let model = HistoryMockupFixtures.model(detail: source.detail, runs: source.runs, source: source)
         let history = try #require(model.selectedHistory)
         let state = ConversationFeedState()
+        // Scroll samples explain a lost tail on another macOS (CI runs a newer one).
+        final class Trace { var lines: [String] = [] }
+        let trace = Trace()
+        state.onGeometrySample = { old, new in
+            trace.lines.append("o=\(new.offset) c=\(new.content) h=\(new.container) i=\(new.inset) d=\(new.deficit) awaits=\(new.awaitsAnchor(after: old))")
+        }
         let (host, window) = window(ConversationFeed(state: state, history: history, routingOptions: .init()).environment(model), width: 680)
         host.sizingOptions = []
         defer { window.close() }
         await settle(host, count: 10)
         await settle(host) { state.follows && state.atBottom }
+        print("TAIL TRACE follows=\(state.follows) bottom=\(state.atBottom)\n" + trace.lines.prefix(80).joined(separator: "\n"))
         #expect(state.follows)
         #expect(state.atBottom)
         let prose = try #require(views(host).compactMap { $0 as? ProseTextView }.first { $0.string.hasPrefix("Tail passage 0:") })

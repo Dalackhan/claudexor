@@ -1,5 +1,55 @@
 # @claudexor/orchestrator
 
+## 4.8.0
+
+### Patch Changes
+
+- Ordinary single-candidate Auto Agent runs requesting Browser select a compatible lane before account quota, processing and ranking, without widening access or web policy. Explicit pools, pins, explicit or inherited primaries, multi-candidate and convergence runs keep their existing behavior. A configured primary excluded from this Auto path reports capability_incompatible with the exact cause in its event detail.
+- Add operator-only editable next messages for daemon-owned one-shot Agent and Ask runs: `claudexor_next_message` and `claudexor_next_message_read`, CLI `next-message` and `next-message-read`, and HTTP `/v2/runs/next-message`. One revisioned draft reserves the predecessor's single successor claim. An eligible settled success sends it once as an ordinary continuation through the existing admission and queue; failure, unknown process custody, Stop, restart or admission refusal holds it without retry. Controls and Settings execution preferences are captured at creation and shown by origin on the bounded read, while permissions, trust, accounts and quota stay current at dispatch.
+
+  Public Stop (`POST /v2/runs/:id/control`, `claudexor_run_cancel`) holds a waiting draft whatever the predecessor's lifecycle and reports an already accepted successor as `next_message_dispatched` without cancelling it. If the hold cannot be saved, the run is still stopped, the draft is not sent, and Stop answers 503 `next_message_hold_failed`. `claudexor_run_cancel` failures now keep the control API's typed problem: their text starts with the code (for example `http_409: run is succeeded; cancel has nothing to stop`), and the structured failure carries the code, required actions and context.
+
+  The orchestrator exports `captureRunDefaults`, `executionRunConfig` and `resolveRunInputDefaults`, accepts captured `executionDefaults`, and adds `preflightOneShot` for dispatch validation without starting a run.
+
+  Engine-store schema 4 adds the `deferred_message` table in an atomic forward-only migration; older engines refuse an upgraded store.
+
+- 6c31c44: Add the Grok Build subscription CLI harness: named accounts with isolated
+  profile homes, device login, account model lists, shared effort placement,
+  stream parsing and reactive quota cooldowns for pools and rotation. Readiness
+  comes from `grok models` in the profile env, and an inconclusive probe stays
+  unknown instead of marking the account dead; failure text from a run is never
+  read as an authentication verdict either. Session login is confirmed from
+  Grok's init frame; a contradicting source fails the attempt as the new typed
+  `credential_source_unconfirmed` request refusal, without a retry or account
+  rotation, even when the same frame also contradicts the scoped tool policy.
+  Claudexor never selects an API key, but a key in Grok's own configuration can
+  send a paid request before that check, as the adapter README discloses.
+  Subscription cash is reported unknown, not zero. Grok joins the macOS Add Account picker and
+  the shared credential-store path rules, so a directory run never copies or
+  publishes a selected `.grok/` directory; leave it out of `--scope-path`. An app
+  built before this change cannot decode an active Grok login job, and its
+  engine-update check reports busy until that login finishes or is cancelled.
+  Applied attempt facts now name the HOME a Grok, Antigravity or Cursor profile
+  child actually received.
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies [6c31c44]
+  - @claudexor/schema@4.8.0
+  - @claudexor/core@4.8.0
+  - @claudexor/util@4.8.0
+  - @claudexor/arbitration@4.8.0
+  - @claudexor/budget@4.8.0
+  - @claudexor/config@4.8.0
+  - @claudexor/context@4.8.0
+  - @claudexor/delivery@4.8.0
+  - @claudexor/event-log@4.8.0
+  - @claudexor/gateway@4.8.0
+  - @claudexor/policy@4.8.0
+  - @claudexor/review@4.8.0
+  - @claudexor/workspace@4.8.0
+  - @claudexor/artifact-store@4.8.0
+  - @claudexor/synthesis@4.8.0
+
 ## 4.7.1
 
 ### Patch Changes

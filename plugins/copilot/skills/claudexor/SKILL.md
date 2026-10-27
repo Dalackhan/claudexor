@@ -69,9 +69,21 @@ Start read-only unless the user explicitly asked to change or create files.
 
 ## Documents
 
-For an explicitly selected document, use the upload tools on an already-running
-daemon. Select one absolute regular file on the MCP-server host, not a remote
-client's path, URL, glob or directory; sensitive source/content checks still apply.
+For an explicitly selected document on an already-running daemon, first call
+`claudexor_store_identity` and durably save its `storeId`. Save a caller-owned
+import key with the exact arguments, then call `claudexor_upload_import` with
+`{expectedStoreId,path,idempotencyKey}` (optional `kind`, `mime`, `name`). Select
+one absolute regular file on the MCP-server host, not a remote client's path, URL,
+glob or directory; sensitive source/content checks still apply. After any
+uncertainty or failure repeat the identical call with the saved store id and key,
+never a later store answer. A completed import returns its original `resource`
+without reading the file again, even after the file changed or was deleted. Other
+arguments under a used key fail `idempotency_conflict`; a new edition needs a new
+key. An unfinished import whose source changed or vanished fails
+`upload_import_source_changed` or `upload_import_source_unavailable` with its
+`uploadId`; another store fails `store_mismatch` before the file is touched.
+
+The low-level stages remain available.
 Save a caller-owned create key and exact body before `claudexor_upload_create`
 with `{idempotencyKey,request:{kind,mime,name,sizeBytes}}`. Save its `uploadId`, then
 call `claudexor_upload_import_local` with `{uploadId,path}`; save the returned
@@ -88,10 +100,12 @@ replay the original finalize key/body even after status 404.
 Never auto-cancel an unknown finalize outcome. `claudexor_upload_cancel` with
 `{uploadId}` is only an explicit decision about an unfinished upload.
 
-Pass the finalized resource as `attachments: [{resourceId}]` to a public run,
-`claudexor_thread_turn` or `claudexor_run_continue`; paths, base64 and internal
-resolved objects are invalid run refs. Omission adds no new refs; `[]` is explicit empty.
-Continuation refs do not rewrite retained history.
+Pass the ready resource as `attachments: [{resourceId}]` to a public run,
+`claudexor_thread_turn` or `claudexor_run_continue` (CLI `--attach-resource`);
+paths, base64 and internal resolved objects are invalid run refs.
+Omission adds no new refs; `[]` is explicit empty.
+A continuation inherits no attachments: pass the refs again when the successor
+needs the documents. Continuation refs do not rewrite retained history.
 Model-purpose resources are not ordinary attachments. The Delegate belt accepts
 refs on its run tools but has no upload controls. Every selected lane must admit
 the MIME and finite byte/count limits. Ordinary CLI --attach/--image convenience

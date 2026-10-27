@@ -1,8 +1,10 @@
 import { z } from "zod/v3";
 import { ContentHash, Id, NonBlankString } from "./primitives.js";
 import {
+  AttachmentKind,
   ControlUploadCreateRequest,
   ControlUploadFinalizeRequest,
+  ControlUploadImportRequest,
   ControlUploadStatus,
 } from "./attachment.js";
 
@@ -34,6 +36,35 @@ export const McpUploadFinalizeInput = McpUploadTargetInput.extend({
   idempotencyKey: uploadKey,
 }).strict();
 export type McpUploadFinalizeInput = z.infer<typeof McpUploadFinalizeInput>;
+
+/** The store identity read takes no input; its output is the opt-in ControlHandshakeResponse. */
+export const McpStoreIdentityInput = z.object({}).strict();
+export type McpStoreIdentityInput = z.infer<typeof McpStoreIdentityInput>;
+
+/** One-call keyed import of a file on the MCP-server host; output is ControlUploadImport. */
+export const McpUploadImportInput = z
+  .object({
+    expectedStoreId: ControlUploadImportRequest.shape.expectedStoreId,
+    path: NonBlankString.describe(
+      "Explicit absolute regular file on the MCP-server host, never the remote client's filesystem.",
+    ),
+    idempotencyKey: NonBlankString.max(256).describe(
+      "Caller-owned key for this one import. Save it with the exact arguments before calling and repeat both after any uncertainty; a completed import returns its original resource without reading the file again. A new edition of the file needs a new key.",
+    ),
+    kind: AttachmentKind.optional().describe(
+      "Default: image when the effective MIME type starts with image/, otherwise file.",
+    ),
+    mime: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Default from the file extension (unknown extensions are application/octet-stream).",
+      ),
+    name: z.string().optional().describe("Display name. Default: the file's base name."),
+  })
+  .strict();
+export type McpUploadImportInput = z.infer<typeof McpUploadImportInput>;
 
 export const McpUploadImportLocalResult = ControlUploadStatus.extend({
   expectedSha256: ContentHash.optional().describe(

@@ -46,6 +46,17 @@ const operations: ControlOperationDescriptor[] = [
     "ControlResource",
     { idempotency: "key_required" },
   ),
+  // Its catalog presence is the keyed-import feature marker clients detect.
+  j(
+    "POST",
+    "/v2/uploads/imports",
+    "mutating",
+    "ControlUploadImportRequest",
+    "ControlUploadImport",
+    {
+      idempotency: "key_required",
+    },
+  ),
   j("POST", "/v2/handshake", "read_only", "ControlHandshakeRequest", "ControlHandshakeResponse", {
     parameters: [STORE_IDENTITY_HEADER],
   }),

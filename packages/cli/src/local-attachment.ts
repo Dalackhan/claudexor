@@ -11,7 +11,8 @@ export interface LocalAttachment {
   inode: number;
 }
 
-function mimeFor(path: string): { mime: string; image: boolean } {
+/** Pure extension mapping: the path string alone decides, with no filesystem access. */
+export function attachmentTypeFor(path: string): { mime: string; image: boolean } {
   switch (extname(path).toLowerCase()) {
     case ".png":
       return { mime: "image/png", image: true };
@@ -51,7 +52,7 @@ export function resolveLocalAttachment(path: string, forceImage: boolean): Local
     throw new Error(`attachment must be an existing file: ${path}`);
   }
   if (!stat.isFile()) throw new Error(`attachment must be a regular non-symlink file: ${path}`);
-  const detected = mimeFor(resolved);
+  const detected = attachmentTypeFor(resolved);
   return {
     kind: forceImage || detected.image ? "image" : "file",
     mime: detected.mime,

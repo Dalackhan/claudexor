@@ -2,6 +2,26 @@ import type { CliCommandSpec } from "./command-registry.js";
 
 export const UPLOAD_COMMAND_SPECS: readonly CliCommandSpec[] = [
   {
+    id: "store-identity",
+    usageArgs: "--json",
+    positionalPatterns: [{ min: 0, max: 0 }],
+    summary: "Read the running daemon's durable store id; save it with an import key before use",
+    flags: ["json"],
+    mutability: "read",
+    stability: "stable",
+  },
+  {
+    id: "upload-import",
+    usageArgs:
+      '<absolute-host-file> --expected-store-id <id> --idempotency-key <key> [--request-json \'{"kind":...,"mime":...,"name":...}\'] --json',
+    positionalPatterns: [{ min: 1, max: 1 }],
+    summary:
+      "Import one file on this host as a ready attachment under a saved store id and key; replays need no source",
+    flags: ["expected-store-id", "request-json", "idempotency-key", "json"],
+    mutability: "write",
+    stability: "stable",
+  },
+  {
     id: "upload-create",
     usageArgs: "--request-json '<object>' --idempotency-key <key> --json",
     positionalPatterns: [{ min: 0, max: 0 }],

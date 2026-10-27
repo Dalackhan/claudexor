@@ -10,6 +10,7 @@ import type {
   ControlPendingInteraction,
   ControlProjectListingProblem,
   ControlResource,
+  ControlUploadImport,
   ControlUploadStatus,
   ModelPayloadRef,
   Project,
@@ -73,6 +74,8 @@ export interface ResourceStorePort {
     expectedSha256: string | undefined,
     idempotencyKey: string,
   ): ControlResource;
+  /** Keyed import: begin, read or replay, publishing verified bytes under the same key. */
+  importUpload(raw: unknown, idempotencyKey: string): ControlUploadImport;
   resolve(refs: ResourceAttachmentRef[] | undefined): Attachment[];
   readModel(raw: ModelPayloadRef): Buffer;
   publishModel(bytes: Uint8Array): ModelPayloadRef;

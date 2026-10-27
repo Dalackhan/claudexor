@@ -1,3 +1,4 @@
+import { createHash, type Hash } from "node:crypto";
 import { closeSync, constants, ftruncateSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { ControlUploadCreateRequest, ControlUploadStatus } from "@claudexor/schema";
@@ -12,10 +13,15 @@ import {
   readUploadRow,
   resourceError,
   sensitiveResourceError,
+  type UploadImportBinding,
   type UploadRow,
 } from "./resource-rows.js";
 import type { EngineStore } from "./store.js";
-import { UploadBindings, uploadKeyDigest } from "./upload-binding-retention.js";
+import {
+  UploadBindings,
+  uploadKeyDigest,
+  type UploadOperation,
+} from "./upload-binding-retention.js";
 
 /** The shared main-thread decision used by cancel, post-publication cleanup and the sweep. */
 export async function cleanupUploadPart(
@@ -95,6 +101,25 @@ export class SqlUploads {
     const prior =
       callerKey === undefined ? undefined : this.bindings.lookup("create", key, requestDigest);
     if (prior) return ControlUploadStatus.parse(prior.result);
+    return this.open(request, "create", uploadKeyDigest("create", key), requestDigest);
+  }
+
+  /** The import's key binds this upload in the same transaction that creates it. */
+  createImport(
+    request: ControlUploadCreateRequest,
+    binding: UploadImportBinding,
+    requestDigest: string,
+  ): ControlUploadStatus {
+    return this.open(request, "import", binding.keyDigest, requestDigest, binding);
+  }
+
+  private open(
+    request: ControlUploadCreateRequest,
+    operation: UploadOperation,
+    keyDigest: string,
+    requestDigest: string,
+    importBinding?: UploadImportBinding,
+  ): ControlUploadStatus {
     const uploadId = newId("upl");
     ensureDirectory(this.store, this.store.paths.uploads);
     try {
@@ -115,15 +140,22 @@ export class SqlUploads {
       expectedBytes: request.sizeBytes,
     });
     runMutation(this.store, (tx) => {
-      putUploadInTx(tx, { request, status, state: "open", finalizeSha: null });
+      putUploadInTx(tx, {
+        request,
+        status,
+        state: "open",
+        finalizeSha: null,
+        ...(importBinding ? { import: importBinding } : {}),
+      });
       bindIdempotencyInTx(tx, {
         owner: "upload",
         pid: 0,
-        keyDigest: uploadKeyDigest("create", key),
-        operation: "create",
+        keyDigest,
+        operation,
         requestDigest,
         targetId: uploadId,
-        result: status,
+        // The import projection is derived from its upload; only create stores a reply.
+        ...(operation === "create" ? { result: status } : {}),
         createdAt: tx.now().toISOString(),
       });
       tx.changes.uploadChanged(uploadId);
@@ -149,12 +181,16 @@ export class SqlUploads {
     if (row.status.state !== "open")
       throw resourceError(`upload ${id} is ${row.status.state}`, 409, "upload_not_open");
     const fd = this.beginWrite(row);
+    // An import verifies its declared digest while receiving.
+    const hash = row.import ? createHash("sha256") : undefined;
     this.writing.add(id);
     try {
-      for await (const chunk of chunks) this.writeChunk(row, fd, chunk);
-      return this.finishWrite(row);
+      for await (const chunk of chunks) this.writeChunk(row, fd, chunk, hash);
+      return this.finishWrite(row, hash);
     } catch (error) {
-      this.markCancelled(row);
+      // An import keeps its key: an unverified transfer restarts from byte zero.
+      if (row.import) this.reopen(id);
+      else this.markCancelled(row);
       throw mapStoreError(error, "writing upload part");
     } finally {
       closeSync(fd);
@@ -216,7 +252,7 @@ export class SqlUploads {
       throw mapStoreError(error, "opening upload part for writing");
     }
   }
-  private writeChunk(row: UploadRow, fd: number, bytes: Uint8Array): void {
+  private writeChunk(row: UploadRow, fd: number, bytes: Uint8Array, hash?: Hash): void {
     this.assertNotCancelled(row.status.uploadId);
     const next = row.status.receivedBytes + bytes.byteLength;
     if (next > row.status.expectedBytes)
@@ -224,10 +260,11 @@ export class SqlUploads {
     let offset = 0;
     while (offset < bytes.byteLength)
       offset += writeSync(fd, bytes, offset, bytes.byteLength - offset);
+    hash?.update(bytes);
     row.status = { ...row.status, receivedBytes: next };
     this.save(row);
   }
-  private finishWrite(row: UploadRow): ControlUploadStatus {
+  private finishWrite(row: UploadRow, hash?: Hash): ControlUploadStatus {
     this.assertNotCancelled(row.status.uploadId);
     if (row.status.receivedBytes !== row.status.expectedBytes)
       throw resourceError(
@@ -235,6 +272,13 @@ export class SqlUploads {
         400,
         "upload_size_mismatch",
       );
+    if (hash && `sha256:${hash.digest("hex")}` !== row.import?.sha256)
+      throw resourceError(
+        "uploaded bytes do not match the import's declared sha256",
+        409,
+        "digest_mismatch",
+      );
+    // O_DSYNC writes made the bytes durable; this commit is the import's byte receipt.
     row.status = { ...row.status, state: "uploaded" };
     row.state = "uploaded";
     this.save(row);
@@ -243,6 +287,14 @@ export class SqlUploads {
   private assertNotCancelled(id: string): void {
     if (readUploadRow(this.store, id)?.state === "discarded")
       throw resourceError(`upload ${id} was cancelled`, 409, "upload_cancelled");
+  }
+  /** Unverified import bytes are not a receipt. An explicit cancel stays final. */
+  reopen(id: string): void {
+    const row = readUploadRow(this.store, id);
+    if (!row?.import || row.state === "discarded" || row.finalization) return;
+    row.status = { ...row.status, state: "open", receivedBytes: 0 };
+    row.state = "open";
+    this.save(row);
   }
   private markCancelled(row: UploadRow): void {
     row.status = { ...row.status, state: "cancelled" };

@@ -10,7 +10,7 @@ changing Claudexor.
 
 | Surface | Current role | Stability |
 |---|---|---|
-| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, runs-wait, task-group-runs, next-message, next-message-read, retry, run-again, apply, decision, review), attachment ingress (upload-create, upload-import-local, upload-status, upload-finalize, upload-cancel), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). `runs-wait` observes existing handles read-only through `--targets-json` and optional `--wait-ms`, with `--json` or `--json-stream` output. `task-group-runs` reads one bounded retained group page. `next-message` creates, replaces or clears an authorized one-shot draft; `next-message-read` reads its bounded content and editing handles. | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
+| CLI | Human and automation entrypoint: run verbs (init, ask — `--deep-scan` for the research sweep — agent — `--delegate` for the delegation belt — best-of, plan, create), run inspection/recovery (inspect, follow, runs-wait, task-group-runs, next-message, next-message-read, retry, run-again, apply, decision, review), attachment ingress (store-identity, upload-import, upload-create, upload-import-local, upload-status, upload-finalize, upload-cancel), ops (project, models, harness, doctor, quota, account-reset, accounts, plugin, daemon, gc, auth, secrets, profiles, settings, trust, setup, remote, release), and agent introspection (capabilities, about, `help --json`). `runs-wait` observes existing handles read-only through `--targets-json` and optional `--wait-ms`, with `--json` or `--json-stream` output. `task-group-runs` reads one bounded retained group page. `next-message` creates, replaces or clears an authorized one-shot draft; `next-message-read` reads its bounded content and editing handles. | Stable contract: the verb/flag surface (`help --json`) and `--json` output keys on run paths (add-only). JSON support exists on primary machine-readable paths, not every subcommand. |
 | Daemon and control API | Local durable queue, Agent runs, caller-owned model and image operations, artifacts, SSE events, settings, harness status, secrets metadata, apply, and run control. | Stable contract: endpoints and DTOs per `docs/reference/endpoints.json` + generated schemas (add-only fields). Loopback + bearer token only. |
 | MCP server | Exposes Claudexor tools to MCP clients. `claudexor_runs_wait` projects the same read-only observation with `targets: [{runId, seen?}]` and optional `waitMs`. | Stable contract: the tool set with input/output schemas. Tool list follows the implementation, not old docs. |
 | ACP server | Lets compatible editors or agents talk to Claudexor as a local agent surface. | Experimental (may change in minors, disclosed in the CHANGELOG). |
@@ -821,19 +821,112 @@ separate budget or lifecycle.
 
 Every public one-shot run tool (Ask, Plan, Agent, Best-of, Create and Run Continue), the
 Delegate belt's run tools, and `claudexor_thread_turn` accept optional
-`attachments: [{resourceId}]`. Only immutable resource IDs returned by finalize
-are accepted; local paths, base64 and internal resolved Attachment objects are
-invalid run references. Omission keeps the existing run behavior. The ordinary
-daemon admission, sensitive-content policy, model-purpose resource rejection,
-and selected lanes' finite MIME/size/count limits still apply.
+`attachments: [{resourceId}]`; the CLI spelling is `--attach-resource
+<resourceId[,resourceId...]>` on ask/agent/best-of/plan. Only immutable resource
+IDs returned by a keyed import or by finalize are accepted; local paths, base64
+and internal resolved Attachment objects are invalid run references. Omission
+keeps the existing run behavior. The ordinary daemon admission, sensitive-content
+policy, model-purpose resource rejection, and selected lanes' finite
+MIME/size/count limits still apply. A ready resource is reusable by any later
+run, turn or task of the same store.
 
-Public MCP exposes `claudexor_upload_create`, `claudexor_upload_import_local`,
+Public MCP exposes `claudexor_store_identity`, `claudexor_upload_import`,
+`claudexor_upload_create`, `claudexor_upload_import_local`,
 `claudexor_upload_status`, `claudexor_upload_finalize` and
 `claudexor_upload_cancel`. The Delegate belt exposes no upload controls. These
 tools require an already-running daemon and perform one finite operation;
 they add no upload store, retry loop or automatic cancellation. The corresponding
-CLI verbs are `upload-create`, `upload-import-local`, `upload-status`,
-`upload-finalize` and `upload-cancel`, with the same request/result schemas.
+CLI verbs are `store-identity`, `upload-import`, `upload-create`,
+`upload-import-local`, `upload-status`, `upload-finalize` and `upload-cancel`,
+with the same request/result schemas.
+
+#### Keyed import
+
+A keyed import turns one source into one immutable resource under a caller-owned
+key, on the existing upload owner (the same upload, idempotency and blob
+records; no separate document registry). Before the first import the caller reads
+the store identity, `claudexor_store_identity` or `claudexor store-identity --json`
+(the opt-in `POST /v2/handshake` with `X-Claudexor-Store-Identity: 1`), and
+durably saves that `storeId` together with the key and exact arguments. Every
+replay sends the saved store id unchanged and never adopts a later store answer.
+
+```bash
+claudexor upload-import /absolute/host/brief.md --expected-store-id "$STORE_ID" --idempotency-key "$IMPORT_KEY" --json
+claudexor ask "Summarize the brief" --attach-resource "$RESOURCE_ID" --json
+```
+
+`claudexor_upload_import({expectedStoreId, path, idempotencyKey, kind?, mime?,
+name?})` imports an explicit absolute regular file **on the MCP-server host**
+(the same source custody as stage import below; `kind`, `mime` and `name` default
+from the path). It first asks the daemon about the key, before it stats or opens
+the file. A completed import returns its original resource even when the file has
+since changed or been deleted. Only an unfinished import reads the file: it
+hashes it, binds that content, sends the bytes once and asks again. Success
+always means `state: ready` with `resource`. Typed failures carry `uploadId`,
+`state` and the bound `content` when a key is bound:
+
+- `store_mismatch`: the saved store id names another store;
+  `upload_import_unavailable` (HTTP 503): the daemon has no durable store
+  identity. Either way nothing ran and no file was touched.
+- `idempotency_conflict`: the key is bound to other arguments (`kind`, `mime`,
+  `name` or the source path); `upload_import_content_conflict`: it owns other
+  bytes. Neither has effects; a new edition of a file needs a new key.
+- `upload_import_source_changed` / `upload_import_source_unavailable`: the import
+  is unfinished and its source no longer matches or no longer exists. Restoring
+  the same bytes and repeating completes it.
+- `sensitive_resource_rejected`: the sensitive-resource policy refused the path,
+  the display name or the content. A sensitive path or name is refused before
+  the file is read; content refused at publication cancels the import.
+- `digest_mismatch` / `upload_not_open` (HTTP 409, passed through with the import
+  context): the byte send raced with a change to the file, or with another
+  transfer or a cancel of the same upload. Repeat the identical call; it answers
+  from the import's current state.
+- `upload_import_in_progress`, `upload_import_incomplete` (no verified bytes yet)
+  and `upload_import_uncertain` (retryable): repeat the identical call.
+  `upload_import_cancelled`: the import ended without a resource; a new attempt
+  needs a new key.
+
+Over HTTP the same contract is `POST /v2/uploads/imports` with a required
+`Idempotency-Key` and a `ControlUploadImportRequest` body `{expectedStoreId, kind,
+mime, name, source?, content?}`; it answers `ControlUploadImport` `{storeId, state,
+uploadId, content, receivedBytes, resource?}`. A remote client sends bytes, never
+a path for the daemon to open. `source` is an optional opaque caller identity of
+the selected source (the local import uses its absolute path); it is bound into
+the key and the daemon never reads, resolves or stores it. The key binds `kind`,
+`mime`, `name` and `source`; the first declared `content` (`sizeBytes` and
+`sha256:<64 hex>`) binds the bytes. Omitting `content` only reads or replays a
+bound key, so a client can replay before it touches its source; an unbound key
+then answers `404 upload_import_not_found`. That 404 means this store retains no
+binding for the key now. It does not prove the key was never accepted: upload
+bindings are pruned 30 days after their resource was released or expired (only
+model-purpose resources are released today), and another `storeId` is another
+store. After an unknown outcome a client replays its saved request and never
+silently mints a new key.
+
+| `state` | Next step |
+| --- | --- |
+| `open` | `PUT /v2/uploads/:uploadId/bytes` with exactly the bound bytes, then repeat the POST |
+| `uploading` | another transfer is in flight; repeat the POST later |
+| `ready` | use `resource.resourceId`; no source access |
+| `cancelled` | finished without a resource; a new attempt needs a new key |
+
+The daemon hashes an import's bytes while receiving them. A digest mismatch
+(`409 digest_mismatch`), a short, oversized or interrupted transfer, or a daemon
+restart during the transfer returns that upload to `open` with zero bytes, so the
+same key resends from byte zero; ordinary uploads keep their single-shot
+cancellation. Complete verified bytes are a durable receipt that survives a
+daemon restart: the next POST publishes them with the bound digest, needing
+neither the source nor a client digest. As for every engine commit, a power loss
+before the store's next durability barrier (INV-143) can discard that receipt;
+the import then reads `open` again and needs its bytes. `POST /v2/uploads/:id/finalize` refuses an
+import's upload with `409 upload_import_owned`; `DELETE /v2/uploads/:id` cancels
+it terminally. Discovery uses existing seams, with no protocol bump: the
+`POST /v2/uploads/imports` descriptor in `GET /v2/operations` marks support, and
+`GET /v2/agent-capabilities` keeps each lane's `attachmentInputs` limits. An
+older engine without the descriptor has no keyed replay; clients must not
+emulate one with the stages.
+
+#### Upload stages
 
 1. Save a caller-owned create key and exact `request` before calling
    `claudexor_upload_create({idempotencyKey, request: {kind, mime, name, sizeBytes}})`.
@@ -874,7 +967,8 @@ claudexor upload-finalize "$UPLOAD_ID" --request-json '{"expectedSha256":"sha256
 
 Ordinary CLI `--attach`/`--image` retain their existing local-file convenience
 flow, including best-effort cancellation on failure. That uploader does not
-provide the explicit stage controls' caller-owned recovery identities.
+provide caller-owned recovery identities; `upload-import` followed by
+`--attach-resource` is the recoverable CLI path.
 
 Codex accepts file references for plain text, Markdown, JSON, PDF and DOCX
 (`text/plain`, `text/markdown`, `application/json`, `application/pdf` and
@@ -1116,8 +1210,10 @@ terminated process.
 
 Optional `attachments: [{resourceId}]` supplies new immutable resource references
 for that successor through the [document ingress contract](#document-ingress-and-resource-references).
-Omission adds no new refs; `[]` is forwarded as an explicit empty list. These
-controls do not alter retained conversation history. Paths, base64 and internal
+Omission adds no new refs; `[]` is forwarded as an explicit empty list. A
+successor inherits no attachments under either carrier, so pass the refs again
+when it needs the documents. These controls do not alter retained conversation
+history. Paths, base64 and internal
 resolved attachment objects are rejected. Save the exact attachment list with
 the original key and body for replay.
 

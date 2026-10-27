@@ -3,6 +3,8 @@ import {
   ControlResource,
   ControlUploadCreateRequest,
   ControlUploadFinalizeRequest,
+  ControlUploadImport,
+  ControlUploadImportRequest,
   ControlUploadStatus,
   type ResourceAttachmentRef,
 } from "@claudexor/schema";
@@ -19,6 +21,7 @@ export interface ResourceRouteServices {
     expectedSha256: string | undefined,
     idempotencyKey: string,
   ): Promise<unknown>;
+  importUpload(input: ControlUploadImportRequest, idempotencyKey: string): Promise<unknown>;
   validateResources(refs: ResourceAttachmentRef[]): Promise<void>;
 }
 
@@ -51,6 +54,22 @@ export async function handleResourceRoute(
     if (!result.ok) return true;
     return serviceResponse(ctx, res, "createUpload", () =>
       ctx.json(res, 201, ControlUploadStatus.parse(result.value)),
+    );
+  }
+  if (method === "POST" && path === "/uploads/imports") {
+    const service = services?.importUpload;
+    if (!service) return false;
+    const input = await routeValue(ctx, res, 400, async () => ({
+      idempotencyKey: requiredIdempotencyKey(req),
+      request: ControlUploadImportRequest.parse(await ctx.readBody(req)),
+    }));
+    if (!input.ok) return true;
+    const result = await routeValue(ctx, res, 500, () =>
+      service(input.value.request, input.value.idempotencyKey),
+    );
+    if (!result.ok) return true;
+    return serviceResponse(ctx, res, "importUpload", () =>
+      ctx.json(res, 200, ControlUploadImport.parse(result.value)),
     );
   }
   const uploadBytesMatch = /^\/uploads\/([^/]+)\/bytes$/.exec(path);

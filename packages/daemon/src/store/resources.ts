@@ -25,12 +25,14 @@ import {
   verifiedResourceBytes,
 } from "./resource-rows.js";
 import type { EngineStore } from "./store.js";
+import { SqlUploadImports } from "./upload-imports.js";
 import { SqlUploads } from "./uploads.js";
 
 /** Resource metadata and replay live in the one engine DB; only immutable bytes are files. */
 export class SqlResourceStore implements ResourceStorePort {
   private readonly uploads: SqlUploads;
   private readonly publisher: PublishBlob;
+  private readonly imports: SqlUploadImports;
   private readonly cleanup = new Set<Promise<void>>();
 
   constructor(
@@ -43,6 +45,7 @@ export class SqlResourceStore implements ResourceStorePort {
     this.publisher = new PublishBlob(store, blobs, obligations, this.uploads, (work) =>
       this.defer(work),
     );
+    this.imports = new SqlUploadImports(store, this.uploads, this.publisher);
   }
   create(raw: unknown, key: string) {
     return this.uploads.create(raw, key);
@@ -58,6 +61,9 @@ export class SqlResourceStore implements ResourceStorePort {
   }
   finalize(id: string, expectedSha256: string | undefined, key: string) {
     return this.publisher.finalize(id, expectedSha256, key);
+  }
+  importUpload(raw: unknown, key: string) {
+    return this.imports.import(raw, key);
   }
 
   resolve(refs: ResourceAttachmentRef[] | undefined): Attachment[] {

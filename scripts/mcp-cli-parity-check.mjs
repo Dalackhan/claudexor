@@ -80,11 +80,7 @@ const MCP_TO_CLI = {
       "caller-owned MCP launch identity, carried as the existing HTTP Idempotency-Key rather than an engine run-control flag",
   },
   taskGroupId: { cli: "task-group-id" },
-  attachments: {
-    cli: null,
-    reason:
-      "MCP carries finalized resource refs; CLI --attach/--image stage explicit local files through the same upload owner before enqueue",
-  },
+  attachments: { cli: "attach-resource" },
   harness: { cli: "harness" },
   primaryHarness: { cli: "primary-harness" },
   model: { cli: "model" },
@@ -253,9 +249,9 @@ const CLI_ONLY_EXEMPT = {
   portfolio: "removed v2 flag retained only to emit a hard error",
   "routing-goal": "MCP callers currently use the daemon default routing goal",
   attach:
-    "local-file convenience over upload create/import/finalize; MCP uses upload tools then attachments resource refs",
+    "local-file convenience over the upload owner; MCP imports with claudexor_upload_import, then passes attachments resource refs (CLI --attach-resource)",
   image:
-    "local-image convenience over the same upload owner; MCP uses upload tools then attachments resource refs",
+    "local-image convenience over the same upload owner; MCP imports with claudexor_upload_import, then passes attachments resource refs",
   "access-default":
     "trust subcommand flag, not a run control (was invisible to the old VALUE_FLAGS source-regex; the registry surfaces it)",
   "grant-test": "trust subcommand flag for an external exact-command grant, not a run control",
@@ -376,6 +372,7 @@ for (const [field, flag] of Object.entries(RUN_OBSERVATION_TOOL_FLAGS)) {
   }
 }
 
+const STORE_BOUND_IMPORT_FLAGS = ["expected-store-id"];
 const TASK_GROUP_TOOL_FLAGS = {
   limit: { flag: "limit", type: "integer" },
   state: { flag: "state", type: "string" },
@@ -401,9 +398,40 @@ for (const [field, { flag, type }] of Object.entries(TASK_GROUP_TOOL_FLAGS)) {
       `Task group read '${field}' maps to missing task-group-runs value flag '--${flag}'`,
     );
   for (const command of cliRegistry.CLI_COMMANDS)
-    if (command.id !== "task-group-runs" && command.flags.includes(flag))
+    if (
+      command.id !== "task-group-runs" &&
+      !(STORE_BOUND_IMPORT_FLAGS.includes(flag) && command.id === "upload-import") &&
+      command.flags.includes(flag)
+    )
       failures.push(`Task group read flag '--${flag}' leaked into '${command.id}'`);
 }
+
+// Keyed import: the store identity read and the one-call import have exact CLI spellings.
+// Its saved store check reuses --expected-store-id; overrides travel in --request-json.
+const UPLOAD_IMPORT_TOOL_FLAGS = {
+  expectedStoreId: "expected-store-id",
+  idempotencyKey: "idempotency-key",
+  kind: "request-json",
+  mime: "request-json",
+  name: "request-json",
+};
+const importTool = tools.find((tool) => tool.name === "claudexor_upload_import");
+const importCommand = cliRegistry.CLI_COMMANDS.find((command) => command.id === "upload-import");
+const identityTool = tools.find((tool) => tool.name === "claudexor_store_identity");
+const identityCommand = cliRegistry.CLI_COMMANDS.find((command) => command.id === "store-identity");
+if (importCommand?.mutability !== "write")
+  failures.push("upload-import must be a registered write command");
+if (identityTool?.annotations?.readOnlyHint !== true || identityCommand?.mutability !== "read")
+  failures.push("claudexor_store_identity and store-identity must both be read-only");
+for (const [field, flag] of Object.entries(UPLOAD_IMPORT_TOOL_FLAGS)) {
+  if (!importTool?.inputSchema.properties?.[field])
+    failures.push(`Keyed import tool is missing field '${field}'`);
+  if (!importCommand?.flags.includes(flag))
+    failures.push(`Keyed import field '${field}' maps to missing upload-import flag '--${flag}'`);
+}
+for (const field of ["expectedStoreId", "path", "idempotencyKey"])
+  if (!importTool?.inputSchema.required?.includes(field))
+    failures.push(`Keyed import tool must require '${field}'`);
 
 const mappedCliFlags = new Set(
   Object.values(MCP_TO_CLI)
@@ -475,6 +503,7 @@ for (const arg of mcpArgs) {
 // 2. Every prompt-taking run tool declares the structured outputSchema.
 // 3. The recovery tool set exists (hosts recover lost run handles).
 const MUTATING_TOOLS = new Set([
+  "claudexor_upload_import",
   "claudexor_upload_create",
   "claudexor_upload_import_local",
   "claudexor_upload_finalize",

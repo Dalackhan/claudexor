@@ -760,7 +760,9 @@ Finalize returns an immutable resource ID; run and turn requests accept only tho
 IDs, never local paths or base64. Every selected harness must declare a finite
 MIME, byte/count limit, and native transport for every mandatory attachment or
 preflight refuses the whole pool. Adapters verify the finalized digest immediately
-before building the vendor payload.
+before building the vendor payload. Recoverable keyed imports (`upload-import`),
+reusable `--attach-resource` refs and the MCP upload tools are specified in
+[`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md#document-ingress-and-resource-references).
 
 Keep ONE `AGENTS.md` at your project root as the source of truth for
 project-specific instructions. Claudexor bridges it to Claude Code automatically

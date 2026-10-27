@@ -20,9 +20,9 @@ import type { EngineStore } from "./store.js";
 
 /** The accepted upload-binding lifetime starts at release/expiry, never at upload creation. */
 export const UPLOAD_BINDING_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
-export type UploadOperation = "create" | "finalize";
+export type UploadOperation = "create" | "finalize" | "import";
 export interface LegacyUploadBinding {
-  operation: UploadOperation;
+  operation: Exclude<UploadOperation, "import">;
   key: string;
   requestDigest: string;
   result: ControlUploadStatus | ControlResource;
@@ -34,7 +34,7 @@ export function uploadKeyDigest(operation: UploadOperation, key: string): string
 /** Pure parser for the importer; serving lookup refuses a present invalid record. */
 export function parseLegacyUploadBinding(
   raw: unknown,
-  operation: UploadOperation,
+  operation: LegacyUploadBinding["operation"],
   key: string,
 ): LegacyUploadBinding | undefined {
   if (!raw || typeof raw !== "object") return undefined;
@@ -120,7 +120,8 @@ export class UploadBindings {
       );
     }
     const saved = lookupIdempotency(this.store, address, requestDigest);
-    if (saved) return saved;
+    // Keyed imports postdate the legacy file store; SQL is their only authority.
+    if (saved || operation === "import") return saved;
     const enabled = this.store
       .prepare("SELECT value FROM meta WHERE key='legacy_idempotency_dir'")
       .get() as { value: string } | undefined;
@@ -207,7 +208,7 @@ export class UploadBindings {
     );
   }
   private readLegacy(
-    operation: UploadOperation,
+    operation: LegacyUploadBinding["operation"],
     key: string,
     digest: string,
   ): LegacyUploadBinding | undefined {

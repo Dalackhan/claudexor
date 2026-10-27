@@ -250,6 +250,10 @@ final class ProseTextView: NSTextView {
 
     override func accessibilityChildren() -> [Any]? { (super.accessibilityChildren() ?? []) + codeAccessibilityActions() }
 
+    // The feed owns scrolling. NSTextView snaps a visible rect to whole lines, which on
+    // macOS 26.6 moved a following feed 4pt above its bottom right after opening.
+    override func adjustScroll(_ newVisible: NSRect) -> NSRect { newVisible }
+
     override func scrollWheel(with event: NSEvent) {
         if abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX), let feed = verticalScrollView {
             feed.scrollWheel(with: event)

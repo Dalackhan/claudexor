@@ -85,7 +85,11 @@ type ScriptedJobState = "waiting_for_input" | "running" | "succeeded" | "failed"
  * advances the script, cancel terminalizes it. Ephemeral port, never a real
  * daemon, no runner or vendor. */
 async function withScriptedSetupDaemon<T>(
-  script: { afterCreate: ScriptedJobState[]; onCancel?: ScriptedJobState },
+  script: {
+    afterCreate: ScriptedJobState[];
+    onCancel?: ScriptedJobState;
+    harness?: "cursor" | "grok";
+  },
   fn: (
     ensureDaemon: () => Promise<{ addr: { baseUrl: string; token: string } }>,
     calls: string[],
@@ -93,6 +97,7 @@ async function withScriptedSetupDaemon<T>(
   ) => Promise<T>,
 ): Promise<T> {
   const calls: string[] = [];
+  const harness = script.harness ?? "cursor";
   const requests: unknown[] = [];
   const steps = [...script.afterCreate];
   let state: ScriptedJobState = "waiting_for_input";
@@ -100,7 +105,7 @@ async function withScriptedSetupDaemon<T>(
     const terminal = !["waiting_for_input", "running"].includes(state);
     return {
       jobId: "setup-scripted-1",
-      harness: "cursor",
+      harness,
       action: "login",
       transport: "client_pty",
       state,
@@ -119,7 +124,7 @@ async function withScriptedSetupDaemon<T>(
         disclosure: {
           schemaVersion: 1,
           protocolVersion: 1,
-          harness: "cursor",
+          harness,
           requested: "subscription",
           requiredRoute: "vendor_native",
           requiredSource: "native_session",
@@ -368,13 +373,17 @@ describe("claudexor profiles login machine output", () => {
   const loginDeps = (
     ensureDaemon: () => Promise<{ addr: { baseUrl: string; token: string } }>,
     order: string[],
-    options: { receipt: boolean; interruptDuringAttach?: boolean },
+    options: { receipt: boolean; interruptDuringAttach?: boolean; harness?: "cursor" | "grok" },
   ) => {
     let interrupt: (() => void) | null = null;
     return {
       daemonGet: async () => {
         order.push("get");
-        return { profiles: [row("cursor", "work")], harnessAccounts: [], accountPools: [] };
+        return {
+          profiles: [row(options.harness ?? "cursor", "work")],
+          harnessAccounts: [],
+          accountPools: [],
+        };
       },
       ensureDaemon,
       attach: async (_addr: unknown, jobId: string) => {
@@ -394,6 +403,34 @@ describe("claudexor profiles login machine output", () => {
       pollMs: 1,
     };
   };
+
+  it("Grok profile login uses managed completion and re-reads fresh account status", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const order: string[] = [];
+    await withScriptedSetupDaemon(
+      { harness: "grok", afterCreate: ["running", "succeeded"] },
+      async (ensureDaemon, calls, requests) => {
+        expect(
+          await profilesCommandWithDeps(
+            parseArgs(["profiles", "login", "grok", "work"]),
+            false,
+            loginDeps(ensureDaemon, order, { receipt: true, harness: "grok" }),
+          ),
+        ).toBe(0);
+        expect(calls).toEqual(["create", "status", "status"]);
+        expect(requests).toEqual([
+          {
+            harness: "grok",
+            action: "login",
+            authRequest: "subscription",
+            profileId: "work",
+            transport: "client_pty",
+          },
+        ]);
+        expect(order).toEqual(["get", "attach setup-scripted-1", "unsubscribe", "get"]);
+      },
+    );
+  });
 
   it.each([
     ["succeeded", 0],

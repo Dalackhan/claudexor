@@ -488,6 +488,7 @@ const MUTATING_TOOLS = new Set([
   "claudexor_run_message",
   "claudexor_run_continue",
   "claudexor_run_time_limit",
+  "claudexor_next_message",
   "claudexor_answer_interaction",
   "claudexor_quarantine_journal",
   "claudexor_account_reset",
@@ -525,6 +526,8 @@ for (const readTool of [
   "claudexor_run_event_read",
   "claudexor_run_message",
   "claudexor_run_continue",
+  "claudexor_next_message",
+  "claudexor_next_message_read",
 ]) {
   const tool = tools.find((t) => t.name === readTool);
   if (!tool) {

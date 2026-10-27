@@ -26,6 +26,7 @@ export * from "./host-facts.js";
 export * from "./runtime-env.js";
 export * from "./npm-launch.js";
 export * from "./executable-inspection.js";
+export * from "./launch-refusal.js";
 export * from "./instructions.js";
 export * from "./browser-mcp.js";
 export * from "./process-identity.js";

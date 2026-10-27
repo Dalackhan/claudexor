@@ -77,6 +77,10 @@ export interface PreparedHarnessProcessing {
    * disclosure cannot disagree. Absent when the level is a separate flag the
    * adapter resolves at spawn, or when the harness has no effort control. */
   effort?: EffortResolution;
+  /** The account inventory this preparation read for the spec's own profile,
+   * env and cwd. The per-spawn gate resolves that spawn's observed model label
+   * against it and nothing else. Absent = no catalog proof. */
+  catalog?: HarnessModel[];
 }
 
 /**
@@ -204,6 +208,14 @@ export interface HarnessAdapter {
   continuity?: HarnessContinuityCapability;
   /** Adapter owns its native store format and safe retirement boundary. */
   nativeHomeLifetime?: NativeHomeLifetime;
+  /**
+   * The HOME this adapter's vendor child actually receives for `spec` when the
+   * adapter replaces the engine-scoped HOME with a named account's own
+   * Claudexor-owned HOME (a vendor store selected only by HOME). Applied
+   * attempt facts record this path. Absent or null: the child receives
+   * `spec.env.HOME`.
+   */
+  childHome?(spec: HarnessRunSpec): string | null;
 }
 
 /** A registry of available adapters keyed by harness id. */

@@ -113,9 +113,38 @@
                 "installed_version"
               ],
               "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "credential_source_unconfirmed"
+                },
+                "native_code": {
+                  "type": "string",
+                  "const": "grok_credential_source_unconfirmed"
+                },
+                "source": {
+                  "type": "string",
+                  "const": "grok_init"
+                },
+                "reported_source": {
+                  "type": "string",
+                  "maxLength": 80,
+                  "description": "Redacted credential source the vendor's startup frame reported."
+                }
+              },
+              "required": [
+                "kind",
+                "native_code",
+                "source",
+                "reported_source"
+              ],
+              "additionalProperties": false
             }
           ],
-          "description": "Vendor-attested request refusal that another account cannot repair; input and executable causes carry their own evidence."
+          "description": "Vendor-attested request refusal that stops retries and account rotation on its harness; input, executable and credential-source causes carry their own evidence."
         },
         "effort_resolution": {
           "type": "object",
@@ -819,6 +848,50 @@
           "type": "string",
           "description": "Model the harness actually reported using."
         },
+        "observed_model_catalog_match": {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S",
+              "description": "The observed model string, byte-identical to observed_model on the same event and to the matched entry's catalog label."
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S",
+              "description": "Id of the only catalog entry whose label is exactly `label`; no other entry has `label` as its id."
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "account_catalog"
+              ],
+              "description": "The model list the spawn's own account answered before the vendor process ran."
+            },
+            "profile_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Credential profile whose catalog answered (the spawn's profile); null = engine-default credentials."
+            }
+          },
+          "required": [
+            "label",
+            "id",
+            "source",
+            "profile_id"
+          ],
+          "additionalProperties": false,
+          "description": "Stamped by the per-spawn model gate from that spawn's own account catalog; adapters never set it, and the gate strips any value it did not compute."
+        },
         "credential_route": {
           "type": "string",
           "enum": [
@@ -881,6 +954,7 @@
                 "claude_oauth_usage",
                 "agy_command_usage",
                 "cursor_rate_limit",
+                "grok_rate_limit",
                 "claude_rate_limit_event",
                 "codex_app_server_event",
                 "codex_image_response"

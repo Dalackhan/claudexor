@@ -55,6 +55,18 @@ export function cursorProfilePathEnv(
   };
 }
 
+/** The HOME a native profile child receives (applied attempt evidence). An
+ * API-key row and the profile-less route keep the engine-scoped HOME. */
+export function cursorChildHome(spec: Pick<HarnessRunSpec, "credential_profile">): string | null {
+  const profile = spec.credential_profile;
+  if (profile?.credential_kind !== "config_dir_login" || !profile.isolation_locator) return null;
+  try {
+    return canonicalCursorProfileHome(profile.isolation_locator);
+  } catch {
+    return null;
+  }
+}
+
 /** Exact strict-profile run/probe environment; never bridges the host Keychain. */
 export function cursorProfileRunEnv(profileHome: string, specEnv: EnvMap = {}): EnvMap {
   const stateHome = specEnv["HOME"] || profileHome;

@@ -9,6 +9,7 @@ import { retentionChanges } from "./retention-changes.js";
 import { RetentionReferenceReader } from "./retention-reference-reader.js";
 import { commandRetentionReferences } from "./retention-command-references.js";
 import { retentionGenerations } from "./retention-generations.js";
+import { deferredRetentionReferences } from "./deferred-retention.js";
 
 export interface DiskRetentionReferences {
   /** Legacy exact inventory witness; current retirement rechecks changed owners. */
@@ -153,12 +154,19 @@ export async function diskRetentionReferences(
       .prepare("SELECT pid,run_id FROM interaction WHERE state='pending'")
       .all() as Array<{ pid: number; run_id: string }>)
       if (retained(row.pid)) reader.add(row.run_id);
+    const refreshDraft = await deferredRetentionReferences(
+      store,
+      retained,
+      (id) => reader.add(id),
+      signal,
+    );
     const commands = await commandRetentionReferences(store, retained, reader.runs, signal);
     const readChange = ({
       table,
       id,
     }: Parameters<Parameters<typeof changesObserved.current>[0]>[0]) => {
       if (table === "command") commands.refresh(id);
+      else if (table === "deferred_message") refreshDraft(id);
       else if (table === "blob") {
         const owner = store
           .prepare(

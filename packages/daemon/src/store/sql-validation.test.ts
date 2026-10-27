@@ -56,6 +56,7 @@ describe("SQL recovery uses canonical domain validators", () => {
     expect(result.status).toBe("ready");
     expect(result.projectionStatus.map((p) => p.name)).toEqual([
       "sqlite.integrity",
+      "deferred-messages",
       "commands",
       "threads",
       "interactions",

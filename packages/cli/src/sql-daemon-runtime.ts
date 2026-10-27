@@ -19,6 +19,7 @@ import { createDaemonAgentRunner } from "./daemon-agent-runner.js";
 import { createDelegationDaemonBinding } from "./delegation-daemon-binding.js";
 import { createHarnessMaintenance } from "./harness-maintenance-service.js";
 import { createModelServices } from "./model-services.js";
+import { createDeferredStartPreparation } from "./deferred-start-preparation.js";
 
 import { afterRetention, type RetentionRunner } from "./retention-lifetime.js";
 
@@ -70,6 +71,7 @@ export function createSqlDaemonRuntime(
     onRunTerminal: executors.onRunTerminal,
     onTurnEnqueueFailed: executors.onTurnEnqueueFailed,
     runner: executors.runner,
+    deferredStart: options.server.deferredStart ?? (() => executors.deferredStart),
   });
   bind(server);
   return {
@@ -137,6 +139,14 @@ export function createSqlDaemonExecutors(
       graph.threads.persistTerminal(jobId, event, telemetry),
   });
   return {
+    deferredStart: createDeferredStartPreparation({
+      resources: graph.resources,
+      accounts: graph.accounts,
+      commands: graph.commands.queries,
+      authority: options.authority,
+      quota: () => graph.quota,
+      runtimeConcurrencyCaps: options.runtimeConcurrencyCaps,
+    }),
     models,
     // Keep the bounded-pass signal through model cleanup and upload pruning.
     retention: (runner: RetentionRunner): RetentionRunner => {

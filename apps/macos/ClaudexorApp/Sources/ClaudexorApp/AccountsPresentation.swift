@@ -127,7 +127,7 @@ enum AccountsPresentation {
     /// config-dir/HOME account row (the engine's config_dir_login set). Under
     /// the unified account model every one of their accounts — including a
     /// migrated legacy default-store login — is a named registry row.
-    static let configDirLoginHarnessIds = ["agy", "claude", "codex", "cursor"]
+    static let configDirLoginHarnessIds = ["agy", "claude", "codex", "cursor", "grok"]
 
     /// The families the add-account flow may register, DERIVED from the set
     /// above so a fifth family is one entry there and nothing else. The picker

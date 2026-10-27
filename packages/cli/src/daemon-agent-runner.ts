@@ -19,6 +19,7 @@ import {
   restoreRecordedRunReviewRequest,
   type ResourceAttachmentRef,
   RuntimeConcurrencyCaps,
+  CapturedRunStart,
 } from "@claudexor/schema";
 import { assertPlanImplementReady } from "./plan-implement-readiness.js";
 import { buildRunOrchestrator } from "./run-orchestrator.js";
@@ -34,6 +35,7 @@ import { threadRunResumeInputs, threadContinuityContext } from "./thread-continu
 import { continuationForRun } from "./continue-from-run.js";
 import { createRunTimeLimit } from "./run-time-limit.js";
 import { exactRetryProcessingIntent } from "./retry-processing.js";
+import { oneShotRunInput } from "./one-shot-run-input.js";
 
 /** Agent commands alone own projects, tool execution, and conversation continuity.
  * Model commands are dispatched before entering this run-normalization boundary. */
@@ -70,9 +72,13 @@ export function createDaemonAgentRunner(deps: {
     // A thread-bound run's caller-owned root is revalidated by the thread
     // resolver below as a durable, retryable refusal on the exact turn.
     const threadBound = typeof (params as { threadId?: unknown } | null)?.threadId === "string";
-    const p = restoreRecordedRunReviewRequest(
-      normalizeRunStartRequest(params, { deferExecutionWorkspaceAvailability: threadBound }),
-    );
+    const { deferredDefaults, ...request } = CapturedRunStart.parse(params);
+    const p = {
+      ...restoreRecordedRunReviewRequest(
+        normalizeRunStartRequest(request, { deferExecutionWorkspaceAvailability: threadBound }),
+      ),
+      deferredDefaults,
+    };
     const continuation = continuationForRun(p, deps.commands);
     const mode = p.mode;
     const noProjectAsk = mode === "ask" && p.scope.kind === "none";
@@ -171,6 +177,7 @@ export function createDaemonAgentRunner(deps: {
     const timeLimit = createRunTimeLimit(p, ctx);
     return orchestrator
       .run({
+        ...oneShotRunInput(p),
         onTerminalPersist: deps.terminalPersistence?.(ctx.jobId),
         onEventPersist: (event) => {
           // The owning journal partition is the durable terminal
@@ -231,71 +238,19 @@ export function createDaemonAgentRunner(deps: {
                   : null,
               })
           : undefined,
-        authPreference: p.authPreference,
         credentialProfileId: requestedProfileId,
         parentRunId: p.parentRunId ?? null,
         delegatedFromRunId: p.delegatedFromRunId ?? null,
         delegationAdmissionId: ctx.jobId,
-        repoRoot,
-        prompt: String(p.prompt ?? ""),
-        planRef:
-          p.planRef && typeof p.planRef === "object"
-            ? (p.planRef as { runId: string; sha256: string; path: string })
-            : undefined,
-        instructions: typeof p.instructions === "string" ? p.instructions : undefined,
-        denyPaths: Array.isArray(p.denyPaths) ? p.denyPaths : undefined,
-        maxTurns: typeof p.maxTurns === "number" && p.maxTurns > 0 ? p.maxTurns : undefined,
-        outputSchema:
-          p.outputSchema && typeof p.outputSchema === "object" && !Array.isArray(p.outputSchema)
-            ? (p.outputSchema as Record<string, unknown>)
-            : undefined,
         attachments: turnId
           ? (threads.getTurn(turnId)?.attachments ?? [])
           : resources().resolve((p as { attachments?: ResourceAttachmentRef[] }).attachments),
-        browser: (p as { browser?: boolean }).browser === true,
-        mode: p.mode,
-        review: p.review,
-        contextMode: noProjectAsk
-          ? "off"
-          : p.scope.kind === "project"
-            ? p.scope.context
-            : undefined,
-        harnesses: p.harnesses,
-        primaryHarness: p.primaryHarness,
-        routingGoal: p.routingGoal,
-        n: p.n,
-        attempts: p.attempts ?? null,
-        untilClean: p.untilClean === true,
-        deepScan: p.deepScan === true,
-        create: p.create === true,
-        council: p.council === true,
-        delegate: p.delegate === true,
         // Belt descriptor (D32): built once per delegate run with the parent
         // budget snapshot; injected into agent lanes whose adapter can host
         // MCP servers. Null when delegate is off (no belt).
         delegationBelt,
-        synthesis: p.synthesis,
-        paidBudget: p.paidBudget,
-        access: p.access,
-        web: p.web ?? p.externalContextPolicy,
-        externalContextPolicy: p.externalContextPolicy ?? p.web,
-        model: p.model,
-        models: p.models,
-        effort: p.effort,
-        efforts: p.efforts,
-        processingPreference: p.processingPreference,
-        promptCacheTtl: p.promptCacheTtl,
         processingIntent: exactRetryProcessingIntent(p, deps.commands, repoRoot),
-        tests: Array.isArray(p.tests) ? p.tests : undefined,
-        protectedPathApprovals: Array.isArray(p.protectedPathApprovals)
-          ? p.protectedPathApprovals
-          : undefined,
         inPlace,
-        delegated: p.execution.delegated,
-        workspaceKind: p.execution.workspaceKind,
-        scopePaths: p.execution.scopePaths,
-        // Caller spelling; the engine's run admission owns canonicalization.
-        auxiliaryWritableRoots: p.execution.auxiliaryWritableRoots,
         signal: timeLimit.signal,
         onRunStart,
       })

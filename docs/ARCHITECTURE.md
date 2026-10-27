@@ -14,7 +14,7 @@ release gates, and integration notes live in
 ## 1. System Shape
 
 Claudexor is a local-first control plane over external coding harnesses:
-Codex CLI, Claude Code, Cursor CLI, OpenCode, raw APIs, and future adapters.
+Codex CLI, Claude Code, Cursor CLI, OpenCode, Grok Build, raw APIs, and future adapters.
 A harness is not a role. Roles are intents (`explain`, `plan`, `spec`,
 `implement`, `create_from_scratch`, `repair`, `review`, `verify`,
 `synthesize`, `audit`).
@@ -162,7 +162,7 @@ at every wire boundary.
   `RunFacts` projection from canonical run artifacts.
 - `packages/gateway`: harness discovery and capability/intent gating (route
   selection itself lives in the budget router and orchestrator routing).
-- `packages/harness-codex|claude|cursor|opencode|agy|acp|raw-api|fake`: adapters that
+- `packages/harness-codex|claude|cursor|opencode|agy|grok|acp|raw-api|fake`: adapters that
   translate native CLI/API streams into typed `HarnessEvent`s. The `fake-*` kinds
   are deterministic offline test fixtures (incl. `fake-implement`, which writes a
   real worktree file); they are explicit-`--harness` only and never enter
@@ -421,6 +421,23 @@ width 4, capped by `runtime.max_deep_scan_width`, default 8; see
 [Main Execution Paths](#6-main-execution-paths)). Best-of-N expands the eligible pool over N candidates. Convergence rotates compatible
 harnesses when a stall signature persists.
 
+Ordinary single-candidate Auto Agent runs requesting Browser project the
+already-resolved Browser receipts onto effective lanes before account quota
+preflight, processing preparation, ranking and width selection. This uses
+`RequestRequirementsResolver`; it never widens access or web policy. Request,
+Settings and inherited thread pools, credential pins, explicitly supplied or
+inherited primaries, multi-candidate runs and convergence keep their existing
+selection semantics. A configured default primary remains a bias among eligible
+lanes; if Browser compatibility excludes it, `route.primary.diverged` reports
+`capability_incompatible`, and `route.pool.degraded` records the actual access,
+web or capability cause. Ordinary account readiness, quota and billing checks
+remain in force; a later refusal never restores an incompatible lane. The
+selected-pool Browser assertion remains the final backstop. The macOS app copies
+a Settings primary into a new thread's sticky primary, which remains outside
+this Auto projection. The run-detail timeline exposes the exact drop detail;
+the app's primary note uses the coarse reason, while human CLI progress names
+only the omitted harnesses (JSON/NDJSON retains the complete events).
+
 Route resolution is honest about membership. An EXPLICITLY selected lane that
 becomes ineligible (unavailable, no manifest, wrong access profile, incompatible
 web policy, unsupported attachment, or unable to perform the intent) is a loud
@@ -658,6 +675,42 @@ never injected assistant messages. These fields add no operation, generation,
 retry, account-selection or budget authority. A rejected final-route preference
 ends that attempt without account rotation, model/harness fallback or repair retry;
 ordinary availability failover retains its existing policy.
+
+Cursor's stream names its model by the vendor's display label (`init.model`,
+for example `GPT-5.5 High`), while runs request and send the listed id
+(`gpt-5.5-high`). `attempts[].observed_model` keeps the raw string. Beside it,
+`attempts[].observed_model_catalog_match` records
+`{label, id, source: account_catalog, profile_id}` when the account catalog
+that the same spawn's processing preparation already read lists exactly one
+live row whose label is byte-identical to that string and no other row uses the
+string as its id; `profile_id` names the account whose catalog answered (null
+for engine-default credentials). The per-spawn model gate is the only author:
+it stamps `HarnessEvent.observed_model_catalog_match` on that spawn's events of
+the same profile and strips any value it did not compute. The attempt takes the
+proof only from the event that set its first-wins `observed_model`, so a later
+try, another account or the requested model never supplies it, and the label
+is never trimmed, case-folded or fuzzy-matched. The proof then lasts only while
+that event's native try is the attempt's latest and no later event names
+another model: when the Agent or Ask/report loop starts another try of the
+same attempt (an in-run continuation, a transient retry or a rotation to
+another account), the proof is dropped, because the later try may run another
+model or report none. A retried attempt therefore stays unverified even when
+every try reported the same label; only when no earlier try reported any model
+does the first try that reports one supply both the string and its proof. The
+`run.continuity` receipt still names each continued try's own model.
+`observed_model` itself stays first-wins and can name an earlier try's model,
+a pre-existing limit shared by harnesses whose streams report listed ids. A
+reader verifying the attempt's model still requires `label` to equal
+`observed_model` and `profile_id` to equal the attempt's last-wins
+`profile_id`. Every other case leaves the field null and the model unverified: an
+empty or failed catalog read, an unmatched or duplicated label, a label that is
+another row's id, and a harness whose preparation supplies no catalog. Internal
+reviewer and continuity-summary spawns run outside the per-spawn gate, so their
+observed models carry no proof. A null field only means no proof exists, and
+readers do not treat it as a mismatch. Reusing the preparation's read adds no
+vendor call; admission, routing, inventory-absence policy and
+`auth_route.model_mismatch`, which still compares the raw string with the sent
+id, are unchanged.
 
 Codex raw model calls expose ordinary inference efforts, while the native CLI's
 `ultra` selector also owns automatic task delegation. The raw adapter excludes
@@ -939,7 +992,10 @@ and does not alter profile selection or paid-route policy: an already explicit
 pin or durable thread binding may keep its exact config-dir route alive for
 this bounded grace, while unpinned pool/rotation selection never consumes it.
 This absorbs a probe failure only; it does not claim to serialize the vendor's
-OAuth refresh or to repair a revoked credential.
+OAuth refresh or to repair a revoked credential. A spawn that fails for the
+file's format (`EFTYPE`/`ENOEXEC`, including a launch refused before spawning)
+is not a transport failure: it is reported once as a probe failure, with no
+retry and no stale observation.
 Cursor's row status probe (`cursor-agent status` in a row's file-store HOME)
 is coordinated the same way: concurrent reads of one row store — keyed by the
 auth-selecting `HOME`/`USERPROFILE`/`XDG_CONFIG_HOME`/`APPDATA`, so admission
@@ -1142,13 +1198,14 @@ identity or an OS-user-scoped binding:
 secret_ref, enabled}`. There is no separate "default"/"CLI login" account
 type. `config_dir_login` rows point at a Claudexor-owned scoped vendor-state
 root (`CLAUDE_CONFIG_DIR` / `CODEX_HOME` / the Cursor file-store HOME / the agy
-HOME, canonical absolute path); the effective platform policy may keep the
+HOME / the Grok profile HOME with `GROK_HOME=<HOME>/.grok`, canonical absolute
+path); the effective platform policy may keep the
 physical credential at OS-user scope. The Claudexor-owned LEGACY native dirs
 are legal locators —
 the startup migration registers a detected claude/codex default-store login as
 the ordinary `claude-default`/`codex-default` row without moving bytes; the
-vendor's ordinary host stores (~/.claude, ~/.codex, the host Cursor Keychain)
-stay outside the owned root and are never locators.
+vendor's ordinary host stores (~/.claude, ~/.codex, the host Cursor Keychain,
+~/.grok) stay outside the owned root and are never locators.
 `oauth_token`/`api_key` rows point at a namespaced
 secret-store name (`claude_oauth:work`, `anthropic:acc2`, …) — the namespace
 is REQUIRED (the schema refuses a bare engine-default slot like `anthropic`,
@@ -2678,6 +2735,8 @@ visibility, not a permanent roster. Reads add no execution or approval authority
 - `GET /v2/runs/:id/run-again`
 - `GET /v2/runs/:id/time-limit`
 - `PATCH /v2/runs/:id/time-limit`
+- `POST /v2/runs/next-message`
+- `GET /v2/runs/next-message/:id`
 - `POST /v2/runs/wait-many`
 - `GET /v2/secrets`
 - `POST /v2/secrets`
@@ -2887,8 +2946,8 @@ not retry automatically.
   bodies stay in the engine store, run trees
   follow the run retention below, native sessions that a route keeps outside
   the lane home stay in the agent's own storage (Agent turns, and Codex
-  config-dir login profiles and Antigravity, which keep sessions in the
-  account's directory), and project files are untouched. (ACP's view of
+  config-dir login profiles, Antigravity and Grok Build, which keep sessions
+  in the account's directory), and project files are untouched. (ACP's view of
   trashed threads is in INTEGRATIONS.)
 - Refused turns are honest end-to-end: when a turn's run dies BEFORE it starts
   (the trust gate refusing `access: full`, preflight validation, an enqueue
@@ -3766,6 +3825,30 @@ kept only for cold import and an independent frozen copy kept for tests.
   No automatic rebuild is added. Earlier experimental binaries whose forced-index
   queries lack the tagged predicate cannot query the narrower indexes. Do not swap
   experimental binaries against the same store; the complete-backup rule applies.
+- Schema version 4 adds the command-adjacent `deferred_message` table and its
+  active-slot, predecessor, successor and blob-reference indexes through an
+  atomic 3→4 migration. Older readers refuse the upgraded file. A waiting or
+  held draft reserves its canonical predecessor job's successor claim; accepted
+  command parameters stay immutable. Draft mutations use the existing
+  idempotency and event owners. `prepareAcceptance`/`acceptInTx` lets acceptance
+  and a dispatched receipt commit together without nested transactions. Pending
+  drafts retain predecessor evidence; command pruning removes cleared or
+  dispatched receipts with their bindings. Restart holds waiting drafts;
+  archive/quarantine holds prevent restoration from rearming them. Delegate
+  child targets and belt callers are refused with `delegation_forbidden`.
+  Canonical start preparation captures execution defaults once, including
+  explicit versus Auto/unpinned routing intent; enabled accounts, trust,
+  capabilities and quotas remain current admission gates. Mutation and runner
+  settlement events evaluate the exact revision after active-slot release and
+  process-custody proof, then publish only the committed ordinary successor to
+  the existing queue. Late Stop/shutdown and generation/revision/reservation
+  fences are rechecked inside promotion. Notification ambiguity recovers the
+  same committed handle. There is no timer or retry scheduler. Failed or
+  incompatible typed terminals hold; native `willRetry` progress stays waiting.
+  HTTP/CLI/MCP controls and addressed projections are wired; public Stop holds
+  a waiting draft whatever the predecessor's lifecycle (`POST /v2/runs/:id/control`), and
+  bounded reads add `controls`, the captured values by origin with
+  `capturedAt`.
 - The flusher worker owns the power-loss barrier. Every 200 ms it fsyncs each
   directory registered since the previous pass, reads `data_version`, runs a
   PASSIVE checkpoint for space, and — whenever anything was committed since
@@ -4014,7 +4097,7 @@ fails. Answer delivery remains the same commit-before-delivery child endpoint ab
 parent-side proxy or app-local interaction state is introduced.
 
 `/v2/setup/jobs` (create / status / snapshot / events / cancel / reconcile / extend)
-is the native-login setup surface for Codex, Claude, Cursor, and Antigravity.
+is the native-login setup surface for Codex, Claude, Cursor, Antigravity, and Grok Build.
 The same effective setup-login projector feeds `/v2/harnesses`,
 `/v2/agent-capabilities`, and create admission. Its current producers always
 emit their own `setupLogin` property; omission remains a legacy-wire fact.
@@ -4215,7 +4298,22 @@ of local fake apply state.
 `POST /v2/runs/:id/control` is capability-based. The implemented verb is `cancel`:
 daemon abort closes the active harness stream and the process helper sends a
 cooperative interrupt with hard-kill fallback. (The former `interrupt` control
-kind was deleted as a fake knob — it mapped to the same daemon cancel.) Live
+kind was deleted as a fake knob — it mapped to the same daemon cancel.) For a
+run that already ended, the route asks the daemon (`deferredMessageStop`) to
+hold the run's waiting next message; for a live run the daemon cancel does it
+right after the ordinary stop and returns the same report. The hold is one
+synchronous step that promotion rechecks inside its acceptance transaction. The
+daemon fences the draft in memory before it writes the hold, so a hold that
+cannot be saved never sends the draft: a live run is still signalled, a restart
+holds the draft, and the route answers 503 `next_message_hold_failed` instead
+of reporting it held. Every Stop or cancel retries a hold that is not saved
+yet. Daemon shutdown sets its closing fence first, aborts and drains runners
+even when its own holds cannot be saved, and reports such a hold as an
+unconfirmed drain. A
+held draft is reported as `deferredMessage`; a dispatched one makes a terminal
+run answer 409 `next_message_dispatched` with the successor handles, and that
+successor is not cancelled. Without a pending draft a terminal run keeps the
+plain 409. Live
 input into a running attempt is its own typed surface,
 `POST /v2/runs/:id/messages`, described under "Live messages into a running run"
 below; the former `/runs/:id/input` endpoint and `RunInput` DTO stay deleted (a
@@ -4446,7 +4544,7 @@ refused` lifecycle state before consumption is typed `live_input_refused`
 without failing the run. A one-shot argv run (no interaction channel; never
 the daemon's shape) has no live session and answers `not_active`/`no_live_session`. Cursor declares `none` (no
 persistent live-input channel: its prompt is piped once, then EOF); agy,
-opencode, copilot and raw-api declare `none`. MCP exposes the existing channel
+grok, opencode, copilot and raw-api declare `none`. MCP exposes the existing channel
 through `claudexor_run_message` (see [MCP controls](INTEGRATIONS.md#observing-and-directing-an-existing-run)).
 There is no CLI message verb yet (`claudexor follow` is the later surface), and the
 ACP server's `session/prompt` on an active session is refused rather than
@@ -5155,7 +5253,13 @@ recorded oversized-input refusal remains separate: the app-server preserves
 RPC data and emits `request_refusal`, which reaches final failure as
 `input_too_large` with Unicode-scalar measurements and no quota reset. It stops
 account rotation, same-harness fallback-model and convergence retries; ordinary
-failover remains unchanged. `capability_profile.input_limits` declares the
+failover remains unchanged. Grok's startup frame reporting an `apiKeySource`
+other than `oauth` (session login) is the `credential_source_unconfirmed`
+request refusal with the reported value and stops the same paths, also when
+that frame contradicts the scoped tool policy: each further launch could send
+a paid request before its own startup frame is read. A tool-policy
+contradiction alone stays an ordinary pre-progress failure, and an absent
+field is disclosed as unknown; neither is a refusal. `capability_profile.input_limits` declares the
 verified native turn-text bound only on the observed CLI version. The catalog's
 `inputLimits` entry's `askPromptBudget` subtracts shared thread-pointer framing for ordinary
 ASK initial attempts (`prompt-framing.ts`), including thread turns. Other shapes
@@ -5778,7 +5882,33 @@ manifest and permit. Ordinary missing PATH candidates are silent; a present
 broken preferred entry remains diagnostic even when a usable fallback is found.
 Explicit executable overrides never select a different installation implicitly.
 Installer success still requires the declared version to execute, so a placeholder
-file left by an incomplete package install cannot certify success. The Windows
+file left by an incomplete package install cannot certify success.
+A `.exe`/`.com` the resolver would start (a PATH candidate, a standard launcher's
+declared native target, or a Node interpreter) must have the PE minimum shape: `MZ`,
+then `PE\0\0` at the header's offset, read through the descriptor that supplied
+the identity facts. A readable file without it, such as the npm placeholder left
+when the package's postinstall did not run or a zero-filled download, is never
+started. A skipped candidate or launcher target is named and a later healthy
+candidate is used; a broken `node.exe` is passed over for a later healthy
+interpreter without a diagnostic and is named only when none remains. When nothing
+is selected, spawning the bare name would let libuv search again, the cwd first and
+then PATH. The launch is refused before any process starts when the resolver proved
+the install broken, so that search cannot start a file nobody selected (an image in
+the cwd or under a relative PATH entry), or when the search would reach a proven
+non-image. The refusal carries the spawn error the OS reports for that file
+(`EFTYPE`) and its message leads with the file and the verdict. Claude doctor,
+discovery, the broken-install advisory and bounded auth-status detail name the
+unlaunchable file; Codex appends that detail to its missing-CLI summary. Windows
+PATH is read as libuv reads it: normalization preserves quoted entries containing
+`;`, an unclosed quote consumes the remaining PATH, a child env without PATH
+searches the daemon's own PATH, and an empty PATH searches no directory. On every platform, relative PATH
+entries resolve at the daemon's cwd, for a run and for the probes that vouch for its
+binary alike, and the run is given the selected file's absolute path; an explicitly
+relative override resolves from the child's cwd. The shape is not loader validity:
+an image for another architecture or with damaged headers still reaches the OS, an
+unreadable file or failed read is not proof. An incomplete header during an in-place
+update can be refused for that inspection; the next resolution rechecks it.
+POSIX executability rules are unchanged. The Windows
 smoke is `scripts/windows-local-install-smoke.mjs`; native Windows login and Agent
 execution are separate acceptance claims, not consequences of package resolution.
 The omitted target remains `remote`; the SSH installer's destination and PATH
@@ -6371,7 +6501,7 @@ code touching one of these areas must honor it or change it explicitly here.
 - A credential profile cannot bootstrap a raw-API instance whose own key is
   absent: raw-API discovery is key-gated (an instance without its configured
   key is not a route, so no manifest exists for the profile probe to
-  override). CLI harnesses (agy/claude/codex/cursor/opencode) discover
+  override). CLI harnesses (agy/claude/codex/cursor/grok/opencode) discover
   credential-neutrally, so their profile probes CAN admit a route past a
   logged-out default store; for raw-API, set the instance key (env or its
   managed slot) and use the profile for per-run key selection within the

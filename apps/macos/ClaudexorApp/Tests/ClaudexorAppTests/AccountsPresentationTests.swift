@@ -72,6 +72,17 @@ import Testing
             .contains(AccountsPresentation.defaultAddHarnessId))
     }
 
+    /// Grok Build accounts are named rows like Antigravity: addable from the
+    /// popover under the product name, never a profile-less bootstrap login.
+    @Test func grokIsAddableAsANamedAccountOnly() {
+        let grok = HarnessFamily(rawValue: "grok")
+        #expect(AccountsPresentation.addableFamilies.contains(grok))
+        #expect(AccountsPresentation.addAccountCaption(family: nil).contains("Grok Build"))
+        #expect(AccountsPresentation.addAccountCaption(family: grok).contains("Grok Build"))
+        #expect(SetupHarness(rawValue: grok.setupHarnessId) == .grok)
+        #expect(!AccountsPresentation.supportsBootstrapLogin(grok))
+    }
+
     /// Oxford list: a future two-family set must not read "A, or B".
     @Test func addableFamilyListReadsAsProse() {
         #expect(AccountsPresentation.listed([]) == "")

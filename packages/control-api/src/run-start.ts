@@ -32,6 +32,7 @@ import {
 } from "@claudexor/workspace";
 import type { DaemonFacadeClient } from "./daemon-server.js";
 import { assertContinuationAdmissible, resolveContinuationBody } from "./run-continuation-start.js";
+import { prepareRunStart } from "./run-start-preparation.js";
 export { acceptedTaskGroupReceipt, unboundRunStartResponse } from "./run-start-receipt.js";
 
 const NO_PROJECT_ROOT = noProjectRepoRoot();
@@ -421,11 +422,7 @@ export async function handleRunCreate(
           throw retiredAccessProfileError();
         }
         await assertContinuationAdmissible(ctx.daemon, recorded);
-        params = normalizeRunStart(ControlRunStartRequest.parse(recorded));
-        await ctx.validateResources?.(params.attachments ?? []);
-        // A threadId is refused below; requirements would first read its pin.
-        if (params.threadId) return;
-        await ctx.preflightRunRequirements?.(params);
+        params = await prepareRunStart(recorded, ctx);
       },
     );
     if (prior) return ctx.respondToAcceptedJob(res, prior.id);

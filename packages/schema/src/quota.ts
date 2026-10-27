@@ -13,6 +13,7 @@ export const QuotaSource = z
     "claude_oauth_usage",
     "agy_command_usage",
     "cursor_rate_limit",
+    "grok_rate_limit",
     "claude_rate_limit_event",
     "codex_app_server_event",
     "codex_image_response",
@@ -88,6 +89,12 @@ export const QUOTA_SOURCE_TRAITS = {
     refreshDemandHarness: null,
     producedByRefresher: false,
   },
+  grok_rate_limit: {
+    snapshotMode: "full",
+    vendorAuthenticated: false,
+    refreshDemandHarness: null,
+    producedByRefresher: false,
+  },
   claude_rate_limit_event: {
     snapshotMode: "window",
     // Measured quota telemetry is not a standalone fresh authentication receipt.
@@ -123,6 +130,7 @@ export const REACTIVE_COOLDOWN_SOURCE: Partial<Record<string, QuotaSource>> = {
   codex: "codex_rollout",
   claude: "claude_api_retry",
   cursor: "cursor_rate_limit",
+  grok: "grok_rate_limit",
 };
 
 /** Durable-journal source label the strict v3.2.0 rollback runtime can parse.
@@ -134,7 +142,9 @@ export const REACTIVE_COOLDOWN_SOURCE: Partial<Record<string, QuotaSource>> = {
  * v3.2.0 but predates this mapping: remapping it now would orphan its already
  * journaled prepare/commit hashes, so it stays a disclosed rollback residual. */
 export function legacyV320QuotaSource(source: QuotaSource): QuotaSource {
-  return source === "cursor_rate_limit" ? "claude_api_retry" : source;
+  return source === "cursor_rate_limit" || source === "grok_rate_limit"
+    ? "claude_api_retry"
+    : source;
 }
 
 export function quotaRefreshDemandHarnesses(): Array<"claude" | "codex" | "agy"> {

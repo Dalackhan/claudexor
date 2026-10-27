@@ -26,7 +26,18 @@ export function applyCommandPruneInTx(sql: SqlWriteContext, rows: readonly Prune
   requireTransaction(sql);
   const released: string[] = [];
   for (const row of rows) {
+    if (draftRetainsCommand(sql, row.id)) continue;
     const keys = [`c:${row.id}:a`, `c:${row.id}:u`];
+    const drafts = sql
+      .prepare(
+        "DELETE FROM deferred_message WHERE pid=? AND predecessor_job_id=? AND state IN ('cleared','dispatched') RETURNING id,body_sha",
+      )
+      .all(row.pid, row.id) as Array<{ id: string; body_sha: string | null }>;
+    for (const draft of drafts) {
+      keys.push(`draft:${draft.id}`);
+      if (draft.body_sha) released.push(draft.body_sha);
+      deleteTargetIdempotencyInTx(sql, "deferred_message", row.pid, draft.id);
+    }
     if (row.run_id) {
       keys.push(
         `r:${row.run_id}:c`,
@@ -77,6 +88,7 @@ export class SqlCommandPruner {
       retentionMs,
       cap,
       exempt: (candidate) =>
+        draftRetainsCommand(this.store, candidate.id) ||
         !!(
           candidate.runDir &&
           candidate.runId &&
@@ -167,4 +179,13 @@ export class SqlCommandPruner {
   private collect(digests: readonly string[]): void {
     collectReleasedBodies(this.store, this.blobs, digests, this.options.log);
   }
+}
+
+function draftRetainsCommand(sql: Pick<SqlWriteContext, "prepare">, id: string): boolean {
+  return !!sql
+    .prepare(
+      `SELECT 1 FROM deferred_message WHERE predecessor_job_id=? AND state IN ('waiting','held')
+    UNION ALL SELECT 1 FROM deferred_message WHERE successor_job_id=? LIMIT 1`,
+    )
+    .get(id, id);
 }

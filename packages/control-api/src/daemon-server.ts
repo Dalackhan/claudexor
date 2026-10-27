@@ -2,6 +2,7 @@ import { requestGone } from "./request-liveness.js";
 import { measureSync } from "@claudexor/util";
 import { trackRequest } from "./request-timing.js";
 import { serveRunDetail } from "./run-detail-route.js";
+import { handleDeferredMessageRoute } from "./deferred-message-routes.js";
 import { handleAccountResourceRoute } from "./account-resource-routes.js";
 import { projectProcessScope } from "./run-detail-scope.js";
 import { CONTROL_STORE_IDENTITY_HEADER, ControlAccountResetRequest } from "@claudexor/schema";
@@ -786,6 +787,7 @@ export class DaemonControlApiServer {
         this.requestError(response, error, fallback),
     };
     for (const route of [
+      handleDeferredMessageRoute,
       handleRunWaitManyRoute,
       handleTaskGroupRunsRoute,
       handleResourceRoute,
@@ -904,6 +906,7 @@ export class DaemonControlApiServer {
       return serveRunDetail(
         {
           findRun: (id) => this.findRun(id),
+          deferred: this.opts.daemon.deferredMessageProjection?.bind(this.opts.daemon),
           children: (id) => this.opts.daemon.list({ delegatedFromRunId: id }),
           summarize: (rec) => this.summarizeRunOrDiagnostic(rec),
           project: (rec, cursor, children) =>

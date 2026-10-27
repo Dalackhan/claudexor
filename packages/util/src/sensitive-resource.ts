@@ -99,6 +99,9 @@ const CREDENTIAL_STORE_PARTS = new Set([
   // fallback state may include a token file, while Windows primary auth may
   // live in the OS keychain. Every profile HOME still contains this state root.
   ".gemini",
+  // Grok Build keeps auth, config, session history and logs under this root
+  // (GROK_HOME); a profile HOME and a project `.grok/` both carry it.
+  ".grok",
   ".gnupg",
   ".kube",
   ".openai",

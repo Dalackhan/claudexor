@@ -107,6 +107,21 @@ describe("ScopeAtlas", () => {
     expect(byPath["notes.txt"]).toBe("sensitive");
     expect(res.missingMandatory).toContain(".env");
   });
+
+  it("excludes Grok native state by path even when its content matches no signature", async () => {
+    const repo = tmp();
+    mkdirSync(join(repo, ".grok", "sessions"), { recursive: true });
+    // Opaque placeholder: no token-shaped content for the signature scan to find.
+    writeFileSync(join(repo, ".grok", "auth.json"), '{"session":"opaque-placeholder"}\n');
+    writeFileSync(join(repo, ".grok", "sessions", "s.jsonl"), '{"role":"user"}\n');
+    writeFileSync(join(repo, "notes.txt"), "ordinary prose\n");
+
+    const res = await buildScopeAtlas(repo, { tokenLimit: 100_000 });
+    const byPath = Object.fromEntries(res.atlas.map((entry) => [entry.path, entry.disposition]));
+    expect(byPath[".grok/auth.json"]).toBe("sensitive");
+    expect(byPath[".grok/sessions/s.jsonl"]).toBe("sensitive");
+    expect(byPath["notes.txt"]).toBe("full");
+  });
 });
 
 describe("AGENTS.md discovery", () => {

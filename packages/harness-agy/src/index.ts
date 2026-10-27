@@ -29,6 +29,7 @@ import { createAgyNativeCompletion } from "./native-completion.js";
 import { isAgyProfileKeychainUnsafe, prepareAgyProfileKeychain } from "./keychain.js";
 import {
   AGY_BIN,
+  agyChildHome,
   defaultAgyModelProbe,
   probeAgyCredentialProfile,
   resolveAgyProfileRoute,
@@ -252,6 +253,7 @@ export function createAgyAdapter(options: AgyAdapterOptions = {}): HarnessAdapte
       reason: "Agy native session storage has no proven independent pruning contract.",
     },
     id: "agy",
+    childHome: agyChildHome,
     // The level is a token of the model id: `prepareProcessing` selects the
     // listed variant of the requested model's family from the pinned
     // account's live inventory and returns the effort receipt with it.

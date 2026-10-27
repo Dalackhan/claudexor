@@ -1,4 +1,6 @@
-import { resolveCandidateHarnessIds } from "./route-admission.js";
+import { assertCandidatePoolAvailable, resolveCandidateHarnessIds } from "./route-admission.js";
+import { projectCandidateBrowserPool } from "./candidate-browser.js";
+import { emitPrimaryDivergence } from "./primary-divergence.js";
 import {
   applyWorkEnvelope,
   promptWithPointers as renderPromptWithPointers,
@@ -174,7 +176,9 @@ import {
   strictifyOutputSchema,
   estimateEffectiveAuthRoute,
 } from "@claudexor/schema";
-import { globalConfigDir, loadConfig } from "@claudexor/config";
+import { globalConfigDir } from "@claudexor/config";
+import { executionRunConfig } from "./run-defaults.js";
+import { preflightOneShot } from "./one-shot-preflight.js";
 import type {
   AdapterRegistry,
   CredentialExecutionObserverFactory,
@@ -249,7 +253,6 @@ import {
   reviewerTimeoutMs,
   harnessInactivityTimeoutMs,
   observeAuthSwitch,
-  emitPrimaryDivergence,
   emitPoolDegraded,
   deliveryRefusalFailure,
   winnerNeedsHuman,
@@ -289,7 +292,7 @@ import {
   unrecoveredToolErrors,
   webUnsatisfied,
 } from "./attemptTelemetry.js";
-import { newAttemptOutputMarkers } from "./attemptOutputMarkers.js";
+import { beginNativeRetry } from "./native-retry-telemetry.js";
 import * as delegateFailure from "./delegationFailure.js";
 import * as secretDiff from "./secretDiff.js";
 import {
@@ -369,6 +372,7 @@ import {
 } from "@claudexor/util";
 
 export interface OrchestratorDeps {
+  executionDefaults?: import("@claudexor/schema").RunDefaultsSnapshot;
   registry: AdapterRegistry;
   /** Daemon-lifetime Delegate family budget authority. */
   delegationBudgetAuthority?: DelegationBudgetAuthority;
@@ -1200,7 +1204,7 @@ export class Orchestrator {
       ) ?? [],
     );
     const policy = input.web ?? input.externalContextPolicy ?? "auto";
-    const pool: RoutedAdapter[] = [];
+    let pool: RoutedAdapter[] = [];
     const dropped: string[] = [];
     // Every auto-pool drop is recorded with its typed STAGE so the disclosure preserves the
     // real cause instead of collapsing to one reason.
@@ -1484,23 +1488,17 @@ export class Orchestrator {
         );
       }
     }
-    if (pool.length === 0) {
-      if (
-        droppedLanes.length > 0 &&
-        droppedLanes.every((l) => auxiliaryUnsupported.has(l.harnessId))
-      )
-        throw new AuxiliaryWritableRootsUnsupportedError(
-          `no harness can apply the requested auxiliary writable roots (${dropped.join(", ")})`,
-        );
-      if (droppedLanes.length > 0 && droppedLanes.every((lane) => lane.stage === "access")) {
-        throw new AccessProfileIncompatibleError(
-          `no harness can enforce the requested access profile (${droppedLanes.map((lane) => lane.detail).join(", ")})`,
-        );
-      }
-      throw new HarnessUnavailableError(
-        `no harness can perform '${intent}' for this mode${dropped.length ? ` (skipped: ${dropped.join(", ")})` : ""}`,
-      );
-    }
+    assertCandidatePoolAvailable(pool, intent, droppedLanes, auxiliaryUnsupported);
+    const browserOmissions: string[] = [];
+    pool = projectCandidateBrowserPool(
+      input,
+      pool,
+      this.requestRequirements,
+      (id, stage, detail) => {
+        browserOmissions.push(id);
+        dropLane(id, stage, detail);
+      },
+    );
     // Quota admission resolves the spawning account before budget routing;
     // the first spec build reuses that exact profile.
     const quotaPrepared = await Promise.all(
@@ -1585,7 +1583,7 @@ export class Orchestrator {
         `no harness remains eligible for '${intent}' after budget and quota routing`,
       );
     }
-    emitPrimaryDivergence(log, input.primaryHarness, ordered, pool, dropped);
+    emitPrimaryDivergence(log, input.primaryHarness, ordered, pool, dropped, browserOmissions);
     const n = input.n ?? ordered.length;
     const selectionOrder = ordered;
     const out: RoutedAdapter[] = [];
@@ -1950,19 +1948,16 @@ export class Orchestrator {
     return new Set(reviewers.map((r) => r.providerFamily)).size >= 2;
   }
 
-  private config(repoRoot: string): ReturnType<typeof loadConfig> {
-    return loadConfig(repoRoot);
-  }
+  private readonly config = (root: string) => executionRunConfig(root, this.deps.executionDefaults);
+  readonly preflightOneShot = (input: RunInput) =>
+    preflightOneShot(input, this.deps, this.resolveCandidateAdapters.bind(this));
 
   private projectConfig(repoRoot: string): ProjectConfig {
     return this.config(repoRoot).project;
   }
 
   private buildContract(input: RunInput, taskId: string, mode: ModeKind): ActiveTaskContract {
-    return buildTaskContract(input, taskId, mode, {
-      paidBudget: this.deps.paidBudget,
-      routingGoal: this.deps.routingGoal,
-    });
+    return buildTaskContract(input, taskId, mode, this.deps);
   }
 
   /**
@@ -2475,7 +2470,7 @@ export class Orchestrator {
     // must name the profile that ran, never the one the request asked for.
     const appliedNow = () =>
       appliedAttemptFacts(
-        followSpecHome(harnessHome, spec, runInput?.credentialProfileId ?? null),
+        followSpecHome(harnessHome, spec, runInput?.credentialProfileId ?? null, adapter),
         spec.access,
         spec.credential_profile?.profile_id ?? runInput?.credentialProfileId ?? null,
       );
@@ -2534,10 +2529,10 @@ export class Orchestrator {
     try {
       for (let nativeTry = 0; !signal?.aborted; nativeTry += 1) {
         currentCapture = undefined;
-        // A3 per-try isolation: neither output nor progress markers leak across tries.
+        // A3 per-try isolation: no output, progress marker or model proof crosses tries.
         if (nativeTry > 0) {
           answer = new secretDiff.CountedAnswerAssembly();
-          telemetry.outputMarkers = newAttemptOutputMarkers();
+          beginNativeRetry(telemetry);
         }
         const clearFileBackedContext = stageFileBackedContext(
           envelope.worktree_path,
@@ -6733,11 +6728,11 @@ export class Orchestrator {
       let poolExhausted: Error | null = null; // A5: typed pool-exhausted refusal
       try {
         for (let nativeTry = 0; !input.signal?.aborted; nativeTry += 1) {
-          // A3 per-try isolation (candidate-lane parity): neither a failed try's
-          // output nor its progress markers leak into the next try's evidence.
+          // A3 per-try isolation (candidate-lane parity): a failed try's output,
+          // progress markers and model proof never carry into the next try.
           if (nativeTry > 0) {
             answer = new secretDiff.CountedAnswerAssembly();
-            telemetry.outputMarkers = newAttemptOutputMarkers();
+            beginNativeRetry(telemetry);
           }
           const runSpec =
             nativeTry === 0

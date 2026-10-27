@@ -1,5 +1,12 @@
 # @claudexor/secrets
 
+## 4.8.0
+
+### Patch Changes
+
+- Updated dependencies [6c31c44]
+  - @claudexor/util@4.8.0
+
 ## 4.7.1
 
 ### Patch Changes

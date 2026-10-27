@@ -1,6 +1,7 @@
 import mcpRunToolResultSchemaRaw from "@claudexor/schema/generated/McpRunToolResult.schema.json" with { type: "json" };
 import { ContinueCarrierPreference } from "@claudexor/schema";
 import { mcpToolFailure } from "./tool-failure.js";
+import { attachmentRefsSchema } from "./attachment-ref-schema.js";
 import { formatRunResult, structuredRunResult } from "./run-result-format.js";
 import { inlineJsonSchemaRefs } from "./inline-json-schema-refs.js";
 import {
@@ -26,6 +27,7 @@ export function runContinueTool(runner: RunnerFn): McpTool {
       properties: {
         runId: { type: "string", minLength: 1, pattern: "\\S" },
         prompt: { type: "string", description: "Optional continuation text; empty is valid." },
+        attachments: attachmentRefsSchema,
         idempotencyKey: {
           type: "string",
           minLength: 1,

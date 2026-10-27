@@ -2,6 +2,7 @@ import {
   ControlThread,
   ControlThreadDetail,
   ControlThreadTurnResponse,
+  ResourceAttachmentRef,
   type McpThreadTurnResult,
 } from "@claudexor/schema";
 import { connectDaemonIfRunning, ensureDaemon } from "./daemon-run.js";
@@ -17,6 +18,10 @@ export async function threadQuery(
 ): Promise<Record<string, unknown>> {
   const creating = input["mode"] === "__thread_create";
   const reading = input["mode"] === "__thread_read";
+  const attachments =
+    creating || reading || input["attachments"] === undefined
+      ? undefined
+      : ResourceAttachmentRef.array().parse(input["attachments"]);
   // Reads never boot a daemon: an absent one is a typed, retryable refusal.
   const connection =
     requireExistingDaemon || reading ? await connectDaemonIfRunning() : await ensureDaemon();
@@ -63,6 +68,7 @@ export async function threadQuery(
       }
     : {
         prompt: String(input["prompt"] ?? ""),
+        ...(attachments !== undefined ? { attachments } : {}),
         ...(input["runMode"] ? { mode: input["runMode"] } : {}),
         ...(input["harness"] ? { harnesses: [input["harness"]] } : {}),
         ...(input["primaryHarness"] ? { primaryHarness: input["primaryHarness"] } : {}),

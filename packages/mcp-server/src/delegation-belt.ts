@@ -28,6 +28,7 @@ import {
 } from "@claudexor/schema";
 import { DELEGATION_ENV, redactSecrets } from "@claudexor/util";
 import type { McpTool, McpToolAnnotations, McpToolOutput, RunnerFn } from "./index.js";
+import { attachmentRefsSchema } from "./attachment-ref-schema.js";
 
 /** Runtime policy the belt enforces, derived from the injected delegation env. */
 export interface DelegationPolicy {
@@ -279,6 +280,7 @@ export function beltClaudexorTools(
     type: "object",
     additionalProperties: false,
     properties: {
+      attachments: attachmentRefsSchema,
       prompt: {
         type: "string",
         minLength: 1,

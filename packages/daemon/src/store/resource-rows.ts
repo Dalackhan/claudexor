@@ -28,6 +28,12 @@ export interface UploadRow {
   finalizeSha: string | null;
   resourceId?: string;
   finalization?: UploadFinalization;
+  /** A keyed import's binding and declared digest; that import alone completes the upload. */
+  import?: UploadImportBinding;
+}
+export interface UploadImportBinding {
+  keyDigest: string;
+  sha256: string;
 }
 
 type SqlReader = Pick<SqlWriteContext, "prepare">;

@@ -24,6 +24,7 @@ const continuationRequest = ControlRunStartRequest.pick({
   continueFrom: true,
   taskGroupId: true,
   prompt: true,
+  attachments: true,
   access: true,
   web: true,
   externalContextPolicy: true,

@@ -180,6 +180,9 @@ entries; do not invent an `@profile` mini-grammar.
   answer is successful only after the `/v2` control API acknowledges it.
   Use the read-only `claudexor_accounts` tool to inspect account/profile state
   before selecting a pinned reviewer; it never starts authentication.
+  Documents reach a run as `attachments: [{resourceId}]` from
+  `claudexor_upload_import` or the upload stages (contract: [Document ingress
+  and resource references](INTEGRATIONS.md#document-ingress-and-resource-references)).
 - **ACP** (`claudexor acp serve`, stdio) uses stable protocol version 1 through
   the official TypeScript SDK. ACP session IDs are daemon thread IDs, so
   `session/list`, `session/load`, `session/resume`, `session/close`, prompts,

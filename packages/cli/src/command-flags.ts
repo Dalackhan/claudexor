@@ -42,6 +42,7 @@ export const COMMON_RUN_FLAGS: readonly string[] = [
   "instructions",
   "instructions-file",
   "attach",
+  "attach-resource",
   "image",
   "json",
 ];
@@ -123,6 +124,11 @@ export const CLI_FLAGS: readonly CliFlagSpec[] = [
   valueFlag("around", "<turn-id>", "thread history: include this anchor"),
   valueFlag("offset", "<N>", "thread prompt: UTF-8 byte offset"),
   valueFlag("max-bytes", "<N>", "thread prompt: maximum bytes in one part (4..65536)"),
+  valueFlag(
+    "request-json",
+    "<object>",
+    "Upload create/finalize: exact schema-owned request body; upload import: optional kind/mime/name",
+  ),
   valueFlag("limit", "<N>", "Page limit: task-group-runs 1..200 (50); thread history 1..20 (20)"),
   valueFlag("state", "<state>", "task-group-runs: filter retained members by lifecycle"),
   valueFlag("cursor", "<cursor>", "Opaque cursor from the prior returned page"),
@@ -298,6 +304,11 @@ export const CLI_FLAGS: readonly CliFlagSpec[] = [
     "Read --instructions from a file (avoids ARG_MAX and ps leakage)",
   ),
   valueFlag("attach", "<path[,path...]>", "Attach file(s) to ask/agent/best-of/plan"),
+  valueFlag(
+    "attach-resource",
+    "<resourceId[,resourceId...]>",
+    "Attach ready immutable resource id(s) from upload-import or upload-finalize",
+  ),
   valueFlag(
     "image",
     "<path[,path...]>",

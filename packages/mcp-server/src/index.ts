@@ -1,10 +1,10 @@
 import { mcpToolFailure } from "./tool-failure.js";
-import { accountResourceTools } from "./account-resource-tools.js";
+import { attachmentRefsSchema } from "./attachment-ref-schema.js";
+import { uploadTools } from "./upload-tools.js";
+import { catalogTools } from "./catalog-tools.js";
 import { runExecutionSchema } from "./run-execution-schema.js";
 import { idempotencyKeySchema } from "./idempotency-key-schema.js";
 import { isAbsolute } from "node:path";
-import agentCapabilityCatalogSchemaRaw from "@claudexor/schema/generated/AgentCapabilityCatalog.schema.json" with { type: "json" };
-import accountsQuerySchemaRaw from "@claudexor/schema/generated/McpAccountsToolResult.schema.json" with { type: "json" };
 import mcpRunToolResultSchemaRaw from "@claudexor/schema/generated/McpRunToolResult.schema.json" with { type: "json" };
 import mcpRunHandleResultSchemaRaw from "@claudexor/schema/generated/McpRunHandleResult.schema.json" with { type: "json" };
 import testCommandInvocationSchemaRaw from "@claudexor/schema/generated/TestCommandInvocation.schema.json" with { type: "json" };
@@ -26,7 +26,6 @@ import { assertNoInlineSecretValues, errorCode } from "@claudexor/util";
 import { journalRecoveryTools } from "./recovery-tools.js";
 import { formatRunResult, structuredRunResult } from "./run-result-format.js";
 import { assertNoPluginArtifactSkew } from "./plugin-skew.js";
-import { accountsTool } from "./accounts-tool.js";
 import { threadTools } from "./thread-tools.js";
 import { runControlTools } from "./run-control-tools.js";
 import { runObservationTools } from "./run-observation-tools.js";
@@ -46,10 +45,6 @@ const mcpRunHandleResultSchema = inlineJsonSchemaRefs(
   mcpRunHandleResultSchemaRaw as Record<string, unknown>,
 );
 const testCommandInvocationSchema = inlineJsonSchemaRefs(testCommandInvocationSchemaRaw);
-const agentCapabilityCatalogSchema = inlineJsonSchemaRefs(
-  agentCapabilityCatalogSchemaRaw as Record<string, unknown>,
-);
-const accountsQuerySchema = inlineJsonSchemaRefs(accountsQuerySchemaRaw as Record<string, unknown>);
 const RUN_STRATEGY_PROPERTIES = {
   ask: {
     deepScan: {
@@ -244,6 +239,7 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
     additionalProperties: false,
     properties: {
       idempotencyKey: idempotencyKeySchema,
+      attachments: attachmentRefsSchema,
       ...taskGroupProperties(),
       prompt: {
         type: "string",
@@ -399,45 +395,10 @@ export function defaultClaudexorTools(runner: RunnerFn): McpTool[] {
       },
     ),
     ...threadTools(runner),
+    ...uploadTools(runner),
     ...runControlTools(runner),
     ...runObservationTools(runner),
-    {
-      name: "claudexor_status",
-      description:
-        "Return doctor-backed Claudexor runtime status: per-harness verdicts with enabled/disabled intents, doctor reasons and checks, and the configured model.",
-      inputSchema: { type: "object", additionalProperties: false, properties: {} },
-      annotations: { readOnlyHint: true },
-      handler: async () => {
-        const result = await runner({ mode: "__status" });
-        return {
-          text: formatRunResult(result),
-          structured: (result && typeof result === "object" ? result : {}) as Record<
-            string,
-            unknown
-          >,
-        };
-      },
-    },
-    {
-      name: "claudexor_capabilities",
-      description:
-        "Return the derived AgentCapabilityCatalog: per-harness live capabilities (doctor-backed), canonical modes, the mutability matrix, run-control keys, CLI verbs, and the run-apply-state vocabulary.",
-      inputSchema: { type: "object", additionalProperties: false, properties: {} },
-      outputSchema: agentCapabilityCatalogSchema,
-      annotations: { readOnlyHint: true },
-      handler: async () => {
-        const result = await runner({ mode: "__capabilities" });
-        return {
-          text: formatRunResult(result),
-          structured: (result && typeof result === "object" ? result : {}) as Record<
-            string,
-            unknown
-          >,
-        };
-      },
-    },
-    accountsTool(runner, accountsQuerySchema),
-    ...accountResourceTools(runner),
+    ...catalogTools(runner),
     // Read-only daemon projections let hosts recover lost run handles.
     {
       name: "claudexor_runs",

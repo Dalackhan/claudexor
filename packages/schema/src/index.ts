@@ -30,6 +30,7 @@ export * from "./request-requirements.js";
 export * from "./delegation.js";
 export * from "./command-list.js";
 export * from "./attachment.js";
+export * from "./mcp-upload.js";
 export * from "./task.js";
 export * from "./context.js";
 export * from "./raw.js";

@@ -61,6 +61,32 @@ const codexRows: Row[] = [
   { id: "cl-work", harness: "claude" },
 ];
 
+/** MIME admission fixture, not a PDF parser/reader test; every byte uses HTTP. */
+async function uploadPdf(daemon: Awaited<ReturnType<typeof openDaemon>>) {
+  const bytes = Buffer.from("%PDF-1.4\n% admission fixture\n%%EOF\n");
+  const created = await http(daemon, "POST", "/uploads", {
+    kind: "file",
+    mime: "application/pdf",
+    name: "notes.pdf",
+    sizeBytes: bytes.length,
+  });
+  expect(created.status).toBe(201);
+  const uploadId = String(created.body["uploadId"]);
+  const written = await fetch(`${daemon.base}/v2/uploads/${uploadId}/bytes`, {
+    method: "PUT",
+    headers: {
+      authorization: "Bearer fixture",
+      "X-Claudexor-Protocol-Major": "3",
+      "Content-Type": "application/octet-stream",
+    },
+    body: bytes,
+  });
+  expect(written.status).toBe(200);
+  const finalized = await http(daemon, "POST", `/uploads/${uploadId}/finalize`, {});
+  expect(finalized.status).toBe(201);
+  return { resourceId: String(finalized.body["resourceId"]) };
+}
+
 describe("requirements admission through the production Control API, queue and runner", () => {
   it("admits a named-only pin over a logged-out default HOME with attachments and Browser; the run uses that profile's store", async () => {
     const accounts = configure(codexRows, ["work", "cl-work"]);
@@ -103,6 +129,7 @@ describe("requirements admission through the production Control API, queue and r
     const daemon = await openDaemon();
     const repo = await repository(daemon);
     const text = await upload(daemon, "file");
+    const pdf = await uploadPdf(daemon);
     const body = (extra: Record<string, unknown>) => ({
       prompt: "read the notes",
       mode: "agent",
@@ -110,22 +137,30 @@ describe("requirements admission through the production Control API, queue and r
       attachments: [text],
       ...extra,
     });
-    // Settings pool: strict at ingress, as at execution (codex reads images only).
+    // Both real manifests admit text; Settings still makes the pool strict.
     updateGlobalConfig((config) => ({
       ...config,
       routing: { ...config.routing, eligible_harnesses: ["codex", "claude"] },
     }));
     const settings = await http(daemon, "POST", "/runs", body({}));
     observe("settings_pool_text", { status: settings.status, code: settings.body["code"] });
-    expect(settings.status).toBe(400);
-    expect(settings.body["code"]).toBe("attachment_pool_unsupported");
-    expect(recorder.enqueues).toHaveLength(0);
+    expect(settings.status).toBe(200);
+    expect(recorder.enqueues).toHaveLength(1);
+    expect(sum(recorder.enqueues[0]!, /\.probe$/)).toBe(0);
+    await succeeded(daemon, settings);
+    expect(recorder.spawns.at(-1)).toMatchObject({ attachments: ["text/plain"] });
+    // PDF is supported by Codex and truly incompatible with Claude.
+    const settingsPdf = await http(daemon, "POST", "/runs", body({ attachments: [pdf] }));
+    observe("settings_pool_pdf", { status: settingsPdf.status, code: settingsPdf.body["code"] });
+    expect(settingsPdf.status).toBe(400);
+    expect(settingsPdf.body["code"]).toBe("attachment_pool_unsupported");
+    expect(recorder.enqueues).toHaveLength(1);
     // An explicit request pool still wins over Settings.
     const explicit = await http(daemon, "POST", "/runs", body({ harnesses: ["claude"] }));
     expect(explicit.status).toBe(200);
     await succeeded(daemon, explicit);
     expect(recorder.spawns.at(-1)).toMatchObject({ harness: "claude", profile: "cl-work" });
-    // Pure Auto drops the lane that cannot read the file and routes the other.
+    // Pure Auto admits text on both lanes; PDF drops Claude and routes Codex.
     updateGlobalConfig((config) => ({
       ...config,
       routing: { ...config.routing, eligible_harnesses: [] },
@@ -134,8 +169,18 @@ describe("requirements admission through the production Control API, queue and r
     observe("auto_rows_only_text", { status: auto.status, code: auto.body["code"] });
     expect(auto.status).toBe(200);
     await succeeded(daemon, auto);
-    expect(recorder.spawns.at(-1)).toMatchObject({ harness: "claude", profile: "cl-work" });
-    // A thread's sticky pool arrives projected and stays strict; the refusal is durable.
+    expect(recorder.spawns.at(-1)).toMatchObject({ attachments: ["text/plain"] });
+    expect(["codex", "claude"]).toContain(recorder.spawns.at(-1)!["harness"]);
+    const autoPdf = await http(daemon, "POST", "/runs", body({ attachments: [pdf] }));
+    observe("auto_rows_only_pdf", { status: autoPdf.status, code: autoPdf.body["code"] });
+    await succeeded(daemon, autoPdf);
+    expect(recorder.spawns.at(-1)).toMatchObject({
+      harness: "codex",
+      profile: "work",
+      attachments: ["application/pdf"],
+    });
+    expect(recorder.enqueues).toHaveLength(4);
+    // A thread's projected sticky pool admits text and durably refuses mixed PDF.
     const thread = await http(daemon, "POST", "/threads", {
       scope: { kind: "project", root: repo },
       mode: "agent",
@@ -148,9 +193,16 @@ describe("requirements admission through the production Control API, queue and r
       prompt: "read the notes",
       attachments: [text],
     });
-    expect(sticky.status).toBe(400);
-    expect(sticky.body["code"]).toBe("attachment_pool_unsupported");
-    expect(recorder.enqueues).toHaveLength(before);
+    await succeeded(daemon, sticky);
+    expect(recorder.enqueues).toHaveLength(before + 1);
+    expect(daemon.graph.threads.turnsFor(threadId).at(-1)?.run_id).toBe(sticky.body["runId"]);
+    const stickyPdf = await http(daemon, "POST", `/threads/${threadId}/turns`, {
+      prompt: "read the PDF notes",
+      attachments: [pdf],
+    });
+    expect(stickyPdf.status).toBe(400);
+    expect(stickyPdf.body["code"]).toBe("attachment_pool_unsupported");
+    expect(recorder.enqueues).toHaveLength(before + 1);
     expect(daemon.graph.threads.turnsFor(threadId).at(-1)?.enqueue_error).toMatchObject({
       code: "attachment_pool_unsupported",
       retryable: false,
@@ -376,6 +428,7 @@ describe("requirements admission through the production Control API, queue and r
         browser: true,
         ...extra,
       });
+    const pdf = await uploadPdf(daemon);
     const verdicts: Record<string, unknown> = {};
     for (const [name, extra, status, code] of [
       [
@@ -394,17 +447,42 @@ describe("requirements admission through the production Control API, queue and r
       [
         "explicit_text_codex_claude",
         { harnesses: ["codex", "claude"], attachments: [text], access: "full" },
+        200,
+        undefined,
+      ],
+      [
+        "explicit_pdf_codex_claude",
+        { harnesses: ["codex", "claude"], attachments: [pdf], access: "full" },
         400,
         "attachment_pool_unsupported",
+      ],
+      [
+        "auto_pdf_browser_workspace_write",
+        { attachments: [pdf], access: "workspace_write" },
+        400,
+        "browser_unavailable",
       ],
     ] as const) {
       const answer = await start(extra);
       verdicts[name] = { status: answer.status, code: answer.body["code"] };
       expect.soft(answer.status, name).toBe(status);
       expect.soft(answer.body["code"], name).toBe(code);
+      if (answer.status === 200) {
+        await succeeded(daemon, answer);
+        expect(recorder.spawns.at(-1)).toMatchObject({
+          browser: true,
+          attachments: ["text/plain"],
+        });
+      }
     }
-    expect(recorder.enqueues).toHaveLength(0);
-    const textAuto = await start({ attachments: [text], access: "workspace_write" });
+    expect(recorder.enqueues).toHaveLength(1);
+    // Both lanes now admit text. Keep the Auto pool, but prefer the lane whose
+    // native MCP policy supports Browser at workspace_write for this success case.
+    const textAuto = await start({
+      attachments: [text],
+      access: "workspace_write",
+      primaryHarness: "claude",
+    });
     verdicts["auto_text_browser"] = { status: textAuto.status };
     expect(textAuto.status).toBe(200);
     await succeeded(daemon, textAuto);
@@ -422,6 +500,7 @@ describe("requirements admission through the production Control API, queue and r
       browser: true,
       attachments: ["image/png"],
     });
+    expect(recorder.enqueues).toHaveLength(3);
     observe("browser_matrix", verdicts);
   }, 240_000);
 

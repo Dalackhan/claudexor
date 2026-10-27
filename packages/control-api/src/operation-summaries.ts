@@ -3,11 +3,13 @@ export const OPERATION_SUMMARIES: Record<string, string> = {
   "POST /v2/uploads":
     "Create a single-request streaming upload session for an attachment of the declared size.",
   "PUT /v2/uploads/:id/bytes":
-    "Stream the complete declared byte body in ONE request. The store is single-shot: a short, oversized, or interrupted PUT cancels the upload and discards partial bytes — retry by creating a new upload and resending from byte zero. Not resumable.",
+    "Stream the complete declared byte body in ONE request. The store is single-shot: a short, oversized, or interrupted PUT cancels the upload and discards partial bytes — retry by creating a new upload and resending from byte zero. Not resumable. A keyed import's upload instead returns to open, also when its bytes miss the declared sha256, so the same key resends from byte zero.",
   "GET /v2/uploads/:id":
     "Read an upload session's status and received byte count (diagnostic on a cancelled upload, not a resumable offset).",
   "DELETE /v2/uploads/:id": "Abort and discard an in-progress upload session.",
   "POST /v2/uploads/:id/finalize": "Finalize an upload into a durable attachment resource.",
+  "POST /v2/uploads/imports":
+    "Begin, read or replay one keyed attachment import; verified bytes are published under the same key without the source.",
   "POST /v2/handshake": "Negotiate the control protocol major before product calls.",
   "GET /v2/daemon/status":
     "Read daemon activity, capacity, current/admission memory and event-loop window facts.",

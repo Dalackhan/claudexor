@@ -170,15 +170,28 @@ describe("ACP adapter over stdio", () => {
     const request = spec();
     const result = collect(peer.adapter.run(request));
     let pids: Record<string, any> | undefined;
-    await vi.waitFor(() => {
-      pids = commands(peer.log).find((line) => line["pid"]);
-      expect(pids).toBeDefined();
-    });
-    await peer.adapter.cancel!(request.session_id);
-    const events = await result;
-    expect(events.at(-1)).toMatchObject({ type: "completed", payload: { aborted: true } });
-    for (const pid of [pids!["pid"], pids!["child"]]) expect(() => process.kill(pid, 0)).toThrow();
-    expect(commands(peer.log).some((line) => line["method"] === "session/cancel")).toBe(true);
+    try {
+      // Budget offline peer startup within the existing 30s test deadline.
+      await vi.waitFor(
+        () => {
+          pids = commands(peer.log).find((line) => line["pid"]);
+          expect(pids).toBeDefined();
+        },
+        { timeout: 10_000 },
+      );
+      await peer.adapter.cancel!(request.session_id);
+      const events = await result;
+      expect(events.at(-1)).toMatchObject({ type: "completed", payload: { aborted: true } });
+      for (const pid of [pids!["pid"], pids!["child"]])
+        expect(() => process.kill(pid, 0)).toThrow();
+      expect(commands(peer.log).some((line) => line["method"] === "session/cancel")).toBe(true);
+    } finally {
+      try {
+        await peer.adapter.cancel!(request.session_id);
+      } finally {
+        await result;
+      }
+    }
   });
 
   it("uses only the managed token and scoped home in the real child", async () => {

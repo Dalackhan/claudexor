@@ -1832,7 +1832,7 @@
       "path": "/v2/uploads/:id/bytes",
       "mutating": true,
       "applicability": "global",
-      "summary": "Stream the complete declared byte body in ONE request. The store is single-shot: a short, oversized, or interrupted PUT cancels the upload and discards partial bytes — retry by creating a new upload and resending from byte zero. Not resumable.",
+      "summary": "Stream the complete declared byte body in ONE request. The store is single-shot: a short, oversized, or interrupted PUT cancels the upload and discards partial bytes — retry by creating a new upload and resending from byte zero. Not resumable. A keyed import's upload instead returns to open, also when its bytes miss the declared sha256, so the same key resends from byte zero.",
       "auth": "loopback_bearer",
       "request_schema": null,
       "parameters": [],
@@ -1849,6 +1849,18 @@
       "request_schema": "ControlUploadFinalizeRequest",
       "parameters": [],
       "response_schema": "ControlResource",
+      "error_schema": "ControlProblem"
+    },
+    {
+      "method": "POST",
+      "path": "/v2/uploads/imports",
+      "mutating": true,
+      "applicability": "global",
+      "summary": "Begin, read or replay one keyed attachment import; verified bytes are published under the same key without the source.",
+      "auth": "loopback_bearer",
+      "request_schema": "ControlUploadImportRequest",
+      "parameters": [],
+      "response_schema": "ControlUploadImport",
       "error_schema": "ControlProblem"
     }
   ]

@@ -31,7 +31,7 @@ with a vendor quota source (Antigravity, Claude, and Codex). Cursor's internal
 dashboard supplies dated monetary resources, not an execution-quota verdict.
 Everything runs on your machine, files are the source of truth, and there is no telemetry.
 
-Current status: **v4.7.1**. See "Stability at 2.0" below for what is a stable
+Current status: **v4.8.0**. See "Stability at 2.0" below for what is a stable
 contract and what remains experimental; retired verbs and mode ids hard-error
 with the new spelling instead of silently aliasing.
 
@@ -768,7 +768,9 @@ Finalize returns an immutable resource ID; run and turn requests accept only tho
 IDs, never local paths or base64. Every selected harness must declare a finite
 MIME, byte/count limit, and native transport for every mandatory attachment or
 preflight refuses the whole pool. Adapters verify the finalized digest immediately
-before building the vendor payload.
+before building the vendor payload. Recoverable keyed imports (`upload-import`),
+reusable `--attach-resource` refs and the MCP upload tools are specified in
+[`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md#document-ingress-and-resource-references).
 
 Keep ONE `AGENTS.md` at your project root as the source of truth for
 project-specific instructions. Claudexor bridges it to Claude Code automatically

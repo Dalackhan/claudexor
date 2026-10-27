@@ -18,6 +18,30 @@ __afterAllReap(() => {
 });
 
 describe("resolveLocalAttachment", () => {
+  it.each([
+    ["report.pdf", "application/pdf"],
+    ["report.PDF", "application/pdf"],
+    ["report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+    ["report.DOCX", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+    ["report.txt", "text/plain"],
+    ["report.md", "text/markdown"],
+    ["report.markdown", "text/markdown"],
+    ["report.json", "application/json"],
+    ["image.png", "image/png"],
+    ["unknown.bin", "application/octet-stream"],
+  ])("detects the MIME of %s before upload", (name, mime) => {
+    const root = reapMk(join(tmpdir(), "claudexor-local-mime-"));
+    const path = join(root, name);
+    writeFileSync(path, "exact bytes");
+    expect(resolveLocalAttachment(path, false)).toMatchObject({
+      kind: mime.startsWith("image/") ? "image" : "file",
+      mime,
+      name,
+      path,
+      sizeBytes: 11,
+    });
+  });
+
   it("accepts a regular text file", () => {
     const root = reapMk(join(tmpdir(), "claudexor-local-attachment-"));
     const path = join(root, "note.txt");

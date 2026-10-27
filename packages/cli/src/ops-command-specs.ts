@@ -1,6 +1,8 @@
 import type { CliCommandSpec } from "./command-registry.js";
+import { UPLOAD_COMMAND_SPECS } from "./upload-command-specs.js";
 
 export const OPS_COMMAND_SPECS_BEFORE_REMOTE = [
+  ...UPLOAD_COMMAND_SPECS,
   {
     id: "account-reset",
     usageArgs:

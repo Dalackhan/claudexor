@@ -80,6 +80,7 @@ const MCP_TO_CLI = {
       "caller-owned MCP launch identity, carried as the existing HTTP Idempotency-Key rather than an engine run-control flag",
   },
   taskGroupId: { cli: "task-group-id" },
+  attachments: { cli: "attach-resource" },
   harness: { cli: "harness" },
   primaryHarness: { cli: "primary-harness" },
   model: { cli: "model" },
@@ -213,6 +214,8 @@ const BOOLEAN_FLAG_MAP = {
 // CLI run-control flags with NO MCP argument: each needs a stated reason.
 // (Non-run-control CLI flags — subcommand plumbing — are structurally exempt.)
 const CLI_ONLY_EXEMPT = {
+  "request-json":
+    "upload-create/upload-finalize request body; separate lifecycle tools, not an inference run argument",
   "host-binding-json":
     "plugin installation/repair binding, not a run control; MCP tools do not rebind their host integration",
   "vendor-version":
@@ -246,9 +249,9 @@ const CLI_ONLY_EXEMPT = {
   portfolio: "removed v2 flag retained only to emit a hard error",
   "routing-goal": "MCP callers currently use the daemon default routing goal",
   attach:
-    "MCP surface does not support attachments yet (native-attachment delivery is CLI/app-only; a prompt cannot carry an image)",
+    "local-file convenience over the upload owner; MCP imports with claudexor_upload_import, then passes attachments resource refs (CLI --attach-resource)",
   image:
-    "MCP surface does not support attachments yet (native-attachment delivery is CLI/app-only)",
+    "local-image convenience over the same upload owner; MCP imports with claudexor_upload_import, then passes attachments resource refs",
   "access-default":
     "trust subcommand flag, not a run control (was invisible to the old VALUE_FLAGS source-regex; the registry surfaces it)",
   "grant-test": "trust subcommand flag for an external exact-command grant, not a run control",
@@ -320,6 +323,15 @@ for (const declared of Object.keys(MCP_TO_CLI)) {
   }
 }
 
+// Continuation's optional prompt must not exclude it from resource-ref parity.
+const continuationTool = tools.find((tool) => tool.name === "claudexor_run_continue");
+if (
+  !continuationTool?.inputSchema.properties?.attachments ||
+  JSON.stringify(continuationTool.inputSchema.properties.attachments) !==
+    JSON.stringify(runTools[0].inputSchema.properties?.attachments)
+)
+  failures.push("Run continuation must expose the same strict attachment refs as launch tools");
+
 // Account controls are separate direct tools, not inference run arguments.
 const ACCOUNT_TOOL_FLAGS = {
   offer_id: "offer",
@@ -360,6 +372,7 @@ for (const [field, flag] of Object.entries(RUN_OBSERVATION_TOOL_FLAGS)) {
   }
 }
 
+const STORE_BOUND_IMPORT_FLAGS = ["expected-store-id"];
 const TASK_GROUP_TOOL_FLAGS = {
   limit: { flag: "limit", type: "integer" },
   state: { flag: "state", type: "string" },
@@ -388,6 +401,7 @@ for (const [field, { flag, type }] of Object.entries(TASK_GROUP_TOOL_FLAGS)) {
     if (
       command.id !== "task-group-runs" &&
       !(command.id === "thread" && ["limit", "cursor", "expected-store-id"].includes(flag)) &&
+      !(STORE_BOUND_IMPORT_FLAGS.includes(flag) && command.id === "upload-import") &&
       command.flags.includes(flag)
     )
       failures.push(`Task group read flag '--${flag}' leaked into '${command.id}'`);
@@ -433,6 +447,33 @@ for (const [toolName, verb, mapping] of [
   )
     failures.push(`${toolName} positional identity drifted`);
 }
+
+// Keyed import: the store identity read and the one-call import have exact CLI spellings.
+// Its saved store check reuses --expected-store-id; overrides travel in --request-json.
+const UPLOAD_IMPORT_TOOL_FLAGS = {
+  expectedStoreId: "expected-store-id",
+  idempotencyKey: "idempotency-key",
+  kind: "request-json",
+  mime: "request-json",
+  name: "request-json",
+};
+const importTool = tools.find((tool) => tool.name === "claudexor_upload_import");
+const importCommand = cliRegistry.CLI_COMMANDS.find((command) => command.id === "upload-import");
+const identityTool = tools.find((tool) => tool.name === "claudexor_store_identity");
+const identityCommand = cliRegistry.CLI_COMMANDS.find((command) => command.id === "store-identity");
+if (importCommand?.mutability !== "write")
+  failures.push("upload-import must be a registered write command");
+if (identityTool?.annotations?.readOnlyHint !== true || identityCommand?.mutability !== "read")
+  failures.push("claudexor_store_identity and store-identity must both be read-only");
+for (const [field, flag] of Object.entries(UPLOAD_IMPORT_TOOL_FLAGS)) {
+  if (!importTool?.inputSchema.properties?.[field])
+    failures.push(`Keyed import tool is missing field '${field}'`);
+  if (!importCommand?.flags.includes(flag))
+    failures.push(`Keyed import field '${field}' maps to missing upload-import flag '--${flag}'`);
+}
+for (const field of ["expectedStoreId", "path", "idempotencyKey"])
+  if (!importTool?.inputSchema.required?.includes(field))
+    failures.push(`Keyed import tool must require '${field}'`);
 
 const mappedCliFlags = new Set(
   Object.values(MCP_TO_CLI)
@@ -483,6 +524,8 @@ for (const declared of Object.keys(BOOLEAN_FLAG_MAP)) {
 // ACP <-> MCP: every MCP run-control argument must be expressible over ACP
 // (same engine contract; repoPath is the ACP session cwd by design).
 const ACP_EQUIVALENT = {
+  attachments:
+    "ACP native image/resource content parts are uploaded/finalized before thread enqueue; refs are not session/prompt metadata",
   repoPath: "session/new cwd anchors the project",
   idempotencyKey: "caller-owned MCP transport identity; ACP does not expose launch replay keys",
   taskGroupId:
@@ -504,6 +547,11 @@ for (const arg of mcpArgs) {
 // 2. Every prompt-taking run tool declares the structured outputSchema.
 // 3. The recovery tool set exists (hosts recover lost run handles).
 const MUTATING_TOOLS = new Set([
+  "claudexor_upload_import",
+  "claudexor_upload_create",
+  "claudexor_upload_import_local",
+  "claudexor_upload_finalize",
+  "claudexor_upload_cancel",
   "claudexor_run",
   "claudexor_best_of",
   "claudexor_create",

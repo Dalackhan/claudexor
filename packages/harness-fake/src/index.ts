@@ -12,6 +12,7 @@ import type { DoctorSpec, HarnessAdapter } from "@claudexor/core";
 import { CLAUDEXOR_VERSION, nowIso } from "@claudexor/util";
 import { runFakeInteractive } from "./interactive.js";
 import { FAKE_TURN_ID, FakeLiveInput } from "./live-input.js";
+import { FAKE_DOCUMENT_INPUT, runFakeDocument } from "./documents.js";
 
 export type FakeKind =
   | "fake-success"
@@ -38,7 +39,8 @@ export type FakeKind =
   | "fake-interactive"
   // Native-session fixture: reports a native session id (the resumed one when
   // the engine carries one) and a probe of the environment it was handed.
-  | "fake-session";
+  | "fake-session"
+  | "fake-document";
 
 export const FAKE_KINDS: FakeKind[] = [
   "fake-success",
@@ -61,6 +63,7 @@ export const FAKE_KINDS: FakeKind[] = [
   "fake-steerable",
   "fake-interactive",
   "fake-session",
+  "fake-document",
 ];
 
 /** Kinds with a live-input channel (`message()` and `live_input: mid_turn`). */
@@ -69,6 +72,7 @@ const LIVE_INPUT_KINDS: ReadonlySet<string> = new Set(["fake-steerable", "fake-i
 /** The D-16 kinds that declare a schema-constrained WorkReport transport and
  * emit a (possibly malformed) envelope final message. */
 const WORK_REPORT_KINDS = new Set<FakeKind>([
+  "fake-document",
   "fake-work-complete",
   "fake-needs-input",
   "fake-work-incomplete",
@@ -143,7 +147,7 @@ function buildManifest(id: string, provider: ProviderFamily): HarnessManifest {
       // The fake spawns no sandbox, so its belt is reachable at any access —
       // keep delegate exercisable at the default write access deterministically.
       mcp_injection_requires_full_access: false,
-      attachment_inputs: [],
+      attachment_inputs: id === "fake-document" ? [FAKE_DOCUMENT_INPUT] : [],
     },
     capabilities: {
       plan: true,
@@ -210,6 +214,9 @@ async function* runFake(
     return;
   }
   switch (kind) {
+    case "fake-document":
+      yield* runFakeDocument(spec, observedModel);
+      return;
     case "fake-success":
       // Prompt-free deterministic text: the raw prompt must never be echoed into a
       // persisted message/answer artifact (BIBLE §6 — secrets never become artifacts).

@@ -28,11 +28,38 @@ extension NSAttributedString.Key {
     static func label(_ value: String) -> String { value.padding(toLength: 11, withPad: " ", startingAt: 0) }
 
     static func plainText(_ text: NSAttributedString, range: NSRange) -> String {
-        var result = ""
+        projection(text, range: range).string
+    }
+
+    private static func projection(_ text: NSAttributedString, range: NSRange) -> NSAttributedString {
+        let result = NSMutableAttributedString(string: "")
         text.enumerateAttribute(.proseCopyExcluded, in: range) { excluded, part, _ in
-            if excluded as? Bool != true { result += (text.string as NSString).substring(with: part) }
+            if excluded as? Bool != true { result.append(text.attributedSubstring(from: part)) }
         }
         return result
+    }
+
+    static func writeSelection(_ text: NSAttributedString, range: NSRange, to pasteboard: NSPasteboard,
+                               types: [NSPasteboard.PasteboardType]) -> Bool {
+        // Export a detached projection, retaining native rich formats/attributes
+        // without changing the painted storage, selection or reading character.
+        let selected = projection(text, range: range)
+        let exporter = NSTextView(frame: .zero)
+        exporter.isRichText = true
+        exporter.textStorage?.setAttributedString(selected)
+        exporter.setSelectedRange(NSRange(location: 0, length: selected.length))
+        let native = NSPasteboard.withUniqueName()
+        defer { native.releaseGlobally() }
+        native.declareTypes(types, owner: nil)
+        _ = exporter.writeSelection(to: native, types: types)
+        // Materialize native data before its owner goes away. Legacy AppKit type
+        // names and their modern aliases both carry the filtered projection.
+        var data: [NSPasteboard.PasteboardType: Data] = [:]
+        for type in types { data[type] = native.data(forType: type) }
+        for (type, bytes) in data { pasteboard.setData(bytes, forType: type) }
+        guard types.contains(.string) else { return !data.isEmpty }
+        pasteboard.addTypes([.string], owner: nil)
+        return pasteboard.setString(selected.string, forType: .string) || !data.isEmpty
     }
 
     static func write(_ text: String, to pasteboard: NSPasteboard = .general) -> Bool {

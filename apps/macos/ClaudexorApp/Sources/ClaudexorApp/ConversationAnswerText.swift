@@ -12,7 +12,7 @@ struct ConversationAnswerText: View {
         let long = TurnCard.isLongAnswer(answer)
         let collapsed = long && !expanded
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            MarkdownOutputView(markdown: collapsed ? String(answer.prefix(1_200)) : answer,
+            MarkdownOutputView(markdown: collapsed ? ConversationPreviewText.prefix(answer) : answer,
                 fileScopeRoots: fileScopeRoots, remoteFileScope: remoteFileScope,
                 bodyFont: .body, previewHeight: collapsed ? 260 : nil)
                 .clipped()

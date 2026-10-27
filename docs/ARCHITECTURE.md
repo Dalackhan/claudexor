@@ -3277,17 +3277,21 @@ stale keys preventing following from resuming. Explicit earlier/later travel may
 end an evicted selection; presentation drafts remain independent of membership.
 
 A settled reading passage records the visible turn, prose document, character
-index and line offset. Width changes restore that passage after layout settles
+index and line offset after scrolling or focus/selection pauses following. Width changes restore that passage after layout settles
 through the feed's single programmatic scroll path; following still pins the
-bottom. Native prose hosts register weakly, without row geometry observers.
+bottom. Native prose hosts register weakly, without row geometry observers. Full-prompt
+sheets clear the inherited feed registry and message identity.
 Code wraps within the prose selection host, with a language/Copy header excluded
-from plain-text copies. Code actions use the native link delegate, and the native
+from plain-text and rich-text copies. Code actions use the native link delegate, and the native
 context menu retains selection Copy alongside whole-message Markdown copying.
 Tables expose whole-table copying and fading sides only where columns are hidden.
-Prompt/answer folds use their content rule, with a visual last-line fade and the
-newest turn initially expanded. A printable key in message text is delivered
-synchronously to that conversation's registered, enabled composer; an unavailable
-destination leaves the message alone.
+Prompt/answer folds use their content rule, with word-bounded source long enough
+for the whole-line clip, a visual last-line fade and the newest turn initially
+expanded. Typing in message text restores the registered composer’s saved native
+selection (or its draft end before first focus), then delivers the original key
+event to the field editor for native input composition. An unavailable destination
+leaves the message alone. Tab/Shift-Tab leave clicked prose through the window’s
+native key-view loop without making prose an ordinary Tab destination.
 Interaction selections/free text live in the located presentation store keyed by
 run, interaction and question, survive eviction, and clear on acknowledged answer,
 withdrawal, timeout or terminal resolution. Composer/Stop use the page header, not

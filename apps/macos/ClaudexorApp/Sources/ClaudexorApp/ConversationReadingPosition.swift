@@ -47,6 +47,14 @@ import SwiftUI
         }
     }
 
+    func captureWhenReadingBegins() {
+        guard !isResizing else { return }
+        captureTask?.cancel()
+        // Focus arrives outside layout. Capture before a subsequent resize can
+        // cancel a delayed scroll-settling capture and lose the old-width passage.
+        capture()
+    }
+
     private func capture() {
         guard let state, !state.follows else { passage = nil; return }
         guard let turn = state.visibleTurnID, let scroll = scrollView, let document = scroll.documentView else { return }

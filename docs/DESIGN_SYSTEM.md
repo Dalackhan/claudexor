@@ -496,7 +496,9 @@ frequency and volume are. The contracts:
   Painted content remains during loading and errors; a background replay never evicts rows.
   The live head retains its per-run stream and terminal read. A terminal answer
   published during the trailing replay wins without a third chained history GET.
-- **History evidence and actions.** Prompt previews disclose `promptInfo`; full
+- **History evidence and actions.** Collapsed prompt and answer sources end at a word boundary and retain enough
+  text to fill the 260pt whole-line fold at the 680pt measure; the existing
+  character/line content rule still decides whether to fold. Prompt previews disclose `promptInfo`; full
   prompts load in UTF-8 parts only on Copy full prompt / Show full prompt. Answers
   use the page's bounded primary output and its existing artifact address.
   Pruned runs retain their prompt and a quiet retention explanation, without a
@@ -541,22 +543,27 @@ frequency and volume are. The contracts:
   generation and EXACT width. Measuring writes no SwiftUI state. Unchanged
   document IDs retain native storage and selection. Wrapped code shares the
   prose selection host, with a small language/Copy header in the rounded code
-  well; header labels never enter plain-text copies. Copy code goes through the
+  well; header labels never enter plain-text or rich-text copies. Copy code goes through the
   native link delegate and gives brief “Copied” / “Copy failed” feedback. The
   native context menu adds “Copy message” for the authored Markdown source while
   retaining selection Copy. Printable typing in focused message text moves to
-  the registered, enabled conversation composer and delivers the first key
-  synchronously. Command shortcuts, selection keys, scrolling keys and Tab keep
-  their native routing. Without an available composer, typing does nothing.
+  the registered, enabled conversation composer, restoring its saved caret or
+  selection (the draft end if it has never been focused). The original key event
+  goes to its field editor, preserving the unsent draft and native dead-key/input
+  method composition. Tab and Shift-Tab leave clicked prose through the native
+  key-view loop; prose remains outside ordinary Tab entry. Command shortcuts,
+  selection keys and scrolling keys keep their native routing. Without an
+  available composer, typing does nothing.
   Table cells offer whole-table Markdown copying; existing selectable tool/error
   captions remain disclosed residuals.
 - **Reading passages survive width changes.** While reading, the feed captures
   the first visible card, its prose character at the viewport top and the line's
-  offset only after scrolling settles. A settled width change restores that
+  offset after scrolling settles or text focus/selection pauses following. A settled width change restores that
   character through the same programmatic scroll path, outside layout. Hosts
   register weakly; there are no per-row geometry observers or per-frame text
   measurements. A new gesture or explicit navigation cancels a pending restore.
-  Following continues to pin the bottom.
+  Following continues to pin the bottom. Full-prompt sheets own independent prose:
+  they inherit neither the feed registry nor a turn’s selection/focus identity.
 - **Per-row readable measure (D-13 C).** The 680pt conversation measure
   (`conversationMeasure()`) is applied PER ROW (each `TurnCard`), not as a
   double-frame around the whole history page; a sidebar drag / width change

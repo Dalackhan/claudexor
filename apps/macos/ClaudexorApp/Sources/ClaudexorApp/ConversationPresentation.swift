@@ -46,7 +46,7 @@ struct PromptBubble: View {
         let long = TurnCard.isLongAnswer(prompt)
         let collapsed = long && !expansion.wrappedValue
         let bounded = Self.preview(prompt)
-        let text = collapsed ? String(bounded.prefix(1_200)) : bounded
+        let text = collapsed ? ConversationPreviewText.prefix(bounded) : bounded
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             ProseText(document: ProseBuilder.plain(text, style: .make(body: true, size: dynamicTypeSize)),
                 hugs: !long, heightLimit: collapsed ? 260 : nil, accessibilityName: "User message",

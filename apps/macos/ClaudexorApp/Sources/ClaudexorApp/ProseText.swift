@@ -232,14 +232,8 @@ final class ProseTextView: NSTextView {
     override func writeSelection(to pasteboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
         let range = selectedRange()
         guard range.length > 0, NSMaxRange(range) <= (string as NSString).length else { return false }
-        // Preserve native rich export, but make plain text an explicit source
-        // projection. Text-block formatting and soft wraps must never alter it.
-        let richTypes = types.filter { $0 != .string }
-        let richWritten = !richTypes.isEmpty && super.writeSelection(to: pasteboard, types: richTypes)
-        guard types.contains(.string) else { return richWritten }
-        pasteboard.addTypes([.string], owner: nil)
-        guard let textStorage else { return richWritten }
-        return pasteboard.setString(ProseCodeActions.plainText(textStorage, range: range), forType: .string) || richWritten
+        guard let textStorage else { return false }
+        return ProseCodeActions.writeSelection(textStorage, range: range, to: pasteboard, types: types)
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -267,10 +261,15 @@ final class ProseTextView: NSTextView {
         if event.modifierFlags.contains(.command)
             || (arrow && (event.modifierFlags.contains(.shift) || selectedRange().length > 0)) {
             super.keyDown(with: event)
+        } else if event.keyCode == 48 {
+            if event.modifierFlags.contains(.shift) { window?.selectPreviousKeyView(self) }
+            else { window?.selectNextKeyView(self) }
         } else if [49, 115, 116, 119, 121].contains(event.keyCode) || arrow {
             verticalScrollView?.keyDown(with: event)
         } else if !event.modifierFlags.contains(.control),
-                  let characters = event.characters, !characters.isEmpty,
+                  let characters = event.characters?.isEmpty == false ? event.characters
+                    : event.charactersIgnoringModifiers,
+                  !characters.isEmpty,
                   characters.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) && !(0xF700...0xF8FF).contains($0.value) }) {
             composerInput?.forward(event, from: self)
         }

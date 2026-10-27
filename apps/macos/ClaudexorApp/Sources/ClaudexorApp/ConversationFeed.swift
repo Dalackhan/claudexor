@@ -168,7 +168,10 @@ struct ConversationFeed: View {
 
     private func textFocusChanged() {
         if !history.presentation.selectedMessages.isEmpty || !history.presentation.focusedMessages.isEmpty {
+            let wasFollowing = state.follows
             state.viewport = .reading(anchor: state.visibleTurnID ?? state.positionedTurnID)
+            if wasFollowing { state.readingPosition.captureWhenReadingBegins() }
+            else { state.readingPosition.captureAfterSettling() }
         } else if state.atBottom && tailMounted { state.viewport = .followingTail }
         synchronizeReading()
     }
@@ -199,10 +202,10 @@ struct ConversationFeed: View {
     private func prepare(_ turn: ThreadHistoryTurn) -> CGFloat {
         let prompt = PromptBubble.preview(turn.prompt)
         let expanded = history.presentation.expanded["prompt:" + turn.id] ?? (history.header?.latestTurnId == turn.id)
-        let text = !expanded ? String(prompt.prefix(1_200)) : prompt
+        let text = !expanded ? ConversationPreviewText.prefix(prompt) : prompt
         let promptHeight = ProseMeasurer.shared.height(ProseBuilder.plain(text), width: max(1, state.width - 72))
         if let answer = turn.primaryOutput?.text {
-            let shown = history.presentation.expanded["answer:" + turn.id] == true ? answer : String(answer.prefix(1_200))
+            let shown = history.presentation.expanded["answer:" + turn.id] == true ? answer : ConversationPreviewText.prefix(answer)
             for segment in ProseBuilder.segments(shown, style: .init()) {
                 if case .prose(let doc) = segment.content {
                     _ = ProseMeasurer.shared.height(doc, width: max(1, state.width - 48))

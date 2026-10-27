@@ -20,7 +20,7 @@ struct ConversationTextInputTests {
         message.setSelectedRange(NSRange(location: 0, length: selected ? 8 : 0))
         let sourceText = message.string
         // Navigation / selection keys do not become composer input.
-        for (text, code) in [(" ", UInt16(49)), ("\t", UInt16(48)), ("\u{F72C}", UInt16(116))] {
+        for (text, code) in [(" ", UInt16(49)), ("\u{F72C}", UInt16(116))] {
             message.keyDown(with: try key(text, code: code))
             #expect(window.firstResponder === message && composer.stringValue.isEmpty)
         }

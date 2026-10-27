@@ -19,11 +19,7 @@ struct HistoryPromptActions: View {
             if let failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
         }
         .sheet(isPresented: $showing, onDismiss: { fullPrompt = nil }) {
-            VStack(alignment: .leading) {
-                Text("Full prompt").font(.headline)
-                ScrollView { ProseText(document: ProseBuilder.plain(fullPrompt ?? ""), accessibilityName: "Full user message") }
-                Button("Done") { showing = false }.keyboardShortcut(.cancelAction)
-            }.padding().frame(width: 680, height: 600)
+            HistoryFullPromptSheet(prompt: fullPrompt ?? "", done: { showing = false })
         }
     }
 
@@ -39,5 +35,23 @@ struct HistoryPromptActions: View {
             } catch { failure = "Could not load full prompt: \(error.localizedDescription)" }
             loading = false
         }
+    }
+}
+
+/// The full-prompt sheet's content, independent of the mounted feed surface.
+struct HistoryFullPromptSheet: View {
+    let prompt: String
+    var done: () -> Void = {}
+    var body: some View {
+        VStack(alignment: .leading) {
+            Text("Full prompt").font(.headline)
+            ScrollView { ProseText(document: ProseBuilder.plain(prompt), accessibilityName: "Full user message") }
+            Button("Done", action: done).keyboardShortcut(.cancelAction)
+        }.padding().frame(width: 680, height: 600)
+            .environment(\.conversationReadingPosition, nil)
+            .environment(\.proseMessageID, nil)
+            .environment(\.conversationComposerInput, nil)
+            .environment(\.proseMessageCopyAction, nil)
+            .environment(\.proseMessageSource, prompt)
     }
 }

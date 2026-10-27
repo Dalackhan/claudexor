@@ -357,6 +357,7 @@ struct HistoryMockupRenderingTests {
             return prose.convert(prose.bounds, to: document)
         }
         func check(_ y: CGFloat, label: String) async {
+            state.readingPosition.readerMovedUp()  // the reader scrolls toward earlier content
             scroll.contentView.scroll(to: CGPoint(x: origin.x, y: y))
             scroll.reflectScrolledClipView(scroll.contentView)
             await settle(host)

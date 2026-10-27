@@ -265,6 +265,10 @@ final class ProseTextView: NSTextView {
             if event.modifierFlags.contains(.shift) { window?.selectPreviousKeyView(self) }
             else { window?.selectNextKeyView(self) }
         } else if [49, 115, 116, 119, 121].contains(event.keyCode) || arrow {
+            // Home, Page Up, Up arrow and Shift-Space read earlier content.
+            if [115, 116, 126].contains(event.keyCode) || (event.keyCode == 49 && event.modifierFlags.contains(.shift)) {
+                readingPosition?.readerMovedUp()
+            }
             verticalScrollView?.keyDown(with: event)
         } else if !event.modifierFlags.contains(.control),
                   let characters = event.characters?.isEmpty == false ? event.characters

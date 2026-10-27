@@ -76,18 +76,22 @@ import ClaudexorKit
         if bottom && tailMounted {
             viewport = .followingTail
             newCount = 0
+            readingPosition.readerIntentEnded()
         } else if follows && !readingPosition.isFollowingResize {
             viewport = .reading(anchor: positionedTurnID)
         }
     }
 
     /// Applies one scroll sample and reports whether bottom or viewport state changed.
-    /// macOS 26.6 reports content growth before the bottom anchor moves the offset, so a
-    /// following feed that lost the bottom without an offset change waits for the anchor.
+    /// Only the reader leaves the tail: an upward wheel, trackpad or key scroll, or a
+    /// scroller drag that moved up. Placement, anchoring and growth keep following; macOS
+    /// 26.6 places a newly opened feed a few points short of its bottom, and the bottom
+    /// anchor can lag content growth by a frame.
     func geometry(_ edge: FeedEdge, after old: FeedEdge, tailMounted: Bool) -> Bool {
-        let lost = follows && !edge.bottom
-        if lost && (edge.awaitsAnchor(after: old) || readingPosition.isFollowingResize) { return false }
-        guard edge.bottom != atBottom || lost else { return false }
+        if follows && !edge.bottom {
+            let reader = readingPosition.readerIsMovingUp || (readingPosition.liveScrolling && edge.offset < old.offset - 0.5)
+            guard reader, !readingPosition.isFollowingResize else { return false }
+        } else if edge.bottom == atBottom { return false }
         geometry(bottom: edge.bottom, tailMounted: tailMounted)
         return true
     }
@@ -102,16 +106,6 @@ struct FeedEdge: Equatable {
     /// How far the viewport ends above the bottom of the content.
     var deficit: CGFloat { content + inset - offset - container }
     var bottom: Bool { deficit <= 1 }
-
-    /// The bottom anchor has not applied a size change yet: the size changed while the
-    /// offset stayed, or the offset caught up exactly with the previous sample's deficit
-    /// while a new size change arrived (growth in consecutive frames).
-    func awaitsAnchor(after old: FeedEdge) -> Bool {
-        let moved = offset - old.offset
-        let resized = abs(content - old.content) > 0.5 || abs(container - old.container) > 0.5
-            || abs(inset - old.inset) > 0.5
-        return (resized && abs(moved) < 0.5) || (old.deficit > 1 && abs(moved - old.deficit) < 0.5)
-    }
 }
 
 struct ConversationFeed: View {
@@ -196,7 +190,7 @@ struct ConversationFeed: View {
             state.synchronize(history)
             history.prepare = { rows in for row in rows { _ = prepare(row) } }
         }
-        .onDisappear { history.prepare = nil; state.readingPosition.stop() }
+        .onDisappear { history.prepare = nil; state.readingPosition.stop(); state.readingPosition.detach() }
         .onChange(of: history.presentation.selectedMessages) { textFocusChanged() }
         .onChange(of: history.presentation.focusedMessages) { textFocusChanged() }
     }

@@ -17,11 +17,53 @@ import SwiftUI
     private var restoreTask: Task<Void, Never>?
     private var preservingNavigation = false
     private var heldWidth: CGFloat?
+    private var inputMonitor: Any?
+    private var liveScrollObservers: [NSObjectProtocol] = []
+    private var readerMovedUpAt: ContinuousClock.Instant?
     private(set) var passage: Passage?
     private(set) var isResizing = false
     private(set) var isFollowingResize = false
+    /// AppKit's user-driven live scroll: a gesture or a scroller-knob drag.
+    var liveScrolling = false
 
-    func attach(_ state: ConversationFeedState) { self.state = state }
+    func attach(_ state: ConversationFeedState) {
+        self.state = state
+        guard inputMonitor == nil else { return }
+        // Wheel and trackpad scrolling, momentum included, reach the window before the feed.
+        inputMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX), let self, let scroll = self.scrollView,
+                      event.window === scroll.window,
+                      scroll.bounds.contains(scroll.convert(event.locationInWindow, from: nil)) else { return }
+                if event.scrollingDeltaY > 0 { self.readerMovedUp() } else { self.readerMovedUpAt = nil }
+            }
+            return event
+        }
+        for (name, live) in [(NSScrollView.willStartLiveScrollNotification, true), (NSScrollView.didEndLiveScrollNotification, false)] {
+            liveScrollObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { [weak self] note in
+                let sender = (note.object as AnyObject?).map(ObjectIdentifier.init)
+                MainActor.assumeIsolated {
+                    guard let self, let scroll = self.scrollView, sender == ObjectIdentifier(scroll) else { return }
+                    self.liveScrolling = live
+                }
+            })
+        }
+    }
+
+    func detach() {
+        inputMonitor.map(NSEvent.removeMonitor)
+        liveScrollObservers.forEach(NotificationCenter.default.removeObserver)
+        inputMonitor = nil
+        liveScrollObservers = []
+        liveScrolling = false
+        readerMovedUpAt = nil
+    }
+
+    /// The reader asked for earlier content: an upward wheel, trackpad or key scroll.
+    func readerMovedUp() { readerMovedUpAt = .now }
+    /// The tail or an explicit navigation took over; earlier input no longer applies.
+    func readerIntentEnded() { readerMovedUpAt = nil }
+    var readerIsMovingUp: Bool { readerMovedUpAt.map { .now - $0 < .milliseconds(400) } ?? false }
     func register(_ view: ProseTextView) { hosts.add(view) }
     func unregister(_ view: ProseTextView) { hosts.remove(view) }
     func stop() {
@@ -32,6 +74,7 @@ import SwiftUI
     func gestureBegan() { stop() }
 
     func navigated() {
+        readerIntentEnded()
         if preservingNavigation { preservingNavigation = false; return }
         stop()
         captureAfterSettling()

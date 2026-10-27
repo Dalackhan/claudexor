@@ -157,24 +157,37 @@ struct ProseTextTests {
         #expect(history.following && history.newCount == 0)
         #expect(history.presentation.planText["plan"]?["question"] == "Keep this draft")
         let state = ConversationFeedState()
-        // macOS 26.6 reports growth before the bottom anchor moves the offset.
+        // Placement short of the bottom (macOS 26.6), growth before the anchor, anchor lag
+        // with new growth and a shorter viewport are not the reader: following holds.
         let rest = FeedEdge(offset: 400, content: 1_000, container: 600)
-        let grown = FeedEdge(offset: 400, content: 1_300, container: 600)
-        let anchored = FeedEdge(offset: 700, content: 1_300, container: 600)
-        #expect(!state.geometry(grown, after: rest, tailMounted: true))
+        var old = rest
+        for edge in [FeedEdge(offset: 396, content: 1_000, container: 600), FeedEdge(offset: 396, content: 1_020, container: 600),
+                     FeedEdge(offset: 416, content: 1_050, container: 600), FeedEdge(offset: 416, content: 1_050, container: 560),
+                     FeedEdge(offset: 490, content: 1_050, container: 560)] {
+            #expect(!state.geometry(edge, after: old, tailMounted: true))
+            old = edge
+        }
         #expect(state.follows && state.atBottom)
-        #expect(!state.geometry(anchored, after: grown, tailMounted: true))
-        #expect(!state.geometry(FeedEdge(offset: 700, content: 1_300, container: 560), after: anchored, tailMounted: true))
-        #expect(state.follows && state.atBottom)
-        // A 40pt move up hidden by 50pt of anchored growth in the same frame still leaves the tail.
-        let masked = FeedEdge(offset: 710, content: 1_350, container: 600)
-        #expect(state.geometry(masked, after: anchored, tailMounted: true))
-        #expect(!state.follows && !state.atBottom)
-        let tail = FeedEdge(offset: 750, content: 1_350, container: 600)
-        #expect(state.geometry(tail, after: masked, tailMounted: true))
-        #expect(state.follows)
-        #expect(state.geometry(FeedEdge(offset: 700, content: 1_350, container: 600), after: tail, tailMounted: true))
-        #expect(!state.follows)
+        // A 40pt wheel move up hidden by 50pt of anchored growth in the same frame leaves the tail.
+        let wheel = ConversationFeedState()
+        wheel.readingPosition.readerMovedUp()
+        let masked = FeedEdge(offset: 500, content: 1_100, container: 560)
+        #expect(wheel.geometry(masked, after: old, tailMounted: true))
+        #expect(!wheel.follows && !wheel.atBottom)
+        let back = FeedEdge(offset: 540, content: 1_100, container: 560)
+        #expect(wheel.geometry(back, after: masked, tailMounted: true))
+        #expect(wheel.follows)
+        // Reaching the tail ends that input: a later placement short of the bottom keeps following.
+        #expect(!wheel.geometry(FeedEdge(offset: 536, content: 1_100, container: 560), after: back, tailMounted: true))
+        #expect(wheel.follows)
+        // A scroller drag down while content grows keeps the tail; a drag up leaves it.
+        let drag = ConversationFeedState()
+        drag.readingPosition.liveScrolling = true
+        let down = FeedEdge(offset: 500, content: 1_100, container: 560)
+        #expect(!drag.geometry(down, after: old, tailMounted: true))
+        #expect(drag.follows)
+        #expect(drag.geometry(FeedEdge(offset: 450, content: 1_100, container: 560), after: down, tailMounted: true))
+        #expect(!drag.follows)
         state.geometry(bottom: true, tailMounted: true)
         #expect(state.follows)
         state.geometry(bottom: false, tailMounted: true)

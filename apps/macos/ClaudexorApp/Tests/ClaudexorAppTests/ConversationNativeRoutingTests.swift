@@ -4,6 +4,32 @@ import Testing
 import ClaudexorKit
 @testable import ClaudexorApp
 
+/// Call stacks of upward clip-view moves, for diagnosing scroll changes nobody requested.
+@MainActor private final class ClipMoves {
+    private(set) var lines: [String] = []
+    private var last: CGFloat = 0
+    private var token: NSObjectProtocol?
+
+    func watch(_ clip: NSClipView) {
+        clip.postsBoundsChangedNotifications = true
+        last = clip.bounds.minY
+        // A nil queue runs the block inside the poster, so the stack shows who moved the clip.
+        token = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification,
+            object: clip, queue: nil) { [weak self, weak clip] _ in
+            MainActor.assumeIsolated {
+                guard let self, let clip else { return }
+                let y = clip.bounds.minY
+                if y < self.last - 0.5 {
+                    self.lines.append("clip \(self.last) -> \(y)\n" + Thread.callStackSymbols.prefix(40).joined(separator: "\n"))
+                }
+                self.last = y
+            }
+        }
+    }
+
+    func stop() { token.map(NotificationCenter.default.removeObserver) }
+}
+
 /// Suites that move AppKit first responders run one at a time. SwiftUI text
 /// fields share one field editor in the process, so focusing a field in one
 /// test window ends editing in another test's window.
@@ -205,9 +231,16 @@ struct ConversationNativeRoutingTests {
         let (host, window) = window(ConversationFeed(state: state, history: history, routingOptions: .init()).environment(model), width: 680)
         host.sizingOptions = []
         defer { window.close() }
+        // Record the caller of every upward clip-view move (the runner's macOS moves it 4pt).
+        host.layoutSubtreeIfNeeded()
+        let moves = ClipMoves()
+        let clip = views(host).compactMap({ $0 as? NSScrollView }).first(where: { $0.hasVerticalScroller })?.contentView
+        if let clip { moves.watch(clip) }
+        defer { moves.stop() }
         await settle(host, count: 10)
         await settle(host) { state.follows && state.atBottom }
         print("TAIL TRACE follows=\(state.follows) bottom=\(state.atBottom)\n" + trace.lines.prefix(80).joined(separator: "\n"))
+        print("TAIL MOVES \(moves.lines.count) watching=\(clip != nil) y=\(clip?.bounds.minY ?? -1)\n" + moves.lines.prefix(3).joined(separator: "\n----\n"))
         #expect(state.follows)
         #expect(state.atBottom)
         let prose = try #require(views(host).compactMap { $0 as? ProseTextView }.first { $0.string.hasPrefix("Tail passage 0:") })
